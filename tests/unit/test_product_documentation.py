@@ -72,8 +72,10 @@ HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT = (
     "03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc"
 )
 HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT = "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
-CURRENT_PLANCONSTRAINTS_CHECKPOINT = "7ef471744adfce557edf612a74b2847aafb3e8bc"
-CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT = "85c06b07ccc3905af4e0231497276934f7ae142a"
+HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT = "7ef471744adfce557edf612a74b2847aafb3e8bc"
+HISTORICAL_PLANCONSTRAINTS_BASE_PARENT_CHECKPOINT = "85c06b07ccc3905af4e0231497276934f7ae142a"
+CURRENT_PLANCONSTRAINTS_CHECKPOINT = "425502c5cbc173578053423d946ef24843f26285"
+CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT = "390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
 )
@@ -85,14 +87,14 @@ AUTONOMY_WORKTREE_INDEPENDENCE_CHECKPOINT = "3d4a43ac026547dd8652796b6186c48891f
 HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
     "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
 )
-AUTONOMY_INVENTORY_RAW_SHA256 = "207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c"
+AUTONOMY_INVENTORY_RAW_SHA256 = "7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
 )
-AUTONOMY_INVENTORY_SHA256 = "c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a"
-AUTONOMY_SOURCE_UNIVERSE_SHA256 = "6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc"
+AUTONOMY_INVENTORY_SHA256 = "a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
-    "e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a"
+    "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -282,38 +284,10 @@ AUTHRUNNER_CANONICAL_REPLAY_STABLE_PATHS = frozenset(
 )
 PLANCONSTRAINTS_SOURCE_PATHS = frozenset(
     {
-        "config/models.selection-plan.json",
         "docs/remediation/v3/autonomy_gate_inventory.json",
-        "schemas/authenticated_runner_smoke_evidence_bundle.schema.json",
-        "schemas/candidate_selection_plan.schema.json",
-        "src/mmaudit/benchmark/cross_lineage_adjudication.py",
-        "src/mmaudit/cli.py",
-        "src/mmaudit/models/candidate_benchmark.py",
-        "src/mmaudit/models/candidate_selection.py",
-        "src/mmaudit/models/discovery.py",
-        "src/mmaudit/models/endpoint_snapshots.py",
-        "src/mmaudit/models/lineage_review.py",
-        "src/mmaudit/models/openrouter.py",
-        "src/mmaudit/models/qualification.py",
-        "src/mmaudit/models/qualification_workflow.py",
-        "src/mmaudit/models/route_admission.py",
         "src/mmaudit/models/route_constraints.py",
-        "src/mmaudit/orchestration/authenticated_runner_openrouter.py",
-        "src/mmaudit/orchestration/authenticated_runner_smoke_openrouter.py",
-        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-        "tests/unit/test_authenticated_runner_cli.py",
-        "tests/unit/test_authenticated_runner_execution.py",
-        "tests/unit/test_authenticated_runner_openrouter.py",
-        "tests/unit/test_authenticated_runner_smoke_runtime.py",
-        "tests/unit/test_autonomy_gate_inventory.py",
-        "tests/unit/test_candidate_benchmark.py",
-        "tests/unit/test_candidate_registry_bridge_cli.py",
-        "tests/unit/test_candidate_selection.py",
         "tests/unit/test_endpoint_snapshots.py",
         "tests/unit/test_model_discovery.py",
-        "tests/unit/test_openrouter.py",
-        "tests/unit/test_openrouter_request_cost_preview.py",
-        "tests/unit/test_route_admission.py",
         "tests/unit/test_route_constraints.py",
     }
 )
@@ -1177,7 +1151,7 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert planconstraints_resolved.stdout.strip() == CURRENT_PLANCONSTRAINTS_CHECKPOINT
     assert planconstraints_parent.stdout.strip() == CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT
     assert frozenset(planconstraints_changed.stdout.splitlines()) == PLANCONSTRAINTS_SOURCE_PATHS
-    assert len(PLANCONSTRAINTS_SOURCE_PATHS) == 33
+    assert len(PLANCONSTRAINTS_SOURCE_PATHS) == 5
     assert OPERATOR_RESULTS_RELATIVE_PATH not in PLANCONSTRAINTS_SOURCE_PATHS
     assert not (PLANCONSTRAINTS_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
     assert planconstraints_current_match.returncode == 0
@@ -1196,6 +1170,25 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
         "REMAINING_ACTIONABLE_TICKETS: The combined queues contain "
         f"{unfinished} unfinished tickets."
     ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
+
+
+def test_truncation_resumes_after_planconstraints_regression_repair() -> None:
+    for document in (
+        QUEUE_PATH.read_text(encoding="utf-8"),
+        CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
+    ):
+        match = re.search(
+            r"^#{2,3} V3-TRUNCATION-001\b.*?(?=^#{2,3} V3-[A-Z0-9-]+\b|\Z)",
+            document,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        section = " ".join(match.group().split())
+        assert "**Status:** `PARTIAL`" in section
+        assert "Resume only the bounded provider-free specialist-role recovery gap" in section
+        assert "repair checkpoint `425502c` is complete" in section
+        assert "before" in section and "recursive child recovery" in section
+        assert "Pause this ticket while" not in section
 
 
 def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
@@ -1240,7 +1233,11 @@ def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
         assert "Runtime schema conformance remains a separate empirical" in section
         assert "Item 5" in section and "`ADOPTED_NONAUTHORIZING / IMPLEMENTED`" in section
         assert CURRENT_PLANCONSTRAINTS_CHECKPOINT in section
-        assert "exact 33-path provider-free" in section
+        assert "five-path checkpoint" in section
+        assert "case-insensitive `display_count == 1` selected-name rule" in section
+        assert "unrelated Fireworks/Alibaba/Morph collisions" in section
+        assert HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT in section
+        assert "exact 33-path provider-free implementation" in section
         assert (
             "No operator action, provider access, inferred index, command, or campaign" in section
         )
@@ -1265,7 +1262,8 @@ def test_modelrefresh_next_action_is_historicalized_behind_current_provider_free
         assert match is not None
         section = " ".join(match.group().split())
         assert "No provider or operator action is current" in section
-        assert "`V3-PLANCONSTRAINTS-001` is complete at source checkpoint `7ef4717`" in section
+        assert "`V3-PLANCONSTRAINTS-001` is complete after repair checkpoint `425502c`" in section
+        assert "`7ef4717` retained as its historical implementation base" in section
         assert "separate future authorization" in section
         assert "do not emit or rerun an authenticated refresh command" in section
         assert "operator-run authenticated metadata discovery" not in section
@@ -1410,13 +1408,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         assert (
-            "AUTORUN_STATUS: PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_"
-            "NONAUTHORIZING_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_"
-            "NEXT_INDEX_NOT_STATED"
+            "AUTORUN_STATUS: V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_"
+            "NONAUTHORIZING_ZERO_PROVIDER_COMMANDS"
         ) in worklog
         assert (
             "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_"
-            "OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET"
+            "OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
         ) in worklog
         assert (
             f"LAST_RECONCILED_OPERATOR_RESULTS: `{LAST_RECONCILED_OPERATOR_RESULTS_SHA256}` / "
@@ -1425,7 +1422,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     normalized_queues = tuple(" ".join(queue.split()) for queue in queues)
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     assert runtime_status["operator_results_current_worktree_status"] == (
-        "USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET"
+        "USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
     )
     assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
     assert (
@@ -1973,7 +1970,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["updated_at"] == "2026-08-24T10:34:59Z"
+    assert runtime_status["updated_at"] == "2026-08-24T12:53:58Z"
     assert runtime_status["candidate_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
@@ -1982,14 +1979,15 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
     assert (
-        "Exact 33-path provider-free V3-PLANCONSTRAINTS-001"
+        "Exact five-path provider-free V3-PLANCONSTRAINTS-001 regression repair"
         in runtime_status["candidate_commit_scope"]
     )
     assert (
-        "shared 29-predicate route-constraint profile" in runtime_status["candidate_commit_scope"]
+        "whole-inventory display-name uniqueness conjunct"
+        in (runtime_status["candidate_commit_scope"])
     )
-    assert "runtime output-token parity" in runtime_status["candidate_commit_scope"]
-    assert "typed UNAVAILABLE" in runtime_status["candidate_commit_scope"]
+    assert "selected display_count == 1" in runtime_status["candidate_commit_scope"]
+    assert "Sail Research and Modal" in runtime_status["candidate_commit_scope"]
     assert "operator_results" in runtime_status["candidate_commit_scope"]
     assert "operator action are excluded" in runtime_status["candidate_commit_scope"]
     assert (
@@ -1999,23 +1997,33 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
     assert runtime_status["last_checkpoint_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
-    assert "exact 33-path" in runtime_status["last_checkpoint_commit_scope"]
+    assert "exact five-path" in runtime_status["last_checkpoint_commit_scope"]
     assert (
-        "V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
-        in (runtime_status["last_checkpoint_commit_scope"])
+        "V3_PLANCONSTRAINTS_001_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR_COMPLETE_"
+        "PROVIDER_FREE_NONAUTHORIZING" in (runtime_status["last_checkpoint_commit_scope"])
     )
-    assert "runtime output-token parity" in runtime_status["last_checkpoint_commit_scope"]
+    assert (
+        "selected name remains uniquely matched" in runtime_status["last_checkpoint_commit_scope"]
+    )
+    assert (
+        "unrelated duplicate names are allowed" in (runtime_status["last_checkpoint_commit_scope"])
+    )
     assert "operator_results" in runtime_status["last_checkpoint_commit_scope"]
     assert "provider/network execution" in runtime_status["last_checkpoint_commit_scope"]
     assert "operator action are excluded" in runtime_status["last_checkpoint_commit_scope"]
     planconstraints_status = runtime_status["planconstraints_provider_free_route_admission"]
     assert planconstraints_status == {
         "ticket": "V3-PLANCONSTRAINTS-001",
-        "status": "COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "status": "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_REGRESSION_REPAIRED",
         "source_checkpoint_commit": CURRENT_PLANCONSTRAINTS_CHECKPOINT,
         "source_checkpoint_parent": CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT,
-        "source_checkpoint_subject": "Enforce route constraint parity",
-        "source_checkpoint_exact_path_count": 33,
+        "source_checkpoint_subject": "Restore selected endpoint name parity",
+        "source_checkpoint_exact_path_count": 5,
+        "historical_base_source_checkpoint_commit": HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT,
+        "historical_base_source_checkpoint_parent": (
+            HISTORICAL_PLANCONSTRAINTS_BASE_PARENT_CHECKPOINT
+        ),
+        "historical_base_source_checkpoint_exact_path_count": 33,
         "source_checkpoint_pushed": False,
         "source_checkpoint_remote_resolved": False,
         "selection_plan_schema_version": "1.4",
@@ -2032,6 +2040,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "shared_route_constraint_profile_sha256": (
             "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82"
         ),
+        "selected_provider_display_name_uniqueness_retained": True,
+        "unrelated_provider_display_name_duplicates_allowed": True,
+        "complete_provider_identity_inventory_retained": True,
+        "display_name_casefolding_retained": True,
         "selection_discovery_registry_candidate_judge_and_runtime_parity_bound": True,
         "runtime_required_output_tokens_bound_to_serialized_max_tokens": True,
         "full_admission_status": "BLOCKED_FAIL_CLOSED_TYPED_UNAVAILABLE_EVIDENCE",
@@ -2039,20 +2051,18 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EMPIRICAL_SCHEMA_VALIDATION",
             "RUNTIME_TOKEN_DETAIL_CONVENTION",
         ],
-        "changed_surface_tests_passed": 951,
-        "disjoint_adjacent_tests_passed": 201,
-        "generated_inventory_and_schema_tests_passed": 57,
-        "focused_route_constraint_and_admission_tests_passed": 111,
-        "actual_request_body_profile_test_passed": 1,
+        "adjacent_runner_matrix_tests_passed": 921,
+        "focused_route_snapshot_discovery_admission_tests_passed_overlapping": 250,
+        "canonical_inventory_tests_passed": 32,
         "ruff_check": "PASS",
-        "ruff_format_check": "PASS_534_FILES_ALREADY_FORMATTED",
-        "strict_mypy_source_files": 210,
+        "ruff_format_check": "PASS_FOCUSED_FILES_ALREADY_FORMATTED",
+        "strict_mypy_source_files": 1,
         "strict_mypy": "PASS",
         "canonical_generator_write_and_verify": "PASS",
         "pip_check": "PASS_NO_BROKEN_REQUIREMENTS",
         "diff_integrity": "PASS",
-        "independent_mutation_probe_count": 1012,
-        "independent_import_order_count": 6,
+        "historical_7ef_independent_mutation_probe_count": 1012,
+        "historical_7ef_independent_import_order_count": 6,
         "independent_review": "PASS_NO_BLOCKER_OR_HIGH",
         "provider_or_network_accessed": False,
         "secret_material_read": False,
@@ -2065,14 +2075,15 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "historical_repository_full_suite_failed": 1,
     }
     assert runtime_status["autorun_status"] == (
-        "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
-        "AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
+        "V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
+        "NEXT_TRUNCATION_SPECIALIST_RECOVERY_ZERO_CURRENT_EXTERNAL_COMMANDS"
     )
     assert runtime_status["autorun_status_evidence_scope"] == (
-        "LOCAL_PROVIDER_FREE_ROUTE_CONSTRAINT_CHECKPOINT_7EF4717_PLUS_LAST_RECONCILED_"
-        "AUTHRUNNER_OPERATOR_REPLAY_EVIDENCE_NONAUTHORIZING_NOT_INDEPENDENTLY_AUTHENTICATED_"
-        "BY_CODEX; CURRENT_USER_OWNED_OPERATOR_FILE_DRIFTED_AND_WAS_NOT_OPENED_OR_RECONCILED_"
-        "FOR_THIS_SOURCE_ONLY_TICKET"
+        "LOCAL_PROVIDER_FREE_PLANCONSTRAINTS_REPAIR_CHECKPOINT_425502C_PLUS_PRIOR_RETAINED_"
+        "PARENT_RECOVERY_CHECKPOINT_390E9B2_PLUS_HISTORICAL_PLANCONSTRAINTS_BASE_7EF4717_"
+        "PLUS_LAST_RECONCILED_AUTHRUNNER_OPERATOR_REPLAY_EVIDENCE_NONAUTHORIZING_NOT_"
+        "INDEPENDENTLY_AUTHENTICATED_BY_CODEX; CURRENT_USER_OWNED_OPERATOR_FILE_DRIFTED_"
+        "AND_WAS_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
     )
     assert (
         runtime_status["autorun_status_operator_evidence_independently_authenticated_by_codex"]
@@ -2085,14 +2096,14 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert runtime_status["current_ticket"] == "V3-PLANCONSTRAINTS-001"
     assert runtime_status["last_completed_provider_free_work"] == {
         "ticket": "V3-PLANCONSTRAINTS-001",
-        "slice": "V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY_AT_7EF4717",
+        "slice": "SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR_COMPLETE_AT_425502C",
         "status": (
-            "PLANCONSTRAINTS_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTHRUNNER_OVERALL_"
-            "PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS"
+            "COMPLETE_PROVIDER_FREE_NONAUTHORIZING; SELECTED_NAME_MUST_BE_UNIQUE; "
+            "UNRELATED_DUPLICATE_NAMES_ALLOWED; FULL_CAMPAIGN_STILL_BLOCKED_TYPED_UNAVAILABLE"
         ),
         "next_slice": (
-            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_PENDING_SEPARATE_AUTHORITATIVE_EVIDENCE; "
-            "NO_OPERATOR_ACTION_OR_INDEX_INFERENCE; AUTONOMY_PHASE_2_PAUSED"
+            "RESUME_BOUNDED_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_ONLY_"
+            "THEN_RECORD_BEFORE_RECURSIVE_CHILD_RECOVERY"
         ),
         "provider_access_authorized": False,
         "secret_access_authorized": False,
@@ -2103,10 +2114,23 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "operator_command_execution_authorized": False,
         "parked_ticket": "V3-AUTONOMY-001",
         "parked_ticket_status": (
-            "IN_PROGRESS_PHASE_2_PAUSED_PENDING_SEPARATE_AUTHRUNNER_AUTHORITATIVE_"
+            "PARTIAL_PHASE_2_PAUSED_PENDING_SEPARATE_AUTHRUNNER_AUTHORITATIVE_"
             "EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX_AUTHORIZED"
         ),
         "historical_park_reason": "TIME_SENSITIVE_INDEXED_EXTERNAL_SEQUENCE_ENDED",
+    }
+    assert runtime_status["prior_provider_free_work"] == {
+        "ticket": "V3-TRUNCATION-001",
+        "source_checkpoint_commit": CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT,
+        "source_checkpoint_parent": "b1f8ba9eba7efef94388ab185529f1248fb608c3",
+        "source_checkpoint_exact_path_count": 14,
+        "completed_slice": "RETAINED_PARENT_SURFACE_RECOVERY",
+        "ticket_status": "PARTIAL",
+        "specialist_role_recovery_complete": False,
+        "recursive_child_recovery_complete": False,
+        "positive_nonempty_full_pipeline_real_promotion_available": False,
+        "provider_or_network_accessed": False,
+        "runtime_authority": False,
     }
     phase_zero = runtime_status["autonomy_phase_zero_inventory"]
     assert phase_zero == {
@@ -2118,10 +2142,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "current_reconciliation_commit_pushed": False,
         "current_reconciliation_commit_remote_resolved": False,
         "historical_c627_authrunner_entrypoint_successor_path_count": 3,
-        "current_reconciliation_exact_path_count": 33,
+        "current_reconciliation_exact_path_count": 5,
         "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
-        "artifact_reconciled_for_slice": "V3_PLANCONSTRAINTS_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY",
+        "artifact_reconciled_for_slice": (
+            "V3_PLANCONSTRAINTS_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR"
+        ),
         "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
         "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
         "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
@@ -2132,9 +2158,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "67f1ff32913327913ab19adbe60ff54263bf0fcb347304b151bd009311cfe1b0"
         ),
         "inventory_sha256": AUTONOMY_INVENTORY_SHA256,
-        "source_count": 3651,
-        "source_occurrence_count": 3654,
-        "gate_source_count": 3608,
+        "source_count": 3657,
+        "source_occurrence_count": 3660,
+        "gate_source_count": 3614,
         "non_gating_source_count": 43,
         "source_kind_count": 13,
         "logical_gate_count": 35,
@@ -2150,11 +2176,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PENDING_SEPARATE_AUTHRUNNER_"
-            "AUTHORITATIVE_EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
+            "PLANCONSTRAINTS_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTONOMY_PHASE_2_"
+            "PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
         "current_execution_next_action": (
-            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
+            "RESUME_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_RECOVERY; KEEP_AUTHRUNNER_"
+            "PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
         ),
     }
     assert runtime_status["managed_toolchain_phase_one"] == {
@@ -2191,11 +2218,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PENDING_SEPARATE_AUTHRUNNER_"
-            "AUTHORITATIVE_EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
+            "PLANCONSTRAINTS_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTONOMY_PHASE_2_"
+            "PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
         "current_execution_next_action": (
-            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
+            "RESUME_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_RECOVERY; KEEP_AUTHRUNNER_"
+            "PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
         ),
     }
     assert "next_slice" not in phase_zero
@@ -2215,9 +2243,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert autonomy_inventory["source_universe_sha256"] == AUTONOMY_SOURCE_UNIVERSE_SHA256
     assert autonomy_inventory["inventory_sha256"] == AUTONOMY_INVENTORY_SHA256
-    assert autonomy_inventory["source_count"] == 3651
-    assert autonomy_inventory["source_occurrence_count"] == 3654
-    assert autonomy_inventory["gate_source_count"] == 3608
+    assert autonomy_inventory["source_count"] == 3657
+    assert autonomy_inventory["source_occurrence_count"] == 3660
+    assert autonomy_inventory["gate_source_count"] == 3614
     assert autonomy_inventory["logical_gate_count"] == 35
     assert autonomy_inventory["unsatisfied_gate_count"] == 29
     assert autonomy_inventory["current_manual_gate_count"] == 15
@@ -3220,9 +3248,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "HISTORICAL_C627F2D_OFFLINE_REPLAY_IS_OPERATOR_REPORTED_VALID_NONCREDITING_"
         "NONAUTHORIZING_BUT_GRANTS_NO_CAMPAIGN_AUTHORITY; COMPLETED_REAL_AUDITS_ZERO; "
         "ONE_CASE_NOT_24; V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
-        "AT_7EF4717; FULL_BLOCKED_TYPED_UNAVAILABLE_EMPIRICAL_SCHEMA_AND_TOKEN_DETAIL_"
-        "EVIDENCE; ZERO_CURRENT_COMMANDS; NEXT_UNUSED_INDEX_NOT_STATED; ANY_FUTURE_"
-        "OPERATOR_ACTION_REQUIRES_SEPARATE_AUTHORIZATION"
+        "AFTER_425502C_REPAIR_WITH_HISTORICAL_7EF4717_IMPLEMENTATION_BASE; FULL_BLOCKED_"
+        "TYPED_UNAVAILABLE_EMPIRICAL_SCHEMA_AND_TOKEN_DETAIL_EVIDENCE; ZERO_CURRENT_"
+        "COMMANDS; NEXT_UNUSED_INDEX_NOT_STATED; ANY_FUTURE_OPERATOR_ACTION_REQUIRES_"
+        "SEPARATE_AUTHORIZATION"
     )
     assert smoke_status["commands_must_not_be_chained"] is True
     assert smoke_status["pre_a_ledger_exactly_empty_inspection_required"] is False
@@ -3576,8 +3605,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
     )
     assert current_successor["selection_plan_schema_version"] == "1.4"
-    assert current_successor["checkpoint_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
-    assert current_successor["checkpoint_parent"] == CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT
+    assert current_successor["checkpoint_commit"] == HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT
+    assert current_successor["checkpoint_parent"] == (
+        HISTORICAL_PLANCONSTRAINTS_BASE_PARENT_CHECKPOINT
+    )
     assert current_successor["checkpoint_status"] == "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     assert current_successor["checkpoint_pushed"] is False
     assert current_successor["checkpoint_remote_resolved"] is False
@@ -3730,21 +3761,24 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is True
     assert runtime_status["last_validation"]["status"] == (
-        "V3_PLANCONSTRAINTS_001_PROVIDER_FREE_GATES_PASS_TICKET_COMPLETE_"
-        "NONAUTHORIZING_FULL_FAIL_CLOSED_TYPED_UNAVAILABLE_AUTHRUNNER_PARTIAL_"
-        "BLOCKED_SAFETY_HISTORICAL_FULL_SUITE_INCOMPLETE"
+        "V3_PLANCONSTRAINTS_001_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REGRESSION_REPAIRED_"
+        "TICKET_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_FULL_FAIL_CLOSED_TYPED_UNAVAILABLE_"
+        "AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_HISTORICAL_FULL_SUITE_INCOMPLETE"
     )
-    assert "951 PASS" in runtime_status["last_validation"]["command"]
-    assert "201 PASS" in runtime_status["last_validation"]["command"]
-    assert "57 PASS" in runtime_status["last_validation"]["command"]
-    assert "111 PASS" in runtime_status["last_validation"]["command"]
+    assert "921 PASS" in runtime_status["last_validation"]["command"]
+    assert "250 PASS" in runtime_status["last_validation"]["command"]
+    assert "32 PASS" in runtime_status["last_validation"]["command"]
     assert (
-        "actual request-body/profile parity 1 PASS"
-        in (runtime_status["last_validation"]["command"])
+        "V3-PLANCONSTRAINTS-001 is COMPLETE_PROVIDER_FREE_NONAUTHORIZING after the exact "
+        "five-path repair checkpoint 425502c" in (runtime_status["last_validation"]["result"])
     )
     assert (
-        "V3-PLANCONSTRAINTS-001 is COMPLETE_PROVIDER_FREE_NONAUTHORIZING at exact "
-        "33-path source checkpoint 7ef4717" in (runtime_status["last_validation"]["result"])
+        "selected provider display name must occur exactly once"
+        in (runtime_status["last_validation"]["result"])
+    )
+    assert (
+        "duplicates among unrelated endpoints do not reject"
+        in (runtime_status["last_validation"]["result"])
     )
     assert (
         "Historical c627f2d replay and operator evidence remain separate"
@@ -4040,9 +4074,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "checked again when the interval closes" in normalized_model_selection
     assert "Kimi's total judge plan" in normalized_model_selection
     assert "becomes exactly bounded before dispatch" in normalized_model_selection
-    assert "Whole-inventory `provider_name` uniqueness remains enforced." in model_selection
-    assert "end-to-end wire and evidence redesign" in normalized_model_selection
-    assert "explicit selection-quality limitation" in normalized_model_selection
+    assert "The selected endpoint's `provider_name` must be unique" in model_selection
+    assert "Duplicate names among unrelated, unselected endpoints" in normalized_model_selection
+    assert "do not make the selected identity ambiguous" in normalized_model_selection
     assert "committed-byte provider-free gate" in normalized_model_selection
     assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
     assert "case-df79ea132113b863" in model_selection

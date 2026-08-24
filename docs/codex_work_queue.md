@@ -239,23 +239,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Status:** `PARTIAL`
 - **Result:** Added strict framed truncation projection, deterministic bounded child planning,
   append-only typed recovery-family custody, exact shared request/cost accounting, opaque
-  promotion, and hash-only public usage/report/manifest/assurance joins. Truncation and
-  unpromoted or MOCK recovery remain non-creditable. Final red-team review was `CLEAN` for
-  blocker/HIGH findings after fixing the reproduced unbounded recovery-root and recovery-usage
-  iterable seams. Validation passed `170` recovery tests, `678` cross-artifact/accounting/
-  assurance/schema tests, `117` scheduler/status tests after the final bounds, `58`
-  scheduler-model tests, `6` local pipeline integrations, the schema generator and `16` schema
-  tests, plus Ruff format/check, strict mypy, and diff integrity. Terminal governance replay also
-  passed strict duplicate-key parsing for both JSON ledgers and `11` product
-  documentation/objective tests.
-- **Remaining limitation:** The pipeline deliberately does not recover specialist roles or a
-  parent projection with retained surface records, does not recursively consume a truncated
-  recovery child, and has no positive full-pipeline REAL promotion test. Those paths remain
-  incomplete and receive no review, coverage, floor, qualification, assurance, or completion
-  credit.
-- **Next action:** Begin `V3-COVERAGE-001`. Before any future `AUTHLINEAGE` work, reconcile the
-  newly supplied `2026-08-18` lineage-evidence-standard correction with the existing lineage
-  queue history; do not silently treat the superseded receipt assumptions as current authority.
+  promotion, and hash-only public usage/report/manifest/assurance joins. Checkpoint
+  `390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8` additionally consumes retained-parent surface
+  records only through a journal-owned PID-local opaque promotion capability: live parent/child
+  usage and context custody must join the current run, the parent remains truncated and
+  noncreditable as an ordinary artifact, only `PARENT_PROVISIONAL` records may receive composite
+  coverage credit, children remain ordinary successful artifacts, and public promotion bindings
+  must equal the live token set with ordered child-result hashes. Truncation and unpromoted,
+  serialized-only, forged, ambiguous, swapped, or MOCK recovery remain non-creditable. The
+  retained-parent validation passed `510` affected tests, full Ruff/format, strict mypy, canonical
+  generator, dependency, import, and diff gates; independent red-team review found no remaining
+  blocker/HIGH.
+- **Remaining limitation:** Specialist-role recovery and recursive consumption of a truncated
+  recovery child are not implemented. A positive nonempty full-pipeline REAL promotion remains an
+  external criterion; synthetic live-custody unit evidence and MOCK pipeline execution are not
+  relabeled as provider evidence.
+- **Current action:** Resume only the bounded provider-free specialist-role recovery gap now that
+  `V3-PLANCONSTRAINTS-001` repair checkpoint `425502c` is complete. Record and validate that slice
+  before attempting recursive child recovery.
 
 ### V3-COVERAGE-001 — Risk-tiered feasible surface coverage
 
@@ -1026,10 +1027,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   and exact caps cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
   not a fabricated full-campaign bound. The authenticated runner is a one-shot, non-resumable
-  same-process launch; interrupted work cannot be resumed as valid campaign evidence. The retained
-  whole-inventory provider-display-name uniqueness invariant conservatively excludes otherwise viable
-  routes whose regional endpoints reuse a display name; this is an explicit selection-quality
-  limitation and is not relaxed for the current triple. Genuine v1.1 durable REAL evidence and a
+  same-process launch; interrupted work cannot be resumed as valid campaign evidence. Selected-route
+  provider display-name ambiguity remains fail-closed, while checkpoint `425502c` restores parity so
+  duplicate display names among unrelated endpoints do not disqualify an otherwise unambiguous
+  selected route. Genuine v1.1 durable REAL evidence and a
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
@@ -1041,7 +1042,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   completes the provider-free replay
   repair. The last-reconciled operator record reports the unchanged index-19 bundle offline-valid,
   noncrediting, and nonauthorizing. No operator action is authorized, no next index is stated, and no
-  command is current. `V3-PLANCONSTRAINTS-001` is complete provider-free; the unresolved empirical
+  command is current. `V3-PLANCONSTRAINTS-001` is complete provider-free at repair checkpoint
+  `425502c`; the unresolved empirical
   schema and token-detail gates still prohibit any campaign.
   `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
@@ -1053,8 +1055,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Files/modules:** Candidate selection and endpoint snapshots, selection-plan schemas/builders,
   provider-free route checks, runtime admission adapters, documentation, and focused parity tests.
 - **Acceptance criteria:**
-  - The profile covers exact model identity and endpoint tag, whole-inventory provider display-name
-    injectivity, the exact operational accepted state, ZDR eligibility, and the emitted request
+  - The profile covers exact model identity and endpoint tag, requires the selected endpoint's
+    normalized provider display name to occur exactly once in the complete exact-model inventory,
+    the exact operational accepted state, ZDR eligibility, and the emitted request
     parameters `max_tokens`, `temperature`, `response_format`, and `reasoning`. It separately binds
     the `structured_outputs` native-capability marker in both the exact-model inventory and the
     selected-endpoint inventory rather than treating that marker as an emitted parameter.
@@ -1087,10 +1090,20 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `V3-AUTHRUNNER-001` smoke satisfies only this provider-free prerequisite; it is not independent
   bundle authentication or campaign authority. This ticket is mandatory before the 24-case campaign.
 - **Status:** `COMPLETE`
-- **Result:** Candidate-selection schema v1.4 now binds one strict self-hashed 29-predicate profile
+- **Regression repair:** Checkpoint `425502c5cbc173578053423d946ef24843f26285`, direct child of
+  `390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8`, removes only the stricter whole-inventory
+  display-name uniqueness conjunct introduced at `7ef4717`. Complete inventory custody and the
+  case-insensitive `display_count == 1` selected-name rule remain fail-closed. Exact Sail Research
+  and Modal route regressions admit unrelated Fireworks/Alibaba/Morph collisions across generic,
+  constrained, and full discovery paths and reject casefold collisions of either selected name.
+  The five-path checkpoint passed the `921`-test adjacent runner matrix, the overlapping `250`-test
+  route/snapshot/discovery/admission matrix, `32` inventory tests, Ruff/format, strict mypy, canonical
+  generation, and diff integrity. Independent review found no blocker/HIGH. No provider, network,
+  secret, ledger, campaign, operator-record, or run-index action occurred.
+- **Prior result:** Candidate-selection schema v1.4 binds one strict self-hashed 29-predicate profile
   and exact per-role route constraints. The same evaluator and closed report are required before
   constrained endpoint/model publication, through registry plan/profile/constraint/report custody,
-  and at FULL or NONCREDITING runtime admission. Whole-inventory display-name collisions, model or
+  and at FULL or NONCREDITING runtime admission. Selected-endpoint display-name ambiguity, model or
   endpoint emitted-parameter gaps, reasoning precedence/empty/contradictory inventories, capacity,
   exact-price cap weakness, live/frozen drift, custody swaps, and lower or higher runtime output-token
   drift fail closed. FULL rejects the deliberately `UNAVAILABLE` empirical-schema and token-detail
@@ -1148,7 +1161,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
 - **Next action:** No provider or operator action is current. Preserve the provider-free mechanism;
-  `V3-PLANCONSTRAINTS-001` is complete at source checkpoint `7ef4717`, and this ticket remains
+  `V3-PLANCONSTRAINTS-001` is complete after repair checkpoint `425502c`, with `7ef4717` retained as
+  its historical implementation base, and this ticket remains
   noncurrent. Resume this ticket only
   under separate future authorization with fresh exact provider evidence and the stock
   live authority quartet; do not emit or rerun an authenticated refresh command from this ticket.

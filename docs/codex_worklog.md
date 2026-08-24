@@ -4,21 +4,101 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T09:45:36Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T12:53:58Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED
-OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET
+AUTORUN_STATUS: V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_ZERO_PROVIDER_COMMANDS
+OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET
 LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
 CURRENT_TICKET: V3-PLANCONSTRAINTS-001
-CURRENT_LOCAL_SLICE_STATUS: COMPLETE_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY
+CURRENT_LOCAL_SLICE_STATUS: SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REGRESSION_REPAIRED_COMPLETE_PROVIDER_FREE_NONAUTHORIZING
 LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001
-NEXT_ACTION: Keep V3-AUTHRUNNER-001 PARTIAL / BLOCKED_SAFETY until separately authorized authoritative evidence resolves empirical-schema conformance and token-detail convention. No next unused index is stated; no current command exists. No provider or AUTHRUNNER action, campaign, or inferred next index is authorized; V3-AUTONOMY-001 Phase 2 remains paused.
-LAST_VALIDATION_COMMAND: Final provider-free gates: the exact changed-surface matrix passed `951` tests with two known intentional code-retarget warnings; the disjoint adjacent qualification/lineage matrix passed `201`; generated inventory/schema tests passed `57` overlapping tests. Route constraint/admission tests passed `111`, and the actual request-body/profile parity regression passed `1`. Ruff check and format-check passed over `534` Python files; `.venv/bin/mypy src` passed all `210` source files; canonical generator verify, pip dependency check, six import permutations, and diff-check passed. Independent review found no blocker/HIGH, including `1,012` defensive mutation probes. The historical repository-wide suite attempt remains INCOMPLETE at 1,492 passed / 25 skipped / 1 failed and receives no pass credit. Codex emitted or executed no AUTHRUNNER command.
-LAST_VALIDATION_RESULT: COMPLETE_PROVIDER_FREE_NONAUTHORIZING — one shared self-hashed 29-predicate profile now governs selection, pre-snapshot constrained discovery, registry custody, exact price-cap projection, and runtime admission. Lower or higher runtime output-token drift fails before state. FULL remains intentionally blocked by typed `UNAVAILABLE` empirical-schema and token-detail predicates. No provider, campaign, benchmark, audit, AUTHSEAL, release, or runtime authority follows.
-LAST_CHECKPOINT_COMMIT: `7ef471744adfce557edf612a74b2847aafb3e8bc`, direct child of `85c06b07ccc3905af4e0231497276934f7ae142a`, owns exactly 33 source, config, schema, generated-inventory, and focused-test paths for `V3-PLANCONSTRAINTS-001`; `git diff-tree --no-commit-id --name-only -r 7ef471744adfce557edf612a74b2847aafb3e8bc` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c`, `c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a`, `e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a`, and `6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc`; counts are 3,651 sources / 3,654 occurrences / 3,608 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Historical replay checkpoint: `c627f2d`; historical join checkpoint: `03d6e8a`; historical diagnostic checkpoint: `3a1246d`; historical receipt-state-seal checkpoint: `68126e0`; historical receipt-composite checkpoint: `48ea635`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its bounded replay continuation is complete nonauthorizing, but empirical-schema and token-detail authority remain unavailable. The next unused index is NOT_STATED and no command or paid authority is current. `V3-PLANCONSTRAINTS-001` is complete provider-free. `V3-AUTONOMY-001` Phase 2 remains paused. Every qualification, audit, benchmark, AUTHSEAL, release, runtime-authority, and readiness claim remains absent.
+NEXT_ACTION: Resume only the bounded provider-free V3-TRUNCATION-001 specialist-role recovery gap, then record it before recursive child recovery. Preserve no credit for unsupported, unpromoted, serialized-only, MOCK, or non-REAL paths. No provider, operator, or inferred run-index action is authorized.
+LAST_VALIDATION_COMMAND: PLANCONSTRAINTS repair checkpoint `425502c` passed the `921`-test adjacent runner matrix with two known code-retarget warnings, the overlapping `250`-test route/snapshot/discovery/admission matrix, and `32` canonical inventory tests. Ruff check/format, strict mypy on the changed source, canonical generator write/verify, and diff-check passed. Independent latest-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
+LAST_VALIDATION_RESULT: SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIRED_COMPLETE_PROVIDER_FREE_NONAUTHORIZING — the selected name must occur exactly once in the complete casefold inventory; unrelated duplicate display names are allowed. Exact Sail Research and Modal positives/negatives cover generic and constrained snapshots plus full discovery, and downstream registry/live/runtime admission reuses the same guarded evaluator. FULL remains blocked by typed UNAVAILABLE empirical-schema and token-detail evidence.
+LAST_CHECKPOINT_COMMIT: `425502c5cbc173578053423d946ef24843f26285`, direct child of `390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8`, owns exactly five PLANCONSTRAINTS source, canonical-inventory, and unit-test paths; `git diff-tree --no-commit-id --name-only -r 425502c5cbc173578053423d946ef24843f26285` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965`, `a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1`, `4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042`, and `acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83`; counts are 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior retained-parent checkpoint: `390e9b2`; historical PLANCONSTRAINTS base: `7ef4717`; historical replay checkpoint: `c627f2d`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-PLANCONSTRAINTS-001` is repaired and complete. `V3-TRUNCATION-001` is `PARTIAL`: retained-parent recovery is checkpointed, specialist-role recovery is the next bounded provider-free gap, recursive child recovery follows, and positive nonempty full-pipeline REAL promotion remains external. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; the next unused index is NOT_STATED and no command or paid authority is current.
+
+## 2026-08-24T12:53:58Z — selected-provider display-name parity repaired
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` is `COMPLETE` provider-free and nonauthorizing at
+  `425502c5cbc173578053423d946ef24843f26285`, directly after retained-parent checkpoint `390e9b2`.
+- **Completed changes:** Removed only the global-all-display-names uniqueness conjunct. Complete
+  inventory custody, casefold normalization, and exact selected-name occurrence count remain.
+  Generic and constrained snapshots plus full discovery now admit Sail Research and Modal when only
+  unrelated Fireworks/Alibaba/Morph names collide, while selected-name casefold collisions reject.
+- **Files changed:** Exact five-path source checkpoint plus this separate governance reconciliation;
+  user-owned `.gitignore` and `docs/remediation/v3/operator_results.md` remain excluded and unread.
+- **Commands run / results:** `921` adjacent runner tests, overlapping `250` focused parity tests,
+  and `32` inventory tests passed; Ruff/format, focused strict mypy, generator, and diff gates passed.
+  Independent review found no blocker/HIGH.
+- **Remaining limitations:** FULL campaign admission remains blocked by typed `UNAVAILABLE`
+  empirical-schema and token-detail evidence. This repair provides no provider, qualification,
+  campaign, benchmark, audit, AUTHSEAL, release, or runtime authority.
+- **Next safe action:** Resume only bounded provider-free `V3-TRUNCATION-001` specialist recovery.
+
+## 2026-08-24T12:42:42Z — route display-name parity regression reopened
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` is reopened `IN_PROGRESS`; the interrupted
+  `V3-TRUNCATION-001` work is recorded `PARTIAL` with retained-parent recovery checkpointed.
+- **Finding:** The shared route evaluator requires both one occurrence of the selected endpoint's
+  display name and global uniqueness of every unrelated display name. Endpoint snapshot validation
+  requires only the first property, so constrained discovery can reject an otherwise valid selected
+  route solely because two unselected endpoints share another name.
+- **Next safe action:** Delete only the extra global-uniqueness conjunct; preserve complete-inventory
+  custody and case-insensitive selected-name ambiguity rejection. Add exact positive unrelated-name
+  collision and negative selected-name collision regressions, then run the bounded parity matrix.
+- **External effects:** None. No provider, network, credential, private-ledger, operator-record, or
+  run-index action is authorized or required.
+
+## 2026-08-24T12:35:41Z — retained-parent surface recovery checkpointed
+
+- **Current ticket:** `V3-TRUNCATION-001` remains `IN_PROGRESS`; one cohesive retained-parent
+  recovery slice is complete at `390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8`.
+- **Completed changes:** Added a journal-issued PID-local opaque capability for an exact appended
+  recovery promotion. Replay retains live parent/child `UsageRecord` identities and exact contexts
+  after terminal journal freezing while serialized artifacts remain comparison-only. Model coverage
+  credits only retained `PARENT_PROVISIONAL` records through the promoted composite; successful
+  children keep ordinary artifact credit. Assurance now requires an exact bidirectional public
+  promotion/live-token set, current-run usage identity, exact route custody, and ordered child-result
+  associations. MOCK retained-parent recovery opens and consumes its bounded family but remains
+  incomplete/noncreditable and resumes with zero provider calls.
+- **Files changed:** The exact 14-path source commit contains qualification route factoring,
+  truncation-recovery authority, scheduler issuance, pipeline consumption/private documentary
+  retention, model coverage, assurance, canonical inventory, fake provider, and focused unit/local
+  integration tests. This governance update follows separately. User-owned `.gitignore` and
+  `docs/remediation/v3/operator_results.md` remain outside the slice and were not opened or changed.
+- **Commands run / results:** `510` affected tests passed: `170` recovery, `61` coverage, `239`
+  assurance, `6` local pipeline, `32` inventory, and `2` adjacent reasoning/manifest tests. Ruff
+  check, `534`-file Python format-check, strict mypy over `210` source files, canonical generator,
+  dependency, import, and diff gates passed. Independent red-team audit ended `PASS` with no
+  blocker/HIGH.
+- **Unresolved issues:** Specialist-role recovery and recursive truncated-child consumption remain
+  unsupported and noncreditable. Positive nonempty full-pipeline REAL promotion is still external;
+  the synthetic live-custody fixture and MOCK integration do not satisfy it.
+- **Next safe action:** Implement only the bounded provider-free specialist-role recovery gap with
+  exact role/context/request/cost/resume custody and fail-closed no-credit negatives, then record
+  that slice before recursive child recovery.
+
+## 2026-08-24T11:00:52Z — bounded truncation-recovery completion gaps opened
+
+- **Current ticket:** `V3-TRUNCATION-001` is `IN_PROGRESS` on three provider-free recovery paths.
+- **Completed changes:** Audited all 139 unique queue tickets: 96 are complete and 43 remain
+  unfinished. Reclassified paused `V3-AUTONOMY-001` from `IN_PROGRESS` to `PARTIAL`, preserving its
+  completed Phase 0/1 evidence and external Phase 2 boundary, then selected the earliest actionable
+  partial ticket under the queue's one-active-ticket rule.
+- **Files changed:** Both queues and worklogs only at this boundary. Production and tests are not
+  yet changed; user-owned `.gitignore` and `docs/remediation/v3/operator_results.md` remain outside
+  this work unit.
+- **Commands run / results:** Read-only queue/dependency audit and targeted inspection of the
+  truncation planner, append-only recovery journal, scheduler runtime, pipeline, and local tests.
+  No provider, network, credential, private-ledger, or operator action occurred.
+- **Unresolved issues:** Specialist roots are excluded, retained parent surfaces are rejected before
+  family creation, and nested child families are deliberately refused. Positive full-pipeline REAL
+  promotion remains an external criterion and cannot be fabricated with MOCK evidence.
+- **Next safe action:** Implement the three bounded provider-free recovery paths with deterministic
+  partition, resource, resume, custody, and no-credit regressions; keep REAL promotion fail-closed.
 
 ## 2026-08-24T09:45:36Z — route-constraint source checkpoint sealed
 

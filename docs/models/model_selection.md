@@ -65,7 +65,7 @@ SHA-256 `14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c`. It i
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
 publication. Although the tag matched, the endpoint's `provider_name` was duplicated elsewhere in
-the exact-model inventory. The whole-inventory uniqueness rule is retained: generation metadata
+the exact-model inventory. Selected-name uniqueness is retained: generation metadata
 does not always expose an endpoint tag, so accepting a duplicated display identity could import ZDR,
 pricing, or capability evidence from an unapproved sibling route. Under the current validator no
 reported Claude ZDR route can satisfy this invariant; route substitution alone cannot repair r3.
@@ -291,13 +291,13 @@ The exact runtime answers for both the smoke and full paths are:
   closes.
   Kimi's total judge plan is unavailable before candidate outputs, but it becomes exactly bounded
   before dispatch; it is never uncapped at the POST boundary.
-- **Whole-inventory `provider_name` uniqueness remains enforced.** Current generation/response
-  evidence may expose only `provider_name`, and runtime identity handling accepts tag, slug, or name
-  forms. If a display name is duplicated, an unconfigured sibling route could otherwise be mistaken
-  for the approved route. Pair- or tag-granular identity would require an end-to-end wire and evidence
-  redesign, not a local validator relaxation. This deliberate fail-closed rule excludes some
-  multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
-  evidence that the excluded models were technically inferior.
+- **The selected endpoint's `provider_name` must be unique in the exact-model inventory.** Current
+  generation/response evidence may expose only `provider_name`, and runtime identity handling accepts
+  tag, slug, or name forms. If the selected name is duplicated, an unconfigured sibling route could
+  otherwise be mistaken for the approved route. Duplicate names among unrelated, unselected
+  endpoints do not make the selected identity ambiguous and therefore do not reject it. Checkpoint
+  `425502c5cbc173578053423d946ef24843f26285` restores this exact snapshot/runtime parity while
+  preserving complete-inventory custody and case-insensitive selected-name rejection.
 
 ### Post-origin fixes, failed one-case REAL attempt, and token-budget parity repair
 
@@ -827,13 +827,13 @@ The `531a9d8` 906-test matrix and independent review were CLEAN. The identity su
 tests, Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review also passed.
 The dormant receipt scaffold's focused provider-free matrix passed 458 tests. Historical `3a1246d`
 retains its independent 564-test / 47-root / 1,072-state evidence. The current committed
-`7ef471744adfce557edf612a74b2847aafb3e8bc` PLANCONSTRAINTS inventory
+`425502c5cbc173578053423d946ef24843f26285` PLANCONSTRAINTS repair inventory
 raw/self/discovery/universe hashes are
-`207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c`,
-`c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a`,
-`e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a`, and
-`6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc`; counts are 3,651 sources /
-3,654 occurrences / 3,608 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates /
+`7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965`,
+`a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1`,
+`4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042`, and
+`acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83`; counts are 3,657 sources /
+3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates /
 29 unsatisfied / 15 current-manual. The current smoke schema raw SHA-256 is
 `34f264a5fa9ae55ba6d0c02d2e1f78c81aa4abf2c19ab50b6366c2c4d6e75404`; the historical
 pre-PLANCONSTRAINTS value was
