@@ -146,6 +146,7 @@ class SchedulerTruncationRecoveryClosureStatus(StrEnum):
     """Structural family closure; none of these states grants credit."""
 
     COVERAGE_CLOSED = "COVERAGE_CLOSED"
+    RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING = "RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING"
     INCOMPLETE = "INCOMPLETE"
     UNCERTAIN = "UNCERTAIN"
 
@@ -2282,7 +2283,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
 class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry):
     """Recursive structural closure that deliberately grants no completion authority."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED] = (
         SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED
     )
@@ -2325,6 +2326,14 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
             covered_unfinished_surface_ids,
             label="closure surfaces",
         )
+        schema_version: Literal["1.0", "1.1", "1.2"] = (
+            "1.2"
+            if closure_status
+            is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+            else "1.1"
+            if closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+            else "1.0"
+        )
         values: dict[str, Any] = {
             **_entry_values(
                 campaign_id=family.campaign_id,
@@ -2334,11 +2343,7 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
                 entry_index=entry_index,
                 previous_entry_sha256=previous_entry_sha256,
             ),
-            "schema_version": (
-                "1.1"
-                if closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
-                else "1.0"
-            ),
+            "schema_version": schema_version,
             "family_index": family.family_index,
             "family_id": family.family_id,
             "family_root_sha256": family.entry_sha256,
@@ -2350,7 +2355,11 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
         }
         closure_id = "scheduler-recovery-closure-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-closure.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-closure.v2"
+                    if schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-closure.v1"
+                ),
                 "family_id": family.family_id,
                 "family_root_sha256": family.entry_sha256,
                 "child_result_sha256s": result_hashes,
@@ -2364,10 +2373,10 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
 
     @model_validator(mode="after")
     def closure_inventory_identity_and_hash_are_exact(self) -> Self:
-        if (
-            self.schema_version == "1.0"
-            and self.closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
-        ):
+        if self.schema_version == "1.0" and self.closure_status in {
+            SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED,
+            SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING,
+        }:
             raise ValueError("v1 structural recovery closure cannot grant coverage closure")
         if self.schema_version == "1.1" and (
             self.closure_status is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
@@ -2376,6 +2385,14 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
             or not self.covered_unfinished_surface_ids
         ):
             raise ValueError("v1.1 recovery closure requires exact direct typed coverage")
+        if self.schema_version == "1.2" and (
+            self.closure_status
+            is not SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+            or len(self.child_result_sha256s) != 2
+            or len(self.nested_family_closure_sha256s) != 1
+            or not self.covered_unfinished_surface_ids
+        ):
+            raise ValueError("v1.2 recovery closure requires one exact nested typed closure")
         if len(self.child_result_sha256s) != len(set(self.child_result_sha256s)) or any(
             re.fullmatch(_SHA256_PATTERN, item) is None for item in self.child_result_sha256s
         ):
@@ -2393,7 +2410,11 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
         )
         expected_id = "scheduler-recovery-closure-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-closure.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-closure.v2"
+                    if self.schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-closure.v1"
+                ),
                 "family_id": self.family_id,
                 "family_root_sha256": self.family_root_sha256,
                 "child_result_sha256s": self.child_result_sha256s,

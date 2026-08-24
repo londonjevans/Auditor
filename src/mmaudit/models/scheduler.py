@@ -62,6 +62,7 @@ from mmaudit.models.schemas import (
     VerificationDecision,
 )
 from mmaudit.models.truncation import (
+    CandidateReviewChannelState,
     CandidateReviewFramedDocument,
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
@@ -70,20 +71,30 @@ from mmaudit.models.truncation import (
     candidate_review_frame_wire_schema_sha256,
     candidate_review_protocol_implementation_is_pristine,
 )
-from mmaudit.models.truncation_recovery import TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS
+from mmaudit.models.truncation_recovery import (
+    TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    TruncationRecoveryChildPlan,
+)
 from mmaudit.models.truncation_recovery_journal import (
     SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
     SchedulerTruncationRecoveryChildActivation,
+    SchedulerTruncationRecoveryChildDispatch,
+    SchedulerTruncationRecoveryChildPreflightResult,
     SchedulerTruncationRecoveryChildResult,
+    SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryEntry,
+    SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryPromotionBinding,
+    SchedulerTruncationRecoveryRequestLimitBinding,
+    SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
     validate_truncation_recovery_entry_chain,
 )
 from mmaudit.models.usage import (
+    atomic_request_limit_reservations_from_usage,
     is_structurally_accountable_usage_record,
     usage_requires_audit_policy_evidence,
 )
@@ -6721,10 +6732,13 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         *,
         manifest: SchedulerCampaignManifest,
         parent_request: SchedulerModelRequestEvidence,
+        parent_attempt: SchedulerProviderAttemptEvidence,
         family: SchedulerTruncationRecoveryFamilyRoot,
         promotion: SchedulerTruncationRecoveryFamilyPromotion | None,
         activation: SchedulerTruncationRecoveryChildActivation,
         result: SchedulerTruncationRecoveryChildResult,
+        root_family: SchedulerTruncationRecoveryFamilyRoot | None = None,
+        recovery_entries: tuple[SchedulerTruncationRecoveryEntry, ...],
     ) -> SchedulerTruncationRecoveryModelRequestEvidence:
         """Derive one projection without accepting caller-selected evidence coordinates."""
 
@@ -6734,8 +6748,15 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         exact_parent = SchedulerModelRequestEvidence.model_validate(
             parent_request.model_dump(mode="python")
         )
+        exact_parent_attempt = SchedulerProviderAttemptEvidence.model_validate(
+            parent_attempt.model_dump(mode="python")
+        )
         exact_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
             family.model_dump_json(),
+            strict=True,
+        )
+        exact_root_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+            (root_family if root_family is not None else family).model_dump_json(),
             strict=True,
         )
         exact_promotion = (
@@ -6753,6 +6774,148 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         exact_result = SchedulerTruncationRecoveryChildResult.model_validate_json(
             result.model_dump_json(),
             strict=True,
+        )
+        if type(recovery_entries) is not tuple:
+            raise TypeError("recovery public request lifecycle inventory is invalid")
+        exact_recovery_entries = validate_truncation_recovery_entry_chain(recovery_entries)
+        chain_families = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryFamilyRoot)
+        )
+        chain_activations = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryChildActivation)
+        )
+        chain_dispatches = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryChildDispatch)
+        )
+        chain_results = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryChildResult)
+        )
+        chain_preflight_results = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryChildPreflightResult)
+        )
+        chain_promotions = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryFamilyPromotion)
+        )
+        chain_closures = tuple(
+            item
+            for item in exact_recovery_entries
+            if isinstance(item, SchedulerTruncationRecoveryFamilyClosure)
+        )
+        exact_root_child_results = tuple(
+            item for item in chain_results if item.family_id == exact_root_family.family_id
+        )
+        nested_family_keys = tuple(
+            (item.parent_family_id, item.recovery_plan.parent.parent_task_id)
+            for item in chain_families
+            if item.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+        )
+        terminal_child_ids = tuple(item.child_task_id for item in chain_results) + tuple(
+            item.child_task_id for item in chain_preflight_results
+        )
+        direct_parent_task_ids = tuple(
+            item.recovery_plan.parent.parent_task_id
+            for item in chain_families
+            if item.parent_kind is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        )
+        closure_family_ids = tuple(item.family_id for item in chain_closures)
+        chain_shape_is_unique = (
+            len({item.family_id for item in chain_families}) == len(chain_families)
+            and len({item.child_task_id for item in chain_activations}) == len(chain_activations)
+            and len({item.child_task_id for item in chain_dispatches}) == len(chain_dispatches)
+            and len(set(terminal_child_ids)) == len(terminal_child_ids)
+            and len(set(nested_family_keys)) == len(nested_family_keys)
+            and len(set(direct_parent_task_ids)) == len(direct_parent_task_ids)
+            and len(set(closure_family_ids)) == len(closure_family_ids)
+        )
+        try:
+            exact_parent_reservations = atomic_request_limit_reservations_from_usage(
+                exact_parent_attempt.usage_record
+            )
+        except ValueError:
+            raise ValueError(
+                "recovery public request lacks exact parent request-limit evidence"
+            ) from None
+        root_parent_reservation = (
+            exact_root_family.request_limit_binding.parent_request_limit_reservation
+        )
+        root_has_nested_family = any(
+            item.parent_family_id == exact_root_family.family_id for item in chain_families
+        )
+        root_attempt_truncation_is_exact = (
+            exact_parent_attempt.schema_version == "1.1"
+            and exact_parent_attempt.truncation_projection
+            == exact_root_family.truncation_projection
+        ) or (
+            not root_has_nested_family
+            and exact_parent_attempt.schema_version == "1.0"
+            and exact_parent_attempt.truncation_projection is None
+        )
+        expected_parent_reservation_request_id = (
+            exact_parent_attempt.usage_record.request_id
+            if exact_parent_attempt.usage_record.attempts == 1
+            else (
+                f"{exact_parent_attempt.usage_record.request_id}:attempt:"
+                f"{exact_parent_attempt.usage_record.attempts}"
+            )
+        )
+        root_parent_attempt_is_exact = (
+            exact_root_family.request_limit_binding.manifest_sha256
+            == exact_manifest.manifest_sha256
+            and exact_root_family.request_limit_binding.campaign_id == exact_manifest.campaign_id
+            and exact_parent.manifest_sha256 == exact_manifest.manifest_sha256
+            and exact_parent.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            and exact_parent.activation_status is SchedulerActivationStatus.ACTIVATED
+            and exact_parent.terminal_status is SchedulerTerminalStatus.TRUNCATED
+            and exact_root_family.request_limit_id == exact_parent.logical_request_id
+            and exact_root_family.recovery_plan.parent.parent_task_id == exact_parent.task_id
+            and exact_root_family.recovery_plan.parent.parent_logical_request_id
+            == exact_parent.logical_request_id
+            and exact_root_family.recovery_plan.parent.pass_plan_id == exact_parent.pass_plan_id
+            and exact_root_family.recovery_plan.parent.parent_task_plan_sha256
+            == exact_parent.task_plan_sha256
+            and exact_root_family.recovery_plan.parent.parent_activation_sha256
+            == exact_parent.activation_sha256
+            and exact_root_family.parent_terminal_result_sha256 == exact_parent.result_sha256
+            and exact_parent.terminal_evidence_sha256
+            == exact_root_family.truncation_projection.evidence_sha256
+            and bool(exact_parent_reservations)
+            and exact_parent_reservations[-1] == root_parent_reservation
+            and root_parent_reservation.request_id == expected_parent_reservation_request_id
+            and root_parent_reservation.request_limit_scope == exact_parent.logical_request_id
+            and root_parent_reservation.exact_model_id == exact_parent.requested_model
+            and root_parent_reservation.role == exact_parent.role
+            and root_attempt_truncation_is_exact
+            and exact_parent_attempt.task_id == exact_parent.task_id
+            and exact_parent_attempt.logical_request_id == exact_parent.logical_request_id
+            and exact_parent_attempt.activation_sha256 == exact_parent.activation_sha256
+            and exact_parent_attempt.attempt_evidence_sha256
+            == exact_root_family.recovery_plan.parent.provider_attempt_evidence_sha256
+            and exact_parent_attempt.delivered_source_descriptor_sha256s
+            == exact_parent.delivered_source_descriptor_sha256s
+            and exact_parent_attempt.response_schema_sha256 == exact_parent.response_schema_sha256
+            and exact_parent_attempt.usage_record.request_id == exact_parent.logical_request_id
+            and exact_parent_attempt.usage_record.role == exact_parent.role
+            and exact_parent_attempt.usage_record.requested_model == exact_parent.requested_model
+            and exact_parent_attempt.usage_record.validation_status
+            is ModelRequestValidationStatus.TRUNCATED
+            and exact_parent_attempt.usage_record.status == "rejected_truncated_response"
+            and exact_parent_attempt.usage_record.validated_response_sha256 is None
+            and exact_parent_attempt.usage_record.response_sha256
+            == exact_root_family.truncation_projection.original_response_sha256
+            and exact_parent_attempt.usage_record.schema_sha256
+            == exact_root_family.truncation_projection.wire_schema_sha256
         )
         usage = exact_result.runtime_usage_record
         reservation = exact_result.runtime_request_limit_reservation
@@ -6813,12 +6976,472 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 "source_descriptor_sha256s": (exact_parent.delivered_source_descriptor_sha256s),
             }
         )
+
+        def chain_lifecycle_matches(
+            *,
+            family_item: SchedulerTruncationRecoveryFamilyRoot,
+            child: TruncationRecoveryChildPlan,
+            result_item: SchedulerTruncationRecoveryChildResult,
+        ) -> bool:
+            preceding_reserved_attempts = sum(
+                item.reserved_provider_attempts
+                for item in family_item.recovery_plan.children
+                if item.ordinal < child.ordinal
+            )
+            expected_request_limit_count_before = (
+                family_item.request_limit_count_before_family + preceding_reserved_attempts
+            )
+            activation_matches = tuple(
+                item
+                for item in chain_activations
+                if item.entry_sha256 == result_item.activation_sha256
+                and item == result_item.runtime_activation
+                and item.family_index == family_item.family_index
+                and item.family_id == family_item.family_id
+                and item.family_root_sha256 == family_item.entry_sha256
+                and item.child_ordinal == child.ordinal
+                and item.child_task_id == child.child_task_id
+                and item.child_logical_request_id == child.child_logical_request_id
+                and item.child_plan_sha256 == child.child_plan_sha256
+                and item.child_surface_ids == child.surface_ids
+                and item.global_request_ordinal
+                == family_item.request_count_before_family + child.ordinal + 1
+                and item.request_limit_count_before_child == expected_request_limit_count_before
+                and item.request_limit_count_after_child
+                == expected_request_limit_count_before + child.reserved_provider_attempts
+                and item.request_limit_maximum
+                == family_item.request_limit_binding.request_limit_maximum
+                and item.request_limit_id == family_item.request_limit_id
+                and item.request_limit_binding_sha256 == family_item.request_limit_binding_sha256
+                and item.request_role
+                == family_item.request_limit_binding.parent_request_limit_reservation.role
+                and item.requested_model
+                == family_item.request_limit_binding.parent_request_limit_reservation.exact_model_id
+            )
+            if len(activation_matches) != 1:
+                return False
+            activation_item = activation_matches[0]
+            dispatch_matches = tuple(
+                item
+                for item in chain_dispatches
+                if item.entry_sha256 == result_item.dispatch_sha256
+                and item.dispatch_id == result_item.dispatch_id
+                and item.activation_id == activation_item.activation_id
+                and item.activation_sha256 == activation_item.entry_sha256
+                and item.family_id == family_item.family_id
+                and item.family_root_sha256 == family_item.entry_sha256
+                and item.child_task_id == child.child_task_id
+                and item.child_logical_request_id == child.child_logical_request_id
+                and item.child_plan_sha256 == child.child_plan_sha256
+                and item.global_request_ordinal == activation_item.global_request_ordinal
+                and item.request_limit_id == activation_item.request_limit_id
+                and item.request_limit_binding_sha256
+                == activation_item.request_limit_binding_sha256
+                and item.request_limit_count_before_child
+                == activation_item.request_limit_count_before_child
+                and item.request_limit_count_after_child
+                == activation_item.request_limit_count_after_child
+                and item.request_limit_maximum == activation_item.request_limit_maximum
+            )
+            return (
+                len(dispatch_matches) == 1
+                and family_item.entry_index
+                < activation_item.entry_index
+                < dispatch_matches[0].entry_index
+                < result_item.entry_index
+                and result_item.family_id == family_item.family_id
+                and result_item.family_root_sha256 == family_item.entry_sha256
+                and result_item.child_task_id == child.child_task_id
+                and result_item.child_logical_request_id == child.child_logical_request_id
+                and result_item.child_plan_sha256 == child.child_plan_sha256
+                and result_item.child_surface_ids == child.surface_ids
+                and result_item.global_request_ordinal == activation_item.global_request_ordinal
+            )
+
+        expected_global_request_count = 0
+        expected_scope_counts: dict[str, int] = {}
+        scope_bindings: dict[str, SchedulerTruncationRecoveryRequestLimitBinding] = {}
+        family_sequence_is_exact = True
+        for expected_family_index, family_item in enumerate(chain_families):
+            prior_binding = scope_bindings.setdefault(
+                family_item.request_limit_id,
+                family_item.request_limit_binding,
+            )
+            expected_scope_count = expected_scope_counts.setdefault(
+                family_item.request_limit_id,
+                (
+                    family_item.request_limit_binding.parent_request_limit_reservation.request_limit_count_after
+                ),
+            )
+            if (
+                family_item.family_index != expected_family_index
+                or family_item.request_count_before_family != expected_global_request_count
+                or family_item.request_count_after_family
+                != expected_global_request_count + len(family_item.recovery_plan.children)
+                or family_item.request_limit_binding != prior_binding
+                or family_item.request_limit_count_before_family != expected_scope_count
+                or family_item.request_limit_count_after_family
+                != expected_scope_count + family_item.request_limit_attempts_reserved_for_family
+            ):
+                family_sequence_is_exact = False
+            expected_global_request_count += len(family_item.recovery_plan.children)
+            expected_scope_counts[family_item.request_limit_id] = (
+                expected_scope_count + family_item.request_limit_attempts_reserved_for_family
+            )
+
+        family_by_id = {item.family_id: item for item in chain_families}
+        closure_by_family_id = {item.family_id: item for item in chain_closures}
+        terminal_by_child_id: dict[
+            str,
+            SchedulerTruncationRecoveryChildResult
+            | SchedulerTruncationRecoveryChildPreflightResult,
+        ] = {}
+        for result_entry in chain_results:
+            terminal_by_child_id[result_entry.child_task_id] = result_entry
+        for preflight_entry in chain_preflight_results:
+            terminal_by_child_id[preflight_entry.child_task_id] = preflight_entry
+        closure_sequence_is_exact = True
+        for closure_item in chain_closures:
+            closed_family = family_by_id.get(closure_item.family_id)
+            ordered_terminals = (
+                tuple(
+                    terminal_by_child_id[child.child_task_id]
+                    for child in closed_family.recovery_plan.children
+                )
+                if closed_family is not None
+                and all(
+                    child.child_task_id in terminal_by_child_id
+                    for child in closed_family.recovery_plan.children
+                )
+                else ()
+            )
+            nested_families = tuple(
+                item for item in chain_families if item.parent_family_id == closure_item.family_id
+            )
+            nested_closures = tuple(
+                closure_by_family_id.get(item.family_id) for item in nested_families
+            )
+            expected_covered: set[str] = set()
+            expected_nested_closure_sha256s: list[str] = []
+            all_branches_have_typed_coverage = True
+            closure_is_uncertain = False
+            for child, terminal_item in zip(
+                closed_family.recovery_plan.children if closed_family is not None else (),
+                ordered_terminals,
+                strict=True,
+            ):
+                child_nested_families = tuple(
+                    item
+                    for item in nested_families
+                    if item.recovery_plan.parent.parent_task_id == child.child_task_id
+                )
+                if (
+                    isinstance(terminal_item, SchedulerTruncationRecoveryChildResult)
+                    and terminal_item.schema_version in {"1.1", "1.2"}
+                    and terminal_item.result_origin
+                    is SchedulerTruncationRecoveryResultOrigin.RUNTIME
+                    and terminal_item.terminal_status
+                    is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+                    and terminal_item.completed_surface_ids == child.surface_ids
+                    and not child_nested_families
+                ):
+                    expected_covered.update(terminal_item.completed_surface_ids)
+                    continue
+                if (
+                    isinstance(terminal_item, SchedulerTruncationRecoveryChildResult)
+                    and terminal_item.schema_version == "1.1"
+                    and terminal_item.result_origin
+                    is SchedulerTruncationRecoveryResultOrigin.RUNTIME
+                    and terminal_item.terminal_status
+                    is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+                    and closed_family is not None
+                    and closed_family.parent_kind
+                    is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+                    and not terminal_item.retained_surface_ids
+                    and len(child_nested_families) == 1
+                ):
+                    nested_closure = closure_by_family_id.get(child_nested_families[0].family_id)
+                    if (
+                        nested_closure is not None
+                        and nested_closure.schema_version == "1.1"
+                        and nested_closure.closure_status
+                        is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                        and nested_closure.covered_unfinished_surface_ids == child.surface_ids
+                    ):
+                        expected_covered.update(nested_closure.covered_unfinished_surface_ids)
+                        expected_nested_closure_sha256s.append(nested_closure.entry_sha256)
+                        continue
+                all_branches_have_typed_coverage = False
+                if (
+                    terminal_item.terminal_status
+                    is SchedulerTruncationRecoveryTerminalStatus.UNCERTAIN
+                ):
+                    closure_is_uncertain = True
+            expected_unfinished_surfaces = (
+                set(closed_family.recovery_plan.parent.unfinished_surface_ids)
+                if closed_family is not None
+                else set()
+            )
+            exact_typed_coverage = (
+                all_branches_have_typed_coverage
+                and expected_covered == expected_unfinished_surfaces
+                and len(expected_nested_closure_sha256s) == len(nested_families)
+            )
+            expected_closure_status = (
+                SchedulerTruncationRecoveryClosureStatus.UNCERTAIN
+                if closure_is_uncertain
+                else (
+                    SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+                    if expected_nested_closure_sha256s
+                    else SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                )
+                if exact_typed_coverage
+                else SchedulerTruncationRecoveryClosureStatus.INCOMPLETE
+            )
+            expected_closure_schema = (
+                "1.2"
+                if expected_closure_status
+                is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+                else "1.1"
+                if expected_closure_status
+                is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                else "1.0"
+            )
+            if (
+                closed_family is None
+                or closure_item.schema_version != expected_closure_schema
+                or closure_item.campaign_id != closed_family.campaign_id
+                or closure_item.request_limit_id != closed_family.request_limit_id
+                or closure_item.request_limit_binding_sha256
+                != closed_family.request_limit_binding_sha256
+                or closure_item.family_index != closed_family.family_index
+                or closure_item.family_root_sha256 != closed_family.entry_sha256
+                or closure_item.recovery_plan_sha256 != closed_family.recovery_plan.plan_sha256
+                or closure_item.closure_status is not expected_closure_status
+                or closure_item.covered_unfinished_surface_ids != tuple(sorted(expected_covered))
+                or len(ordered_terminals) != len(closed_family.recovery_plan.children)
+                or closure_item.child_result_sha256s
+                != tuple(item.entry_sha256 for item in ordered_terminals)
+                or not all(
+                    closed_family.entry_index < item.entry_index < closure_item.entry_index
+                    for item in ordered_terminals
+                )
+                or any(item is None for item in nested_closures)
+                or closure_item.nested_family_closure_sha256s
+                != tuple(expected_nested_closure_sha256s)
+                or any(
+                    item is None or item.entry_index >= closure_item.entry_index
+                    for item in nested_closures
+                )
+            ):
+                closure_sequence_is_exact = False
+        for current_family in chain_families:
+            family_closure = closure_by_family_id.get(current_family.family_id)
+            parent_closure = (
+                closure_by_family_id.get(current_family.parent_family_id)
+                if current_family.parent_family_id is not None
+                else None
+            )
+            family_lifecycle_indexes = (
+                tuple(
+                    item.entry_index
+                    for item in chain_activations
+                    if item.family_id == current_family.family_id
+                )
+                + tuple(
+                    item.entry_index
+                    for item in chain_dispatches
+                    if item.family_id == current_family.family_id
+                )
+                + tuple(
+                    item.entry_index
+                    for item in chain_results
+                    if item.family_id == current_family.family_id
+                )
+                + tuple(
+                    item.entry_index
+                    for item in chain_preflight_results
+                    if item.family_id == current_family.family_id
+                )
+            )
+            if (
+                family_closure is not None
+                and any(index >= family_closure.entry_index for index in family_lifecycle_indexes)
+            ) or (
+                parent_closure is not None
+                and current_family.entry_index >= parent_closure.entry_index
+            ):
+                closure_sequence_is_exact = False
+        for promotion_item in chain_promotions:
+            promotion_closure = closure_by_family_id.get(promotion_item.family_id)
+            if (
+                promotion_closure is None
+                or promotion_item.entry_index <= promotion_closure.entry_index
+            ):
+                closure_sequence_is_exact = False
+
+        direct_family = (
+            exact_family.parent_kind is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            and exact_family == exact_root_family
+            and exact_family.parent_family_id is None
+            and exact_family.recovery_plan.parent.parent_task_id == exact_parent.task_id
+            and exact_family.parent_terminal_result_sha256 == exact_parent.result_sha256
+        )
+        projected_children = tuple(
+            child
+            for child in exact_family.recovery_plan.children
+            if child.child_task_id == exact_result.child_task_id
+            and child.child_logical_request_id == exact_result.child_logical_request_id
+            and child.child_plan_sha256 == exact_result.child_plan_sha256
+            and child.surface_ids == exact_result.child_surface_ids
+            and child.ordinal == exact_activation.child_ordinal
+        )
+        root_results_by_child = tuple(
+            (
+                child,
+                tuple(
+                    item
+                    for item in exact_root_child_results
+                    if item.family_id == exact_root_family.family_id
+                    and item.family_root_sha256 == exact_root_family.entry_sha256
+                    and item.child_task_id == child.child_task_id
+                    and item.child_logical_request_id == child.child_logical_request_id
+                    and item.child_plan_sha256 == child.child_plan_sha256
+                    and item.child_surface_ids == child.surface_ids
+                    and item.runtime_activation is not None
+                    and item.runtime_activation.child_task_id == child.child_task_id
+                    and item.runtime_activation.child_logical_request_id
+                    == child.child_logical_request_id
+                    and item.runtime_activation.child_plan_sha256 == child.child_plan_sha256
+                    and item.runtime_activation.child_surface_ids == child.surface_ids
+                    and item.runtime_activation.family_id == exact_root_family.family_id
+                    and item.runtime_activation.family_root_sha256 == exact_root_family.entry_sha256
+                    and item.runtime_activation.request_role == exact_parent.role
+                    and item.runtime_activation.requested_model == exact_parent.requested_model
+                    and chain_lifecycle_matches(
+                        family_item=exact_root_family,
+                        child=child,
+                        result_item=item,
+                    )
+                ),
+            )
+            for child in exact_root_family.recovery_plan.children
+        )
+        exact_root_result_partition = (
+            len(exact_root_family.recovery_plan.children) == 2
+            and len(exact_root_child_results) == 2
+            and len({item.entry_sha256 for item in exact_root_child_results}) == 2
+            and all(len(matches) == 1 for _child, matches in root_results_by_child)
+        )
+        truncated_root_branches = tuple(
+            (child, matches[0])
+            for child, matches in root_results_by_child
+            if len(matches) == 1
+            and matches[0].schema_version == "1.1"
+            and matches[0].result_origin is SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            and matches[0].terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+            and matches[0].truncation_projection is not None
+            and matches[0].truncation_projection.findings_state
+            is CandidateReviewChannelState.COMPLETE
+            and not matches[0].retained_surface_ids
+            and not matches[0].truncation_projection.surface_reviews
+            and matches[0].runtime_specialist_accepted_outcome is None
+            and matches[0].runtime_specialist_accepted_outcome_sha256 is None
+        )
+        successful_root_branches = tuple(
+            (child, matches[0])
+            for child, matches in root_results_by_child
+            if len(matches) == 1
+            and matches[0].schema_version == "1.1"
+            and matches[0].result_origin is SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            and matches[0].terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+            and matches[0].completed_surface_ids == child.surface_ids
+            and matches[0].runtime_specialist_accepted_outcome is None
+            and matches[0].runtime_specialist_accepted_outcome_sha256 is None
+        )
+        truncated_root_projection = (
+            truncated_root_branches[0][1].truncation_projection
+            if len(truncated_root_branches) == 1
+            else None
+        )
+        nested_parent = exact_family.recovery_plan.parent
+        family_membership_is_exact = (
+            sum(item == exact_family for item in chain_families) == 1
+            and sum(item == exact_root_family for item in chain_families) == 1
+        )
+        projected_lifecycle_is_exact = (
+            len(projected_children) == 1
+            and sum(item == exact_result for item in chain_results) == 1
+            and chain_lifecycle_matches(
+                family_item=exact_family,
+                child=projected_children[0],
+                result_item=exact_result,
+            )
+        )
+        result_promotions = tuple(
+            item
+            for item in chain_promotions
+            if exact_result.entry_sha256 in item.direct_child_result_sha256s
+        )
+        promotion_membership_is_exact = (
+            result_promotions == ()
+            if exact_promotion is None
+            else result_promotions == (exact_promotion,)
+        )
+        nested_family = (
+            exact_family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+            and exact_family.parent_family_id == exact_root_family.family_id
+            and exact_root_family.parent_kind
+            is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            and exact_root_family.parent_family_id is None
+            and exact_root_family.recovery_plan.parent.parent_task_id == exact_parent.task_id
+            and exact_root_family.parent_terminal_result_sha256 == exact_parent.result_sha256
+            and exact_family.request_limit_binding == exact_root_family.request_limit_binding
+            and exact_family.requested_surface_manifest
+            == exact_root_family.requested_surface_manifest
+            and exact_root_result_partition
+            and len(truncated_root_branches) == 1
+            and len(successful_root_branches) == 1
+            and truncated_root_projection is not None
+            and nested_parent.parent_task_id == truncated_root_branches[0][0].child_task_id
+            and nested_parent.parent_logical_request_id
+            == truncated_root_branches[0][0].child_logical_request_id
+            and nested_parent.pass_plan_id == truncated_root_branches[0][0].pass_plan_id
+            and nested_parent.parent_task_plan_sha256
+            == truncated_root_branches[0][0].child_plan_sha256
+            and nested_parent.parent_activation_sha256
+            == truncated_root_branches[0][1].activation_sha256
+            and nested_parent.provider_attempt_evidence_sha256
+            == truncated_root_branches[0][1].provider_attempt_evidence_sha256
+            and nested_parent.truncation_projection_sha256
+            == truncated_root_projection.evidence_sha256
+            and nested_parent.requested_surface_ids == truncated_root_branches[0][0].surface_ids
+            and nested_parent.unfinished_surface_ids == truncated_root_branches[0][0].surface_ids
+            and nested_parent.current_depth == truncated_root_branches[0][0].depth == 1
+            and nested_parent.parent_path == truncated_root_branches[0][0].path
+            and exact_family.parent_terminal_result_sha256
+            == truncated_root_branches[0][1].entry_sha256
+            and exact_family.entry_index
+            > max(item.entry_index for item in exact_root_child_results)
+            and exact_family.request_count_before_family
+            == exact_root_family.request_count_after_family
+            and exact_family.request_limit_count_before_family
+            == exact_root_family.request_limit_count_after_family
+            and all(child.depth == 2 for child in exact_family.recovery_plan.children)
+            and exact_parent.role not in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
+            and exact_promotion is None
+        )
         if (
             exact_manifest.campaign_id != exact_parent.campaign_id
+            or not chain_shape_is_unique
+            or not root_parent_attempt_is_exact
+            or not family_sequence_is_exact
+            or not closure_sequence_is_exact
             or exact_family.campaign_id != exact_manifest.campaign_id
-            or exact_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
-            or exact_family.recovery_plan.parent.parent_task_id != exact_parent.task_id
-            or exact_family.parent_terminal_result_sha256 != exact_parent.result_sha256
+            or not family_membership_is_exact
+            or not projected_lifecycle_is_exact
+            or not promotion_membership_is_exact
+            or not (direct_family or nested_family)
             or exact_result.family_id != exact_family.family_id
             or exact_result.family_root_sha256 != exact_family.entry_sha256
             or exact_parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
@@ -7076,6 +7699,7 @@ def build_scheduler_truncation_recovery_model_request_evidence(
     manifest: SchedulerCampaignManifest,
     model_requests: Iterable[SchedulerModelRequestEvidence],
     truncation_recovery_entries: Iterable[SchedulerTruncationRecoveryEntry],
+    provider_attempts: Iterable[SchedulerProviderAttemptEvidence] = (),
 ) -> tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]:
     """Derive public request evidence for every typed child UsageRecord."""
 
@@ -7089,28 +7713,144 @@ def build_scheduler_truncation_recovery_model_request_evidence(
         SchedulerModelRequestEvidence.model_validate(item.model_dump(mode="python"))
         for item in request_items
     )
+    provider_attempt_items = _bounded_scheduler_items(
+        provider_attempts,
+        limit=_MAX_SCHEDULER_MODEL_REQUESTS,
+        label="provider-attempt inventory",
+    )
+    exact_provider_attempts = tuple(
+        SchedulerProviderAttemptEvidence.model_validate(item.model_dump(mode="python"))
+        for item in provider_attempt_items
+    )
     entries = validate_truncation_recovery_entry_chain(truncation_recovery_entries)
     parent_by_task = {item.task_id: item for item in exact_requests}
     if len(parent_by_task) != len(exact_requests):
         raise ValueError("scheduler recovery public projection repeats a parent request")
-    activations_by_sha = {
-        entry.entry_sha256: entry
-        for entry in entries
-        if isinstance(entry, SchedulerTruncationRecoveryChildActivation)
-    }
-    results_by_sha = {
-        entry.entry_sha256: entry
-        for entry in entries
-        if isinstance(entry, SchedulerTruncationRecoveryChildResult)
-    }
+    provider_attempt_by_task = {item.task_id: item for item in exact_provider_attempts}
+    if len(provider_attempt_by_task) != len(exact_provider_attempts):
+        raise ValueError("scheduler recovery public projection repeats a provider attempt")
+    activation_items = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryChildActivation)
+    )
+    activations_by_sha = {entry.entry_sha256: entry for entry in activation_items}
+    result_items = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryChildResult)
+    )
+    results_by_sha = {entry.entry_sha256: entry for entry in result_items}
     promotions = tuple(
         entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
     )
-    families_by_id = {
-        entry.family_id: entry
-        for entry in entries
-        if isinstance(entry, SchedulerTruncationRecoveryFamilyRoot)
-    }
+    family_items = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyRoot)
+    )
+    families_by_id = {entry.family_id: entry for entry in family_items}
+    if (
+        len(activations_by_sha) != len(activation_items)
+        or len(results_by_sha) != len(result_items)
+        or len(families_by_id) != len(family_items)
+    ):
+        raise ValueError("scheduler recovery public projection repeats lifecycle evidence")
+
+    for root_candidate in family_items:
+        if root_candidate.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK:
+            continue
+        parent = parent_by_task.get(root_candidate.recovery_plan.parent.parent_task_id)
+        attempt = provider_attempt_by_task.get(root_candidate.recovery_plan.parent.parent_task_id)
+        if parent is None or attempt is None:
+            raise ValueError("scheduler recovery root lacks its exact public parent attempt")
+        try:
+            request_limit_reservations = atomic_request_limit_reservations_from_usage(
+                attempt.usage_record
+            )
+        except ValueError:
+            raise ValueError(
+                "scheduler recovery root lacks exact parent request-limit evidence"
+            ) from None
+        parent_reservation = root_candidate.request_limit_binding.parent_request_limit_reservation
+        usage = attempt.usage_record
+        root_has_nested_family = any(
+            item.parent_family_id == root_candidate.family_id for item in family_items
+        )
+        root_attempt_truncation_is_exact = (
+            attempt.schema_version == "1.1"
+            and attempt.truncation_projection == root_candidate.truncation_projection
+        ) or (
+            not root_has_nested_family
+            and attempt.schema_version == "1.0"
+            and attempt.truncation_projection is None
+        )
+        expected_parent_request_id = (
+            usage.request_id
+            if usage.attempts == 1
+            else f"{usage.request_id}:attempt:{usage.attempts}"
+        )
+        if (
+            root_candidate.request_limit_binding.manifest_sha256 != exact_manifest.manifest_sha256
+            or root_candidate.request_limit_binding.campaign_id != exact_manifest.campaign_id
+            or not request_limit_reservations
+            or request_limit_reservations[-1] != parent_reservation
+            or parent_reservation.request_id != expected_parent_request_id
+            or parent_reservation.request_limit_scope != parent.logical_request_id
+            or parent_reservation.exact_model_id != parent.requested_model
+            or parent_reservation.role != parent.role
+            or root_candidate.request_limit_id != parent.logical_request_id
+            or root_candidate.recovery_plan.parent.parent_logical_request_id
+            != parent.logical_request_id
+            or root_candidate.recovery_plan.parent.pass_plan_id != parent.pass_plan_id
+            or root_candidate.recovery_plan.parent.parent_task_plan_sha256
+            != parent.task_plan_sha256
+            or root_candidate.recovery_plan.parent.parent_activation_sha256
+            != parent.activation_sha256
+            or root_candidate.recovery_plan.parent.provider_attempt_evidence_sha256
+            != attempt.attempt_evidence_sha256
+            or root_candidate.parent_terminal_result_sha256 != parent.result_sha256
+            or parent.manifest_sha256 != exact_manifest.manifest_sha256
+            or parent.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+            or parent.activation_status is not SchedulerActivationStatus.ACTIVATED
+            or parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+            or parent.terminal_evidence_sha256
+            != root_candidate.truncation_projection.evidence_sha256
+            or not root_attempt_truncation_is_exact
+            or attempt.task_id != parent.task_id
+            or attempt.logical_request_id != parent.logical_request_id
+            or attempt.activation_sha256 != parent.activation_sha256
+            or attempt.delivered_source_descriptor_sha256s
+            != parent.delivered_source_descriptor_sha256s
+            or attempt.response_schema_sha256 != parent.response_schema_sha256
+            or usage.request_id != parent.logical_request_id
+            or usage.role != parent.role
+            or usage.requested_model != parent.requested_model
+            or usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
+            or usage.status != "rejected_truncated_response"
+            or usage.validated_response_sha256 is not None
+            or usage.response_sha256
+            != root_candidate.truncation_projection.original_response_sha256
+            or usage.schema_sha256 != root_candidate.truncation_projection.wire_schema_sha256
+        ):
+            raise ValueError("scheduler recovery root differs from its public parent attempt")
+
+    def root_family_for(
+        family: SchedulerTruncationRecoveryFamilyRoot,
+    ) -> SchedulerTruncationRecoveryFamilyRoot:
+        if family.parent_kind is SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK:
+            if family.parent_family_id is not None:
+                raise ValueError("scheduler recovery root has an unexpected parent family")
+            return family
+        parent_family = (
+            families_by_id.get(family.parent_family_id)
+            if family.parent_family_id is not None
+            else None
+        )
+        if (
+            parent_family is None
+            or parent_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            or parent_family.parent_family_id is not None
+            or family.recovery_plan.parent.current_depth != 1
+            or any(child.depth != 2 for child in family.recovery_plan.children)
+        ):
+            raise ValueError("scheduler nested recovery lacks one exact root ancestor")
+        return parent_family
+
     parent_ids = tuple(item.parent_task_id for item in promotions)
     if len(parent_ids) != len(set(parent_ids)):
         raise ValueError("scheduler recovery public projection repeats a promoted parent")
@@ -7126,18 +7866,33 @@ def build_scheduler_truncation_recovery_model_request_evidence(
             continue
         family = families_by_id.get(result.family_id)
         activation = activations_by_sha.get(result.activation_sha256)
+        root_family = root_family_for(family) if family is not None else None
         parent = (
-            parent_by_task.get(family.recovery_plan.parent.parent_task_id)
-            if family is not None
+            parent_by_task.get(root_family.recovery_plan.parent.parent_task_id)
+            if root_family is not None
             else None
         )
-        if family is None or activation is None or parent is None:
+        parent_attempt = (
+            provider_attempt_by_task.get(root_family.recovery_plan.parent.parent_task_id)
+            if root_family is not None
+            else None
+        )
+        if (
+            family is None
+            or root_family is None
+            or activation is None
+            or parent is None
+            or parent_attempt is None
+        ):
             raise ValueError("scheduler typed recovery usage lacks its public parent lifecycle")
         recovered.append(
             SchedulerTruncationRecoveryModelRequestEvidence.build(
                 manifest=exact_manifest,
                 parent_request=parent,
+                parent_attempt=parent_attempt,
                 family=family,
+                root_family=root_family,
+                recovery_entries=entries,
                 promotion=promotion_by_result_sha256.get(result.entry_sha256),
                 activation=activation,
                 result=result,

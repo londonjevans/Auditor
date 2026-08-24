@@ -1094,17 +1094,16 @@ class FakeOpenRouter:
             if self.mode in {
                 "truncation_recovery",
                 "truncation_recovery_multiple",
+                "truncation_recovery_recursive",
                 "truncation_recovery_retained_surface",
             } and isinstance(logical_request_id, str):
                 if logical_request_id.startswith("scheduler-recovery-request-"):
                     self.recovery_child_calls += 1
                     if (
-                        self.mode
-                        in {
-                            "truncation_recovery",
-                            "truncation_recovery_multiple",
-                            "truncation_recovery_retained_surface",
-                        }
+                        self.mode == "truncation_recovery_recursive"
+                        and self.recovery_child_calls == 1
+                    ) or (
+                        self.mode != "truncation_recovery_recursive"
                         and self.recovery_child_calls % 2 == 0
                     ):
                         return self._completion(

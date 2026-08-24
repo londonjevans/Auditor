@@ -33,10 +33,11 @@ def _one_whole_protocol_config(
     *,
     whole_protocol_count: int = 1,
     specialist: bool = False,
+    max_requests_per_agent: int = 4,
 ) -> Any:
     sections: dict[str, Any] = {
         "privacy": {"fail_on_detected_secret": False},
-        "execution": {"max_requests_per_agent": 4},
+        "execution": {"max_requests_per_agent": max_requests_per_agent},
     }
     if specialist:
         sections["profile"] = "deep"
@@ -109,6 +110,24 @@ def _candidate_and_surface_inventory(run_dir: Path) -> tuple[bytes, bytes]:
     return (
         (run_dir / "candidate-findings.json").read_bytes(),
         (run_dir / "private" / "model-review-artifacts.json").read_bytes(),
+    )
+
+
+def _assert_resume_retains_exact_scheduler_journal(*, owner: Path, consumer: Path) -> None:
+    assert not (consumer / "private" / "scheduler-journal").exists()
+    owner_artifact_bytes = (owner / "scheduler-state.json").read_bytes()
+    assert (consumer / "scheduler-state.json").read_bytes() == owner_artifact_bytes
+    owner_artifact = json.loads(owner_artifact_bytes)
+    reference = json.loads(
+        (consumer / "private" / "scheduler-journal-reference.json").read_text(encoding="utf-8")
+    )
+    assert reference["owner_run_id"] == owner.name
+    assert reference["consumer_run_id"] == consumer.name
+    assert reference["relative_journal_path"] == f"{owner.name}/private/scheduler-journal"
+    assert reference["scheduler_artifact_sha256"] == owner_artifact["artifact_sha256"]
+    assert (
+        reference["scheduler_journal_evidence_sha256"]
+        == (owner_artifact["journal_evidence"]["evidence_sha256"])
     )
 
 
@@ -255,6 +274,409 @@ async def test_mock_direct_recovery_is_noncrediting_and_resume_dispatches_nothin
     assert resumed_fake.truncated_parent_calls == 0
     assert resumed_fake.recovery_child_calls == 0
     assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
+
+
+@pytest.mark.asyncio
+async def test_mock_recursive_child_recovery_is_bounded_noncrediting_and_resumes_zero_transport(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _one_whole_protocol_config(
+        config_factory,
+        monkeypatch,
+        max_requests_per_agent=5,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "recursive-truncation-recovery-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    output = tmp_path / "recursive-truncation-recovery-output"
+    fake = FakeOpenRouter(mode="truncation_recovery_recursive")
+
+    first = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        cost_ledger=ledger,
+        output=output,
+    )
+
+    assert first.exit_code is ExitCode.INCOMPLETE
+    assert not first.report.completed
+    assert fake.truncated_parent_calls == 1
+    assert fake.recovery_child_calls == 4
+    parent_attempt = _truncated_parent_attempt(first.run_dir)
+    parent_request_id = parent_attempt["usage_record"]["request_id"]
+    assert Decimal(parent_attempt["usage_record"]["accounted_cost_usd_exact"]) == Decimal("0.001")
+    assert parent_attempt["truncation_projection"]["findings_state"] == "COMPLETE"
+
+    entries = _recovery_entries(first.run_dir)
+    assert [entry["entry_kind"] for entry in entries] == [
+        SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value,
+        SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value,
+    ]
+    family_roots = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value
+    )
+    activations = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value
+    )
+    child_results = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+    )
+    closures = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value
+    )
+    assert len(family_roots) == len(closures) == 2
+    assert len(activations) == len(child_results) == 4
+    root, nested = family_roots
+    nested_closure, root_closure = closures
+    assert root["family_index"] == 0
+    assert root["parent_kind"] == "SCHEDULER_TASK"
+    assert root["parent_family_id"] is None
+    assert root["request_count_before_family"] == 0
+    assert root["request_count_after_family"] == 2
+    assert root["request_limit_count_before_family"] == 1
+    assert root["request_limit_count_after_family"] == 3
+    assert nested["family_index"] == 1
+    assert nested["parent_kind"] == "RECOVERY_CHILD"
+    assert nested["parent_family_id"] == root["family_id"]
+    assert nested["request_count_before_family"] == 2
+    assert nested["request_count_after_family"] == 4
+    assert nested["request_limit_count_before_family"] == 3
+    assert nested["request_limit_count_after_family"] == 5
+    assert nested["request_limit_binding"] == root["request_limit_binding"]
+    assert nested["requested_surface_manifest"] == root["requested_surface_manifest"]
+
+    root_results = tuple(
+        result for result in child_results if result["family_id"] == root["family_id"]
+    )
+    nested_results = tuple(
+        result for result in child_results if result["family_id"] == nested["family_id"]
+    )
+    assert [result["terminal_status"] for result in root_results] == [
+        SchedulerTruncationRecoveryTerminalStatus.TRUNCATED.value,
+        SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value,
+    ]
+    assert all(
+        result["terminal_status"] == SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value
+        for result in nested_results
+    )
+    truncated_child_result = root_results[0]
+    root_children = root["recovery_plan"]["children"]
+    nested_children = nested["recovery_plan"]["children"]
+    truncated_child = next(
+        child
+        for child in root_children
+        if child["child_task_id"] == truncated_child_result["child_task_id"]
+    )
+    successful_root_child = next(
+        child
+        for child in root_children
+        if child["child_task_id"] != truncated_child["child_task_id"]
+    )
+    assert truncated_child["depth"] == 1
+    assert truncated_child["path"] == "0"
+    assert truncated_child_result["retained_surface_ids"] == []
+    assert truncated_child_result["truncation_projection"]["findings_state"] == "COMPLETE"
+    assert truncated_child_result["truncation_projection"]["surface_reviews"] == []
+    nested_parent = nested["recovery_plan"]["parent"]
+    assert nested_parent["parent_task_id"] == truncated_child["child_task_id"]
+    assert nested_parent["parent_logical_request_id"] == truncated_child["child_logical_request_id"]
+    assert nested_parent["parent_task_plan_sha256"] == truncated_child["child_plan_sha256"]
+    assert nested_parent["current_depth"] == 1
+    assert nested_parent["parent_path"] == "0"
+    assert nested_parent["requested_surface_ids"] == truncated_child["surface_ids"]
+    assert nested_parent["unfinished_surface_ids"] == truncated_child["surface_ids"]
+    assert nested["parent_terminal_result_sha256"] == truncated_child_result["entry_sha256"]
+    assert [(child["depth"], child["path"]) for child in nested_children] == [
+        (2, "00"),
+        (2, "01"),
+    ]
+    grandchild_surfaces = tuple(
+        surface_id for child in nested_children for surface_id in child["surface_ids"]
+    )
+    assert len(grandchild_surfaces) == len(set(grandchild_surfaces))
+    assert set(grandchild_surfaces) == set(truncated_child["surface_ids"])
+    assert not set(grandchild_surfaces).intersection(successful_root_child["surface_ids"])
+    leaf_surfaces = (*successful_root_child["surface_ids"], *grandchild_surfaces)
+    assert len(leaf_surfaces) == len(set(leaf_surfaces))
+    assert set(leaf_surfaces) == set(root["recovery_plan"]["parent"]["unfinished_surface_ids"])
+
+    assert [entry["global_request_ordinal"] for entry in activations] == [1, 2, 3, 4]
+    assert [
+        (
+            entry["request_limit_count_before_child"],
+            entry["request_limit_count_after_child"],
+        )
+        for entry in activations
+    ] == [(1, 2), (2, 3), (3, 4), (4, 5)]
+    assert {entry["request_limit_id"] for entry in activations} == {parent_request_id}
+    assert [entry["global_request_ordinal"] for entry in child_results] == [1, 2, 3, 4]
+    assert all(
+        entry["runtime_usage_record"]["attempts"] == 1
+        and entry["runtime_usage_record"]["retry_count"] == 0
+        and entry["runtime_usage_record"]["completion_tokens"] == 50
+        and entry["runtime_usage_record"]["execution_evidence"] == ExecutionEvidenceKind.MOCK.value
+        and Decimal(entry["accounted_cost_usd_exact"])
+        == Decimal(entry["runtime_usage_record"]["accounted_cost_usd_exact"])
+        == Decimal("0.001")
+        and Decimal(entry["accounted_cost_usd_exact"]) <= Decimal(entry["reserved_usd_exact"])
+        for entry in child_results
+    )
+    assert [
+        (
+            entry["runtime_request_limit_reservation"]["request_limit_count_before"],
+            entry["runtime_request_limit_reservation"]["request_limit_count_after"],
+        )
+        for entry in child_results
+    ] == [(1, 2), (2, 3), (3, 4), (4, 5)]
+
+    recovery_transport_ids = tuple(
+        logical_request_id
+        for request in fake.requests
+        if isinstance(metadata := request.get("metadata"), dict)
+        and isinstance(logical_request_id := metadata.get("mmaudit_request_id"), str)
+        and logical_request_id.startswith("scheduler-recovery-request-")
+    )
+    assert recovery_transport_ids == tuple(
+        activation["child_logical_request_id"] for activation in activations
+    )
+    assert recovery_transport_ids == tuple(
+        result["child_logical_request_id"] for result in child_results
+    )
+    assert nested_closure["family_id"] == nested["family_id"]
+    assert nested_closure["schema_version"] == "1.1"
+    assert nested_closure["closure_status"] == (
+        SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED.value
+    )
+    assert nested_closure["child_result_sha256s"] == [
+        result["entry_sha256"] for result in nested_results
+    ]
+    assert nested_closure["nested_family_closure_sha256s"] == []
+    assert root_closure["family_id"] == root["family_id"]
+    assert root_closure["schema_version"] == "1.2"
+    assert root_closure["closure_status"] == (
+        SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING.value
+    )
+    assert root_closure["child_result_sha256s"] == [
+        result["entry_sha256"] for result in root_results
+    ]
+    assert root_closure["nested_family_closure_sha256s"] == [nested_closure["entry_sha256"]]
+    assert all(
+        entry["entry_kind"] != SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED.value
+        for entry in entries
+    )
+
+    first_inventory = _candidate_and_surface_inventory(first.run_dir)
+    assert b"raw-truncated-parent" not in first_inventory[0]
+    assert b"scheduler-recovery-request-" not in first_inventory[1]
+    first_ledger = ledger.snapshot()
+    recovery_ledger_entries = tuple(
+        entry for entry in first_ledger.entries if entry.request_id in set(recovery_transport_ids)
+    )
+    assert len(recovery_ledger_entries) == 4
+    assert {entry.request_id for entry in recovery_ledger_entries} == set(recovery_transport_ids)
+    assert all(
+        entry.actual_cost_usd == entry.accounted_cost_usd == Decimal("0.001")
+        and entry.accounted_cost_usd <= entry.reserved_usd
+        for entry in recovery_ledger_entries
+    )
+
+    resumed_fake = FakeOpenRouter(mode="truncation_recovery_recursive")
+    resumed = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        resumed_fake,
+        cost_ledger=ledger,
+        resume_run_dir=first.run_dir,
+        output=output,
+    )
+
+    assert resumed.exit_code is ExitCode.INCOMPLETE
+    assert not resumed.report.completed
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.truncated_parent_calls == 0
+    assert resumed_fake.recovery_child_calls == 0
+    assert _recovery_entries(first.run_dir) == entries
+    _assert_resume_retains_exact_scheduler_journal(
+        owner=first.run_dir,
+        consumer=resumed.run_dir,
+    )
+    assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
+    assert ledger.snapshot() == first_ledger
+
+
+@pytest.mark.asyncio
+async def test_mock_recursive_recovery_refuses_grandchildren_beyond_shared_request_limit(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _one_whole_protocol_config(
+        config_factory,
+        monkeypatch,
+        max_requests_per_agent=4,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "recursive-request-limit-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    output = tmp_path / "recursive-request-limit-output"
+    fake = FakeOpenRouter(mode="truncation_recovery_recursive")
+
+    first = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        cost_ledger=ledger,
+        output=output,
+    )
+
+    assert first.exit_code is ExitCode.INCOMPLETE
+    assert not first.report.completed
+    assert fake.truncated_parent_calls == 1
+    assert fake.recovery_child_calls == 2
+    entries = _recovery_entries(first.run_dir)
+    assert [entry["entry_kind"] for entry in entries] == [
+        SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value,
+        SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value,
+        SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value,
+    ]
+    family_roots = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value
+    )
+    activations = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value
+    )
+    child_results = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+    )
+    closures = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value
+    )
+    assert len(family_roots) == len(closures) == 1
+    assert len(activations) == len(child_results) == 2
+    root = family_roots[0]
+    closure = closures[0]
+    assert root["parent_kind"] == "SCHEDULER_TASK"
+    assert root["parent_family_id"] is None
+    assert root["request_limit_count_before_family"] == 1
+    assert root["request_limit_count_after_family"] == 3
+    assert [(child["depth"], child["path"]) for child in root["recovery_plan"]["children"]] == [
+        (1, "0"),
+        (1, "1"),
+    ]
+    assert [result["terminal_status"] for result in child_results] == [
+        SchedulerTruncationRecoveryTerminalStatus.TRUNCATED.value,
+        SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value,
+    ]
+    assert [entry["global_request_ordinal"] for entry in activations] == [1, 2]
+    assert [
+        (
+            entry["request_limit_count_before_child"],
+            entry["request_limit_count_after_child"],
+        )
+        for entry in activations
+    ] == [(1, 2), (2, 3)]
+    assert closure["family_id"] == root["family_id"]
+    assert closure["schema_version"] == "1.0"
+    assert closure["closure_status"] == SchedulerTruncationRecoveryClosureStatus.INCOMPLETE.value
+    assert closure["child_result_sha256s"] == [result["entry_sha256"] for result in child_results]
+    assert closure["nested_family_closure_sha256s"] == []
+    assert all(
+        entry["entry_kind"] != SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED.value
+        for entry in entries
+    )
+
+    recovery_transport_ids = tuple(
+        logical_request_id
+        for request in fake.requests
+        if isinstance(metadata := request.get("metadata"), dict)
+        and isinstance(logical_request_id := metadata.get("mmaudit_request_id"), str)
+        and logical_request_id.startswith("scheduler-recovery-request-")
+    )
+    assert recovery_transport_ids == tuple(
+        child["child_logical_request_id"] for child in root["recovery_plan"]["children"]
+    )
+    first_inventory = _candidate_and_surface_inventory(first.run_dir)
+    assert b"raw-truncated-parent" not in first_inventory[0]
+    assert b"scheduler-recovery-request-" not in first_inventory[1]
+    first_ledger = ledger.snapshot()
+    recovery_ledger_entries = tuple(
+        entry for entry in first_ledger.entries if entry.request_id in set(recovery_transport_ids)
+    )
+    assert len(recovery_ledger_entries) == 2
+    assert all(
+        entry.actual_cost_usd == entry.accounted_cost_usd == Decimal("0.001")
+        and entry.accounted_cost_usd <= entry.reserved_usd
+        for entry in recovery_ledger_entries
+    )
+
+    resumed_fake = FakeOpenRouter(mode="truncation_recovery_recursive")
+    resumed = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        resumed_fake,
+        cost_ledger=ledger,
+        resume_run_dir=first.run_dir,
+        output=output,
+    )
+
+    assert resumed.exit_code is ExitCode.INCOMPLETE
+    assert not resumed.report.completed
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.truncated_parent_calls == 0
+    assert resumed_fake.recovery_child_calls == 0
+    assert _recovery_entries(first.run_dir) == entries
+    _assert_resume_retains_exact_scheduler_journal(
+        owner=first.run_dir,
+        consumer=resumed.run_dir,
+    )
+    assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
+    assert ledger.snapshot() == first_ledger
 
 
 @pytest.mark.asyncio

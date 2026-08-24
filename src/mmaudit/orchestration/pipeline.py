@@ -277,6 +277,7 @@ from mmaudit.models.truncation_recovery import (
     TruncationRecoveryChannel,
     TruncationRecoveryChannelBinding,
     TruncationRecoveryChannelState,
+    TruncationRecoveryChildPlan,
     TruncationRecoveryDisposition,
     TruncationRecoveryParentBinding,
     TruncationRecoveryPlan,
@@ -289,7 +290,9 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
     rebuild_truncation_recovery_parent_from_projection,
 )
@@ -299,6 +302,7 @@ from mmaudit.models.usage import (
     candidate_falsifier_role,
     is_creditable_usage_record,
     is_recovery_creditable_usage_record,
+    recovery_request_token_plan_from_usage,
     request_token_plan_from_usage,
 )
 from mmaudit.orchestration.assurance import (
@@ -910,6 +914,140 @@ def _build_direct_truncation_recovery_plan(
         child_completion_tokens=token_plan.requested_completion_tokens,
     )
     return manifest, plan_truncation_recovery(parent=parent, resources=resources)
+
+
+def _build_nested_truncation_recovery_plan(
+    *,
+    journal: SchedulerJournal,
+    parent_family: SchedulerTruncationRecoveryFamilyRoot,
+    parent_child: TruncationRecoveryChildPlan,
+    parent_result: SchedulerTruncationRecoveryChildResult,
+    parent_context: ContextPackage,
+    atomic_ledger: AtomicCostLedger,
+) -> TruncationRecoveryPlan:
+    """Plan one generic depth-two family from exact typed depth-one truncation custody."""
+
+    projection = parent_result.truncation_projection
+    parent_usage = parent_result.runtime_usage_record
+    parent_activation = parent_result.runtime_activation
+    provider_attempt_evidence_sha256 = parent_result.provider_attempt_evidence_sha256
+    parent_request_role = parent_family.request_limit_binding.parent_request_limit_reservation.role
+    if (
+        parent_result.schema_version != "1.1"
+        or parent_result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+        or parent_result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+        or projection is None
+        or parent_usage is None
+        or parent_activation is None
+        or provider_attempt_evidence_sha256 is None
+        or parent_result.runtime_truncated_envelope_evidence is None
+        or parent_child.depth != 1
+        or parent_child.path not in {"0", "1"}
+        or projection.findings_state is not CandidateReviewChannelState.COMPLETE
+        or projection.surface_reviews
+        or scheduler_role_requires_specialist_accepted_outcome(parent_request_role)
+        or tuple(parent_context.requested_model_surfaces)
+        != tuple(
+            request
+            for request in parent_family.requested_surface_manifest.requests
+            if request.surface_id in set(parent_child.surface_ids)
+        )
+    ):
+        raise ValueError("nested truncation recovery parent is outside the bounded generic slice")
+
+    manifest = parent_family.requested_surface_manifest
+    claimed_parent = TruncationRecoveryParentBinding.build(
+        campaign_id=parent_family.campaign_id,
+        pass_plan_id=parent_family.recovery_plan.parent.pass_plan_id,
+        parent_task_id=parent_child.child_task_id,
+        parent_logical_request_id=parent_child.child_logical_request_id,
+        parent_task_plan_sha256=parent_child.child_plan_sha256,
+        parent_activation_sha256=parent_activation.entry_sha256,
+        provider_attempt_evidence_sha256=provider_attempt_evidence_sha256,
+        truncation_projection_sha256=projection.evidence_sha256,
+        requested_surface_manifest_sha256=manifest.requested_surface_manifest_sha256,
+        requested_surface_ids=parent_child.surface_ids,
+        retained_surface_ids=(),
+        channel_bindings=_truncation_recovery_channel_bindings(projection),
+        current_depth=parent_child.depth,
+        parent_path=parent_child.path,
+    )
+    parent = rebuild_truncation_recovery_parent_from_projection(
+        claimed_parent=claimed_parent,
+        projection=projection,
+    )
+    reservation = parent_result.runtime_request_limit_reservation
+    if reservation is None:
+        raise ValueError("nested truncation recovery parent lacks request-limit evidence")
+    token_plan = recovery_request_token_plan_from_usage(
+        parent_usage,
+        request_limit_scope=parent_family.request_limit_id,
+        request_limit_count_before=reservation.request_limit_count_before,
+    )
+    if token_plan is None:
+        raise ValueError("nested truncation recovery parent lacks exact token-plan evidence")
+
+    snapshot = atomic_ledger.snapshot()
+    expected_attempt_request_ids = tuple(
+        parent_usage.request_id
+        if attempt_index == 1
+        else f"{parent_usage.request_id}:attempt:{attempt_index}"
+        for attempt_index in range(1, parent_usage.attempts + 1)
+    )
+    ledger_entries = tuple(
+        entry for entry in snapshot.entries if entry.request_id in expected_attempt_request_ids
+    )
+    reserved_costs = {entry.reserved_usd for entry in ledger_entries}
+    if (
+        tuple(entry.request_id for entry in ledger_entries) != expected_attempt_request_ids
+        or len(reserved_costs) != 1
+    ):
+        raise ValueError("nested truncation recovery parent lacks one uniform reservation")
+
+    retained_usage = journal.retained_provider_usage_records
+    matching_parent_usage = tuple(
+        record for record in retained_usage if record.request_id == parent_usage.request_id
+    )
+    if matching_parent_usage != (parent_usage,):
+        raise ValueError("nested truncation recovery parent usage is absent or ambiguous")
+    prior_usage = tuple(
+        record for record in retained_usage if record.request_id != parent_usage.request_id
+    )
+    prior_costs = tuple(record.accounted_cost_usd_exact for record in prior_usage)
+    if any(value is None for value in prior_costs):
+        raise ValueError("nested truncation recovery prior usage lacks exact cost evidence")
+    parent_cost = parent_usage.accounted_cost_usd_exact
+    if parent_cost is None:
+        raise ValueError("nested truncation recovery parent lacks exact accounted cost")
+
+    baseline = journal.manifest.cost_ledger_baseline
+    campaign_cap = _canonical_recovery_usd_total(
+        (baseline.cap_usd_exact if baseline is not None else TRUNCATION_RECOVERY_MAX_USD_EXACT,)
+    )
+    baseline_spent = _canonical_recovery_usd_total(
+        (baseline.spent_usd_exact if baseline is not None else "0",)
+    )
+    child_reserved = format(next(iter(reserved_costs)), "f")
+    if "." in child_reserved:
+        child_reserved = child_reserved.rstrip("0").rstrip(".")
+    resources = TruncationRecoveryResourceBudget.build(
+        campaign_cap_usd_exact=campaign_cap,
+        accounted_usd_before_parent_exact=_canonical_recovery_usd_total(
+            (baseline_spent, *(cast(str, value) for value in prior_costs))
+        ),
+        parent_accounted_cost_usd_exact=_canonical_recovery_usd_total((parent_cost,)),
+        child_reserved_usd_exact=child_reserved,
+        recovery_requests_consumed=sum(
+            len(family.recovery_plan.children) for family in journal.truncation_recovery_families
+        ),
+        provider_attempts_before_parent=sum(record.attempts for record in prior_usage),
+        parent_provider_attempts=parent_usage.attempts,
+        child_provider_attempts=1,
+        completion_tokens_before_parent=sum(record.completion_tokens for record in prior_usage),
+        parent_completion_tokens=parent_usage.completion_tokens,
+        child_completion_tokens=token_plan.requested_completion_tokens,
+    )
+    return plan_truncation_recovery(parent=parent, resources=resources)
 
 
 def _register_candidate_origin_packages(
@@ -6056,7 +6194,198 @@ class AuditPipeline:
                             raise OpenRouterSchemaError(
                                 "truncation recovery cannot begin before blind-task quiescence"
                             )
-                    promotion_denied_family_ids: set[str] = set()
+
+                    async def execute_nested_recovery_children(
+                        *,
+                        request_role: str,
+                        blind_agent: Any,
+                        family: SchedulerTruncationRecoveryFamilyRoot,
+                        family_parent_context: ContextPackage,
+                    ) -> tuple[
+                        tuple[ContextPackage, ...],
+                        dict[
+                            str,
+                            SchedulerTruncationRecoveryChildResult
+                            | SchedulerTruncationRecoveryChildPreflightResult,
+                        ],
+                    ]:
+                        """Execute only the bounded generic depth-two child inventory."""
+
+                        nonlocal budget_halted, scheduler_halted, terminal_code
+                        child_contexts = tuple(
+                            build_truncation_recovery_child_context(
+                                parent_context=family_parent_context,
+                                child=child,
+                            )
+                            for child in family.recovery_plan.children
+                        )
+                        for child_context in child_contexts:
+                            if child_context not in packages:
+                                packages.append(child_context)
+                        terminal_entries: dict[
+                            str,
+                            SchedulerTruncationRecoveryChildResult
+                            | SchedulerTruncationRecoveryChildPreflightResult,
+                        ] = {
+                            entry.child_task_id: entry
+                            for entry in scheduler.journal.truncation_recovery_entries
+                            if isinstance(
+                                entry,
+                                (
+                                    SchedulerTruncationRecoveryChildResult,
+                                    SchedulerTruncationRecoveryChildPreflightResult,
+                                ),
+                            )
+                            and entry.family_id == family.family_id
+                        }
+                        for child, child_context in zip(
+                            family.recovery_plan.children,
+                            child_contexts,
+                            strict=True,
+                        ):
+                            if child.child_task_id in terminal_entries:
+                                continue
+                            prepared = scheduler.prepare_truncation_recovery_child(
+                                child.child_task_id,
+                                parent_context=family_parent_context,
+                            )
+                            if prepared.child_context != child_context:
+                                raise OpenRouterSchemaError(
+                                    "prepared nested recovery child differs from deterministic "
+                                    "context"
+                                )
+                            try:
+                                child_review = await bounded_call(
+                                    blind_agent.run(
+                                        prepared.child_context,
+                                        logical_request_id=prepared.logical_request_id,
+                                        single_route_single_attempt=True,
+                                        recovery_request_limit_scope=(prepared.request_limit_scope),
+                                        recovery_request_limit_count_before=(
+                                            prepared.request_limit_count_before
+                                        ),
+                                    )
+                                )
+                                exact_usage = tuple(
+                                    record
+                                    for record in usage.records
+                                    if record.request_id == prepared.logical_request_id
+                                )
+                                if (
+                                    len(exact_usage) != 1
+                                    or exact_usage[0] != child_review.completion_usage
+                                    or child_review.surface_review_context != prepared.child_context
+                                    or child_review.raw_response is None
+                                    or child_review.normalization_evidence is None
+                                    or child_review.surface_review_artifact is None
+                                ):
+                                    raise OpenRouterSchemaError(
+                                        "nested recovery child completion lacks exact typed custody"
+                                    )
+                                terminal_entries[child.child_task_id] = (
+                                    scheduler.journal.record_truncation_recovery_child_success(
+                                        child.child_task_id,
+                                        usage_record=exact_usage[0],
+                                        normalization_evidence=(
+                                            child_review.normalization_evidence
+                                        ),
+                                        normalized_batch=child_review.raw_response,
+                                        requested_surface_requests=(
+                                            prepared.child_context.requested_model_surfaces
+                                        ),
+                                        output_artifact=child_review.surface_review_artifact,
+                                        specialist_accepted_outcome=None,
+                                    )
+                                )
+                            except OpenRouterTruncatedResponseError as exc:
+                                envelope = exc.envelope_evidence
+                                child_projection = exc.projection
+                                failed_usage = exc.failed_usage_record
+                                exact_failed = tuple(
+                                    record
+                                    for record in usage.records
+                                    if record.request_id == prepared.logical_request_id
+                                )
+                                if (
+                                    envelope is None
+                                    or child_projection is None
+                                    or failed_usage is None
+                                    or exact_failed != (failed_usage,)
+                                ):
+                                    raise OpenRouterSchemaError(
+                                        "truncated nested recovery child lacks exact typed custody"
+                                    ) from None
+                                terminal_entries[child.child_task_id] = (
+                                    scheduler.journal.record_truncation_recovery_child_truncated(
+                                        child.child_task_id,
+                                        failed_usage_record=failed_usage,
+                                        truncated_envelope_evidence=envelope,
+                                        truncation_projection=child_projection,
+                                    )
+                                )
+                            except (BudgetExhaustedError, OpenRouterError) as exc:
+                                if (
+                                    child.child_task_id
+                                    in scheduler.journal.dispatchable_truncation_recovery_child_ids
+                                ):
+                                    terminal_status = (
+                                        SchedulerTruncationRecoveryTerminalStatus.INCONCLUSIVE
+                                        if isinstance(exc, BudgetExhaustedError)
+                                        else SchedulerTruncationRecoveryTerminalStatus.INVALID
+                                        if isinstance(
+                                            exc,
+                                            (
+                                                OpenRouterSchemaError,
+                                                OpenRouterCandidateReviewBoundaryError,
+                                            ),
+                                        )
+                                        else SchedulerTruncationRecoveryTerminalStatus.FAILED
+                                    )
+                                    terminal_entries[child.child_task_id] = (
+                                        scheduler.record_truncation_recovery_child_preflight_result(
+                                            logical_request_id=prepared.logical_request_id,
+                                            terminal_status=terminal_status,
+                                            terminal_evidence_sha256=scheduler_canonical_sha256(
+                                                {
+                                                    "classification": (
+                                                        "nested_truncation_recovery_preflight_failure"
+                                                    ),
+                                                    "exception_type": (
+                                                        f"{type(exc).__module__}."
+                                                        f"{type(exc).__qualname__}"
+                                                    ),
+                                                }
+                                            ),
+                                        )
+                                    )
+                                else:
+                                    reason = (
+                                        f"{request_role}: dispatched nested recovery child lacks "
+                                        "typed terminal custody"
+                                    )
+                                    if reason not in incomplete:
+                                        incomplete.append(reason)
+                                    scheduler_halted = True
+                                    budget_halted = True
+                                    terminal_code = ExitCode.INCOMPLETE
+                                    break
+                        return child_contexts, terminal_entries
+
+                    existing_recovery_closures = {
+                        entry.family_id: entry
+                        for entry in scheduler.journal.truncation_recovery_entries
+                        if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+                    }
+                    promotion_denied_family_ids: set[str] = {
+                        family.family_id
+                        for family in scheduler.journal.truncation_recovery_families
+                        if family.parent_family_id is not None
+                        and (
+                            existing_recovery_closures.get(family.family_id) is not None
+                            and existing_recovery_closures[family.family_id].closure_status
+                            is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                        )
+                    }
                     for (
                         request_role,
                         configured_role,
@@ -6342,6 +6671,190 @@ class AuditPipeline:
                                     break
                         if scheduler_halted:
                             break
+
+                        existing_root_closures = tuple(
+                            entry
+                            for entry in scheduler.journal.truncation_recovery_entries
+                            if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+                            and entry.family_id == family.family_id
+                        )
+                        if len(existing_root_closures) > 1:
+                            raise OpenRouterSchemaError(
+                                "truncation recovery family has ambiguous closure custody"
+                            )
+                        truncated_child_entries: list[
+                            tuple[
+                                TruncationRecoveryChildPlan,
+                                ContextPackage,
+                                SchedulerTruncationRecoveryChildResult,
+                            ]
+                        ] = []
+                        for child, child_context in zip(
+                            family.recovery_plan.children,
+                            child_contexts,
+                            strict=True,
+                        ):
+                            terminal_entry = terminal_entries.get(child.child_task_id)
+                            if (
+                                isinstance(
+                                    terminal_entry,
+                                    SchedulerTruncationRecoveryChildResult,
+                                )
+                                and terminal_entry.terminal_status
+                                is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+                            ):
+                                truncated_child_entries.append(
+                                    (child, child_context, terminal_entry)
+                                )
+                        truncated_children = tuple(truncated_child_entries)
+                        if truncated_children and not existing_root_closures:
+                            recursive_parent: (
+                                tuple[
+                                    TruncationRecoveryChildPlan,
+                                    ContextPackage,
+                                    SchedulerTruncationRecoveryChildResult,
+                                ]
+                                | None
+                            ) = None
+                            if len(
+                                truncated_children
+                            ) == 1 and not scheduler_role_requires_specialist_accepted_outcome(
+                                scheduler_task.role
+                            ):
+                                recursive_parent = truncated_children[0]
+                            if recursive_parent is not None:
+                                truncated_child, truncated_context, truncated_result = (
+                                    recursive_parent
+                                )
+                                matching_nested_families = tuple(
+                                    nested_family
+                                    for nested_family in (
+                                        scheduler.journal.truncation_recovery_families
+                                    )
+                                    if nested_family.recovery_plan.parent.parent_task_id
+                                    == truncated_child.child_task_id
+                                )
+                                if len(matching_nested_families) > 1:
+                                    raise OpenRouterSchemaError(
+                                        "truncated recovery child has ambiguous nested family "
+                                        "custody"
+                                    )
+                                nested_family = (
+                                    matching_nested_families[0]
+                                    if matching_nested_families
+                                    else None
+                                )
+                                if nested_family is None:
+                                    if atomic_ledger is None:
+                                        raise OpenRouterSchemaError(
+                                            "nested truncation recovery requires the exact "
+                                            "persistent cost ledger"
+                                        )
+                                    try:
+                                        nested_plan = _build_nested_truncation_recovery_plan(
+                                            journal=scheduler.journal,
+                                            parent_family=family,
+                                            parent_child=truncated_child,
+                                            parent_result=truncated_result,
+                                            parent_context=truncated_context,
+                                            atomic_ledger=atomic_ledger,
+                                        )
+                                    except ValueError as exc:
+                                        reason = (
+                                            f"{request_role}: nested truncation recovery was "
+                                            f"not dispatchable ({exc})"
+                                        )
+                                        if reason not in incomplete:
+                                            incomplete.append(reason)
+                                        terminal_code = ExitCode.INCOMPLETE
+                                    else:
+                                        if (
+                                            nested_plan.disposition
+                                            is TruncationRecoveryDisposition.PLANNED
+                                            and len(nested_plan.children) == 2
+                                        ):
+                                            try:
+                                                nested_family = scheduler.journal.open_truncation_recovery_family(
+                                                    recovery_plan=nested_plan,
+                                                    truncation_projection=cast(
+                                                        CandidateReviewTruncationProjection,
+                                                        truncated_result.truncation_projection,
+                                                    ),
+                                                    requested_surface_manifest=(
+                                                        family.requested_surface_manifest
+                                                    ),
+                                                )
+                                            except ValueError as exc:
+                                                reason = (
+                                                    f"{request_role}: nested truncation recovery "
+                                                    f"was not admissible ({exc})"
+                                                )
+                                                if reason not in incomplete:
+                                                    incomplete.append(reason)
+                                                terminal_code = ExitCode.INCOMPLETE
+                                        else:
+                                            reason = (
+                                                f"{request_role}: nested truncation recovery was "
+                                                "outside the bounded depth-two plan "
+                                                f"({nested_plan.disposition.value})"
+                                            )
+                                            if reason not in incomplete:
+                                                incomplete.append(reason)
+                                            terminal_code = ExitCode.INCOMPLETE
+                                if nested_family is not None:
+                                    (
+                                        _nested_child_contexts,
+                                        nested_terminal_entries,
+                                    ) = await execute_nested_recovery_children(
+                                        request_role=request_role,
+                                        blind_agent=blind_agent,
+                                        family=nested_family,
+                                        family_parent_context=truncated_context,
+                                    )
+                                    if scheduler_halted:
+                                        break
+                                    nested_closures = tuple(
+                                        entry
+                                        for entry in (scheduler.journal.truncation_recovery_entries)
+                                        if isinstance(
+                                            entry,
+                                            SchedulerTruncationRecoveryFamilyClosure,
+                                        )
+                                        and entry.family_id == nested_family.family_id
+                                    )
+                                    if len(nested_closures) > 1:
+                                        raise OpenRouterSchemaError(
+                                            "nested truncation recovery family has ambiguous "
+                                            "closure custody"
+                                        )
+                                    if nested_closures:
+                                        nested_closure = nested_closures[0]
+                                    elif len(nested_terminal_entries) == len(
+                                        nested_family.recovery_plan.children
+                                    ):
+                                        nested_closure = (
+                                            scheduler.journal.seal_truncation_recovery_family(
+                                                nested_family.family_id
+                                            )
+                                        )
+                                    else:
+                                        reason = (
+                                            f"{request_role}: nested truncation recovery "
+                                            "remained unfinished"
+                                        )
+                                        if reason not in incomplete:
+                                            incomplete.append(reason)
+                                        scheduler_halted = True
+                                        budget_halted = True
+                                        terminal_code = ExitCode.INCOMPLETE
+                                        break
+                                    if nested_closure.closure_status is (
+                                        SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                                    ):
+                                        # Recursive structure is deliberately nonauthorizing in
+                                        # this bounded slice; only a later full-tree live
+                                        # capability may make it promotable.
+                                        promotion_denied_family_ids.add(nested_family.family_id)
 
                         closures = tuple(
                             entry

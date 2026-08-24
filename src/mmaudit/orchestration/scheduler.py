@@ -616,10 +616,47 @@ def _validate_nested_recovery_parent(
         raise ValueError("nested scheduler recovery root lacks exact durable parent evidence")
     child, parent_family_id = child_match
     parent_family = indexes.families[parent_family_id]
+    sibling_children = tuple(
+        candidate
+        for candidate in parent_family.recovery_plan.children
+        if candidate.child_task_id != child.child_task_id
+    )
+    sibling_result = (
+        indexes.results.get(sibling_children[0].child_task_id)
+        if len(sibling_children) == 1
+        else None
+    )
+    sibling_activation = (
+        indexes.activations.get(sibling_children[0].child_task_id)
+        if len(sibling_children) == 1
+        else None
+    )
     if (
         not isinstance(result, SchedulerTruncationRecoveryChildResult)
+        or result.schema_version != "1.1"
+        or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+        or result.runtime_usage_record is None
+        or result.runtime_activation != activation
+        or result.runtime_specialist_accepted_outcome is not None
+        or result.runtime_specialist_accepted_outcome_sha256 is not None
         or family.parent_family_id != parent_family_id
+        or parent_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        or parent_family.parent_family_id is not None
+        or parent_family.recovery_plan.parent.current_depth != 0
         or parent_family_id in indexes.closures
+        or not isinstance(sibling_result, SchedulerTruncationRecoveryChildResult)
+        or sibling_result.schema_version != "1.1"
+        or sibling_result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+        or sibling_result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+        or sibling_result.runtime_usage_record is None
+        or sibling_result.runtime_activation != sibling_activation
+        or sibling_result.runtime_specialist_accepted_outcome is not None
+        or sibling_result.runtime_specialist_accepted_outcome_sha256 is not None
+        or sibling_result.completed_surface_ids != sibling_children[0].surface_ids
+        or sibling_activation is None
+        or sibling_activation.request_role != activation.request_role
+        or child.parent_depth != 0
+        or child.depth != 1
         or parent.parent_logical_request_id != child.child_logical_request_id
         or parent.parent_task_plan_sha256 != child.child_plan_sha256
         or parent.parent_activation_sha256 != activation.entry_sha256
@@ -628,13 +665,27 @@ def _validate_nested_recovery_parent(
         or parent.requested_surface_manifest_sha256 != child.requested_surface_manifest_sha256
         or parent.requested_surface_ids != child.surface_ids
         or parent.current_depth != child.depth
+        or parent.current_depth != 1
         or parent.parent_path != child.path
+        or any(
+            grandchild.parent_depth != 1 or grandchild.depth != 2
+            for grandchild in (family.recovery_plan.children)
+        )
         or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
         or result.truncation_projection != family.truncation_projection
+        or family.truncation_projection.findings_state is not CandidateReviewChannelState.COMPLETE
+        or family.truncation_projection.surface_reviews
+        or result.retained_surface_ids
         or family.parent_terminal_result_sha256 != result.entry_sha256
         or family.request_limit_binding != parent_family.request_limit_binding
         or family.requested_surface_manifest != parent_family.requested_surface_manifest
+        or activation.request_role is None
+        or activation.request_role.startswith("specialist:")
         or parent.parent_task_id in indexes.nested_family_by_parent_child
+        or any(
+            candidate.parent_family_id == parent_family_id
+            for candidate in indexes.families.values()
+        )
     ):
         raise ValueError("nested scheduler recovery root differs from its truncated child")
     assert isinstance(result, SchedulerTruncationRecoveryChildResult)
@@ -700,7 +751,9 @@ def _expected_recovery_family_closure(
     nested_hashes: list[str] = []
     covered: set[str] = set()
     uncertain = False
-    all_direct_typed_success = True
+    all_branches_have_typed_coverage = True
+    direct_typed_successes: list[SchedulerTruncationRecoveryChildResult] = []
+    nested_typed_coverage_count = 0
     for child in family.recovery_plan.children:
         result = indexes.results.get(child.child_task_id)
         if result is None:
@@ -721,22 +774,58 @@ def _expected_recovery_family_closure(
                 activation=activation,
                 family=family,
             )
+            direct_typed_successes.append(result)
             covered.update(result.completed_surface_ids)
             continue
-        all_direct_typed_success = False
         if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED:
             raise ValueError(
                 "v1 recovery closure lacks exact typed runtime child completion custody"
             )
         if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED:
             if (
-                result.schema_version != "1.1"
+                not isinstance(result, SchedulerTruncationRecoveryChildResult)
+                or result.schema_version != "1.1"
                 or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             ):
                 raise ValueError(
                     "v1 recovery closure lacks exact typed runtime child completion custody"
                 )
+            if family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD:
+                all_branches_have_typed_coverage = False
+                continue
+            nested_family_id = indexes.nested_family_by_parent_child.get(child.child_task_id)
+            if nested_family_id is None:
+                all_branches_have_typed_coverage = False
+                continue
+            nested_family = indexes.families[nested_family_id]
+            nested_closure = indexes.closures.get(nested_family_id)
+            if nested_closure is None:
+                raise ValueError("scheduler recovery family has an unfinished nested family")
+            if (
+                nested_family.parent_kind
+                is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+                or nested_family.parent_family_id != family.family_id
+                or nested_family.recovery_plan.parent.parent_task_id != child.child_task_id
+                or nested_family.recovery_plan.parent.current_depth != 1
+                or nested_family.recovery_plan.parent.parent_path != child.path
+                or nested_closure.family_id != nested_family.family_id
+            ):
+                raise ValueError("scheduler recovery nested closure differs from its ancestor")
+            nested_hashes.append(nested_closure.entry_sha256)
+            if (
+                nested_closure.schema_version == "1.1"
+                and nested_closure.closure_status
+                is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                and nested_closure.covered_unfinished_surface_ids == child.surface_ids
+            ):
+                covered.update(nested_closure.covered_unfinished_surface_ids)
+                nested_typed_coverage_count += 1
+                continue
+            all_branches_have_typed_coverage = False
+            if nested_closure.closure_status is SchedulerTruncationRecoveryClosureStatus.UNCERTAIN:
+                uncertain = True
             continue
+        all_branches_have_typed_coverage = False
         if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.UNCERTAIN:
             uncertain = True
             continue
@@ -744,11 +833,24 @@ def _expected_recovery_family_closure(
     expected_surfaces = set(family.recovery_plan.parent.unfinished_surface_ids)
     if not covered <= expected_surfaces:
         raise ValueError("scheduler recovery closure covers surfaces outside its frozen parent")
+    if nested_hashes and (
+        family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        or len(nested_hashes) != 1
+        or nested_typed_coverage_count != 1
+        or len(direct_typed_successes) != 1
+        or direct_typed_successes[0].schema_version != "1.1"
+    ):
+        all_branches_have_typed_coverage = False
+    exact_typed_coverage = all_branches_have_typed_coverage and covered == expected_surfaces
     status = (
         SchedulerTruncationRecoveryClosureStatus.UNCERTAIN
         if uncertain
-        else SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
-        if all_direct_typed_success and covered == expected_surfaces
+        else (
+            SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+            if nested_hashes
+            else SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+        )
+        if exact_typed_coverage
         else SchedulerTruncationRecoveryClosureStatus.INCOMPLETE
     )
     return (
@@ -1710,7 +1812,18 @@ class SchedulerJournal:
             parent_family_id = None
             parent_terminal_result_sha256 = scheduler_parent_result.result_sha256
         else:
-            raise ValueError("nested scheduler recovery is unavailable in the direct-child slice")
+            child_match = self._truncation_recovery_indexes.children.get(parent_task_id)
+            nested_parent_result = self._truncation_recovery_indexes.results.get(parent_task_id)
+            if child_match is None or not isinstance(
+                nested_parent_result,
+                SchedulerTruncationRecoveryChildResult,
+            ):
+                raise ValueError("nested scheduler recovery lacks its typed parent child")
+            _parent_child, parent_family_id = child_match
+            parent_family = self._truncation_recovery_indexes.families[parent_family_id]
+            binding = parent_family.request_limit_binding
+            parent_kind = SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+            parent_terminal_result_sha256 = nested_parent_result.entry_sha256
         request_limit_attempts_before = (
             self._truncation_recovery_indexes.request_limit_attempts_reserved.get(
                 binding.request_limit_id,
@@ -1986,6 +2099,15 @@ class SchedulerJournal:
             raise ValueError(
                 "scheduler recovery promotion requires one unpromoted terminal family closure"
             )
+        if (
+            family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            or family.parent_family_id is not None
+            or closure.schema_version != "1.1"
+            or closure.closure_status
+            is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+            or closure.nested_family_closure_sha256s
+        ):
+            raise ValueError("scheduler recovery promotion requires one direct v1.1 closure")
         parent_task_id = family.recovery_plan.parent.parent_task_id
         task_and_plan = self._indexes.tasks.get(parent_task_id)
         if task_and_plan is None:
@@ -2466,6 +2588,7 @@ class SchedulerJournal:
             manifest=self.manifest,
             model_requests=self.model_requests,
             truncation_recovery_entries=self._retained_truncation_recovery_entries(),
+            provider_attempts=self.provider_attempts,
         )
 
     @property
