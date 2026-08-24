@@ -5134,6 +5134,27 @@ def usage_matches_verified_reasoning_qualification(
         )
     )
 
+    return usage_is_creditable and usage_matches_verified_reasoning_qualification_route(
+        record=record,
+        production_qualification=production_qualification,
+        now=now,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
+    )
+
+
+def usage_matches_verified_reasoning_qualification_route(
+    *,
+    record: UsageRecord,
+    production_qualification: VerifiedProductionQualification,
+    now: datetime,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> bool:
+    """Validate exact reasoning-route custody without granting response credit."""
+
+    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
+        return False
     try:
         if type(production_qualification) is not VerifiedProductionQualification:
             return False
@@ -5165,8 +5186,7 @@ def usage_matches_verified_reasoning_qualification(
         binding.reasoning_benchmark_fresh_evidence_sha256,
     )
     return (
-        usage_is_creditable
-        and record.actual_provider_endpoint == model.approved_provider_endpoint
+        record.actual_provider_endpoint == model.approved_provider_endpoint
         and binding.exact_model_id == model.exact_model_id
         and binding.approved_provider_endpoint == model.approved_provider_endpoint
         and binding.approved_provider_name == model.approved_provider_name

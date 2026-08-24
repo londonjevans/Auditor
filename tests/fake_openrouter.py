@@ -1103,6 +1103,7 @@ class FakeOpenRouter:
                         in {
                             "truncation_recovery",
                             "truncation_recovery_multiple",
+                            "truncation_recovery_retained_surface",
                         }
                         and self.recovery_child_calls % 2 == 0
                     ):

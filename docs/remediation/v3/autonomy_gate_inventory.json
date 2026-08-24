@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 3608,
-  "inventory_sha256": "c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a",
+  "gate_source_count": 3614,
+  "inventory_sha256": "8dec341d22bc891cece7dca37503f07972bc56d9265c61028fce269c3a2b2e11",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -2834,6 +2834,11 @@
         "direct-env-ast:orchestration.manifest:validate_manifest_artifacts:working-directory:1",
         "direct-env-ast:orchestration.replay:_repository_suite_replay_identity:working-directory:1",
         "direct-env-ast:orchestration.replay:_repository_suite_replay_identity:working-directory:2",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.require:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.verify:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.verify:process-identity:2",
@@ -3941,12 +3946,13 @@
         "direct-env-ast:orchestration.assurance:_current_audit_model_refresh_pricing:wall-clock:1",
         "direct-env-ast:orchestration.assurance:_current_audit_model_selection:wall-clock:1",
         "direct-env-ast:orchestration.assurance:_current_production_qualification:wall-clock:1",
-        "direct-env-ast:orchestration.assurance:_is_real_model_usage:wall-clock:1",
-        "direct-env-ast:orchestration.assurance:_is_real_model_usage:wall-clock:2",
         "direct-env-ast:orchestration.assurance:_model_coverage_is_backed_by_real_usage:wall-clock:1",
+        "direct-env-ast:orchestration.assurance:_model_coverage_is_backed_by_real_usage:wall-clock:2",
         "direct-env-ast:orchestration.assurance:_real_model_usage_lineages:wall-clock:1",
         "direct-env-ast:orchestration.assurance:_scheduler_assurance_errors:wall-clock:1",
         "direct-env-ast:orchestration.assurance:_scheduler_assurance_errors:wall-clock:2",
+        "direct-env-ast:orchestration.assurance:_usage_matches_real_model_route:wall-clock:1",
+        "direct-env-ast:orchestration.assurance:_usage_matches_real_model_route:wall-clock:2",
         "direct-env-ast:orchestration.authenticated_runner_openrouter:_openrouterexecutionadapter._new_client:wall-clock:1",
         "direct-env-ast:orchestration.authenticated_runner_smoke_openrouter:_smokeopenrouteradapter._new_candidate_client:wall-clock:1",
         "direct-env-ast:orchestration.authenticated_runner_smoke_openrouter:_smokeopenrouteradapter._new_judge_client:wall-clock:1",
@@ -4020,7 +4026,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 3651,
+  "source_count": 3657,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9744,7 +9750,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/qualification.py",
-      "source_semantics_sha256": "7cc972d85435f54e0f82fcd8b9e67869a6d9c2abd4c76489249223c350607641"
+      "source_semantics_sha256": "6e31cb90f7be8beced0c38662d99a19bb696bc7319508625ea1e1ef56e10f1b6"
     },
     {
       "classification": "GATE",
@@ -9951,7 +9957,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/assurance.py",
-      "source_semantics_sha256": "2c962a7de467af76f3beac92cd2e7a9df97460ace068d083e4a3ff18118d4460"
+      "source_semantics_sha256": "22a9e67093c9a786944f8eaa3cfb9d2c136835bd7067782674daf2b1604f1d46"
     },
     {
       "classification": "GATE",
@@ -9978,7 +9984,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "a7317d7d8b15faef0744329afa6b9984f7306a6ca5ede92c0c1af51a5e00c2cd"
+      "source_semantics_sha256": "d091bdd965e01cf2eeba7ff7cbbf6a2fb4f29d645755a68ca493e92fdaa46fb9"
     },
     {
       "classification": "GATE",
@@ -10095,7 +10101,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/model_coverage.py",
-      "source_semantics_sha256": "fbf8f452f012622637c5ebc405d5fdd57166e16681b988146f1d15bd3a20b0f6"
+      "source_semantics_sha256": "2511376ace6d708e9971e333735e89be2ac97079061421165d1a3f7c90f9b7b5"
     },
     {
       "classification": "GATE",
@@ -10113,7 +10119,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/pipeline.py",
-      "source_semantics_sha256": "3b54706efd45e8f923beaa633c2ad425345a42de2f4663d7a6e8a8fa2e750623"
+      "source_semantics_sha256": "2276984120d69d5518340ef690538753791eaeb7c0a4b2d5343b2665ebaf8582"
     },
     {
       "classification": "GATE",
@@ -10158,7 +10164,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler.py",
-      "source_semantics_sha256": "68078c0d584fdac92b2743ed3cddc802809813a9225c5c888ea4f094a66918dc"
+      "source_semantics_sha256": "b8aaa9905ce97a68405a71616d6dcd70596b0347e0fc696dae20d78104c638b2"
     },
     {
       "classification": "GATE",
@@ -10185,7 +10191,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py",
-      "source_semantics_sha256": "c857b4fb0a28ce38ca5a6bc3d3cd57f48fe4984c820d636f3236755e317822fa"
+      "source_semantics_sha256": "c7426a4bedba1ca2fa7fbddbe4e9267fd8ee1a9a903bb48a27c06d1957aa4b20"
     },
     {
       "classification": "GATE",
@@ -16301,28 +16307,19 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-trusted-time-independent-replay",
-      "source_id": "direct-env-ast:orchestration.assurance:_is_real_model_usage:wall-clock:1",
-      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/assurance.py:_is_real_model_usage:wall-clock:1",
-      "source_semantics_sha256": "5f77ad1f36c3e8a14050dda17e603cce357b7147dc8bea2de3a7b7fd6b15943d"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-trusted-time-independent-replay",
-      "source_id": "direct-env-ast:orchestration.assurance:_is_real_model_usage:wall-clock:2",
-      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/assurance.py:_is_real_model_usage:wall-clock:2",
-      "source_semantics_sha256": "5f77ad1f36c3e8a14050dda17e603cce357b7147dc8bea2de3a7b7fd6b15943d"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-trusted-time-independent-replay",
       "source_id": "direct-env-ast:orchestration.assurance:_model_coverage_is_backed_by_real_usage:wall-clock:1",
       "source_kind": "DIRECT_ENVIRONMENT_INPUT",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/assurance.py:_model_coverage_is_backed_by_real_usage:wall-clock:1",
+      "source_semantics_sha256": "0d91f0db132b94fe19eeec75802c6095788b236b652f897fd96549383a32c205"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-trusted-time-independent-replay",
+      "source_id": "direct-env-ast:orchestration.assurance:_model_coverage_is_backed_by_real_usage:wall-clock:2",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/assurance.py:_model_coverage_is_backed_by_real_usage:wall-clock:2",
       "source_semantics_sha256": "0d91f0db132b94fe19eeec75802c6095788b236b652f897fd96549383a32c205"
     },
     {
@@ -16351,6 +16348,24 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/assurance.py:_scheduler_assurance_errors:wall-clock:2",
       "source_semantics_sha256": "e66d1b1fc7015352076b2daee9c46f903a0e691632a85b4417984df2365f5fb5"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-trusted-time-independent-replay",
+      "source_id": "direct-env-ast:orchestration.assurance:_usage_matches_real_model_route:wall-clock:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/assurance.py:_usage_matches_real_model_route:wall-clock:1",
+      "source_semantics_sha256": "0184250eb149b6bb14b30306e71c426df27c0ee86a79872efea240433769fa68"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-trusted-time-independent-replay",
+      "source_id": "direct-env-ast:orchestration.assurance:_usage_matches_real_model_route:wall-clock:2",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/assurance.py:_usage_matches_real_model_route:wall-clock:2",
+      "source_semantics_sha256": "0184250eb149b6bb14b30306e71c426df27c0ee86a79872efea240433769fa68"
     },
     {
       "classification": "GATE",
@@ -16774,6 +16789,51 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler_runtime.py:_validated_projection_root:working-directory:1",
       "source_semantics_sha256": "f4d5e6f6df63aec884c894b59146e4fbf3859ba61b0a162d5bd3ced709fe9a71"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+      "source_semantics_sha256": "4587b02dfe6ecf651c435affb49384e30f9773cd01198d3414b4634acf48dd68"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+      "source_semantics_sha256": "4587b02dfe6ecf651c435affb49384e30f9773cd01198d3414b4634acf48dd68"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+      "source_semantics_sha256": "02089539979545ef137ddc9ee25b05c7c0cfd336da1015a1e294c2c3220c5189"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+      "source_semantics_sha256": "e17bdadd86d80fcb5b1f635001bae8947a237a354a9d942fd858dd4fadf66691"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity:1",
+      "source_semantics_sha256": "72edfbb4b74fea970a9fef70ec859db295afb12a01fe78c1046d9d8124affe20"
     },
     {
       "classification": "GATE",
@@ -19104,7 +19164,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.pipeline.AuditPipeline._run_with_provider",
-      "source_semantics_sha256": "92801f393f73fa8b2a342c93598ae1b3a4bf857802b2f04250cdf239e07d0ed4"
+      "source_semantics_sha256": "0fa60d93ca41fcce177630fcfcbb8928367be02c4b6f81605a97f3b0f4973ade"
     },
     {
       "classification": "GATE",
@@ -36882,7 +36942,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a",
+  "source_discovery_semantics_sha256": "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 232,
     "AUDIT_CONFIG_LEAF": 505,
@@ -36890,7 +36950,7 @@
     "AUDIT_RUN_OPTION_LEAF": 13,
     "CLI_RUN_PARAMETER": 50,
     "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-    "DIRECT_ENVIRONMENT_INPUT": 475,
+    "DIRECT_ENVIRONMENT_INPUT": 481,
     "ENTROPY_INPUT": 17,
     "ENVIRONMENT_OVERRIDE": 28,
     "EXPLICIT_NON_FIELD_GATE": 1932,
@@ -36898,8 +36958,8 @@
     "PIPELINE_RUN_PARAMETER": 15,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 3654,
-  "source_universe_sha256": "6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc",
+  "source_occurrence_count": 3660,
+  "source_universe_sha256": "874b38b9102f347e69922ad52cf3ba7b74176ab44107085ad310854f34bcb9dc",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

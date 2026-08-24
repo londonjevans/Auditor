@@ -48,6 +48,8 @@ from mmaudit.models.reasoning import (
     resolve_reasoning_request_role,
 )
 from mmaudit.models.scheduler import (
+    SchedulerArtifact,
+    SchedulerAuditModelSelectionBinding,
     SchedulerBindings,
     SchedulerCampaignManifest,
     SchedulerCostLedgerBaseline,
@@ -62,10 +64,12 @@ from mmaudit.models.scheduler import (
     SchedulerTaskKind,
     SchedulerTaskOutput,
     SchedulerTaskPlan,
+    SchedulerTruncationRecoveryModelRequestEvidence,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditedSuiteCoverage,
     AuditModelRefreshPricingAttemptEvidence,
     AuditProfile,
     AuditQualityStatus,
@@ -117,6 +121,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    QualityGateResult,
     RepositoryCodeExecutionState,
     RepositoryMap,
     RepositorySuiteExecutionPolicy,
@@ -193,6 +198,7 @@ from mmaudit.orchestration.assurance import (
 )
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.model_coverage import build_model_review_coverage
 from mmaudit.orchestration.replay import (
     OfflineReplay,
     OfflineReplayComponent,
@@ -200,6 +206,7 @@ from mmaudit.orchestration.replay import (
     ReplayComponentKind,
     ReplayComponentStatus,
 )
+from mmaudit.orchestration.scheduler import create_scheduler_journal
 from mmaudit.orchestration.scheduler_runtime import build_scheduler_bindings
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
@@ -213,6 +220,7 @@ from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
     rebind_synthetic_token_plan,
+    synthetic_token_plan_routing,
 )
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.qualification_support import (
@@ -231,8 +239,34 @@ from tests.refresh_runtime_support import (
 from tests.scheduler_support import (
     CompleteSchedulerFixture,
     SchedulerFixtureModelTask,
+    bind_scheduler_test_usage_to_audit_selection,
     build_complete_scheduler_artifact,
     build_complete_scheduler_fixture,
+    scheduler_test_analysis_input_inventory,
+)
+from tests.unit.test_model_coverage import (
+    _PATH as _PROMOTED_SURFACE_PATH,
+)
+from tests.unit.test_model_coverage import (
+    _SOURCE as _PROMOTED_SURFACE_SOURCE,
+)
+from tests.unit.test_model_coverage import (
+    _artifact as _promoted_ordinary_artifact,
+)
+from tests.unit.test_model_coverage import (
+    _bind_usage_to_context as _bind_promoted_usage_to_context,
+)
+from tests.unit.test_model_coverage import (
+    _build_promoted_parent_surface_fixture,
+    _promoted_surface_context,
+    _promoted_surface_inputs,
+    _PromotedParentSurfaceFixture,
+)
+from tests.unit.test_model_coverage import (
+    _record as _promoted_surface_record,
+)
+from tests.unit.test_model_coverage import (
+    _usage as _promoted_surface_usage,
 )
 from tests.unit.test_model_policy_selection import (
     _policy_authority,
@@ -2338,6 +2372,413 @@ def _complete_runtime(
     return runtime
 
 
+def _bind_promoted_assurance_usage(
+    record: UsageRecord,
+    authorities: _AssurancePolicySelectionFixture,
+) -> UsageRecord:
+    """Bind one parent or child recovery usage to the exact live assurance authorities."""
+
+    qualification = authorities.qualification
+    refresh_runtime = authorities.refresh_runtime
+    now = refresh_runtime.verified_at
+    model = qualification.model_for(record.requested_model, now=now)
+    raw_reservation = record.routing.get("atomic_request_limit_reservation")
+    original_reservation = (
+        AtomicRequestLimitReservationEvidence.model_validate(raw_reservation)
+        if isinstance(raw_reservation, dict)
+        else None
+    )
+    selection_bound = bind_scheduler_test_usage_to_audit_selection(
+        record,
+        SchedulerAuditModelSelectionBinding.from_evidence_bundle(authorities.evidence_bundle),
+    )
+    ended_at = now + timedelta(milliseconds=selection_bound.latency_ms or 0)
+    prepared = selection_bound.model_copy(
+        update={
+            "provider": model.approved_provider_name,
+            "configured_provider_endpoints": [model.approved_provider_endpoint],
+            "actual_provider_endpoint": model.approved_provider_endpoint,
+            "timestamp": now,
+            "started_at": now,
+            "ended_at": ended_at,
+            "routing": {
+                **selection_bound.routing,
+                "certification_request": True,
+                "request_started_at": now.isoformat(),
+                "request_ended_at": ended_at.isoformat(),
+                "selected_model": model.exact_model_id,
+                "canonical_model": model.canonical_model_slug,
+                "selected_provider_endpoint": model.approved_provider_endpoint,
+                "selected_provider_name": model.approved_provider_name,
+                "provider_fallbacks_allowed": False,
+                "router_attempt": 1,
+                "router_attempt_count": 1,
+                "router_pipeline": [],
+            },
+        }
+    )
+    if prepared.validated_response_sha256 is not None:
+        bound = _bind_usage_to_qualification(prepared, qualification, now)
+    else:
+        base = _bind_base_usage_to_qualification(prepared, qualification, now)
+        assert base.actual_provider_endpoint is not None
+        assert base.request_body_sha256 is not None
+        assert base.schema_sha256 is not None
+        assert base.response_sha256 is not None
+        provider_policy_sha256 = base.routing.get("provider_policy_sha256")
+        structured = base.routing.get("structured_output")
+        assert isinstance(provider_policy_sha256, str)
+        assert isinstance(structured, dict)
+        structured_validated_sha256 = structured.get("validated_response_sha256")
+        assert isinstance(structured_validated_sha256, str)
+        base = base.model_copy(
+            update={
+                "routing": {
+                    **base.routing,
+                    "qualified_exact_model_id": model.exact_model_id,
+                    "qualified_canonical_model_slug": model.canonical_model_slug,
+                    "qualified_root_lineage": model.root_lineage,
+                    "qualified_provider_endpoint": model.approved_provider_endpoint,
+                    "qualified_provider_name": model.approved_provider_name,
+                    "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                    "qualified_output_capability_sha256": model.output_capability_sha256,
+                    "qualified_structured_output_mode": model.structured_output_mode.value,
+                    "qualified_model_metadata_snapshot_sha256": (
+                        model.model_metadata_snapshot_sha256
+                    ),
+                    "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+                    "qualified_roles": list(model.approved_roles),
+                    "qualification_verified_at": qualification.verified_at.isoformat(),
+                    "qualification_expires_at": model.expires_at.isoformat(),
+                    "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                    "output_capability_sha256": model.output_capability_sha256,
+                    "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+                    "structured_output": synthetic_structured_output_routing(
+                        configured_provider_endpoints=(model.approved_provider_endpoint,),
+                        selected_provider_endpoint=model.approved_provider_endpoint,
+                        endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+                        output_capability_sha256=model.output_capability_sha256,
+                        prompt_sha256=base.prompt_sha256,
+                        request_body_sha256=base.request_body_sha256,
+                        provider_policy_sha256=provider_policy_sha256,
+                        schema_sha256=base.schema_sha256,
+                        original_response_sha256=base.response_sha256,
+                        validated_response_sha256=structured_validated_sha256,
+                        mode=model.structured_output_mode,
+                    ),
+                }
+            }
+        )
+        reasoning_binding = _reasoning_binding_for_usage(base, model)
+        reasoning_policy = _reasoning_policy_for_model(model)
+        plan = ReasoningRequestPlanEvidence.build(
+            request_role=base.role,
+            policy=reasoning_policy,
+            endpoint_capability_sha256=(reasoning_binding.endpoint_reasoning_capability_sha256),
+            qualification_binding_sha256=reasoning_binding.binding_sha256,
+        )
+        active = plan.control_profile.mode != "disabled" and not (
+            plan.control_profile.mode == "effort" and plan.control_profile.effort == "none"
+        )
+        observed_reasoning_tokens = 1 if active else 0
+        routing_without_token_plan = dict(base.routing)
+        for field in (
+            "request_token_plan",
+            "request_token_plan_sha256",
+            "atomic_token_reservations",
+            "atomic_token_reservation_sha256s",
+            "atomic_token_reservation",
+            "atomic_token_reservation_sha256",
+        ):
+            routing_without_token_plan.pop(field, None)
+        token_routing = synthetic_token_plan_routing(
+            base,
+            routing_without_token_plan,
+            reasoning_plan=plan,
+        )
+        token_plan_sha256 = token_routing.get("request_token_plan_sha256")
+        assert isinstance(token_plan_sha256, str)
+        reasoning_evidence = ReasoningExecutionEvidence.build(
+            request_plan=plan,
+            observed_reasoning_tokens=observed_reasoning_tokens,
+            provider_completion_tokens=base.completion_tokens,
+            request_token_plan_sha256=token_plan_sha256,
+            request_body_sha256=base.request_body_sha256,
+        )
+        bound = reattest_synthetic_real_usage(
+            base.model_copy(
+                update={
+                    "routing": token_routing,
+                    "reasoning_evidence": reasoning_evidence,
+                    "reasoning_tokens": observed_reasoning_tokens,
+                }
+            )
+        )
+
+    bound = bound.model_copy(
+        update={
+            "routing": {
+                key: value
+                for key, value in bound.routing.items()
+                if key
+                not in {
+                    "atomic_request_limit_reservations",
+                    "atomic_request_limit_reservation_sha256s",
+                    "atomic_request_limit_reservation",
+                    "atomic_request_limit_reservation_sha256",
+                }
+            }
+        }
+    )
+    token_plan = request_token_plan_from_usage(bound)
+    assert token_plan is not None
+    reservation = AtomicRequestLimitReservationEvidence.build(
+        request_id=bound.request_id,
+        exact_model_id=bound.requested_model,
+        role=bound.role,
+        request_token_plan_sha256=token_plan.plan_sha256,
+        request_limit_scope=(
+            original_reservation.request_limit_scope
+            if original_reservation is not None
+            else bound.request_id
+        ),
+        request_limit_count_before=(
+            original_reservation.request_limit_count_before
+            if original_reservation is not None
+            else 0
+        ),
+        request_limit_maximum=(
+            original_reservation.request_limit_maximum if original_reservation is not None else 100
+        ),
+    )
+    reserved = bound.model_copy(
+        update={
+            "routing": {
+                **bound.routing,
+                "atomic_request_limit_reservations": [reservation.model_dump(mode="json")],
+                "atomic_request_limit_reservation_sha256s": [reservation.evidence_sha256],
+                "atomic_request_limit_reservation": reservation.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": reservation.evidence_sha256,
+            }
+        }
+    )
+    refreshed = bind_usage_to_refresh_runtime(reserved, refresh_runtime)
+    priced = bind_usage_to_refresh_pricing_runtime(refreshed, refresh_runtime)
+    return reattest_synthetic_real_usage(priced)
+
+
+def _assurance_promoted_surface_fixture(
+    *,
+    config: AuditConfig,
+    runtime: AssuranceRuntime,
+    authorities: _AssurancePolicySelectionFixture,
+    root: Path,
+) -> tuple[
+    _PromotedParentSurfaceFixture,
+    SoliditySymbolIndex,
+    SolidityGraphSet,
+    InvariantSuite,
+    AuditedSuiteCoverage,
+]:
+    assert runtime.scheduler_artifact is not None
+    manifest = runtime.scheduler_artifact.summary.manifest
+    analysis_inputs = scheduler_test_analysis_input_inventory("maximum-assurance-runtime")
+    assert analysis_inputs.analysis_input_sha256 == manifest.bindings.analysis_input_sha256
+    journal = create_scheduler_journal(
+        root,
+        bindings=manifest.bindings,
+        analysis_input_inventory=analysis_inputs,
+        shard_inventory=manifest.shard_inventory,
+        cost_ledger_baseline=manifest.cost_ledger_baseline,
+        privacy_evidence_custody=manifest.privacy_evidence_custody,
+        audit_model_refresh_evidence=runtime.audit_model_refresh_evidence,
+        audit_model_refresh_guard=runtime.audit_model_refresh_guard,
+        audit_model_refresh_pricing_evidence=runtime.audit_model_refresh_pricing_evidence,
+        audit_model_refresh_pricing_authority=(runtime.audit_model_refresh_pricing_authority),
+        production_qualification=runtime.production_qualification,
+        audit_model_selection=runtime.verified_audit_model_selection,
+    )
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    parent_model_id = config.models.source_audit.primary
+    orientation_model_id = config.models.threat_model.primary
+    assert runtime.production_qualification is not None
+    parent_root = runtime.production_qualification.model_for(
+        parent_model_id,
+        now=authorities.refresh_runtime.verified_at,
+    ).root_lineage
+    orientation_root = runtime.production_qualification.model_for(
+        orientation_model_id,
+        now=authorities.refresh_runtime.verified_at,
+    ).root_lineage
+    context_seed = _promoted_surface_usage(
+        "source_audit",
+        parent_model_id,
+        "promoted-assurance-context-only",
+    )
+    context = _promoted_surface_context(requests, context_seed, index, graphs)
+    records = tuple(
+        _promoted_surface_record(request, "source_audit", index, graphs) for request in requests
+    )
+    fixture = _build_promoted_parent_surface_fixture(
+        journal,
+        requests=requests,
+        records=records,
+        parent_context=context,
+        parent_model_id=parent_model_id,
+        parent_root_lineage=parent_root,
+        orientation_model_id=orientation_model_id,
+        orientation_root_lineage=orientation_root,
+        usage_transform=lambda usage: _bind_promoted_assurance_usage(usage, authorities),
+        include_scheduler_test_refresh_pricing=False,
+    )
+    return fixture, index, graphs, invariants, audited_suite
+
+
+def _runtime_with_promoted_parent_surface(
+    *,
+    config: AuditConfig,
+    runtime: AssuranceRuntime,
+    authorities: _AssurancePolicySelectionFixture,
+    root: Path,
+) -> tuple[AssuranceRuntime, _PromotedParentSurfaceFixture]:
+    fixture, index, graphs, invariants, audited_suite = _assurance_promoted_surface_fixture(
+        config=config,
+        runtime=runtime,
+        authorities=authorities,
+        root=root,
+    )
+    ordinary_model_id = config.models.business_logic.primary
+    ordinary_usage = _promoted_surface_usage(
+        "business_logic",
+        ordinary_model_id,
+        "promoted-assurance-ordinary-review",
+    )
+    ordinary_context = _promoted_surface_context(
+        fixture.requests,
+        ordinary_usage,
+        index,
+        graphs,
+    )
+    _bind_promoted_usage_to_context(ordinary_usage, ordinary_context)
+    ordinary_usage = _bind_promoted_assurance_usage(ordinary_usage, authorities)
+    ordinary_artifact = _promoted_ordinary_artifact(
+        list(fixture.requests),
+        ordinary_usage,
+        index,
+        graphs,
+        context=ordinary_context,
+    )
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in fixture.scheduler_artifact.recovery_model_requests
+    )
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[
+            fixture.parent_usage,
+            *fixture.child_usages,
+            ordinary_usage,
+        ],
+        review_artifacts=[*fixture.child_artifacts, ordinary_artifact],
+        review_contexts_by_request={
+            fixture.parent_usage.request_id: [fixture.parent_context],
+            **{
+                usage.request_id: [context]
+                for usage, context in zip(
+                    fixture.child_usages,
+                    fixture.child_contexts,
+                    strict=True,
+                )
+            },
+            ordinary_usage.request_id: [ordinary_context],
+        },
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        minimum_critical_root_lineages=2,
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+        recovery_usage_coordinates=recovery_coordinates,
+        promoted_recovery_surface_coverages=(fixture.surface_capability,),
+    )
+    assert coverage.critical_gate_passed, " | ".join(
+        f"{surface.label}:{surface.critical}:{surface.reviewed}:"
+        + ",".join(
+            f"{reference.review_role}/{reference.root_lineage}/{reference.credited}"
+            for reference in surface.evidence_references
+        )
+        for surface in coverage.surfaces
+    )
+    promoted_runtime = replace(
+        runtime,
+        scheduler_artifact=fixture.scheduler_artifact,
+        expected_scheduler_bindings=fixture.scheduler_artifact.summary.manifest.bindings,
+        expected_scheduler_analysis_input_sha256=(
+            fixture.scheduler_artifact.summary.manifest.bindings.analysis_input_sha256
+        ),
+        expected_scheduler_shard_inventory=(
+            fixture.scheduler_artifact.summary.manifest.shard_inventory
+        ),
+        expected_scheduler_cost_ledger_baseline=(
+            fixture.scheduler_artifact.summary.manifest.cost_ledger_baseline
+        ),
+        model_review_coverage=coverage,
+        model_surface_review_artifacts=[*fixture.child_artifacts, ordinary_artifact],
+        promoted_truncation_recovery_surface_coverages=[fixture.surface_capability],
+        model_usage=[
+            *runtime.model_usage,
+            fixture.parent_usage,
+            *fixture.child_usages,
+            ordinary_usage,
+        ],
+    )
+    return promoted_runtime, fixture
+
+
+def _critical_surface_requirement(
+    runtime: AssuranceRuntime,
+    config: AuditConfig,
+) -> QualityGateResult:
+    return next(
+        requirement
+        for requirement in MaximumAssuranceContract(config).evaluate(runtime).requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+
+
+def _scheduler_artifact_with_swapped_recovery_result_associations(
+    fixture: _PromotedParentSurfaceFixture,
+) -> SchedulerArtifact:
+    artifact = fixture.scheduler_artifact
+    requests = artifact.recovery_model_requests
+    assert len(requests) == 2
+    swapped_hashes = tuple(reversed(tuple(item.child_result_entry_sha256 for item in requests)))
+    assert swapped_hashes != tuple(item.child_result_entry_sha256 for item in requests)
+    swapped_requests = []
+    for request, swapped_hash in zip(requests, swapped_hashes, strict=True):
+        payload = request.model_dump(mode="python", exclude={"request_evidence_sha256"})
+        payload["child_result_entry_sha256"] = swapped_hash
+        swapped_requests.append(
+            SchedulerTruncationRecoveryModelRequestEvidence.model_validate(
+                {
+                    **payload,
+                    "request_evidence_sha256": scheduler_canonical_sha256(payload),
+                }
+            )
+        )
+    return type(artifact).build(
+        summary=artifact.summary,
+        journal_evidence=artifact.journal_evidence,
+        model_requests=artifact.model_requests,
+        recovery_model_requests=swapped_requests,
+    )
+
+
 def _implemented_traceability() -> MaximumAssuranceTraceability:
     return MaximumAssuranceTraceability(
         last_verified_commit="synthetic-test",
@@ -3927,6 +4368,89 @@ def test_zero_critical_surface_denominator_cannot_pass_maximum_assurance(
     assert "denominator is zero" in clauses["critical_model_surface_review"].detail
     assert not clauses["certified_model_ensemble"].passed
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_assurance_accepts_only_exact_promoted_parent_and_child_custody(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = _maximum_config(config_factory)
+    base_runtime = _complete_runtime(config)
+    authorities = _assurance_policy_selection(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    runtime, fixture = _runtime_with_promoted_parent_surface(
+        config=config,
+        runtime=base_runtime,
+        authorities=authorities,
+        root=tmp_path / "promoted-assurance-runtime",
+    )
+
+    exact = _critical_surface_requirement(runtime, config)
+    assert exact.passed
+
+    pass_results_without_binding = tuple(
+        result.model_copy(update={"recovery_promotion_bindings": ()})
+        if result.recovery_promotion_bindings
+        else result
+        for result in fixture.scheduler_artifact.summary.pass_results
+    )
+    summary_without_binding = fixture.scheduler_artifact.summary.model_copy(
+        update={"pass_results": pass_results_without_binding}
+    )
+    artifact_without_binding = fixture.scheduler_artifact.model_copy(
+        update={"summary": summary_without_binding}
+    )
+    swapped_associations = _scheduler_artifact_with_swapped_recovery_result_associations(fixture)
+    serialized_child = UsageRecord.model_validate_json(fixture.child_usages[0].model_dump_json())
+    assert base_runtime.model_review_coverage is not None
+    assert base_runtime.model_review_coverage.critical_gate_passed
+    assert all(
+        reference.artifact_sha256 != fixture.structural_artifact.artifact_sha256
+        for surface in base_runtime.model_review_coverage.surfaces
+        for reference in surface.evidence_references
+    )
+    variants = {
+        "missing promotion capability": replace(
+            runtime,
+            promoted_truncation_recovery_surface_coverages=[],
+        ),
+        "ordinary coverage cannot orphan a public promotion binding": replace(
+            runtime,
+            model_review_coverage=base_runtime.model_review_coverage,
+            model_surface_review_artifacts=base_runtime.model_surface_review_artifacts,
+            promoted_truncation_recovery_surface_coverages=[],
+        ),
+        "missing public promotion binding": replace(
+            runtime,
+            scheduler_artifact=artifact_without_binding,
+        ),
+        "missing parent usage": replace(
+            runtime,
+            model_usage=[
+                usage
+                for usage in runtime.model_usage
+                if usage.request_id != fixture.parent_usage.request_id
+            ],
+        ),
+        "serialized child custody": replace(
+            runtime,
+            model_usage=[
+                serialized_child if usage.request_id == serialized_child.request_id else usage
+                for usage in runtime.model_usage
+            ],
+        ),
+        "swapped child-result associations": replace(
+            runtime,
+            scheduler_artifact=swapped_associations,
+        ),
+    }
+    for label, invalid_runtime in variants.items():
+        requirement = _critical_surface_requirement(invalid_runtime, config)
+        assert not requirement.passed, label
+
+    fixture.journal.close()
 
 
 def test_provider_session_provenance_cannot_be_constructed_or_serialized() -> None:

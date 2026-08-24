@@ -9,6 +9,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
 from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
@@ -52,7 +53,9 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.models.truncation_closure import TruncationSurfaceOriginKind
 from mmaudit.models.usage import (
+    is_accountable_usage_record,
     is_creditable_usage_record,
     is_recovery_creditable_usage_record,
 )
@@ -69,6 +72,11 @@ from mmaudit.solidity.coverage import (
     exact_test_entity_ids,
     partition_audited_source_entities,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    )
 
 _CALL_GRAPHS = frozenset(
     {
@@ -131,6 +139,7 @@ _CREDITABLE_REVIEW_STATUSES = frozenset(
 )
 _RECOVERY_REQUEST_ID_RE = re.compile(r"^scheduler-recovery-request-[0-9a-f]{64}$")
 _RECOVERY_REQUEST_LIMIT_SCOPE_RE = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
+_WHOLE_PROTOCOL_REQUEST_ROLE_RE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _MAX_RECOVERY_USAGE_COORDINATES = 32
 type ModelCoverageRecoveryUsageCoordinate = tuple[str, str, int]
 _FORENSIC_LIMITATION_LABELS = {
@@ -192,6 +201,9 @@ def build_model_review_coverage(
     audited_suite_coverage: AuditedSuiteCoverage | None = None,
     source_contents_by_path: dict[str, str] | None = None,
     recovery_usage_coordinates: Sequence[ModelCoverageRecoveryUsageCoordinate] = (),
+    promoted_recovery_surface_coverages: Sequence[
+        VerifiedPromotedTruncationRecoverySurfaceCoverage
+    ] = (),
 ) -> ModelReviewCoverage:
     """Credit only explicit, validated per-surface response records."""
 
@@ -289,6 +301,27 @@ def build_model_review_coverage(
         limitations=limitations,
         recovery_usage_coordinates=recovery_usage_coordinates,
     )
+    promoted_references = _promoted_recovery_evidence_references(
+        config,
+        requests=requests,
+        usage_records=usage_records,
+        review_contexts_by_request=review_contexts_by_request,
+        capabilities=promoted_recovery_surface_coverages,
+        index=index,
+        graphs=graphs,
+        limitations=limitations,
+    )
+    for surface_id, surface_references in promoted_references.items():
+        references.setdefault(surface_id, []).extend(surface_references)
+        references[surface_id].sort(
+            key=lambda item: (
+                item.request_id,
+                item.artifact_sha256,
+                item.surface_id,
+                item.review_role,
+                item.status.value,
+            )
+        )
     surfaces = sorted(
         (
             _materialize_surface(
@@ -1220,6 +1253,259 @@ def _with_audited_suite_criticality(
         )
         for seed in seeds
     ]
+
+
+def _promoted_recovery_evidence_references(
+    config: AuditConfig,
+    *,
+    requests: list[ModelSurfaceReviewRequest],
+    usage_records: list[UsageRecord],
+    review_contexts_by_request: dict[str, list[ContextPackage]],
+    capabilities: Sequence[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    limitations: set[str],
+) -> dict[str, list[ModelReviewEvidenceReference]]:
+    """Credit only parent-retained records behind live journal promotion custody."""
+
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        TruncationRecoveryEvidenceError,
+        model_surface_analysis_context_sha256,
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
+
+    materialized = tuple(itertools.islice(capabilities, _MAX_RECOVERY_USAGE_COORDINATES + 1))
+    if len(materialized) > _MAX_RECOVERY_USAGE_COORDINATES:
+        raise ValueError("promoted recovery surface capabilities exceed their compiled bound")
+    requests_by_id = {request.surface_id: request for request in requests}
+    usage_by_request: dict[str, list[UsageRecord]] = {}
+    for usage_record in usage_records:
+        usage_by_request.setdefault(usage_record.request_id, []).append(usage_record)
+    lineage_by_model = model_lineage_index(config)
+    approved_lineages = set(config.privacy.approved_model_lineages)
+    projections = []
+    for capability in materialized:
+        try:
+            projections.append(
+                require_verified_promoted_truncation_recovery_surface_coverage(capability)
+            )
+        except (TypeError, TruncationRecoveryEvidenceError):
+            limitations.add(
+                "invalid or serialized truncation-recovery promotion evidence was not credited"
+            )
+
+    promotion_counts: dict[str, int] = {}
+    artifact_counts: dict[str, int] = {}
+    for projection in projections:
+        promotion_counts[projection.promotion_entry_sha256] = (
+            promotion_counts.get(projection.promotion_entry_sha256, 0) + 1
+        )
+        artifact_counts[projection.artifact.artifact_sha256] = (
+            artifact_counts.get(projection.artifact.artifact_sha256, 0) + 1
+        )
+
+    references: dict[str, list[ModelReviewEvidenceReference]] = {}
+    for projection in projections:
+        if (
+            promotion_counts[projection.promotion_entry_sha256] != 1
+            or artifact_counts[projection.artifact.artifact_sha256] != 1
+        ):
+            limitations.add(
+                "duplicate truncation-recovery promotion or surface evidence was not credited"
+            )
+            continue
+        artifact = projection.artifact
+        reasons: list[str] = []
+        parent_usage_matches = usage_by_request.get(projection.parent_usage_record.request_id, [])
+        usage = parent_usage_matches[0] if len(parent_usage_matches) == 1 else None
+        if not parent_usage_matches:
+            reasons.append("no live runtime usage matched the promoted recovery parent")
+        elif len(parent_usage_matches) != 1:
+            reasons.append(
+                "promoted recovery parent did not join exactly one live runtime usage record"
+            )
+        elif usage is not projection.parent_usage_record:
+            reasons.append("promoted recovery parent differed from its live closure usage")
+        if artifact.parent.usage_record != projection.parent_usage_record:
+            reasons.append("promoted recovery parent structural usage differed from live custody")
+
+        if len(artifact.children) != len(projection.child_usage_records):
+            reasons.append("promoted recovery child usage inventory was incomplete")
+        else:
+            for child, live_child_usage in zip(
+                artifact.children,
+                projection.child_usage_records,
+                strict=True,
+            ):
+                child_usage_matches = usage_by_request.get(live_child_usage.request_id, [])
+                if (
+                    len(child_usage_matches) != 1
+                    or child_usage_matches[0] is not live_child_usage
+                    or child.usage_record != live_child_usage
+                ):
+                    reasons.append(
+                        "promoted recovery child differed from its exact live runtime usage"
+                    )
+
+        parent_context_matches = review_contexts_by_request.get(
+            projection.parent_usage_record.request_id,
+            [],
+        )
+        context = parent_context_matches[0] if len(parent_context_matches) == 1 else None
+        if not parent_context_matches:
+            reasons.append("no live review context matched the promoted recovery parent")
+        elif len(parent_context_matches) != 1:
+            reasons.append("promoted recovery parent did not join exactly one live review context")
+        elif context != projection.parent_context:
+            reasons.append("promoted recovery parent context differed from live closure custody")
+
+        for child_usage, child_context in zip(
+            projection.child_usage_records,
+            projection.child_contexts,
+            strict=True,
+        ):
+            child_context_matches = review_contexts_by_request.get(child_usage.request_id, [])
+            if len(child_context_matches) != 1 or child_context_matches[0] != child_context:
+                reasons.append("promoted recovery child context differed from live closure custody")
+
+        evidence_usage = usage or projection.parent_usage_record
+        evidence_context = context or projection.parent_context
+        artifact_request_ids = tuple(request.surface_id for request in artifact.requests)
+        if any(surface_id not in requests_by_id for surface_id in artifact_request_ids):
+            reasons.append(
+                "promoted recovery requested surfaces outside the deterministic inventory"
+            )
+        else:
+            current_requests = tuple(
+                requests_by_id[surface_id] for surface_id in artifact_request_ids
+            )
+            if current_requests != artifact.requests:
+                reasons.append(
+                    "promoted recovery requests differed from the deterministic inventory"
+                )
+        try:
+            from mmaudit.orchestration.context import (
+                ContextBudgetError,
+                revalidate_context_package,
+            )
+
+            validated_context: ContextPackage | None = revalidate_context_package(evidence_context)
+        except (ContextBudgetError, ValueError):
+            validated_context = None
+            reasons.append("promoted recovery parent context failed exact boundary validation")
+        if validated_context is not None and (
+            tuple(validated_context.requested_model_surfaces) != artifact.requests
+            or model_surface_analysis_context_sha256(validated_context)
+            != artifact.invariant_binding.analysis_context_sha256
+            or validated_context.role != artifact.invariant_binding.context_role
+        ):
+            reasons.append("promoted recovery parent context differed from its closure invariant")
+        if validated_context is not None and not _context_symbol_index_is_subset(
+            validated_context.solidity_index,
+            index,
+        ):
+            reasons.append(
+                "promoted recovery parent context symbol index was not an exact inventory subset"
+            )
+        if validated_context is not None and not _context_graphs_are_subset(
+            validated_context.solidity_graphs,
+            graphs,
+        ):
+            reasons.append(
+                "promoted recovery parent context graphs were not an exact inventory subset"
+            )
+        if not is_accountable_usage_record(evidence_usage, require_real=True):
+            reasons.append("promoted recovery parent usage lacked live REAL accountability")
+        if config.profile is AuditProfile.MAXIMUM_ASSURANCE and (
+            evidence_usage.routing.get("certification_request") is not True
+        ):
+            reasons.append("maximum-assurance recovery parent lacked certification evidence")
+        allowed_role = (
+            evidence_usage.role in _BASE_REVIEW_ROLES
+            or evidence_usage.role in _SPECIALIST_REVIEW_ROLES
+            or _WHOLE_PROTOCOL_REQUEST_ROLE_RE.fullmatch(evidence_usage.role) is not None
+        )
+        if not allowed_role or artifact.invariant_binding.review_role != evidence_usage.role:
+            reasons.append("promoted recovery parent role was not an allowed investigator role")
+        configured_models = _configured_models_for_role(config, evidence_usage.role)
+        if configured_models and evidence_usage.requested_model not in configured_models:
+            reasons.append("promoted recovery parent model was not configured for its review role")
+        lineage = lineage_by_model.get(evidence_usage.requested_model.lower())
+        root_lineage = lineage.root_lineage if lineage is not None else None
+        if lineage is None:
+            reasons.append("promoted recovery parent model had no registered immutable lineage")
+        elif lineage.root_lineage not in approved_lineages:
+            reasons.append("promoted recovery parent model lineage lacked operator approval")
+
+        records_by_id = {record.surface_id: record for record in artifact.records}
+        parent_origins = tuple(
+            origin
+            for origin in artifact.origins
+            if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+        )
+        for origin in parent_origins:
+            record = records_by_id.get(origin.surface_id)
+            request = requests_by_id.get(origin.surface_id)
+            record_reasons = [*reasons]
+            if record is None or request is None:
+                continue
+            record_sha256 = hashlib.sha256(
+                json.dumps(
+                    record.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                origin.request_id != evidence_usage.request_id
+                or origin.generation_id != evidence_usage.openrouter_generation_id
+                or origin.usage_record_sha256 != artifact.parent.usage_record_sha256
+                or origin.record_sha256 != record_sha256
+            ):
+                record_reasons.append("promoted recovery parent origin was inconsistent")
+            record_reasons.extend(
+                _record_validation_failures(
+                    request,
+                    record,
+                    expected_role=evidence_usage.role,
+                    index=index,
+                    graphs=graphs,
+                )
+            )
+            if validated_context is not None:
+                record_reasons.extend(
+                    model_surface_review_excerpt_validation_failures(
+                        context=validated_context,
+                        request=request,
+                        record=record,
+                    )
+                )
+            if record.status not in _CREDITABLE_REVIEW_STATUSES:
+                record_reasons.append(
+                    f"{record.status.value} is explicit no-credit review evidence"
+                )
+            credited = not record_reasons and record.status in _CREDITABLE_REVIEW_STATUSES
+            references.setdefault(record.surface_id, []).append(
+                ModelReviewEvidenceReference(
+                    surface_id=record.surface_id,
+                    request_id=evidence_usage.request_id,
+                    artifact_sha256=artifact.artifact_sha256,
+                    requested_model=evidence_usage.requested_model,
+                    model=evidence_usage.actual_model,
+                    review_role=evidence_usage.role,
+                    status=record.status,
+                    root_lineage=root_lineage,
+                    credited=credited,
+                    reason=(
+                        "credited: promoted parent-retained surface passed live closure replay"
+                        if credited
+                        else "; ".join(sorted(set(record_reasons)))
+                    ),
+                )
+            )
+    return references
 
 
 def _review_evidence_references(

@@ -21,6 +21,7 @@ from typing import Any, Never, Protocol, SupportsIndex
 
 from pydantic import BaseModel
 
+from mmaudit.models.scheduler import scheduler_canonical_sha256
 from mmaudit.models.schemas import (
     ContextPackage,
     ContextRequestEvidence,
@@ -51,6 +52,7 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryChildResult,
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryFamilyClosure,
+    SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryResultOrigin,
@@ -121,6 +123,33 @@ class VerifiedTruncationRecoveryClosure:
         raise TypeError("truncation recovery closure capabilities cannot be serialized")
 
 
+class VerifiedPromotedTruncationRecoverySurfaceCoverage:
+    """Opaque PID-local proof that one live closure was durably promoted."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Never:
+        del cls, _args, _kwargs
+        raise TypeError("promoted truncation surface coverage cannot be constructed directly")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    def __copy__(self) -> Never:
+        raise TypeError("promoted truncation surface coverage capabilities cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Never:
+        del memo
+        raise TypeError("promoted truncation surface coverage capabilities cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("promoted truncation surface coverage capabilities cannot be serialized")
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        del protocol
+        raise TypeError("promoted truncation surface coverage capabilities cannot be serialized")
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedTruncationRecoveryClosureProjection:
     """Fresh closure output plus exact request-scoped scanner fingerprints."""
@@ -129,8 +158,31 @@ class VerifiedTruncationRecoveryClosureProjection:
     family_root_sha256: str
     family_closure_id: str
     family_closure_sha256: str
+    child_result_entry_sha256s: tuple[str, ...]
     artifact: TruncationRecoveredSurfaceReviewArtifact
     scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+    parent_usage_record: UsageRecord
+    child_usage_records: tuple[UsageRecord, ...]
+    parent_context: ContextPackage
+    child_contexts: tuple[ContextPackage, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
+    """Fresh promoted surface union and its exact durable promotion identities."""
+
+    promotion_entry_sha256: str
+    recovered_output_artifact_sha256: str
+    family_id: str
+    family_root_sha256: str
+    family_closure_id: str
+    family_closure_sha256: str
+    child_result_entry_sha256s: tuple[str, ...]
+    artifact: TruncationRecoveredSurfaceReviewArtifact
+    parent_usage_record: UsageRecord
+    child_usage_records: tuple[UsageRecord, ...]
+    parent_context: ContextPackage
+    child_contexts: tuple[ContextPackage, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +214,15 @@ class _VerifiedTruncationRecoveryState:
     scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _VerifiedPromotedTruncationRecoverySurfaceCoverageState:
+    process_id: int
+    journal_reference: weakref.ReferenceType[object]
+    family_id: str
+    closure_capability: VerifiedTruncationRecoveryClosure
+    promotion_json: str
+
+
 class _VerifyTruncationRecoveryClosure(Protocol):
     def __call__(
         self,
@@ -185,6 +246,23 @@ class _RequireTruncationRecoveryClosure(Protocol):
         self,
         capability: VerifiedTruncationRecoveryClosure,
     ) -> VerifiedTruncationRecoveryClosureProjection: ...
+
+
+class _IssuePromotedTruncationRecoverySurfaceCoverage(Protocol):
+    def __call__(
+        self,
+        *,
+        journal: object,
+        family_id: str,
+        closure_capability: VerifiedTruncationRecoveryClosure,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage: ...
+
+
+class _RequirePromotedTruncationRecoverySurfaceCoverage(Protocol):
+    def __call__(
+        self,
+        capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection: ...
 
 
 class _AccountableUsagePredicate(Protocol):
@@ -1091,8 +1169,15 @@ def _build_truncation_recovery_runtime_authority() -> tuple[
             family_root_sha256=material.family.entry_sha256,
             family_closure_id=material.closure.closure_id,
             family_closure_sha256=material.closure.entry_sha256,
+            child_result_entry_sha256s=tuple(
+                result.entry_sha256 for result in material.child_results
+            ),
             artifact=material.artifact,
             scanner_fingerprints_by_request=material.scanner_fingerprints_by_request,
+            parent_usage_record=material.parent_usage_record,
+            child_usage_records=material.child_usage_records,
+            parent_context=material.parent_context,
+            child_contexts=material.child_contexts,
         )
 
     def verify(
@@ -1191,6 +1276,183 @@ _verify_truncation_recovery_closure, _require_truncation_recovery_closure = (
 )
 
 
+def _validated_promoted_surface_projection(
+    *,
+    closure: VerifiedTruncationRecoveryClosureProjection,
+    promotion: SchedulerTruncationRecoveryFamilyPromotion,
+) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
+    output = promotion.recovered_output
+    artifact = closure.artifact
+    expected_capability_binding_sha256 = scheduler_canonical_sha256(
+        {
+            "domain": "mmaudit.scheduler.truncation-recovery-promotion-capability.v1",
+            "family_id": closure.family_id,
+            "family_root_sha256": closure.family_root_sha256,
+            "family_closure_id": closure.family_closure_id,
+            "family_closure_sha256": closure.family_closure_sha256,
+            "structural_surface_artifact_sha256": artifact.artifact_sha256,
+            "scanner_fingerprints_by_request": closure.scanner_fingerprints_by_request,
+            "recovered_output_sha256": output.output_artifact_sha256,
+        }
+    )
+    if (
+        promotion.family_id != closure.family_id
+        or promotion.family_root_sha256 != closure.family_root_sha256
+        or promotion.family_closure_sha256 != closure.family_closure_sha256
+        or promotion.direct_child_result_sha256s != closure.child_result_entry_sha256s
+        or output.recovery_family_id != closure.family_id
+        or output.family_root_sha256 != closure.family_root_sha256
+        or output.family_closure_sha256 != closure.family_closure_sha256
+        or output.structural_surface_artifact_sha256 != artifact.artifact_sha256
+        or output.parent_task_id != artifact.parent_task_id
+        or output.parent_logical_request_id != artifact.parent_logical_request_id
+        or output.recovered_batch.surface_reviews != artifact.records
+        or promotion.capability_binding_sha256 != expected_capability_binding_sha256
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "truncation recovery promotion differs from its live surface closure"
+        )
+    return VerifiedPromotedTruncationRecoverySurfaceCoverageProjection(
+        promotion_entry_sha256=promotion.entry_sha256,
+        recovered_output_artifact_sha256=output.output_artifact_sha256,
+        family_id=closure.family_id,
+        family_root_sha256=closure.family_root_sha256,
+        family_closure_id=closure.family_closure_id,
+        family_closure_sha256=closure.family_closure_sha256,
+        child_result_entry_sha256s=closure.child_result_entry_sha256s,
+        artifact=artifact,
+        parent_usage_record=closure.parent_usage_record,
+        child_usage_records=closure.child_usage_records,
+        parent_context=closure.parent_context,
+        child_contexts=closure.child_contexts,
+    )
+
+
+def _build_promoted_truncation_recovery_surface_coverage_authority() -> tuple[
+    _IssuePromotedTruncationRecoverySurfaceCoverage,
+    _RequirePromotedTruncationRecoverySurfaceCoverage,
+]:
+    """Bind one live closure to a promotion retained by its exact journal."""
+
+    capability_type = VerifiedPromotedTruncationRecoverySurfaceCoverage
+    state_type = _VerifiedPromotedTruncationRecoverySurfaceCoverageState
+    canonical_model_json = _canonical_model_json
+    require_closure = _require_truncation_recovery_closure
+    validate_projection = _validated_promoted_surface_projection
+    current_process_id = os.getpid
+    owner_process_id = current_process_id()
+    make_weakref = weakref.ref
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+            _VerifiedPromotedTruncationRecoverySurfaceCoverageState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def current_promotion(
+        journal: object, family_id: str
+    ) -> SchedulerTruncationRecoveryFamilyPromotion:
+        # Imported lazily because the scheduler owns this module's closure verifier.
+        from mmaudit.orchestration.scheduler import SchedulerJournal
+
+        if type(journal) is not SchedulerJournal:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage lacks exact scheduler custody"
+            )
+        try:
+            return journal._require_current_promoted_truncation_recovery_family(family_id)
+        except ValueError as exc:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage lacks a retained journal promotion"
+            ) from exc
+
+    def issue(
+        *,
+        journal: object,
+        family_id: str,
+        closure_capability: VerifiedTruncationRecoveryClosure,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
+        if current_process_id() != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage cannot cross a process fork"
+            )
+        promotion = current_promotion(journal, family_id)
+        closure = require_closure(closure_capability)
+        validate_projection(closure=closure, promotion=promotion)
+        capability = object.__new__(capability_type)
+        try:
+            journal_reference = make_weakref(journal)
+        except TypeError as exc:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage journal cannot be retained"
+            ) from exc
+        state = state_type(
+            process_id=current_process_id(),
+            journal_reference=journal_reference,
+            family_id=family_id,
+            closure_capability=closure_capability,
+            promotion_json=canonical_model_json(promotion),
+        )
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+        ) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = make_weakref(capability, discard)
+        with lock:
+            registry[key] = (reference, state)
+        return capability
+
+    def require(
+        capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
+        process_id = current_process_id()
+        if process_id != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage cannot cross a process fork"
+            )
+        with lock:
+            registered = registry.get(id(capability))
+        state = (
+            registered[1]
+            if type(capability) is capability_type
+            and registered is not None
+            and registered[0]() is capability
+            else None
+        )
+        if state is None:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage is absent or forged"
+            )
+        journal = state.journal_reference()
+        if state.process_id != process_id or journal is None:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage lost live journal custody"
+            )
+        promotion = current_promotion(journal, state.family_id)
+        if canonical_model_json(promotion) != state.promotion_json:
+            raise TruncationRecoveryEvidenceError(
+                "promoted truncation surface coverage journal state changed"
+            )
+        closure = require_closure(state.closure_capability)
+        return validate_projection(closure=closure, promotion=promotion)
+
+    return issue, require
+
+
+(
+    _issue_verified_promoted_truncation_recovery_surface_coverage,
+    _require_verified_promoted_truncation_recovery_surface_coverage,
+) = _build_promoted_truncation_recovery_surface_coverage_authority()
+
+
 def verify_truncation_recovery_closure(
     *,
     family: SchedulerTruncationRecoveryFamilyRoot,
@@ -1248,3 +1510,11 @@ def require_verified_truncation_recovery_closure_projection(
                 "truncation recovery surface artifact differs from verified closure state"
             )
     return fresh
+
+
+def require_verified_promoted_truncation_recovery_surface_coverage(
+    capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
+) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
+    """Replay one journal-owned promoted surface union without serialized authority."""
+
+    return _require_verified_promoted_truncation_recovery_surface_coverage(capability)

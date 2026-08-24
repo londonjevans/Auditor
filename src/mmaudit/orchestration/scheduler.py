@@ -158,7 +158,9 @@ from mmaudit.orchestration.cost_ledger import (
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
+    VerifiedPromotedTruncationRecoverySurfaceCoverage,
     VerifiedTruncationRecoveryClosure,
+    _issue_verified_promoted_truncation_recovery_surface_coverage,
     require_verified_truncation_recovery_closure_projection,
 )
 from mmaudit.reporting.json_report import stable_json
@@ -2074,6 +2076,50 @@ class SchedulerJournal:
         )
         self._append_truncation_recovery_entry(entry)
         return entry
+
+    def _require_current_promoted_truncation_recovery_family(
+        self,
+        family_id: str,
+    ) -> SchedulerTruncationRecoveryFamilyPromotion:
+        """Return a fresh promotion only while this exact journal retains live custody."""
+
+        self._assert_live_custody()
+        promotion = self._truncation_recovery_indexes.promotions.get(family_id)
+        family = self._truncation_recovery_indexes.families.get(family_id)
+        closure = self._truncation_recovery_indexes.closures.get(family_id)
+        matching_entries = tuple(
+            entry
+            for entry in self._truncation_recovery_entries
+            if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
+            and entry.family_id == family_id
+        )
+        if (
+            promotion is None
+            or family is None
+            or closure is None
+            or matching_entries != (promotion,)
+            or promotion.family_root_sha256 != family.entry_sha256
+            or promotion.family_closure_sha256 != closure.entry_sha256
+        ):
+            raise ValueError("scheduler lacks one exact retained recovery promotion")
+        return SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+            promotion.model_dump_json(),
+            strict=True,
+        )
+
+    def issue_promoted_truncation_recovery_surface_coverage(
+        self,
+        family_id: str,
+        closure_capability: VerifiedTruncationRecoveryClosure,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
+        """Issue live coverage custody only after the matching promotion was appended."""
+
+        self._require_current_promoted_truncation_recovery_family(family_id)
+        return _issue_verified_promoted_truncation_recovery_surface_coverage(
+            journal=self,
+            family_id=family_id,
+            closure_capability=closure_capability,
+        )
 
     @property
     def _truncation_recovery_chain_head(self) -> str | None:

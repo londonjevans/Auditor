@@ -12,7 +12,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Never, SupportsIndex
+from typing import TYPE_CHECKING, Never, SupportsIndex
 
 from mmaudit.agents.specialists import canonical_specialist_role, completed_specialist_roles
 from mmaudit.benchmark.certificate import (
@@ -36,7 +36,7 @@ from mmaudit.models.policy_selection import (
 from mmaudit.models.qualification import (
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
-    usage_matches_verified_reasoning_qualification,
+    usage_matches_verified_reasoning_qualification_route,
 )
 from mmaudit.models.reasoning import (
     ReasoningPolicyError,
@@ -117,6 +117,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import (
     candidate_falsifier_role_prefix,
+    is_accountable_usage_record,
     is_creditable_usage_record,
     is_recovery_creditable_usage_record,
     source_backed_whole_protocol_context,
@@ -133,6 +134,12 @@ from mmaudit.traceability import (
     ImplementationStatus,
     MaximumAssuranceTraceability,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        VerifiedPromotedTruncationRecoverySurfaceCoverage,
+        VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
+    )
 
 FULL_SEMANTIC_GRAPHS: frozenset[SolidityGraphKind] = frozenset(
     {
@@ -279,6 +286,9 @@ class AssuranceRuntime:
     coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
     model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = field(default_factory=list)
+    promoted_truncation_recovery_surface_coverages: list[
+        VerifiedPromotedTruncationRecoverySurfaceCoverage
+    ] = field(default_factory=list)
     model_usage: list[UsageRecord] = field(default_factory=list)
     provider_session: ProviderSessionProvenance | None = None
     production_qualification: VerifiedProductionQualification | None = None
@@ -1899,12 +1909,14 @@ class MaximumAssuranceContract:
             runtime.model_review_coverage,
             runtime.model_usage,
             runtime.model_surface_review_artifacts,
+            runtime.promoted_truncation_recovery_surface_coverages,
             self.config,
             production_qualification,
             runtime.provider_session,
             audit_selection,
             audit_refresh,
             audit_refresh_pricing,
+            scheduler_artifact=runtime.scheduler_artifact,
             recovery_request_limit_coordinates=promoted_recovery_coordinates,
         )
         if runtime.model_review_coverage is None:
@@ -3742,9 +3754,35 @@ def _is_real_model_usage(
             require_certification=True,
         )
     )
+    return usage_is_creditable and _usage_matches_real_model_route(
+        record,
+        config,
+        qualification,
+        provider_session,
+        audit_selection,
+        audit_refresh,
+        audit_refresh_pricing,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
+    )
+
+
+def _usage_matches_real_model_route(
+    record: UsageRecord,
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification | None,
+    provider_session: ProviderSessionProvenance | None,
+    audit_selection: _CurrentAuditModelSelection | None,
+    audit_refresh: _CurrentAuditModelRefresh | None,
+    audit_refresh_pricing: _CurrentAuditModelRefreshPricing | None,
+    *,
+    recovery_request_limit_scope: str | None,
+    recovery_request_limit_count_before: int | None,
+) -> bool:
+    """Join one live usage route without independently deciding response credit."""
+
     if (
-        not usage_is_creditable
-        or qualification is None
+        qualification is None
         or not _real_provider_session_is_qualifying(provider_session)
         or not _usage_matches_audit_model_selection(record, audit_selection)
         or not _usage_matches_audit_model_refresh(record, audit_refresh)
@@ -3834,7 +3872,7 @@ def _is_real_model_usage(
         == qualification.selection_verification_sha256
         and routing.get("qualification_result_sha256")
         == qualified_model.qualification_result_sha256
-        and usage_matches_verified_reasoning_qualification(
+        and usage_matches_verified_reasoning_qualification_route(
             record=record,
             production_qualification=qualification,
             now=datetime.now(UTC).replace(microsecond=0),
@@ -3876,6 +3914,7 @@ def _model_coverage_is_backed_by_real_usage(
     coverage: ModelReviewCoverage | None,
     records: list[UsageRecord],
     artifacts: list[ModelSurfaceReviewArtifact],
+    promoted_surface_coverages: list[VerifiedPromotedTruncationRecoverySurfaceCoverage],
     config: AuditConfig,
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
@@ -3883,10 +3922,16 @@ def _model_coverage_is_backed_by_real_usage(
     audit_refresh: _CurrentAuditModelRefresh | None,
     audit_refresh_pricing: _CurrentAuditModelRefreshPricing | None,
     *,
+    scheduler_artifact: SchedulerArtifact | None,
     recovery_request_limit_coordinates: dict[str, tuple[str, int]] | None = None,
 ) -> bool:
     if coverage is None:
         return False
+
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        TruncationRecoveryEvidenceError,
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
 
     usage_by_request: dict[str, list[UsageRecord]] = {}
     for record in records:
@@ -3894,6 +3939,137 @@ def _model_coverage_is_backed_by_real_usage(
     artifacts_by_request: dict[str, list[ModelSurfaceReviewArtifact]] = {}
     for artifact in artifacts:
         artifacts_by_request.setdefault(artifact.request_id, []).append(artifact)
+
+    if len(promoted_surface_coverages) > 32:
+        return False
+    validated_scheduler_artifact: SchedulerArtifact | None = None
+    if scheduler_artifact is not None:
+        if type(scheduler_artifact) is not SchedulerArtifact:
+            return False
+        try:
+            validated_scheduler_artifact = SchedulerArtifact.model_validate_json(
+                scheduler_artifact.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+    public_promotion_bindings = (
+        tuple(
+            binding
+            for pass_result in validated_scheduler_artifact.summary.pass_results
+            for binding in pass_result.recovery_promotion_bindings
+        )
+        if validated_scheduler_artifact is not None
+        else ()
+    )
+    public_promotion_entry_sha256s = tuple(
+        binding.promotion_entry_sha256 for binding in public_promotion_bindings
+    )
+    if len(public_promotion_entry_sha256s) != len(set(public_promotion_entry_sha256s)):
+        return False
+    composite_by_artifact_sha256: dict[
+        str, VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+    ] = {}
+    seen_promotion_entries: set[str] = set()
+    for capability in promoted_surface_coverages:
+        try:
+            projection = require_verified_promoted_truncation_recovery_surface_coverage(capability)
+        except (TypeError, TruncationRecoveryEvidenceError):
+            return False
+        promoted_artifact = projection.artifact
+        if (
+            projection.promotion_entry_sha256 in seen_promotion_entries
+            or promoted_artifact.artifact_sha256 in composite_by_artifact_sha256
+            or promoted_artifact.artifact_sha256 in {item.artifact_sha256 for item in artifacts}
+        ):
+            return False
+        seen_promotion_entries.add(projection.promotion_entry_sha256)
+        matching_bindings = tuple(
+            binding
+            for binding in public_promotion_bindings
+            if binding.promotion_entry_sha256 == projection.promotion_entry_sha256
+        )
+        if len(matching_bindings) != 1:
+            return False
+        binding = matching_bindings[0]
+        if (
+            binding.parent_task_id != promoted_artifact.parent_task_id
+            or binding.recovered_output_artifact_sha256
+            != projection.recovered_output_artifact_sha256
+            or binding.direct_child_result_sha256s != projection.child_result_entry_sha256s
+        ):
+            return False
+        parent_usage_matches = usage_by_request.get(promoted_artifact.parent_logical_request_id, [])
+        if (
+            len(parent_usage_matches) != 1
+            or parent_usage_matches[0] is not projection.parent_usage_record
+            or promoted_artifact.parent.usage_record != projection.parent_usage_record
+            or not is_accountable_usage_record(parent_usage_matches[0], require_real=True)
+            or parent_usage_matches[0].routing.get("certification_request") is not True
+            or not _usage_matches_real_model_route(
+                parent_usage_matches[0],
+                config,
+                qualification,
+                provider_session,
+                audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=None,
+                recovery_request_limit_count_before=None,
+            )
+        ):
+            return False
+        recovery_requests = tuple(
+            request
+            for request in (
+                validated_scheduler_artifact.recovery_model_requests
+                if validated_scheduler_artifact is not None
+                else ()
+            )
+            if request.promotion_entry_sha256 == projection.promotion_entry_sha256
+        )
+        if (
+            len(recovery_requests) != len(promoted_artifact.children)
+            or len(projection.child_usage_records) != len(promoted_artifact.children)
+            or {request.child_result_entry_sha256 for request in recovery_requests}
+            != set(projection.child_result_entry_sha256s)
+            or {request.logical_request_id for request in recovery_requests}
+            != {child.usage_record.request_id for child in promoted_artifact.children}
+        ):
+            return False
+        recovery_requests_by_id = {
+            request.logical_request_id: request for request in recovery_requests
+        }
+        for child, live_child_usage, expected_child_result_sha256 in zip(
+            promoted_artifact.children,
+            projection.child_usage_records,
+            projection.child_result_entry_sha256s,
+            strict=True,
+        ):
+            matching_child_usage = usage_by_request.get(live_child_usage.request_id, [])
+            request = recovery_requests_by_id.get(live_child_usage.request_id)
+            if (
+                len(matching_child_usage) != 1
+                or matching_child_usage[0] is not live_child_usage
+                or child.usage_record != live_child_usage
+                or request is None
+                or request.child_result_entry_sha256 != expected_child_result_sha256
+                or not _is_real_model_usage(
+                    matching_child_usage[0],
+                    config,
+                    qualification,
+                    provider_session,
+                    audit_selection,
+                    audit_refresh,
+                    audit_refresh_pricing,
+                    recovery_request_limit_scope=request.request_limit_scope,
+                    recovery_request_limit_count_before=request.request_limit_count_before,
+                )
+            ):
+                return False
+        composite_by_artifact_sha256[promoted_artifact.artifact_sha256] = projection
+    if seen_promotion_entries != set(public_promotion_entry_sha256s):
+        return False
 
     lineage_by_model = model_lineage_index(config)
     credited_reference_count = 0
@@ -3917,6 +4093,56 @@ def _model_coverage_is_backed_by_real_usage(
             return False
         credited_reference_count += len(credited_references)
         for reference in credited_references:
+            promoted_projection = composite_by_artifact_sha256.get(reference.artifact_sha256)
+            if promoted_projection is not None:
+                promoted_artifact = promoted_projection.artifact
+                usage = promoted_projection.parent_usage_record
+                matching_origins = tuple(
+                    origin
+                    for origin in promoted_artifact.origins
+                    if origin.surface_id == reference.surface_id and origin.provisional
+                )
+                promoted_records = tuple(
+                    record
+                    for record in promoted_artifact.records
+                    if record.surface_id == reference.surface_id
+                )
+                try:
+                    qualified_model = (
+                        qualification.model_for(
+                            usage.requested_model,
+                            now=datetime.now(UTC).replace(microsecond=0),
+                        )
+                        if qualification is not None
+                        else None
+                    )
+                except ValueError:
+                    return False
+                lineage = lineage_by_model.get(usage.requested_model.lower())
+                if (
+                    len(matching_origins) != 1
+                    or len(promoted_records) != 1
+                    or qualified_model is None
+                    or lineage is None
+                    or reference.surface_id != surface.surface_id
+                    or reference.status
+                    not in {
+                        ModelSurfaceReviewStatus.CANDIDATE,
+                        ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+                    }
+                    or reference.request_id != usage.request_id
+                    or reference.requested_model != usage.requested_model
+                    or reference.model != usage.actual_model
+                    or reference.review_role != usage.role
+                    or reference.review_role != promoted_records[0].review_role
+                    or reference.status is not promoted_records[0].status
+                    or reference.root_lineage != qualified_model.root_lineage
+                    or lineage.root_lineage != qualified_model.root_lineage
+                    or lineage.root_lineage not in config.privacy.approved_model_lineages
+                    or matching_origins[0].request_id != usage.request_id
+                ):
+                    return False
+                continue
             matching_usage = usage_by_request.get(reference.request_id, [])
             if len(matching_usage) != 1:
                 return False
@@ -3942,24 +4168,24 @@ def _model_coverage_is_backed_by_real_usage(
             matching_artifacts = artifacts_by_request.get(reference.request_id, [])
             if len(matching_artifacts) != 1:
                 return False
-            artifact = matching_artifacts[0]
-            if artifact.artifact_sha256 != reference.artifact_sha256:
+            ordinary_artifact = matching_artifacts[0]
+            if ordinary_artifact.artifact_sha256 != reference.artifact_sha256:
                 return False
             try:
                 sealed_artifact = ModelSurfaceReviewArtifact.model_validate(
-                    artifact.model_dump(mode="json")
+                    ordinary_artifact.model_dump(mode="json")
                 )
             except ValueError:
                 return False
 
-            matching_records = [
+            ordinary_records = [
                 record
                 for record in sealed_artifact.records
                 if record.surface_id == reference.surface_id
             ]
-            if len(matching_records) != 1:
+            if len(ordinary_records) != 1:
                 return False
-            review_record = matching_records[0]
+            review_record = ordinary_records[0]
             try:
                 qualified_model = (
                     qualification.model_for(

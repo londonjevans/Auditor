@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.config import AuditConfig
+from mmaudit.models.scheduler import (
+    SchedulerArtifact,
+    SchedulerPassKind,
+    SchedulerPassStatus,
+    SchedulerScope,
+    SchedulerTaskResult,
+    SchedulerTerminalStatus,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditedSuiteAssertionStatus,
@@ -18,6 +31,7 @@ from mmaudit.models.schemas import (
     AuditedSuiteStatementStatus,
     AuditedSuiteSurfaceCoverage,
     AuditProfile,
+    CandidateReviewBatch,
     ContextExcerpt,
     ContextPackage,
     CoverageMetric,
@@ -30,6 +44,7 @@ from mmaudit.models.schemas import (
     InvariantSuite,
     InvariantTemplate,
     Location,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
@@ -41,11 +56,14 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    RepositoryFile,
     RepositoryMap,
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphNode,
+    SolidityGraphNodeKind,
     SolidityGraphOccurrenceKind,
     SolidityGraphOmission,
     SolidityGraphRetainedOccurrence,
@@ -62,6 +80,23 @@ from mmaudit.models.token_planning import (
     ContextOmissionItem,
     ContextOmissionReason,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewTruncatedEnvelopeEvidence,
+    CandidateReviewTruncationProjection,
+    candidate_review_frame_wire_schema_sha256,
+    frame_candidate_review_batch,
+    seal_candidate_review_truncated_envelope_evidence,
+)
+from mmaudit.models.truncation_closure import (
+    _INVARIANT_ROUTING_KEYS,
+    TruncationRecoveredSurfaceReviewArtifact,
+    TruncationSurfaceOriginKind,
+)
+from mmaudit.models.truncation_recovery_journal import (
+    SchedulerTruncationRecoveryClosureStatus,
+    SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryRequestedSurfaceManifest,
+)
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
@@ -70,6 +105,15 @@ from mmaudit.orchestration.model_coverage import (
     model_review_critical_surface_gate,
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
+)
+from mmaudit.orchestration.scheduler import SchedulerJournal
+from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
+from mmaudit.orchestration.truncation_recovery_evidence import (
+    VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    VerifiedTruncationRecoveryClosure,
+    build_truncation_recovery_child_context,
+    require_verified_promoted_truncation_recovery_surface_coverage,
+    verify_truncation_recovery_closure,
 )
 from tests.fake_openrouter import (
     _maximum_assurance_candidates,
@@ -80,6 +124,38 @@ from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
     rebind_synthetic_token_plan,
+)
+from tests.scheduler_support import (
+    bind_scheduler_test_usage_to_audit_selection,
+    build_scheduler_test_model_payload,
+    build_scheduler_test_real_usage,
+    scheduler_test_delivered_source_descriptor_sha256s,
+    scheduler_test_response_schema_sha256,
+)
+from tests.unit.test_scheduler_journal import (
+    _inventory as _scheduler_inventory,
+)
+from tests.unit.test_scheduler_journal import (
+    _privacy_custody as _scheduler_privacy_custody,
+)
+from tests.unit.test_scheduler_journal import (
+    create_scheduler_journal as _create_test_scheduler_journal,
+)
+from tests.unit.test_scheduler_truncation_promotion_integration import (
+    _bind_child_to_parent_invariant as _bind_promoted_child_to_parent_invariant,
+)
+from tests.unit.test_scheduler_truncation_promotion_integration import (
+    _one_shard_bindings as _promoted_surface_bindings,
+)
+from tests.unit.test_scheduler_truncation_promotion_integration import (
+    _recovery_plan as _promoted_recovery_plan,
+)
+from tests.unit.test_truncation_closure import _context_evidence as _promoted_context_evidence
+from tests.unit.test_truncation_recovery_journal import (
+    _projection as _promoted_truncation_projection,
+)
+from tests.unit.test_truncation_recovery_journal import (
+    _success_custody as _promoted_child_success_custody,
 )
 
 _PATH = "src/Vault.sol"
@@ -729,6 +805,372 @@ def _requests_with_audited_coverage() -> tuple[
         audited_suite_coverage=audited_suite,
     )
     return index, graphs, invariants, audited_suite, requests
+
+
+@dataclass(frozen=True, slots=True)
+class _PromotedParentSurfaceFixture:
+    journal: SchedulerJournal
+    family_id: str
+    closure_capability: VerifiedTruncationRecoveryClosure
+    surface_capability: VerifiedPromotedTruncationRecoverySurfaceCoverage
+    promotion: SchedulerTruncationRecoveryFamilyPromotion
+    scheduler_artifact: SchedulerArtifact
+    structural_artifact: TruncationRecoveredSurfaceReviewArtifact
+    requests: tuple[ModelSurfaceReviewRequest, ...]
+    records: tuple[ModelSurfaceReviewRecord, ...]
+    parent_usage: UsageRecord
+    child_usages: tuple[UsageRecord, ...]
+    parent_context: ContextPackage
+    child_contexts: tuple[ContextPackage, ...]
+    child_artifacts: tuple[ModelSurfaceReviewArtifact, ...]
+
+
+def _promoted_parent_truncation(
+    *,
+    journal: SchedulerJournal,
+    task: Any,
+    activation: Any,
+    context: ContextPackage,
+    projection: CandidateReviewTruncationProjection,
+    full_batch: CandidateReviewBatch,
+    include_scheduler_test_refresh_pricing: bool,
+) -> tuple[CandidateReviewTruncatedEnvelopeEvidence, UsageRecord]:
+    base = build_scheduler_test_real_usage(
+        task,
+        activation,
+        seed="promotion-parent",
+        validated_output=frame_candidate_review_batch(full_batch),
+        cost_usd_exact="0.04",
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+        audit_model_refresh_pricing=journal.manifest.bindings.audit_model_refresh_pricing,
+        include_audit_model_refresh_pricing=include_scheduler_test_refresh_pricing,
+    )
+    assert base.openrouter_generation_id is not None
+    assert base.returned_model is not None
+    assert base.actual_model is not None
+    assert base.provider is not None
+    assert base.actual_provider_endpoint is not None
+    router_metadata_sha256 = base.routing.get("router_metadata_sha256")
+    assert isinstance(router_metadata_sha256, str)
+    envelope = seal_candidate_review_truncated_envelope_evidence(
+        logical_request_id=task.logical_request_id,
+        generation_id=base.openrouter_generation_id,
+        generation_header_id=base.openrouter_generation_id,
+        requested_model=base.requested_model,
+        returned_model=base.returned_model,
+        selected_model=base.actual_model,
+        response_provider_identity=base.provider,
+        selected_provider_endpoint=base.actual_provider_endpoint,
+        selected_provider_identity="synthetic-provider",
+        selected_provider_name=base.provider,
+        router_metadata_sha256=router_metadata_sha256,
+        finish_reason=projection.finish_reason,
+        native_finish_reason=projection.native_finish_reason,
+        wire_schema_sha256=projection.wire_schema_sha256,
+        response_sha256=projection.original_response_sha256,
+    )
+    context_evidence = _promoted_context_evidence(context, task.logical_request_id)
+    routing = {
+        **base.routing,
+        "generation_id": envelope.generation_id,
+        "generation_header_id": envelope.generation_header_id,
+        "provider": envelope.selected_provider_name,
+        "router_metadata_sha256": envelope.router_metadata_sha256,
+        "finish_reason": envelope.finish_reason,
+        "native_finish_reason": envelope.native_finish_reason,
+        "schema_sha256": envelope.wire_schema_sha256,
+        "validation_status": ModelRequestValidationStatus.TRUNCATED.value,
+        "context_request_evidence": context_evidence.model_dump(mode="json"),
+        "context_request_evidence_sha256": context_evidence.evidence_sha256,
+        **openrouter_module._candidate_review_truncated_envelope_routing(envelope),
+        **openrouter_module._candidate_review_truncation_projection_routing(projection),
+    }
+    usage = reattest_synthetic_real_usage(
+        base.model_copy(
+            update={
+                "response_sha256": projection.original_response_sha256,
+                "validated_response_sha256": None,
+                "finish_reason": projection.finish_reason,
+                "validation_status": ModelRequestValidationStatus.TRUNCATED,
+                "identity_strength": ModelIdentityStrength.UNBOUND,
+                "model_family": "synthetic-recovery-lineage",
+                "status": "rejected_truncated_response",
+                "provider_error_classification": "truncated_response",
+                "routing": routing,
+            }
+        )
+    )
+    return envelope, usage
+
+
+def _build_promoted_parent_surface_fixture(
+    journal: SchedulerJournal,
+    *,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    records: tuple[ModelSurfaceReviewRecord, ...],
+    parent_context: ContextPackage,
+    parent_model_id: str,
+    parent_root_lineage: str,
+    orientation_model_id: str | None = None,
+    orientation_root_lineage: str | None = None,
+    usage_transform: Callable[[UsageRecord], UsageRecord] | None = None,
+    include_scheduler_test_refresh_pricing: bool = True,
+) -> _PromotedParentSurfaceFixture:
+    """Issue one real journal-owned retained-parent surface capability for consumers."""
+
+    if tuple(parent_context.requested_model_surfaces) != requests:
+        raise ValueError("promoted surface fixture context differs from its requests")
+    if tuple(record.surface_id for record in records) != tuple(
+        request.surface_id for request in requests
+    ):
+        raise ValueError("promoted surface fixture records differ from its requests")
+    selected_orientation_model = orientation_model_id or parent_model_id
+    selected_orientation_root = orientation_root_lineage or parent_root_lineage
+    transform = usage_transform or (lambda usage: usage)
+    planner = PipelineScheduler(journal)
+
+    orientation_task = planner.model_task(
+        pass_kind=SchedulerPassKind.ORIENTATION,
+        scope=SchedulerScope.global_scope(),
+        task_key="promoted-surface-orientation",
+        role="threat_model",
+        requested_model=selected_orientation_model,
+        root_lineage=selected_orientation_root,
+        system_prompt_sha256=hashlib.sha256(b"promoted-surface-orientation-system").hexdigest(),
+        response_schema_sha256=scheduler_test_response_schema_sha256(
+            SchedulerPassKind.ORIENTATION,
+            "threat_model",
+        ),
+    )
+    orientation_plan = planner.prepare_pass(
+        SchedulerPassKind.ORIENTATION,
+        (orientation_task,),
+    )
+    orientation_activation = journal.activate_task(
+        orientation_task.task_id,
+        actual_input_sha256=orientation_task.input_sha256,
+        system_prompt_sha256=orientation_task.system_prompt_sha256,
+        user_prompt_sha256=hashlib.sha256(b"promoted-surface-orientation-user").hexdigest(),
+        provider_prompt_sha256=hashlib.sha256(b"promoted-surface-orientation-provider").hexdigest(),
+        response_schema_sha256=orientation_task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(
+                orientation_plan,
+                orientation_task,
+            )
+        ),
+    )
+    journal.mark_dispatched(orientation_task.task_id)
+    orientation_payload = build_scheduler_test_model_payload(
+        orientation_plan,
+        orientation_task,
+    )
+    orientation_usage = transform(
+        build_scheduler_test_real_usage(
+            orientation_task,
+            orientation_activation,
+            seed="promoted-surface-orientation",
+            validated_output=orientation_payload,
+            privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+            audit_model_selection=journal.manifest.bindings.audit_model_selection,
+            audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+            audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
+            include_audit_model_refresh_pricing=include_scheduler_test_refresh_pricing,
+        )
+    )
+    orientation_output = journal.persist_output(
+        orientation_task.task_id,
+        orientation_payload,
+        usage_record=orientation_usage,
+    )
+    journal.record_terminal(
+        SchedulerTaskResult.build(
+            plan=orientation_plan,
+            task=orientation_task,
+            activation=orientation_activation,
+            terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+            terminal_evidence_sha256=orientation_usage.validated_response_sha256 or "0" * 64,
+            output=orientation_output,
+        )
+    )
+    assert journal.seal_pass_result(SchedulerPassKind.ORIENTATION).status is (
+        SchedulerPassStatus.COMPLETE
+    )
+
+    planner = PipelineScheduler(journal)
+    projection = _promoted_truncation_projection(records, retained_count=1)
+    surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
+    blind_task = planner.model_task(
+        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+        scope=SchedulerScope.single_shard(journal.manifest.shard_inventory.shards[0].shard_id),
+        task_key="promoted-retained-parent-source-audit",
+        role="source_audit",
+        requested_model=parent_model_id,
+        root_lineage=parent_root_lineage,
+        system_prompt_sha256=hashlib.sha256(b"promoted-retained-parent-system").hexdigest(),
+        response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+    )
+    blind_plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, (blind_task,))
+    parent_activation = journal.activate_task(
+        blind_task.task_id,
+        actual_input_sha256=blind_task.input_sha256,
+        system_prompt_sha256=blind_task.system_prompt_sha256,
+        user_prompt_sha256=hashlib.sha256(render_context(parent_context).encode()).hexdigest(),
+        provider_prompt_sha256=hashlib.sha256(b"promoted-retained-parent-provider").hexdigest(),
+        response_schema_sha256=blind_task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(blind_plan, blind_task)
+        ),
+    )
+    journal.mark_dispatched(blind_task.task_id)
+    envelope, parent_usage = _promoted_parent_truncation(
+        journal=journal,
+        task=blind_task,
+        activation=parent_activation,
+        context=parent_context,
+        projection=projection,
+        full_batch=CandidateReviewBatch(findings=(), surface_reviews=records),
+        include_scheduler_test_refresh_pricing=include_scheduler_test_refresh_pricing,
+    )
+    parent_usage = transform(parent_usage)
+    parent_attempt = journal.persist_truncated_provider_attempt(
+        blind_task.task_id,
+        parent_usage,
+        truncated_envelope_evidence=envelope,
+        truncation_projection=projection,
+    )
+    original_result = SchedulerTaskResult.build(
+        plan=blind_plan,
+        task=blind_task,
+        activation=parent_activation,
+        terminal_status=SchedulerTerminalStatus.TRUNCATED,
+        terminal_evidence_sha256=projection.evidence_sha256,
+    )
+    journal.record_terminal(original_result)
+    recovery_plan = _promoted_recovery_plan(
+        journal=journal,
+        pass_plan=blind_plan,
+        task=blind_task,
+        activation=parent_activation,
+        attempt=parent_attempt,
+        projection=projection,
+        manifest=surface_manifest,
+        parent_usage=parent_usage,
+    )
+    family = journal.open_truncation_recovery_family(
+        recovery_plan=recovery_plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    child_results = []
+    child_usages = []
+    child_contexts = []
+    child_artifacts = []
+    for child in recovery_plan.children:
+        child_context = build_truncation_recovery_child_context(
+            parent_context=parent_context,
+            child=child,
+        )
+        child_activation = journal.activate_truncation_recovery_child(
+            child.child_task_id,
+            actual_input_sha256=hashlib.sha256(
+                f"promoted-child-input:{child.child_task_id}".encode()
+            ).hexdigest(),
+            system_prompt_sha256=hashlib.sha256(
+                f"promoted-child-system:{child.child_task_id}".encode()
+            ).hexdigest(),
+            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            provider_prompt_sha256=hashlib.sha256(
+                f"promoted-child-provider:{child.child_task_id}".encode()
+            ).hexdigest(),
+            response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+        child_usage, normalization, batch, child_requests, child_artifact = (
+            _promoted_child_success_custody(
+                child=child,
+                activation=child_activation,
+                surface_manifest=surface_manifest,
+                surfaces=records,
+                execution_evidence=ExecutionEvidenceKind.REAL,
+                request_role="source_audit",
+                exact_model_id=parent_model_id,
+            )
+        )
+        if include_scheduler_test_refresh_pricing:
+            child_usage = _bind_promoted_child_to_parent_invariant(
+                child_usage,
+                journal=journal,
+                parent_usage=parent_usage,
+            )
+        else:
+            audit_selection = journal.manifest.bindings.audit_model_selection
+            assert audit_selection is not None
+            child_usage = bind_scheduler_test_usage_to_audit_selection(
+                child_usage,
+                audit_selection,
+            )
+            child_routing = dict(child_usage.routing)
+            for key in _INVARIANT_ROUTING_KEYS:
+                child_routing.pop(key, None)
+                if key in parent_usage.routing:
+                    child_routing[key] = parent_usage.routing[key]
+            child_usage = child_usage.model_copy(update={"routing": child_routing})
+        child_usage = transform(child_usage)
+        child_result = journal.record_truncation_recovery_child_success(
+            child.child_task_id,
+            usage_record=child_usage,
+            normalization_evidence=normalization,
+            normalized_batch=batch,
+            requested_surface_requests=child_requests,
+            output_artifact=child_artifact,
+        )
+        child_results.append(child_result)
+        child_usages.append(child_usage)
+        child_contexts.append(child_context)
+        child_artifacts.append(child_artifact)
+
+    closure = journal.seal_truncation_recovery_family(family.family_id)
+    assert closure.closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+    closure_capability, structural_artifact = verify_truncation_recovery_closure(
+        family=family,
+        closure=closure,
+        child_results=child_results,
+        parent_usage_record=parent_usage,
+        child_usage_records=child_usages,
+        parent_context=parent_context,
+        child_contexts=child_contexts,
+        requests=requests,
+    )
+    promotion = journal.promote_truncation_recovery_family(
+        family.family_id,
+        closure_capability,
+    )
+    surface_capability = journal.issue_promoted_truncation_recovery_surface_coverage(
+        family.family_id,
+        closure_capability,
+    )
+    blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
+    assert blind_result.status is SchedulerPassStatus.COMPLETE
+    scheduler_artifact = journal.artifact()
+    return _PromotedParentSurfaceFixture(
+        journal=journal,
+        family_id=family.family_id,
+        closure_capability=closure_capability,
+        surface_capability=surface_capability,
+        promotion=promotion,
+        scheduler_artifact=scheduler_artifact,
+        structural_artifact=structural_artifact,
+        requests=requests,
+        records=records,
+        parent_usage=parent_usage,
+        child_usages=tuple(child_usages),
+        parent_context=parent_context,
+        child_contexts=tuple(child_contexts),
+        child_artifacts=tuple(child_artifacts),
+    )
 
 
 def test_surface_requests_cover_full_deterministic_inventory() -> None:
@@ -3048,6 +3490,364 @@ def test_recovery_surface_usage_requires_exact_external_request_limit_coordinate
                 (request_id, request_limit_scope, 1),
             ),
         )
+
+
+def _config_with_promoted_surface_model(
+    config: AuditConfig,
+    model_id: str,
+) -> AuditConfig:
+    canonical = config.models.source_audit.primary
+    registry = tuple(
+        entry.model_copy(update={"aliases": tuple(sorted({*entry.aliases, model_id}))})
+        if entry.canonical_model_id == canonical
+        else entry
+        for entry in config.models.registry
+    )
+    source_audit = config.models.source_audit.model_copy(
+        update={"fallbacks": tuple(sorted({*config.models.source_audit.fallbacks, model_id}))}
+    )
+    return config.model_copy(
+        update={
+            "models": config.models.model_copy(
+                update={"registry": registry, "source_audit": source_audit}
+            )
+        }
+    )
+
+
+def _promoted_surface_inputs() -> tuple[
+    SoliditySymbolIndex,
+    SolidityGraphSet,
+    InvariantSuite,
+    AuditedSuiteCoverage,
+    tuple[ModelSurfaceReviewRequest, ...],
+]:
+    index, base_graphs, invariants = _inventory()
+    nodes = tuple(
+        SolidityGraphNode(
+            id=entity.id,
+            kind=SolidityGraphNodeKind.ENTITY,
+            label=entity.signature or entity.name,
+            path=entity.path,
+            start_line=entity.start_line,
+            end_line=entity.end_line,
+            source_hash=entity.source_hash,
+            provenance=entity.provenance,
+            confidence=entity.confidence,
+            transformation="promoted_surface_exact_entity_node",
+        )
+        for entity in index.entities
+    )
+    retained_occurrences = tuple(
+        sorted(
+            (
+                *_edge_occurrences(list(base_graphs.edges)),
+                *(
+                    SolidityGraphRetainedOccurrence(
+                        subject_kind=SolidityGraphOccurrenceKind.GRAPH_NODE,
+                        subject_sha256=solidity_graph_occurrence_sha256(
+                            SolidityGraphOccurrenceKind.GRAPH_NODE,
+                            node,
+                        ),
+                        occurrence_count=1,
+                    )
+                    for node in nodes
+                ),
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+    graphs = base_graphs.model_copy(
+        update={
+            "nodes": list(nodes),
+            "retained_occurrences": retained_occurrences,
+            "analyzed_graphs": list(
+                sorted(
+                    {
+                        *base_graphs.analyzed_graphs,
+                        *(edge.graph for edge in base_graphs.edges),
+                    },
+                    key=lambda item: item.value,
+                )
+            ),
+        }
+    )
+    audited_suite = _audited_gap_coverage(index, graphs, invariants)
+    requests = tuple(
+        build_model_surface_requests(
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+        )
+    )
+    return index, graphs, invariants, audited_suite, requests
+
+
+def _promoted_surface_context(
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    usage: UsageRecord,
+    index: SoliditySymbolIndex,
+    graphs: SolidityGraphSet,
+) -> ContextPackage:
+    context = _review_context(list(requests), usage, index, graphs)
+    repository_map = context.repository_map.model_copy(
+        update={
+            "files": [
+                RepositoryFile(
+                    path=_PATH,
+                    size=len(_SOURCE.encode()),
+                    lines=len(_SOURCE.splitlines()),
+                    sha256=hashlib.sha256(_SOURCE.encode()).hexdigest(),
+                    language="Solidity",
+                )
+            ]
+        }
+    )
+    return _with_exact_context_bytes(context.model_copy(update={"repository_map": repository_map}))
+
+
+def _coverage_from_promoted_surface_fixture(
+    config: AuditConfig,
+    fixture: _PromotedParentSurfaceFixture,
+    *,
+    index: SoliditySymbolIndex,
+    graphs: SolidityGraphSet,
+    invariants: InvariantSuite,
+    audited_suite_coverage: AuditedSuiteCoverage,
+) -> ModelReviewCoverage:
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in fixture.scheduler_artifact.recovery_model_requests
+    )
+    return build_model_review_coverage(
+        config,
+        usage_records=[fixture.parent_usage, *fixture.child_usages],
+        review_artifacts=list(fixture.child_artifacts),
+        review_contexts_by_request={
+            fixture.parent_usage.request_id: [fixture.parent_context],
+            **{
+                usage.request_id: [context]
+                for usage, context in zip(
+                    fixture.child_usages,
+                    fixture.child_contexts,
+                    strict=True,
+                )
+            },
+        },
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        minimum_critical_root_lineages=2,
+        audited_suite_coverage=audited_suite_coverage,
+        source_contents_by_path={_PATH: _SOURCE},
+        recovery_usage_coordinates=recovery_coordinates,
+        promoted_recovery_surface_coverages=(fixture.surface_capability,),
+    )
+
+
+def _basic_promoted_surface_fixture(
+    root: Path,
+    *,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    records: tuple[ModelSurfaceReviewRecord, ...],
+    context: ContextPackage,
+) -> _PromotedParentSurfaceFixture:
+    inventory = _scheduler_inventory(one_shard=True)
+    journal = _create_test_scheduler_journal(
+        root,
+        bindings=_promoted_surface_bindings(),
+        shard_inventory=inventory,
+        privacy_evidence_custody=_scheduler_privacy_custody(
+            source_sha256=inventory.source_tree_sha256
+        ),
+    )
+    return _build_promoted_parent_surface_fixture(
+        journal,
+        requests=requests,
+        records=records,
+        parent_context=context,
+        parent_model_id="synthetic/auditor-v1",
+        parent_root_lineage="sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest(),
+    )
+
+
+def test_promoted_parent_surface_credits_only_parent_origin_while_children_stay_ordinary(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_model(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context_usage = _usage("source_audit", model_id, "promoted-context-only")
+    context = _promoted_surface_context(requests, context_usage, index, graphs)
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = _basic_promoted_surface_fixture(
+        tmp_path / "promoted-parent-credit",
+        requests=requests,
+        records=records,
+        context=context,
+    )
+
+    coverage = _coverage_from_promoted_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+    projection = require_verified_promoted_truncation_recovery_surface_coverage(
+        fixture.surface_capability
+    )
+    assert projection.parent_usage_record is fixture.parent_usage
+    assert all(
+        projected is expected
+        for projected, expected in zip(
+            projection.child_usage_records,
+            fixture.child_usages,
+            strict=True,
+        )
+    )
+    parent_origin = next(
+        origin
+        for origin in projection.artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+    surfaces_by_id = {surface.surface_id: surface for surface in coverage.surfaces}
+    parent_reference = surfaces_by_id[parent_origin.surface_id].evidence_references
+    child_artifacts_by_surface = {
+        record.surface_id: artifact
+        for artifact in fixture.child_artifacts
+        for record in artifact.records
+    }
+
+    assert coverage.overall.numerator == coverage.overall.denominator == len(requests)
+    assert len(parent_reference) == 1
+    assert parent_reference[0].credited
+    assert parent_reference[0].request_id == fixture.parent_usage.request_id
+    assert parent_reference[0].artifact_sha256 == projection.artifact.artifact_sha256
+    assert all(
+        artifact.request_id != fixture.parent_usage.request_id
+        for artifact in fixture.child_artifacts
+    )
+    assert set(child_artifacts_by_surface) == set(surfaces_by_id) - {parent_origin.surface_id}
+    for surface_id, artifact in child_artifacts_by_surface.items():
+        references = surfaces_by_id[surface_id].evidence_references
+        assert len(references) == 1
+        assert references[0].credited
+        assert references[0].artifact_sha256 == artifact.artifact_sha256
+        assert references[0].request_id == artifact.request_id
+        assert references[0].artifact_sha256 != projection.artifact.artifact_sha256
+    fixture.journal.close()
+
+
+def test_promoted_parent_surface_rejects_missing_forged_serialized_and_swapped_custody(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_model(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context_usage = _usage("source_audit", model_id, "promoted-negative-context-only")
+    context = _promoted_surface_context(requests, context_usage, index, graphs)
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    exact = _basic_promoted_surface_fixture(
+        tmp_path / "promoted-negative-exact",
+        requests=requests,
+        records=records,
+        context=context,
+    )
+    swapped = _basic_promoted_surface_fixture(
+        tmp_path / "promoted-negative-swapped",
+        requests=requests,
+        records=records,
+        context=context,
+    )
+    parent_surface_id = next(
+        origin.surface_id
+        for origin in exact.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(exact.surface_capability)
+    exact_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+        exact.surface_capability
+    )
+    exact_coverage = _coverage_from_promoted_surface_fixture(
+        config,
+        exact,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+    exact_parent_surface = next(
+        surface for surface in exact_coverage.surfaces if surface.surface_id == parent_surface_id
+    )
+    assert exact_parent_surface.reviewed
+    assert exact_projection.parent_usage_record is exact.parent_usage
+
+    forged = object.__new__(VerifiedPromotedTruncationRecoverySurfaceCoverage)
+    serialized_projection = json.loads(
+        require_verified_promoted_truncation_recovery_surface_coverage(
+            exact.surface_capability
+        ).artifact.model_dump_json()
+    )
+    for invalid_capabilities in (
+        (),
+        (forged,),
+        (cast(Any, serialized_projection),),
+        (swapped.surface_capability,),
+    ):
+        recovery_coordinates = tuple(
+            (
+                request.logical_request_id,
+                request.request_limit_scope,
+                request.request_limit_count_before,
+            )
+            for request in exact.scheduler_artifact.recovery_model_requests
+        )
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=[exact.parent_usage, *exact.child_usages],
+            review_artifacts=list(exact.child_artifacts),
+            review_contexts_by_request={
+                exact.parent_usage.request_id: [exact.parent_context],
+                **{
+                    usage.request_id: [context]
+                    for usage, context in zip(
+                        exact.child_usages,
+                        exact.child_contexts,
+                        strict=True,
+                    )
+                },
+            },
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            minimum_critical_root_lineages=2,
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PATH: _SOURCE},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recovery_surface_coverages=invalid_capabilities,
+        )
+        parent_surface = next(
+            surface for surface in coverage.surfaces if surface.surface_id == parent_surface_id
+        )
+        assert not parent_surface.reviewed
+        assert not any(reference.credited for reference in parent_surface.evidence_references)
+
+    exact.journal.close()
+    swapped.journal.close()
 
 
 def test_compact_source_context_inventory_subset_receives_credit(

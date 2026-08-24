@@ -409,7 +409,9 @@ from mmaudit.orchestration.scope import (
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
+    VerifiedPromotedTruncationRecoverySurfaceCoverage,
     build_truncation_recovery_child_context,
+    require_verified_promoted_truncation_recovery_surface_coverage,
     verify_truncation_recovery_closure,
 )
 from mmaudit.privacy import (
@@ -3124,6 +3126,9 @@ class AuditPipeline:
         model_surface_resource_preflight: ModelSurfaceResourcePreflight | None = None
         provider_session: ProviderSessionProvenance | None = None
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
+        promoted_truncation_surface_coverages: list[
+            VerifiedPromotedTruncationRecoverySurfaceCoverage
+        ] = []
         model_surface_review_contexts: dict[str, list[ContextPackage]] = {}
         model_surface_review_assignments: dict[str, list[ModelSurfaceReviewRequest]] = {}
         generated_tests: list[GeneratedFoundryTestSpec] = []
@@ -6068,16 +6073,6 @@ class AuditPipeline:
                         parent_pass_plan = parent_plans[0]
                         projection = parent_attempt.truncation_projection
                         assert projection is not None
-                        if projection.surface_reviews:
-                            reason = (
-                                f"{request_role}: truncation retained parent coverage that "
-                                "cannot yet be consumed without fabricating a successful parent "
-                                "artifact; recovery was not opened and no credit was granted"
-                            )
-                            if reason not in incomplete:
-                                incomplete.append(reason)
-                            terminal_code = ExitCode.INCOMPLETE
-                            continue
                         matching_families = tuple(
                             family
                             for family in scheduler.journal.truncation_recovery_families
@@ -6341,10 +6336,11 @@ class AuditPipeline:
                                 "truncation recovery family has ambiguous promotion custody"
                             )
                         promotion = promotions[0] if promotions else None
-                        if (
-                            promotion is None
-                            and closure.closure_status
-                            is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                        promoted_surface_capability: (
+                            VerifiedPromotedTruncationRecoverySurfaceCoverage | None
+                        ) = None
+                        if closure.closure_status is (
+                            SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
                         ):
                             child_results = tuple(
                                 terminal_entries[child.child_task_id]
@@ -6361,30 +6357,66 @@ class AuditPipeline:
                                 tuple[SchedulerTruncationRecoveryChildResult, ...],
                                 child_results,
                             )
-                            child_usage = tuple(
+                            runtime_usage_by_request: dict[str, list[UsageRecord]] = {}
+                            for runtime_usage in usage.records:
+                                runtime_usage_by_request.setdefault(
+                                    runtime_usage.request_id,
+                                    [],
+                                ).append(runtime_usage)
+                            parent_runtime_usage = runtime_usage_by_request.get(
+                                parent_attempt.usage_record.request_id,
+                                [],
+                            )
+                            child_runtime_usage = tuple(
+                                runtime_usage_by_request.get(result.child_logical_request_id, [])
+                                for result in typed_results
+                            )
+                            retained_child_usage = tuple(
                                 result.runtime_usage_record for result in typed_results
                             )
-                            if any(record is None for record in child_usage):
+                            if (
+                                len(parent_runtime_usage) != 1
+                                or parent_runtime_usage[0] != parent_attempt.usage_record
+                                or any(len(records) != 1 for records in child_runtime_usage)
+                                or any(record is None for record in retained_child_usage)
+                                or any(
+                                    records[0] != retained
+                                    for records, retained in zip(
+                                        child_runtime_usage,
+                                        retained_child_usage,
+                                        strict=True,
+                                    )
+                                )
+                            ):
                                 raise OpenRouterSchemaError(
-                                    "coverage-closed recovery lacks typed child usage"
+                                    "coverage-closed recovery lacks exact reattested runtime usage"
                                 )
                             try:
                                 capability, _artifact = verify_truncation_recovery_closure(
                                     family=family,
                                     closure=closure,
                                     child_results=typed_results,
-                                    parent_usage_record=parent_attempt.usage_record,
-                                    child_usage_records=cast(
-                                        tuple[UsageRecord, ...],
-                                        child_usage,
+                                    parent_usage_record=parent_runtime_usage[0],
+                                    child_usage_records=tuple(
+                                        records[0] for records in child_runtime_usage
                                     ),
                                     parent_context=parent_context,
                                     child_contexts=child_contexts,
                                     requests=family.requested_surface_manifest.requests,
                                 )
-                                promotion = scheduler.journal.promote_truncation_recovery_family(
+                                if promotion is None:
+                                    promotion = (
+                                        scheduler.journal.promote_truncation_recovery_family(
+                                            family.family_id,
+                                            capability,
+                                        )
+                                    )
+                                promoted_surface_capability = scheduler.journal.issue_promoted_truncation_recovery_surface_coverage(
                                     family.family_id,
                                     capability,
+                                )
+                                require_verified_promoted_truncation_recovery_surface_coverage(
+                                    promoted_surface_capability
                                 )
                             except TruncationRecoveryEvidenceError:
                                 reason = (
@@ -6403,6 +6435,30 @@ class AuditPipeline:
                                 incomplete.append(reason)
                             terminal_code = ExitCode.INCOMPLETE
                             continue
+                        if promoted_surface_capability is None:
+                            raise OpenRouterSchemaError(
+                                "promoted recovery lacks live surface-coverage custody"
+                            )
+                        promoted_surface_projection = (
+                            require_verified_promoted_truncation_recovery_surface_coverage(
+                                promoted_surface_capability
+                            )
+                        )
+                        parent_review_contexts = model_surface_review_contexts.setdefault(
+                            promoted_surface_projection.parent_usage_record.request_id,
+                            [],
+                        )
+                        if parent_review_contexts and parent_review_contexts != [
+                            promoted_surface_projection.parent_context
+                        ]:
+                            raise OpenRouterSchemaError(
+                                "promoted recovery parent has ambiguous live context custody"
+                            )
+                        if not parent_review_contexts:
+                            parent_review_contexts.append(
+                                promoted_surface_projection.parent_context
+                            )
+                        promoted_truncation_surface_coverages.append(promoted_surface_capability)
 
                         recovered_output = promotion.recovered_output
                         context_by_request_id = {
@@ -9100,6 +9156,34 @@ class AuditPipeline:
             },
         )
         private_model_review_path.chmod(0o600)
+        promoted_surface_projections = tuple(
+            require_verified_promoted_truncation_recovery_surface_coverage(capability)
+            for capability in promoted_truncation_surface_coverages
+        )
+        if promoted_surface_projections:
+            private_promoted_surface_path = (
+                run_dir / "private" / "truncation-recovered-surface-artifacts.json"
+            )
+            write_json(
+                private_promoted_surface_path,
+                {
+                    "schema_version": "1.0",
+                    "promotions": [
+                        {
+                            "promotion_entry_sha256": projection.promotion_entry_sha256,
+                            "recovered_output_artifact_sha256": (
+                                projection.recovered_output_artifact_sha256
+                            ),
+                            "artifact": projection.artifact.model_dump(mode="json"),
+                        }
+                        for projection in sorted(
+                            promoted_surface_projections,
+                            key=lambda item: item.promotion_entry_sha256,
+                        )
+                    ],
+                },
+            )
+            private_promoted_surface_path.chmod(0o600)
         provider_session = _provider_session_provenance(
             client=self.client,
             pipeline_owned=self._owns_client,
@@ -9138,6 +9222,7 @@ class AuditPipeline:
                 )
                 for request in promoted_recovery_requests_for_coverage
             ),
+            promoted_recovery_surface_coverages=tuple(promoted_truncation_surface_coverages),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -9478,11 +9563,15 @@ class AuditPipeline:
             for request in promoted_recovery_requests
             if request.logical_request_id in model_credit_usage_by_request
         )
+        promoted_parent_usage_ids = {
+            projection.parent_usage_record.request_id for projection in promoted_surface_projections
+        }
         model_review_accounting_usage = (
             [
                 record
                 for record in usage.records
                 if record.request_id in structurally_successful_scheduler_review_ids
+                or record.request_id in promoted_parent_usage_ids
             ]
             if (
                 scheduler_usage_accounting_consistent
@@ -9516,6 +9605,7 @@ class AuditPipeline:
                 )
                 for request in promoted_recovery_requests
             ),
+            promoted_recovery_surface_coverages=tuple(promoted_truncation_surface_coverages),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -9768,6 +9858,9 @@ class AuditPipeline:
                 coverage=solidity_coverage,
                 model_review_coverage=model_review_coverage,
                 model_surface_review_artifacts=model_surface_review_artifacts,
+                promoted_truncation_recovery_surface_coverages=(
+                    promoted_truncation_surface_coverages
+                ),
                 model_usage=usage.records,
                 provider_session=provider_session,
                 production_qualification=self.production_qualification,

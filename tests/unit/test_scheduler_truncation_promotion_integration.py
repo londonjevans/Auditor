@@ -37,22 +37,29 @@ from mmaudit.models.truncation import (
     frame_candidate_review_batch,
     seal_candidate_review_truncated_envelope_evidence,
 )
-from mmaudit.models.truncation_closure import _INVARIANT_ROUTING_KEYS
+from mmaudit.models.truncation_closure import (
+    _INVARIANT_ROUTING_KEYS,
+    TruncationSurfaceOriginKind,
+)
 from mmaudit.models.truncation_recovery import (
     TruncationRecoveryParentBinding,
     plan_truncation_recovery,
 )
 from mmaudit.models.truncation_recovery_journal import (
+    SchedulerTruncationRecoveryChildResult,
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryEntryKind,
+    SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
     rebuild_truncation_recovery_parent_from_projection,
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.orchestration.truncation_recovery_evidence import (
+    VerifiedPromotedTruncationRecoverySurfaceCoverage,
     VerifiedTruncationRecoveryClosure,
     build_truncation_recovery_child_context,
+    require_verified_promoted_truncation_recovery_surface_coverage,
     verify_truncation_recovery_closure,
 )
 from tests.identity_fixtures import reattest_synthetic_real_usage
@@ -412,8 +419,9 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     requests: tuple[ModelSurfaceReviewRequest, ...] = _requests()
     records: tuple[ModelSurfaceReviewRecord, ...] = tuple(_record(item) for item in requests)
     parent_context = _context(requests)
-    projection = _projection(records, retained_count=0)
+    projection = _projection(records, retained_count=1)
     assert projection.findings_state.value == "COMPLETE"
+    assert len(projection.surface_reviews) == 1
     surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
 
     planner = PipelineScheduler(journal)
@@ -484,6 +492,17 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         truncation_projection=projection,
         requested_surface_manifest=surface_manifest,
     )
+    retained_surface_ids = tuple(item.surface_id for item in projection.surface_reviews)
+    assert recovery_plan.parent.retained_surface_ids == retained_surface_ids
+    assert set(recovery_plan.parent.unfinished_surface_ids) == (
+        set(recovery_plan.parent.requested_surface_ids) - set(retained_surface_ids)
+    )
+    child_surface_ids = tuple(
+        surface_id for child in recovery_plan.children for surface_id in child.surface_ids
+    )
+    assert len(child_surface_ids) == len(set(child_surface_ids))
+    assert set(child_surface_ids) == set(recovery_plan.parent.unfinished_surface_ids)
+    assert not set(child_surface_ids).intersection(retained_surface_ids)
     child_results = []
     child_usages = []
     child_contexts = []
@@ -550,6 +569,10 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         requests=requests,
     )
     assert structural_artifact.surface_set_structurally_closed
+    assert structural_artifact.records == records
+    assert [origin.origin_kind for origin in structural_artifact.origins].count(
+        TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    ) == 1
     with pytest.raises(ValueError, match="live closure custody"):
         journal.promote_truncation_recovery_family(
             family.family_id,
@@ -574,6 +597,28 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     promotion = journal.promote_truncation_recovery_family(family.family_id, capability)
     assert promotion.entry_kind is SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED
     assert promotion.original_truncated_result_sha256 == original_result.result_sha256
+    assert promotion.recovered_output.recovered_batch.surface_reviews == records
+    surface_coverage = journal.issue_promoted_truncation_recovery_surface_coverage(
+        family.family_id,
+        capability,
+    )
+    assert type(surface_coverage) is VerifiedPromotedTruncationRecoverySurfaceCoverage
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(surface_coverage)
+    fresh_surface_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+        surface_coverage
+    )
+    replayed_surface_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+        surface_coverage
+    )
+    assert replayed_surface_projection == fresh_surface_projection
+    assert replayed_surface_projection is not fresh_surface_projection
+    assert replayed_surface_projection.artifact is not fresh_surface_projection.artifact
+    assert fresh_surface_projection.promotion_entry_sha256 == promotion.entry_sha256
+    assert fresh_surface_projection.recovered_output_artifact_sha256 == (
+        promotion.recovered_output.output_artifact_sha256
+    )
+    assert fresh_surface_projection.artifact.records == records
     blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
     assert blind_result.status is SchedulerPassStatus.COMPLETE
     assert blind_result.task_results == (original_result,)
@@ -638,6 +683,60 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         resumed.pass_results[-1].recovery_promotion_bindings
         == blind_result.recovery_promotion_bindings
     )
+    recovered_usage_by_request_id = {
+        item.request_id: item for item in resumed.claim_restorable_usage_records()
+    }
+    resumed_families = resumed.truncation_recovery_families
+    assert len(resumed_families) == 1
+    resumed_family = resumed_families[0]
+    resumed_entries = resumed.truncation_recovery_entries
+    resumed_closures = tuple(
+        item
+        for item in resumed_entries
+        if isinstance(item, SchedulerTruncationRecoveryFamilyClosure)
+        and item.family_id == resumed_family.family_id
+    )
+    assert len(resumed_closures) == 1
+    resumed_closure = resumed_closures[0]
+    resumed_child_results = tuple(
+        next(
+            item
+            for item in resumed_entries
+            if isinstance(item, SchedulerTruncationRecoveryChildResult)
+            and item.child_task_id == child.child_task_id
+        )
+        for child in resumed_family.recovery_plan.children
+    )
+    resumed_child_contexts = tuple(
+        build_truncation_recovery_child_context(
+            parent_context=parent_context,
+            child=child,
+        )
+        for child in resumed_family.recovery_plan.children
+    )
+    resumed_closure_capability, resumed_structural_artifact = verify_truncation_recovery_closure(
+        family=resumed_family,
+        closure=resumed_closure,
+        child_results=resumed_child_results,
+        parent_usage_record=recovered_usage_by_request_id[blind_task.logical_request_id],
+        child_usage_records=tuple(
+            recovered_usage_by_request_id[child.child_logical_request_id]
+            for child in resumed_family.recovery_plan.children
+        ),
+        parent_context=parent_context,
+        child_contexts=resumed_child_contexts,
+        requests=requests,
+    )
+    assert resumed_structural_artifact == structural_artifact
+    resumed_surface_coverage = resumed.issue_promoted_truncation_recovery_surface_coverage(
+        resumed_family.family_id,
+        resumed_closure_capability,
+    )
+    assert type(resumed_surface_coverage) is VerifiedPromotedTruncationRecoverySurfaceCoverage
+    resumed_surface_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+        resumed_surface_coverage
+    )
+    assert resumed_surface_projection == fresh_surface_projection
 
     later_plan = resumed.seal_pass_plan(_plan(resumed, SchedulerPassKind.FINDING_REDUCTION))
     later_task = later_plan.tasks[0]
@@ -651,4 +750,17 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     assert later_activation.task_id == later_task.task_id
     assert resumed.truncation_recovery_entries[-1] == promotion
     assert resumed.pass_results[-1].status is SchedulerPassStatus.COMPLETE
+    # Terminal authority freezes every append, but downstream coverage/report
+    # construction must still be able to replay the already-issued live token.
+    monkeypatch.setattr(resumed, "_terminal_report_authority", object())
+    assert (
+        require_verified_promoted_truncation_recovery_surface_coverage(resumed_surface_coverage)
+        == fresh_surface_projection
+    )
+    with pytest.raises(ValueError, match="frozen by its terminal report authority"):
+        resumed.open_truncation_recovery_family(
+            recovery_plan=resumed_family.recovery_plan,
+            truncation_projection=projection,
+            requested_surface_manifest=surface_manifest,
+        )
     resumed.close()

@@ -356,7 +356,7 @@ async def test_multiple_truncated_parents_recover_sequentially_without_resume_di
 
 
 @pytest.mark.asyncio
-async def test_retained_parent_surface_fails_closed_before_family_open(
+async def test_retained_parent_surface_closes_incomplete_mock_family_without_credit(
     config_factory: Any,
     monkeypatch: pytest.MonkeyPatch,
     vulnerable_repo: Path,
@@ -382,16 +382,66 @@ async def test_retained_parent_surface_fails_closed_before_family_open(
     assert first.exit_code is ExitCode.INCOMPLETE
     assert not first.report.completed
     assert fake.truncated_parent_calls == 1
-    assert fake.recovery_child_calls == 0
+    assert fake.recovery_child_calls == 2
     projection = _truncated_parent_attempt(first.run_dir)["truncation_projection"]
     assert [item["candidate_id"] for item in projection["findings"]] == ["raw-truncated-parent"]
     assert len(projection["surface_reviews"]) == 1
-    assert _recovery_entries(first.run_dir) == ()
+    retained_surface_ids = tuple(
+        sorted(item["surface_id"] for item in projection["surface_reviews"])
+    )
+    entries = _recovery_entries(first.run_dir)
+    family_roots = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value
+    )
+    child_results = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+    )
+    closures = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value
+    )
+    assert len(family_roots) == len(closures) == 1
+    assert len(child_results) == 2
+    family = family_roots[0]
+    parent = family["recovery_plan"]["parent"]
+    assert tuple(parent["retained_surface_ids"]) == retained_surface_ids
+    assert set(parent["unfinished_surface_ids"]) == (
+        set(parent["requested_surface_ids"]) - set(retained_surface_ids)
+    )
+    child_surface_ids = tuple(
+        surface_id
+        for child in family["recovery_plan"]["children"]
+        for surface_id in child["surface_ids"]
+    )
+    assert len(child_surface_ids) == len(set(child_surface_ids))
+    assert set(child_surface_ids) == set(parent["unfinished_surface_ids"])
+    assert not set(child_surface_ids).intersection(retained_surface_ids)
+    assert {entry["terminal_status"] for entry in child_results} == {
+        SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value,
+        SchedulerTruncationRecoveryTerminalStatus.TRUNCATED.value,
+    }
+    assert {entry["runtime_usage_record"]["execution_evidence"] for entry in child_results} == {
+        ExecutionEvidenceKind.MOCK.value
+    }
+    assert closures[0]["closure_status"] == (
+        SchedulerTruncationRecoveryClosureStatus.INCOMPLETE.value
+    )
+    assert all(
+        entry["entry_kind"] != SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED.value
+        for entry in entries
+    )
     first_inventory = _candidate_and_surface_inventory(first.run_dir)
     assert b"raw-truncated-parent" not in first_inventory[0]
-    assert not any(
-        str(artifact["review_role"]).startswith("whole_protocol_review:")
-        for artifact in json.loads(first_inventory[1])["artifacts"]
+    artifacts = json.loads(first_inventory[1])["artifacts"]
+    assert all(
+        not str(artifact["review_role"]).startswith("whole_protocol_review:")
+        and not str(artifact["request_id"]).startswith("scheduler-recovery-request-")
+        for artifact in artifacts
     )
 
     resumed_fake = FakeOpenRouter(mode="truncation_recovery_retained_surface")
@@ -408,7 +458,9 @@ async def test_retained_parent_surface_fails_closed_before_family_open(
     assert resumed.exit_code is ExitCode.INCOMPLETE
     assert not resumed.report.completed
     assert resumed_fake.chat_calls == 0
+    assert resumed_fake.truncated_parent_calls == 0
     assert resumed_fake.recovery_child_calls == 0
+    assert _recovery_entries(first.run_dir) == entries
     assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
 
 
