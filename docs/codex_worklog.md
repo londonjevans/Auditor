@@ -4,19 +4,200 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T03:23:00Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T09:45:36Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: PAUSED_AFTER_INDEX_19_OPERATOR_REPORTED_VALID_NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS
-CURRENT_TICKET: V3-AUTHRUNNER-001
-CURRENT_LOCAL_SLICE_STATUS: COMPLETE_NONAUTHORIZING_PROVIDER_FREE_CANONICAL_REPLAY_REPAIR_OVERALL_PARTIAL_BLOCKED_SAFETY
-LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: No provider or AUTHRUNNER action is authorized. Preserve checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, the operator-owned index-19 bundle, and the current ledger. Begin only provider-free `V3-PLANCONSTRAINTS-001` before any 24-case campaign. The next unused index is NOT_STATED and must not be inferred. No command is current.
-LAST_VALIDATION_COMMAND: Current checkpoint gates are separate overlapping results: smoke runtime 95 PASS; adjacent CLI/durable/inventory/release-schema 111 PASS; retained exact AUTHRUNNER matrix 789 PASS with two known warnings; Ruff format/check, strict mypy over `authenticated_runner_smoke.py`, canonical release-schema/inventory generator verify, `pip check`, and diff integrity PASS. Independent exact-byte review of the committed three-path slice found no blocker/HIGH/MEDIUM; a genuine synthetic 265,244-byte sealed v1.2 bundle with two runs / four usages round-tripped and coercive string/whitespace variants rejected canonically. Historical `03d6e8a` retains 19 request-cost-preview, 26 model-benchmark, overlapping 185 usage-plus-preview, and 47-root / 1,073-state evidence; historical `3a1246d` retains 564 tests / 47 roots / 1,072 states. The last repository-wide `.venv/bin/pytest -q` attempt remains INCOMPLETE with 1,492 passed / 25 skipped / 1 failed at 3,878.41 seconds; the exact failing test reproduces on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6` and receives no full-suite pass credit. Codex emitted or executed no AUTHRUNNER command.
-LAST_VALIDATION_RESULT: PARTIAL / BLOCKED_SAFETY — checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce` completes the bounded provider-free replay repair. The current operator record reports that the same historical index-19 bundle now verifies offline as `VALID / NONCREDITING / NONAUTHORIZING`, without another provider call or new spend. This is one-case operator-supplied evidence and not runner, audit, benchmark, AUTHSEAL, release, runtime, readiness, or campaign authority. Completed real audits remain zero. No next unused index is stated; no current command exists.
-LAST_CHECKPOINT_COMMIT: `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, direct child of `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, owns exactly three paths: `src/mmaudit/models/authenticated_runner_smoke.py`, `tests/unit/test_authenticated_runner_smoke_runtime.py`, and `docs/remediation/v3/autonomy_gate_inventory.json`; it excludes governance, operator results, `.gitignore`, and provider execution. Frozen path hashes are `27e70a3c17ef5f03c503e594bca2c3e433fb2c4193de772eb7be829592c3555a`, `58eab4a75a0a944a2290789570aa410f26b2e0471b215cce45622076ad892d0f`, and `6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778`. Current inventory raw/self/discovery/universe hashes are `6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778`, `d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432`, `bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and `b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed`; counts are 3,649 sources / 3,652 occurrences / 3,606 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Historical join checkpoint: `03d6e8a`; historical diagnostic checkpoint: `3a1246d`; historical receipt-state-seal checkpoint: `68126e0`; historical receipt-composite checkpoint: `48ea635`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 44 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`, but its bounded canonical-replay continuation is complete nonauthorizing: operator-supplied evidence reports the unchanged index-19 bundle offline-valid at `c627f2d` with no rerun or new spend. The next unused index is NOT_STATED and no command or paid authority is current. `V3-PLANCONSTRAINTS-001` is now the exact next provider-free slice before any campaign. `V3-AUTONOMY-001` Phase 2 remains paused. Every qualification, audit, benchmark, AUTHSEAL, release, runtime-authority, and readiness claim remains absent.
+AUTORUN_STATUS: PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED
+OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET
+LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
+CURRENT_TICKET: V3-PLANCONSTRAINTS-001
+CURRENT_LOCAL_SLICE_STATUS: COMPLETE_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY
+LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001
+NEXT_ACTION: Keep V3-AUTHRUNNER-001 PARTIAL / BLOCKED_SAFETY until separately authorized authoritative evidence resolves empirical-schema conformance and token-detail convention. No next unused index is stated; no current command exists. No provider or AUTHRUNNER action, campaign, or inferred next index is authorized; V3-AUTONOMY-001 Phase 2 remains paused.
+LAST_VALIDATION_COMMAND: Final provider-free gates: the exact changed-surface matrix passed `951` tests with two known intentional code-retarget warnings; the disjoint adjacent qualification/lineage matrix passed `201`; generated inventory/schema tests passed `57` overlapping tests. Route constraint/admission tests passed `111`, and the actual request-body/profile parity regression passed `1`. Ruff check and format-check passed over `534` Python files; `.venv/bin/mypy src` passed all `210` source files; canonical generator verify, pip dependency check, six import permutations, and diff-check passed. Independent review found no blocker/HIGH, including `1,012` defensive mutation probes. The historical repository-wide suite attempt remains INCOMPLETE at 1,492 passed / 25 skipped / 1 failed and receives no pass credit. Codex emitted or executed no AUTHRUNNER command.
+LAST_VALIDATION_RESULT: COMPLETE_PROVIDER_FREE_NONAUTHORIZING — one shared self-hashed 29-predicate profile now governs selection, pre-snapshot constrained discovery, registry custody, exact price-cap projection, and runtime admission. Lower or higher runtime output-token drift fails before state. FULL remains intentionally blocked by typed `UNAVAILABLE` empirical-schema and token-detail predicates. No provider, campaign, benchmark, audit, AUTHSEAL, release, or runtime authority follows.
+LAST_CHECKPOINT_COMMIT: `7ef471744adfce557edf612a74b2847aafb3e8bc`, direct child of `85c06b07ccc3905af4e0231497276934f7ae142a`, owns exactly 33 source, config, schema, generated-inventory, and focused-test paths for `V3-PLANCONSTRAINTS-001`; `git diff-tree --no-commit-id --name-only -r 7ef471744adfce557edf612a74b2847aafb3e8bc` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c`, `c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a`, `e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a`, and `6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc`; counts are 3,651 sources / 3,654 occurrences / 3,608 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Historical replay checkpoint: `c627f2d`; historical join checkpoint: `03d6e8a`; historical diagnostic checkpoint: `3a1246d`; historical receipt-state-seal checkpoint: `68126e0`; historical receipt-composite checkpoint: `48ea635`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its bounded replay continuation is complete nonauthorizing, but empirical-schema and token-detail authority remain unavailable. The next unused index is NOT_STATED and no command or paid authority is current. `V3-PLANCONSTRAINTS-001` is complete provider-free. `V3-AUTONOMY-001` Phase 2 remains paused. Every qualification, audit, benchmark, AUTHSEAL, release, runtime-authority, and readiness claim remains absent.
+
+## 2026-08-24T09:45:36Z — route-constraint source checkpoint sealed
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` is `COMPLETE` provider-free and nonauthorizing.
+- **Completed changes:** Committed the frozen 33-path implementation as
+  `7ef471744adfce557edf612a74b2847aafb3e8bc`, directly after
+  `85c06b07ccc3905af4e0231497276934f7ae142a`. The commit binds the shared
+  29-predicate profile through selection, constrained discovery, registry custody, price-cap proof,
+  and runtime admission; lower or higher runtime output-token drift rejects before state.
+- **Files changed:** The exact commit tree owns 33 config, schema, generated-inventory, source, and
+  focused-test paths. Governance remains in the following documentation-only reconciliation;
+  user-owned `.gitignore` and `docs/remediation/v3/operator_results.md` were excluded and untouched.
+- **Commands run / results:** Exact changed-surface `951` PASS with two known warnings; disjoint
+  adjacent `201` PASS; generated inventory/schema `57` PASS; route/admission `111` PASS; actual
+  request-body/profile `1` PASS; Ruff, format, strict mypy, generator, pip, import, and diff gates
+  PASS. Two independent reviews found no blocker/HIGH, including `1,012` mutation probes and six
+  import permutations.
+- **Unresolved issues:** Empirical structured-output reliability and the provider-domain token-detail
+  convention remain typed `UNAVAILABLE`; FULL campaign admission remains blocked. The historical
+  repository-wide suite remains INCOMPLETE at 1,492 passed / 25 skipped / 1 failed. The user-owned
+  operator record drifted during source-only documentation validation and was not opened or
+  reconciled; this ticket issued no operator command and does not depend on its contents.
+- **Next safe action:** Keep `V3-AUTHRUNNER-001` blocked pending separately authorized authoritative
+  evidence. No next unused index is stated; no current command exists. Do not infer an index or emit
+  a provider/campaign command; keep `V3-AUTONOMY-001` Phase 2 paused.
+
+## 2026-08-24T09:22:51Z — runtime output envelope and registered authority surface joined
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` is `COMPLETE` provider-free and nonauthorizing.
+- **Completed changes:** Runtime FULL and NONCREDITING admission binds the exact configured
+  output-token reserve into the shared self-hashed facts and rejects lower or higher values with
+  `RUNTIME_OUTPUT_TOKENS_MISMATCH` before ledger or usage mutation. A provider-free dispatch
+  regression joins the same profile value to request-preview `wire_max_tokens` and transmitted
+  `max_tokens`. The late registry-validation authority seals mutable Pydantic class-container
+  contents and returns false rather than raising on ordinary alias drift.
+- **Files changed:** Existing route constraint/admission and runtime callers; focused route, CLI,
+  request-preview, candidate/registry tests; canonical generated artifacts. User-owned `.gitignore`
+  and `docs/remediation/v3/operator_results.md` were not read or modified.
+- **Commands run / results:** The exact changed-surface command passed `951` tests with two known
+  warnings; the disjoint adjacent qualification/lineage command passed `201`; generator-owned
+  inventory/schema tests passed `57` overlapping tests. Route/admission `111`, request-body/profile
+  `1`, Ruff/format over `534` files, strict mypy over `210` source files, generator verify, pip check,
+  import, and diff gates passed. Independent review found no blocker/HIGH; `1,012` defensive mutation
+  probes and six import permutations failed closed and restored cleanly.
+- **Unresolved issues:** Empirical schema reliability and the provider-domain token-detail convention
+  remain typed `UNAVAILABLE`; FULL campaign admission therefore remains blocked. The prior
+  repository-wide suite attempt remains historical and incomplete.
+- **Next safe action:** Keep `V3-AUTHRUNNER-001` blocked pending separately authorized authoritative
+  evidence. Do not emit a provider/campaign command or infer a new index; keep `V3-AUTONOMY-001`
+  Phase 2 paused.
+
+## 2026-08-24T07:59:36Z — route-policy integrity and broad provider-free gates green
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` remains `IN_PROGRESS` pending independent frozen-byte
+  review.
+- **Completed changes:** The fixed purpose-policy and reason maps are immutable, the complete local
+  route-evaluator helper graph is state-pinned, and route admission is joined to the provider
+  pristine boundary without an import cycle. Both clean-process module import orders succeed.
+  Persistent public-admission or transitive evaluator code/alias drift fails the core, admission,
+  and provider predicates; the two runtime-only unavailable results still reject FULL admission.
+- **Files changed:** The existing route-constraint/admission and OpenRouter source slice plus focused
+  route tests and canonical generated inventory. User-owned `.gitignore` and operator results remain
+  untouched.
+- **Commands run / results:** The exact changed-surface pytest command over 14 files passed `928`
+  tests with two known intentional code-retarget warnings; the adjacent candidate-registry,
+  cross-lineage, model-lineage, model-qualification, reasoning-binding, and qualification-workflow
+  command passed `182` tests. The canonical generator write/verify and inventory/release command
+  passed `57` overlapping tests. Ruff check and format-check passed over `534` files;
+  `.venv/bin/mypy src` passed `210` source files; `.venv/bin/python -m pip check`, clean
+  import/pristine, and `git diff --check` passed. `make type` itself found no bare `python` in this
+  shell and is not counted; its `.venv` equivalent passed.
+- **Unresolved issues:** Independent read-only review and a final post-review generated-byte rerun
+  remain. The prior repository-wide suite attempt remains historical and incomplete.
+- **Next safe action:** Resolve any independent concrete finding, then freeze exact bytes, rerun the
+  bounded gates, update queue/worklog status, and commit only the intended ticket paths.
+
+## 2026-08-24T07:08:21Z — route constraints wired through publication and admission
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` remains `IN_PROGRESS`.
+- **Completed changes:** One closed, self-hashed route-predicate profile now governs selected-plan
+  custody, constrained endpoint/model publication, exact-observation REAL replay, registry custody,
+  actual request/pricing projection, zero-state full-run admission, and post-equivalence smoke
+  admission. Full admission deliberately remains unavailable for empirical-schema and token-detail
+  proof. Generic discovery/qualification behavior is preserved. Independent provider-free
+  counterexamples for unselected inventory-name collisions, missing model/endpoint reasoning
+  support, generic replay of constrained evidence, and a missing CLI reasoning-policy binding now
+  reject before publication or dispatch.
+- **Files changed:** route-constraint/admission models; selection, endpoint, discovery, registry,
+  OpenRouter, CLI and runner adapters; generated selection/smoke schemas and autonomy inventory;
+  focused unit tests and current ticket documentation. User-owned `.gitignore` and operator results
+  remain untouched by this work unit.
+- **Commands run:** overlapping focused aggregates passed 214, 552, and 138 tests; canonical
+  generator write/verify plus inventory/release tests passed 57. Earlier owned runtime slices passed
+  244 focused tests. No provider, network, secret, private-ledger, campaign, or AUTHRUNNER action.
+- **Unresolved issues:** final broad pytest, Ruff/format, strict mypy, diff checks, and an independent
+  exact-byte review remain open. The previous repository-wide suite attempt remains historical and
+  incomplete, so no full-suite pass is claimed.
+- **Next safe action:** Run the broad provider-free regression/static matrix on the current generated
+  bytes, resolve any fail-closed counterexample, then freeze the exact source/test/artifact set for
+  independent review.
+
+## 2026-08-24T06:26:33Z — constrained discovery and registry custody integrated
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` remains `IN_PROGRESS`.
+- **Completed changes:** Constrained discovery now parses model facts before endpoint publication,
+  embeds the complete typed profile/constraint/facts/report quartet, and rechecks that report on the
+  final model payload. Selected CandidateModel records bind the final plan/profile/constraint/report
+  hashes, and registry sealing re-evaluates the same report. Strict nested route models now survive
+  REAL evidence sealing and live/frozen reconstruction through JSON-aware detached validation.
+  Static FULL admission stages an unavailable live-equivalence result before metadata refresh, while
+  an explicit live mismatch remains a rejection; empirical-schema and token-detail UNAVAILABLE
+  results still block FULL admission.
+- **Files changed:** route-constraint, endpoint/discovery, candidate-selection, qualification, config,
+  model-selection guide, and their focused unit tests. Runtime cutoff files remain in progress.
+- **Commands run:** `.venv/bin/pytest -q tests/unit/test_route_constraints.py
+  tests/unit/test_model_discovery.py` (137 passed), Ruff format/check on those files, and strict mypy
+  on `route_constraints.py` and `discovery.py` all passed. No provider/network/secret/ledger action.
+- **Unresolved issues:** Runtime FULL/REGISTRY/NONCREDITING cutoffs, exact request/pricing parity,
+  generated schemas/inventory, and broad regression gates remain unfinished.
+- **Next safe action:** Complete and review the zero-state/full and live-smoke runtime cutoffs, then
+  bind actual request emission and provider price caps to the shared projections.
+
+## 2026-08-24T06:06:27Z — acyclic selection-plan route custody integrated
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` remains `IN_PROGRESS`.
+- **Completed changes:** Bumped the nonauthorizing candidate-selection plan to schema v1.4 and bound
+  one exact self-hashed route-predicate profile plus canonically ordered per-role endpoint
+  constraints into its assignment and final plan hash without a back-edge. Plan validation now
+  requires every selected endpoint policy to have exactly one matching constraint and rejects
+  valid-but-unlisted constraints. The committed plan and selection guide carry the new hashes.
+- **Files changed:** `src/mmaudit/models/candidate_selection.py`,
+  `config/models.selection-plan.json`, `docs/models/model_selection.md`, and focused selection tests;
+  `qualification.py` has provisional all-or-none candidate custody fields awaiting discovery bind.
+- **Commands run:** `.venv/bin/pytest -q tests/unit/test_candidate_selection.py --tb=short` (34
+  passed), Ruff check/format-check for the current selection/qualification slice, and strict mypy
+  over route constraints, candidate selection, and qualification all passed.
+- **Unresolved issues:** Constrained discovery publication, registry report custody, shared runtime
+  cutoffs, generated schema/inventory, and full parity regressions remain in progress. No provider or
+  campaign action is authorized.
+- **Next safe action:** Finish pre-publication discovery and registry custody, then require the same
+  typed report at zero-state full and noncrediting-smoke admission boundaries.
+
+## 2026-08-24T05:52:15Z — finite route-predicate core implemented provider-free
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` remains `IN_PROGRESS`.
+- **Completed changes:** Added a neutral, provider-free route-constraint core with 29 ordered
+  predicates, closed `SATISFIED` / `REJECTED` / `UNAVAILABLE` dispositions and reasons, exact
+  self-hashed profile/constraint/facts/report models, four publication/admission purposes, and an
+  exact Decimal-to-upward-float provider price-cap proof. Constraints bind the configured exact
+  endpoint identifier whether provider metadata represents it as a tag or slug. The final plan hash
+  is deliberately not stored inside a contained constraint; registry facts compare that final hash
+  separately, avoiding a self-hash cycle.
+- **Files changed:** `src/mmaudit/models/route_constraints.py` and
+  `tests/unit/test_route_constraints.py`, in addition to the already recorded queue/worklog state.
+- **Commands run:** `.venv/bin/pytest -q tests/unit/test_route_constraints.py` (52 passed),
+  `.venv/bin/ruff check src/mmaudit/models/route_constraints.py
+  tests/unit/test_route_constraints.py`, `.venv/bin/mypy --strict
+  src/mmaudit/models/route_constraints.py`, and `git diff --check` all passed.
+- **Unresolved issues:** Selection, discovery, registry, pricing-runtime, and runner-admission callers
+  do not yet consume the core; no completion or readiness claim is made.
+- **Next safe action:** Integrate the acyclic plan/profile/constraint custody into selected-route
+  construction and pre-publication discovery while preserving generic and RELEASE behavior.
+
+## 2026-08-24T05:23:53Z — route-constraint parity ticket opened provider-free
+
+- **Current ticket:** `V3-PLANCONSTRAINTS-001` is `IN_PROGRESS`. The bounded objective is one typed,
+  self-hashed predicate profile consumed by selection construction/publication, discovery snapshot
+  publication, provider-free qualification, and runtime admission.
+- **Inspection completed:** Existing selection, endpoint-snapshot, discovery, runner-preflight, and
+  OpenRouter smoke admission checks are individually fail-closed but fragmented. The current plan
+  schema has no shared constraint custody, no closed predicate diagnostic, no exact pricing-cap
+  relation, and no typed runtime token-detail completeness disposition.
+- **Files changed so far:** only both persistent queues and both worklogs. Production/test scope is
+  deliberately not frozen until the shared type and call graph are fully enumerated.
+- **Commands run:** read-only repository status and targeted queue/worklog/source inspection. No
+  provider, network, credential, private ledger, AUTHRUNNER, or campaign command was used.
+- **Next safe action:** finalize the finite profile/report representation and integrate it into the
+  existing plan, discovery, and admission seams with provider-free regressions. Preserve the user-
+  owned `.gitignore` and `docs/remediation/v3/operator_results.md` changes.
 
 ## 2026-08-24T03:23:00Z — canonical replay repaired and same sealed bundle operator-reported offline-valid
 

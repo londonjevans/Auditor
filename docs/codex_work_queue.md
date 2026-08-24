@@ -108,8 +108,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Remaining limitation:** The compiled policy deliberately records no frozen baseline
   and accepts no caller clock or runtime capability. Superiority and freshness therefore
   remain `UNEVALUABLE`; MOCK/structural REAL labels cannot authorize qualification.
-- **Next action:** Begin `V3-AUTHLINEAGE-001`; authenticated runner execution cannot
-  safely consume the current operator-authored root labels.
+- **Next action:** Begin `V3-AUTHLINEAGE-001`; authenticated runner execution could not safely
+  consume the then-current operator-authored root labels at that historical boundary.
 
 ### V3-AUTHLINEAGE-001 — Externally grounded autonomous model lineage
 
@@ -405,7 +405,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   265,244-byte sealed v1.2 bundle with two runs and four usages round-trips provider-free; coercive
   string and whitespace variants reject canonically. This is a completed local replay mechanism, not
   provider, qualification, runner, audit, benchmark, AUTHSEAL, release, or campaign authority.
-- **Current checkpoint result:** Exact canonical candidate/judge v3 `NONCREDITING_SMOKE` uses an
+- **Latest completed AUTHRUNNER replay result:** Exact canonical candidate/judge v3
+  `NONCREDITING_SMOKE` uses an
   all-or-none immutable completion-plus-metadata receipt composite across completion retry and
   metadata polling vectors under same client/transport/task/thread/PID/ledger custody. Generic and
   RELEASE behavior retain the historical path. The four-path hotfix validates and neutralizes
@@ -417,7 +418,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `NONCREDITING_SMOKE` reasoning-identity join: disabled reasoning requires neither the evidence nor
   identity required-parameter set to contain `reasoning`; active reasoning requires evidence `reasoning` plus identity
   reasoning capability/support, while only exact CANDIDATE/JUDGE v3 smoke may omit `reasoning` from
-  the identity required-parameter set. Generic/RELEASE exact equality is unchanged. Current `c627f2d`
+  the identity required-parameter set. Generic/RELEASE exact equality is unchanged. Historical
+  AUTHRUNNER replay checkpoint `c627f2d`
   validation passed 95 smoke-runtime tests, 111 adjacent CLI/durable/inventory/release-schema tests,
   and the retained 789-test AUTHRUNNER matrix as separate, overlapping results. Ruff format/check,
   strict mypy over the changed source, the canonical umbrella release-schema/inventory generator,
@@ -431,7 +433,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `INCOMPLETE`, not a pass: 1,492 passed / 25 skipped / 1 failed after 3,878.41 seconds at
   `test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`; the same exact test
   fails on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`.
-- **Current operator-reported offline result / limitation:** Operator record
+- **Last reconciled operator-reported offline result / limitation:** Operator record
   `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` is 115,171 bytes / 2,111
   lines. It reports that the `c627f2d` offline verifier returned the same 282,802-byte index-19
   bundle at SHA-256 `e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703`
@@ -441,14 +443,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   call or independent authentication of the private artifact by Codex occurred. Completed real
   audits remain zero; no 24-case aggregation,
   scoring, audit-quality, calibration, qualification, benchmark, AUTHSEAL, or release result exists.
-  Exact per-index costs for r10-r13/r17-r19, current reserved/remaining/aggregate counters, and the
-  next unused index remain unstated and are not inferred. Broad provider compatibility and both full
+  Exact per-index costs for r10-r13/r17-r19, reserved/remaining/aggregate counters in that
+  last-reconciled record, and the
+  next unused index remain unstated and are not inferred. The user-owned working-tree record later
+  drifted during this source-only ticket and was not opened or reconciled; no conclusion or command
+  in `V3-PLANCONSTRAINTS-001` depends on its new contents. Broad provider compatibility and both full
   production publication rollback joins remain unexecuted. The pure-Python threat exclusions remain
   unchanged, and no runtime authority, readiness, or campaign authority exists.
 - **Next action:** Preserve `c627f2d`, the operator-owned bundle, and ledger state; no operator action
-  is authorized and no new index may be inferred. Take only the provider-free
-  `V3-PLANCONSTRAINTS-001` slice before considering any 24-case campaign. No command is
-  current.
+  is authorized and no new index may be inferred. `V3-PLANCONSTRAINTS-001` is complete provider-free,
+  but its two runtime-only dispositions remain `UNAVAILABLE`; keep this ticket blocked and emit no
+  campaign command.
 - **Historical structured-output eligibility slice:** The first REAL smoke candidate completion proved transport-origin custody
   and exact reserve/spend reconciliation (`$0.0547272` reserved; `$0.01680888` actual), then failed
   closed because the selected DeepSeek/`novita/fp8` route lacks native `structured_outputs`. No
@@ -482,13 +487,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   froze DeepSeek/`parasail/fp8` at
   `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, while replay
   Kimi/`wafer` failed closed at status `-5`; no replay registry, live-route gate, completion, new
-  spend, or bundle followed. Current selection-plan checkpoint
+  spend, or bundle followed. Historical selection-plan checkpoint
   `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`
-  binds nonauthorizing plan v1.3
+  bound nonauthorizing plan v1.3
   `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, retaining candidate
   `parasail/fp8` and PRIMARY `sail-research/fp8` while replacing the failed replay singleton with
   sorted allowlist `modal/mxfp4`, `phala`. Exact operator choice remains mandatory; there is no
-  automatic fallback. The operator explicitly selected `modal/mxfp4`, froze replay r8 at
+  automatic fallback. Current provider-free checkpoint
+  `7ef471744adfce557edf612a74b2847aafb3e8bc` upgrades that selection artifact to schema v1.4 /
+  plan SHA-256 `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`
+  and binds its shared route-predicate profile and exact constraints without refreshing route
+  evidence or granting authority. The operator explicitly selected `modal/mxfp4`, froze replay r8 at
   `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
   through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Historical
   checkpoint `7ca15589453fbc5219da4bbda87e37da824470a7` emitted the r8 pair. Its step A then found
@@ -515,8 +524,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   were respectively
   `$0.01680888`/`$0.01680888`/`reconciled`, `null`/`$0.05225616`/`uncertain_accounted`,
   `$0.00554796`/`$0.00554796`/`reconciled`, and
-  `$0.00537768`/`$0.00537768`/`reconciled`. Runs 5–9 are also reconciled, but the current operator
-  record did not enumerate an authoritative per-index cost mapping for them. That nine-entry snapshot
+  `$0.00537768`/`$0.00537768`/`reconciled`. Runs 5–9 are also reconciled, but that operator record
+  did not enumerate an authoritative per-index cost mapping for them. That nine-entry snapshot
   accounted `$0.10457436`, reserved `$0`, and left `$249.89542564`; none may be released, reused, or
   edited. At the pre-hotfix `48ea635` live-negative boundary, operator record SHA-256
   `7ae7a108144a3d6800b0a708dfa4d16c0f7fcba1c1bb2ceb2667f5ec1faac59b` is 102,651 bytes / 1,863
@@ -597,7 +606,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   zero. Paid indices 14–16 were consumed; checkpoint `3a1246d` made index 16's exact live negative
   `STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS`, and child `03d6e8a` closed that
   construction asymmetry before producing the index-19 bundle. Its first canonical replay failed;
-  current child `c627f2d` repairs that reader, and the current operator record reports the unchanged
+  replay checkpoint `c627f2d` repairs that reader, and the last reconciled operator record reported
+  the unchanged
   bundle valid/noncrediting/nonauthorizing offline without rerun or new spend. The next unused index
   remains NOT_STATED.
 - **Local revocation-cascade slice:** Pushed checkpoint
@@ -976,9 +986,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. Current evidence reports outcomes through index 19 and a
+  candidate endpoint-inventory drift. Last-reconciled operator evidence reports outcomes through
+  index 19 and a
   25-entry global ledger totaling `$0.396223`; the next unused index is not stated. Historical
-  r14/r15/r16 cost `$0.004044`/`$0.008478`/`$0.006281`, while exact r16 terminal status, current reserved/remaining
+  r14/r15/r16 cost `$0.004044`/`$0.008478`/`$0.006281`, while exact r16 terminal status and
+  reserved/remaining at that historical boundary
   values, aggregate model-call/provider-completion counts, authenticated metadata GET count, route
   artifact identities/composition, and bundle publication are unstated. Run 10
   stopped at the intended immutable completion-receipt cutoff with
@@ -1000,8 +1012,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   cutoff, was persisted BOUND, and traversed the high-level origin-marking path before strict
   validation failed; operator evidence cannot prove the opaque origin capability. Historical
   checkpoint `d2364f6` closed that classifier bypass before metadata GET, usage replacement, origin,
-  or capability. Current replay checkpoint `c627f2d` repairs the datetime asymmetry provider-free,
-  and the latest operator record reports that the unchanged index-19 bundle now verifies offline as
+  or capability. Historical AUTHRUNNER replay checkpoint `c627f2d` repairs the datetime asymmetry
+  provider-free,
+  and the last-reconciled operator record reports that the unchanged index-19 bundle verifies offline as
   `VALID / NONCREDITING / NONAUTHORIZING` without another provider call or new spend. That one-case
   evidence does not establish 24-case aggregation/scoring, audit quality, calibration, qualification,
   benchmark, AUTHSEAL, release, broad provider compatibility, or either complete production
@@ -1024,10 +1037,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   the receipt composite; historical child `68126e0` repaired the index-14 receipt-state-seal
   incompatibility provider-free; historical checkpoint `3a1246d` maps index 16's live failure to
   exact closed code `IDENTITY_REQUIRED_PROVIDER_PARAMETERS`; historical `03d6e8a` closes that
-  construction asymmetry provider-free; and current `c627f2d` completes the provider-free replay
-  repair. The latest operator record reports the unchanged index-19 bundle offline-valid,
+  construction asymmetry provider-free; and historical AUTHRUNNER replay checkpoint `c627f2d`
+  completes the provider-free replay
+  repair. The last-reconciled operator record reports the unchanged index-19 bundle offline-valid,
   noncrediting, and nonauthorizing. No operator action is authorized, no next index is stated, and no
-  command is current. Take only provider-free `V3-PLANCONSTRAINTS-001` before any campaign.
+  command is current. `V3-PLANCONSTRAINTS-001` is complete provider-free; the unresolved empirical
+  schema and token-detail gates still prohibit any campaign.
   `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
 
@@ -1068,10 +1083,31 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Tests:** Provider-free profile construction, route-reason sweep, plan/runtime parity, missing-
   predicate mutation, ambiguous display identity, output-parameter, reasoning-effort precedence,
   capacity, and runtime-only convention-`UNAVAILABLE` regressions.
-- **Dependencies:** The operator-reported, nonauthorizing `c627f2d` offline-valid sealed one-case
+- **Dependencies:** The last-reconciled operator-reported, nonauthorizing `c627f2d` offline-valid sealed one-case
   `V3-AUTHRUNNER-001` smoke satisfies only this provider-free prerequisite; it is not independent
   bundle authentication or campaign authority. This ticket is mandatory before the 24-case campaign.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Result:** Candidate-selection schema v1.4 now binds one strict self-hashed 29-predicate profile
+  and exact per-role route constraints. The same evaluator and closed report are required before
+  constrained endpoint/model publication, through registry plan/profile/constraint/report custody,
+  and at FULL or NONCREDITING runtime admission. Whole-inventory display-name collisions, model or
+  endpoint emitted-parameter gaps, reasoning precedence/empty/contradictory inventories, capacity,
+  exact-price cap weakness, live/frozen drift, custody swaps, and lower or higher runtime output-token
+  drift fail closed. FULL rejects the deliberately `UNAVAILABLE` empirical-schema and token-detail
+  predicates before ledger, secret, output, registration, reservation, or provider state. The final
+  changed-surface matrix passed `951` tests with two known code-retarget warnings; the disjoint
+  adjacent qualification/lineage matrix passed `201`; generated inventory/schema tests passed `57`
+  overlapping tests. Ruff, format, strict mypy over `210` source files, dependency, generator, import,
+  and diff gates passed. Independent review found no blocker/HIGH; `1,012` defensive mutation probes
+  and six import permutations failed closed and restored cleanly. Source checkpoint
+  `7ef471744adfce557edf612a74b2847aafb3e8bc`, direct child of
+  `85c06b07ccc3905af4e0231497276934f7ae142a`, owns the exact 33-path provider-free implementation,
+  config, schema, generated-inventory, and focused-test slice; it excludes governance, operator
+  results, `.gitignore`, and provider execution.
+- **Remaining limitation:** This provider-free result does not establish empirical structured-output
+  reliability or the provider-domain token-detail convention. Those two typed dispositions remain
+  `UNAVAILABLE`, so FULL campaign admission remains blocked and no provider, runner, qualification,
+  benchmark, audit, AUTHSEAL, release, or readiness authority follows.
 - **Operator proposal disposition:** Proposal item 1 is converted into this bounded ticket without
   adopting the operator-supplied direct-reference count as proof that these predicates are wholly
   runtime-only: high effort is already checked indirectly, endpoint snapshot construction already
@@ -1084,9 +1120,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   bounded typed successful-usage errors preserve the cause, keep case mismatch separate, and do not
   fetch generation evidence prematurely. Items 2, 3, 4, and 6 remain
   `OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`; none grants command or launch authority.
-- **Next action:** This queued ticket is the current actionable provider-free slice: implement it
-  before authoring or launching the 24-case campaign. It authorizes no operator action, provider
-  access, command, or campaign.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY` until separately authorized,
+  authoritative evidence resolves both runtime-only dispositions. No operator action, provider
+  access, inferred index, command, or campaign is current; `V3-AUTONOMY-001` Phase 2 remains paused.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1112,8 +1148,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
 - **Next action:** No provider or operator action is current. Preserve the provider-free mechanism;
-  the repository's current actionable slice is provider-free `V3-PLANCONSTRAINTS-001`. Resume this
-  ticket only under separate future authorization with fresh exact provider evidence and the stock
+  `V3-PLANCONSTRAINTS-001` is complete at source checkpoint `7ef4717`, and this ticket remains
+  noncurrent. Resume this ticket only
+  under separate future authorization with fresh exact provider evidence and the stock
   live authority quartet; do not emit or rerun an authenticated refresh command from this ticket.
 
 ### QUEUE-BOOTSTRAP-001
@@ -1864,12 +1901,12 @@ and report serialization.
 - **Objective:** Preserve historical checkpoint `03d6e8a` and the operator-owned bundle while fixing
   the provider-free canonical-replay datetime contract without weakening strict validation or exact
   canonical byte equality; retain zero operator commands.
-- **Dependencies:** Exact current operator evidence
+- **Dependencies:** Last reconciled operator evidence
   `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251`, historical negative
   checkpoint `48ea635ab5a2fa778d6b5ce5c9a1592f0f27b375`, historical receipt-seal hotfix
   `68126e0fe438f853fb9b75582023f807a208bdae`, historical diagnostic checkpoint
   `3a1246daf19ffa4a772be7806bd903199634ab0b`, historical join-fix checkpoint
-  `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, current replay checkpoint
+  `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, replay checkpoint
   `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, and nonauthorizing plan
   `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`. The operator reports a
   25-entry global ledger / `$0.396223`, a complete index-19 four-entry closed run ledger /
@@ -1879,21 +1916,25 @@ and report serialization.
 - **Boundary:** Historical post-`3a1246d` operator evidence traverses receipt sealing and four earlier
   structured-output identity clauses, then paid index 16 fails at the exact closed
   `IDENTITY_REQUIRED_PROVIDER_PARAMETERS` clause. Historical `03d6e8a` produced the index-19 bundle;
-  current `c627f2d` repairs replay without changing those bytes. Do not release, reuse, or edit any recorded
+  historical AUTHRUNNER replay checkpoint `c627f2d` repairs replay without changing those bytes. Do
+  not release, reuse, or edit any recorded
   ledger entry or infer unstated statuses, costs, counters, artifacts, or bundle state. The operator
   explicitly retracts its `requested_mode` hypothesis. The next unused index is NOT_STATED. No current command or provider access is
   authorized. No verifier, full runner, qualification, seal,
   audit, benchmark, or release command is emitted.
-- **Current evidence:** Exact three-path replay checkpoint `c627f2d` passed 95 runtime tests, 111
+- **Completed AUTHRUNNER replay evidence:** Exact three-path replay checkpoint `c627f2d` passed 95
+  runtime tests, 111
   adjacent CLI/durable/inventory/release-schema tests, and the retained 789-test AUTHRUNNER matrix as
   separate overlapping results, plus Ruff, format, strict mypy, canonical generator, `pip check`,
   diff integrity, and exact-byte review with no blocker/HIGH/MEDIUM. Historical `03d6e8a` retains
   19 request-cost-preview, 26 model-benchmark, overlapping 185 usage-plus-preview, and 47-root/1,073-state
-  evidence; historical `3a1246d` retains 564 tests / 47 roots / 1,072 states. The current operator
-  file reports the same index-19 bundle offline-valid, noncrediting, and nonauthorizing with no rerun
+  evidence; historical `3a1246d` retains 564 tests / 47 roots / 1,072 states. The last-reconciled
+  operator record reports the same index-19 bundle offline-valid, noncrediting, and nonauthorizing
+  with no rerun
   or new spend. This is not runner or release authority. `V3-AUTONOMY-001` remains
   `IN_PROGRESS`, but its Phase 2 working bytes are paused. The exact 28-role bundle pins three
   reviewed package resources and explicitly leaves 25 external roles unresolved.
 - **Next action:** Preserve `c627f2d`, the operator-owned bundle, and ledger state. No operator action
-  is authorized; do not infer another run index or grant runner/release authority. Begin only
-  provider-free `V3-PLANCONSTRAINTS-001` before any 24-case campaign.
+  is authorized; do not infer another run index or grant runner/release authority.
+  `V3-PLANCONSTRAINTS-001` is complete provider-free, while FULL admission remains blocked by its
+  two typed `UNAVAILABLE` runtime-only gates.

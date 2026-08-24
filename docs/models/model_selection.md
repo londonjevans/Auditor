@@ -19,10 +19,11 @@ own frozen metadata snapshots.
 
 `config/models.selection-plan.json` is a canonical, self-hashed, explicitly
 `NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
-`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`. Schema v1.3 binds
-`required_reasoning_effort = high`, `required_completion_limit_source = metadata`,
-`required_output_mode = NATIVE_JSON_SCHEMA` and the literal required provider parameter
-`structured_outputs` into the AUTHRUNNER assignment. It binds the exact bytes of the
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`. Schema v1.4 binds
+the complete 29-predicate route profile `00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82`,
+including exact effort-high reasoning custody, explicit request parameters, capacity and pricing
+requirements, selected endpoint constraints, and typed unavailable runtime-only gates. It binds the
+exact bytes of the
 operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
 claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
 lineage label is correct, or that any model is qualified. Its endpoint lists are policy
@@ -37,7 +38,7 @@ discover one exact route. The DeepSeek entry SHA-256 is
 `da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b`, the GLM entry SHA-256 is
 `45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef`, the Kimi entry SHA-256 is
 `77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11`, and the
-role-assignment SHA-256 is `93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421`.
+role-assignment SHA-256 is `7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14`.
 Tencent/`novita` remains an unselected historical adaptive seed at rank 10. Gemma remains an
 unselected rank-12 record of the superseded r7 proposal rather than being presented as viable for
 the configured high-effort profile. The plan's own advisory entries remain literally
@@ -510,8 +511,8 @@ It reports `$0` additional spend and the same one-entry live ledger at `$0.01680
 The operator then froze Gemma/`deepinfra/fp8` and refreshed Kimi/`together` as r7, still at `$0`.
 The r7/r7/r7 live-route gate rejected Gemma before paid transport because the configured profile
 requires `effort = high` and Gemma publishes no supported effort inventory. Nemotron's reported
-inventory also lacks `high`; neither already-confirmed alternative is eligible. The current operator
-record at that boundary was 61,243 bytes / 1,092 lines / SHA-256
+inventory also lacks `high`; neither already-confirmed alternative is eligible. The then-current
+operator record at that boundary was 61,243 bytes / 1,092 lines / SHA-256
 `00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516`.
 
 At that historical boundary every previously emitted AUTHRUNNER command was withdrawn and there was
@@ -573,12 +574,16 @@ Kimi/`wafer` failed closed because the endpoint had drifted to status `-5`. No r
 live-route gate, completion, new charge, or bundle resulted. That 69,112-byte / 1,236-line operator
 record has SHA-256 `5fb3d3091e339b840e84468093c0f1f64c738673a40761fcf7d7b9d7ae4c41c6`.
 
-Local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` retained the candidate and
+Historical local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` retained the candidate and
 PRIMARY routes and replaced the failed replay singleton with the nonauthorizing sorted allowlist
 `modal/mxfp4`, `phala`. Plan SHA-256
-`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` remains nonauthorizing,
-local only, and not pushed or remote-resolved. The operator explicitly selected `modal/mxfp4` and
-completed its exact r8 discovery; no automatic route fallback is permitted.
+`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` was nonauthorizing,
+local only, and not pushed or remote-resolved. Current provider-free checkpoint
+`7ef471744adfce557edf612a74b2847aafb3e8bc` upgrades the same route choices to schema v1.4 / plan
+SHA-256 `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`,
+binding the shared route-predicate profile and exact constraints without refreshing route evidence
+or granting authority. The operator explicitly selected `modal/mxfp4` and completed its exact r8
+discovery; no automatic route fallback is permitted.
 
 The operator froze replay r8 at
 `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated the
@@ -607,12 +612,14 @@ transport. Its 385-test implementer matrix and independent 363-test review passe
 format, strict mypy, schema write/verify, and diff gates. That r9/index-2 command pair is historical
 and has been removed from the current guide after execution.
 
-### Current r1–r19 accounting and canonical-replay boundary
+### Last reconciled r1–r19 accounting and canonical-replay boundary
 
-The current operator record is 115,171 bytes / 2,111 lines / SHA-256
+The last reconciled operator record is 115,171 bytes / 2,111 lines / SHA-256
 `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251`. It reports outcomes for
 indices 17–19 after the previously occupied 1–16 and a later offline verification of the unchanged
 index-19 bundle at checkpoint `c627f2d`; the next unused index is not stated and is not inferred.
+The user-owned working-tree record later drifted during this source-only route-constraint ticket and
+was not opened or reconciled; no route-constraint result or command depends on its new contents.
 The first four entries were individually enumerated at the prior snapshot:
 
 | index | actual USD | accounted USD | terminal status |
@@ -630,10 +637,10 @@ assigned to indices here. That nine-entry snapshot accounted `$0.10457436`, rese
 and total `$0.145695`, with index 14
 charged `$0.004044` and index 15 charged `$0.008478`; its per-entry status and budget fields were
 unstated. The prior record reported sixteen entries and total `$0.151976`, with index 16 charged
-`$0.006281`. The current record reports a 25-entry global ledger totaling `$0.396223`; its completed
+`$0.006281`. The last reconciled record reports a 25-entry global ledger totaling `$0.396223`; its completed
 index-19 run has a separate closed four-entry ledger at `$0.39622262`. Exact per-index costs for
-r10–r13 and r17–r19, current reserved/remaining, terminal-entry count, and aggregate counters remain
-unstated. No entry may
+r10–r13 and r17–r19, reserved/remaining at that boundary, terminal-entry count, and aggregate
+counters were unstated. No entry may
 be released, superseded, reused, or hand-edited. Run 10 followed checkpoint `d2364f6`: an immediately preceding gate with PRIMARY
 re-frozen as `primary-judge-registry-r14.json` was operator-reported VALID, then the paid run stopped
 at the intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`. `NONE` means zero
@@ -679,12 +686,12 @@ and request to log both sets are nonauthorizing analysis, not independent source
 provider-free continuation must preserve exact equality and closed value-free diagnostics without
 logging unbounded values.
 
-The current operator record reports that historical generation checkpoint `03d6e8a` cleared that join
+The last reconciled operator record reports that historical generation checkpoint `03d6e8a` cleared that join
 and index 19 completed candidate primary/replay and judge primary/replay as
 `COMPLETE / NONCREDITING / NONAUTHORIZING`. It reports a sealed 282,802-byte bundle at SHA-256
 `e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703`. Its 02:17 entry records the
-strict-datetime replay failure and diagnosis; the new 03:23 entry reports that current replay
-checkpoint `c627f2d` verifies the same bundle bytes offline as
+strict-datetime replay failure and diagnosis; the new 03:23 entry reports that the then-current
+replay checkpoint `c627f2d` verifies the same bundle bytes offline as
 `VALID / NONCREDITING / NONAUTHORIZING`, without another provider run or new spend. This is
 operator-supplied verification, not independent private-artifact authentication by Codex. Index 17
 ended after an operator-side timeout with one `uncertain_accounted` judge entry, index 18 failed
@@ -742,8 +749,8 @@ parity. Parent matrices passed 642 plus 57 tests; independent matrices passed 64
 3,488-case differential found zero mismatches, and review found no BLOCKER/HIGH. This is provider-free
 local evidence, not a live success or launch authority.
 
-Current checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce` is the exact three-path replay
-repair and direct child of historical five-path join checkpoint
+Historical AUTHRUNNER replay checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce` is the exact
+three-path replay repair and direct child of historical five-path join checkpoint
 `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, which is the exact child of historical
 clause-diagnostic checkpoint `3a1246daf19ffa4a772be7806bd903199634ab0b`.
 That diagnostic is the exact five-path child of receipt-state-seal hotfix
@@ -767,13 +774,13 @@ captures the exact CANDIDATE/JUDGE v3 `NONCREDITING_SMOKE` reasoning-identity jo
 reasoning requires neither the evidence nor identity required-parameter set to contain `reasoning`; active reasoning requires
 evidence `reasoning` plus identity reasoning capability/support, while only exact candidate/judge v3
 smoke may omit `reasoning` from the identity required-parameter set. Generic/RELEASE exact equality
-and the production call-root set remain unchanged. Current `c627f2d` removes only the call-level
-strict override whose propagation into nested mapping-copy validators rejected canonical JSON
-datetimes. Model-level strict contracts, exact bundle type, the bounded bytes input, and exact
+and the production call-root set remain unchanged. That historical replay checkpoint removes only
+the call-level strict override whose propagation into nested mapping-copy validators rejected
+canonical JSON datetimes. Model-level strict contracts, exact bundle type, the bounded bytes input, and exact
 canonical-byte equality remain mandatory. The HTTP stack remains
 exact-pinned to `h11==0.16.0`, `httpcore==1.0.9`, and `httpx==0.28.1`.
 
-Current `c627f2d` provider-free validation passed 95 smoke-runtime tests, 111 adjacent
+Historical `c627f2d` provider-free validation passed 95 smoke-runtime tests, 111 adjacent
 CLI/durable/inventory/release-schema tests, and the retained exact 789-test AUTHRUNNER matrix as three
 separate overlapping results. A genuine synthetic 265,244-byte sealed v1.2 bundle with two runs and
 four usages round-trips through the real seal/serializer/parser, while coercive string and whitespace
@@ -798,7 +805,7 @@ inconsistent`; benchmark cases reported `ReasoningPolicyError` with zero observe
 exact test fails on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`, so it was not
 introduced by the receipt-composite lineage. No repository-wide pass is claimed for `c627f2d`.
 
-The current operator record supplies one operator-reported production candidate/judge smoke and
+The last reconciled operator record supplies one operator-reported production candidate/judge smoke and
 offline replay, but it remains one-case, noncrediting, and nonauthorizing. The historical index-14
 live negative shows that checkpoint `48ea635` could not seal the
 owned request state. Historical child `68126e0` fixes that boundary provider-free; paid indices 14–16
@@ -819,23 +826,28 @@ route-disqualification authority.
 The `531a9d8` 906-test matrix and independent review were CLEAN. The identity successor's 340 focused
 tests, Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review also passed.
 The dormant receipt scaffold's focused provider-free matrix passed 458 tests. Historical `3a1246d`
-retains its independent 564-test / 47-root / 1,072-state evidence. The current committed `c627f2d`
-inventory raw/self/discovery/universe hashes are
-`6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778`,
-`d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432`,
-`bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and
-`b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed`; counts are 3,649 sources /
-3,652 occurrences / 3,606 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates /
-29 unsatisfied / 15 current-manual. The smoke schema raw SHA-256 is
+retains its independent 564-test / 47-root / 1,072-state evidence. The current committed
+`7ef471744adfce557edf612a74b2847aafb3e8bc` PLANCONSTRAINTS inventory
+raw/self/discovery/universe hashes are
+`207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c`,
+`c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a`,
+`e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a`, and
+`6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc`; counts are 3,651 sources /
+3,654 occurrences / 3,608 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates /
+29 unsatisfied / 15 current-manual. The current smoke schema raw SHA-256 is
+`34f264a5fa9ae55ba6d0c02d2e1f78c81aa4abf2c19ab50b6366c2c4d6e75404`; the historical
+pre-PLANCONSTRAINTS value was
 `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
 
 The operator's r15 judge re-freezes and every later result remain nonauthorizing. No AUTHRUNNER
-command is current; the next unused index is not stated. The exact next safe action is to preserve
-`c627f2d`, the operator-owned bundle, and ledger state. No AUTHRUNNER action is authorized and no new
-index may be inferred. Begin only provider-free
-`V3-PLANCONSTRAINTS-001`, which is mandatory before the 24-case
-campaign. Its shared route-predicate profile must explicitly mark runtime token-detail convention
-`UNAVAILABLE` until authoritative evidence exists; r3/r4 cannot populate it. Proposal item 5 is
+command is current; the next unused index is not stated. Preserve `c627f2d`, the operator-owned
+bundle, and ledger state. No AUTHRUNNER action is authorized and no new index may be inferred.
+Provider-free `V3-PLANCONSTRAINTS-001` is complete: its shared 29-predicate profile now binds the
+selection plan, pre-snapshot discovery publication, registry custody, provider price-cap projection,
+and FULL/NONCREDITING runtime admission. Runtime output tokens must exactly match the profile before
+state mutation. Empirical schema conformance and token-detail convention remain typed `UNAVAILABLE`,
+so FULL admission and the 24-case campaign still fail closed until separate authoritative evidence
+exists; r3/r4 cannot populate that evidence. Proposal item 5 is
 `ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8`: bounded typed successful-usage diagnostics keep
 case mismatch separate and avoid premature generation fetch. Item 3's REPLAY allowlist is historical;
 its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain

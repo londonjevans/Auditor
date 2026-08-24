@@ -16,7 +16,6 @@ CODEX_QUEUE_PATH = ROOT / "docs/codex_work_queue.md"
 CODEX_WORKLOG_PATH = ROOT / "docs/codex_worklog.md"
 TRACEABILITY_PATH = ROOT / "docs/remediation/v3/review_traceability.json"
 RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
-OPERATOR_RESULTS_PATH = ROOT / "docs/remediation/v3/operator_results.md"
 README_PATH = ROOT / "README.md"
 MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
 SELECTION_PLAN_PATH = ROOT / "config/models.selection-plan.json"
@@ -31,7 +30,12 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
+LAST_RECONCILED_OPERATOR_RESULTS_SHA256 = (
+    "4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
+)
+PLANCONSTRAINTS_PARENT_OPERATOR_RESULTS_SHA256 = (
+    "ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2"
+)
 HISTORICAL_PRE_REPLAY_REPAIR_OPERATOR_RESULTS_SHA256 = (
     "a87ca7efaf4adf0af60479fa5b26fcbfe80ad6d3aa58a92c9e18fab1a70eabce"
 )
@@ -53,7 +57,7 @@ HISTORICAL_PAID_DIAGNOSTIC_OPERATOR_RESULTS_SHA256 = (
 HISTORICAL_INELIGIBLE_GEMMA_CHECKPOINT = "3989e7592de6e1c355365443c10e00c2083829d8"
 CURRENT_LINEAGE_RESEAL_CHECKPOINT = "331bde27c7085d4da34c7b8ec1f688f2ce1e52b3"
 HISTORICAL_COMPLETION_CAPACITY_CHECKPOINT = "3975d2e12fd81a214b9faa1c3031c94506ab696d"
-CURRENT_SELECTION_SUCCESSOR_CHECKPOINT = "dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d"
+HISTORICAL_DCABE_SELECTION_CHECKPOINT = "dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d"
 AUTHRUNNER_TOKEN_ENVELOPE_CHECKPOINT = "531a9d822e9989bf2eda94530e88cf55f2dd2e0d"
 AUTHRUNNER_IDENTITY_DIAGNOSTIC_CHECKPOINT = "77fb4b9a0c03969a9776edf2091dc09d3b67daec"
 HISTORICAL_AUTHRUNNER_RECEIPT_SCAFFOLD_CHECKPOINT = "8058e7bff88594b44aa42b8695ce5c25442ae73c"
@@ -67,7 +71,12 @@ HISTORICAL_AUTHRUNNER_STRUCTURED_OUTPUT_DIAGNOSTIC_CHECKPOINT = (
 HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT = (
     "03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc"
 )
-CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT = "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
+HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT = "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
+CURRENT_PLANCONSTRAINTS_CHECKPOINT = "7ef471744adfce557edf612a74b2847aafb3e8bc"
+CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT = "85c06b07ccc3905af4e0231497276934f7ae142a"
+HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
+)
 OPERATOR_INDEX_19_SOURCE_CHECKPOINT = "03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc"
 HISTORICAL_PHASE_ZERO_CHECKPOINT = "d0402d1c68f0f82d9ee4f8757f7967abda372ac6"
 PHASE_ONE_IMPLEMENTATION_CHECKPOINT = "084add8778ef36a2e4c86fdbdea4082eb3a1b332"
@@ -76,14 +85,14 @@ AUTONOMY_WORKTREE_INDEPENDENCE_CHECKPOINT = "3d4a43ac026547dd8652796b6186c48891f
 HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
     "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
 )
-AUTONOMY_INVENTORY_RAW_SHA256 = "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
+AUTONOMY_INVENTORY_RAW_SHA256 = "207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
 )
-AUTONOMY_INVENTORY_SHA256 = "d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432"
-AUTONOMY_SOURCE_UNIVERSE_SHA256 = "b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed"
+AUTONOMY_INVENTORY_SHA256 = "c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
-    "bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8"
+    "e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -268,6 +277,46 @@ AUTHRUNNER_CANONICAL_REPLAY_PATHS = frozenset(
         "tests/unit/test_authenticated_runner_smoke_runtime.py",
     }
 )
+AUTHRUNNER_CANONICAL_REPLAY_STABLE_PATHS = frozenset(
+    {"src/mmaudit/models/authenticated_runner_smoke.py"}
+)
+PLANCONSTRAINTS_SOURCE_PATHS = frozenset(
+    {
+        "config/models.selection-plan.json",
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/authenticated_runner_smoke_evidence_bundle.schema.json",
+        "schemas/candidate_selection_plan.schema.json",
+        "src/mmaudit/benchmark/cross_lineage_adjudication.py",
+        "src/mmaudit/cli.py",
+        "src/mmaudit/models/candidate_benchmark.py",
+        "src/mmaudit/models/candidate_selection.py",
+        "src/mmaudit/models/discovery.py",
+        "src/mmaudit/models/endpoint_snapshots.py",
+        "src/mmaudit/models/lineage_review.py",
+        "src/mmaudit/models/openrouter.py",
+        "src/mmaudit/models/qualification.py",
+        "src/mmaudit/models/qualification_workflow.py",
+        "src/mmaudit/models/route_admission.py",
+        "src/mmaudit/models/route_constraints.py",
+        "src/mmaudit/orchestration/authenticated_runner_openrouter.py",
+        "src/mmaudit/orchestration/authenticated_runner_smoke_openrouter.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "tests/unit/test_authenticated_runner_cli.py",
+        "tests/unit/test_authenticated_runner_execution.py",
+        "tests/unit/test_authenticated_runner_openrouter.py",
+        "tests/unit/test_authenticated_runner_smoke_runtime.py",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_candidate_benchmark.py",
+        "tests/unit/test_candidate_registry_bridge_cli.py",
+        "tests/unit/test_candidate_selection.py",
+        "tests/unit/test_endpoint_snapshots.py",
+        "tests/unit/test_model_discovery.py",
+        "tests/unit/test_openrouter.py",
+        "tests/unit/test_openrouter_request_cost_preview.py",
+        "tests/unit/test_route_admission.py",
+        "tests/unit/test_route_constraints.py",
+    }
+)
 AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS = (
     AUTHRUNNER_SMOKE_INDEX_IMPLEMENTATION_PATHS - AUTONOMY_WORKTREE_INDEPENDENCE_PATHS
 )
@@ -283,10 +332,10 @@ HISTORICAL_INELIGIBLE_GEMMA_ROLE_SHA256 = (
     "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
 )
 CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256 = (
-    "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f"
+    "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
 )
 CURRENT_NONAUTHORIZING_SUCCESSOR_ROLE_SHA256 = (
-    "93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421"
+    "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14"
 )
 CURRENT_NONAUTHORIZING_ZAI_ENTRY_SHA256 = (
     "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef"
@@ -901,14 +950,14 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         text=True,
     )
     canonical_replay_resolved = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT}^{{commit}}"],
+        ["git", "rev-parse", f"{HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT}^{{commit}}"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
     canonical_replay_parent = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT}^"],
+        ["git", "rev-parse", f"{HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT}^"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -921,7 +970,7 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
             "--no-commit-id",
             "--name-only",
             "-r",
-            CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT,
+            HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT,
         ],
         cwd=ROOT,
         check=True,
@@ -933,9 +982,49 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
             "git",
             "diff",
             "--quiet",
-            CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT,
+            HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT,
             "--",
-            *sorted(AUTHRUNNER_CANONICAL_REPLAY_PATHS),
+            *sorted(AUTHRUNNER_CANONICAL_REPLAY_STABLE_PATHS),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+    planconstraints_resolved = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_PLANCONSTRAINTS_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    planconstraints_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_PLANCONSTRAINTS_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    planconstraints_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    planconstraints_current_match = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--quiet",
+            CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+            "--",
+            *sorted(PLANCONSTRAINTS_SOURCE_PATHS),
         ],
         cwd=ROOT,
         check=False,
@@ -1073,7 +1162,7 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert not (
         AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS
     )
-    assert canonical_replay_resolved.stdout.strip() == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+    assert canonical_replay_resolved.stdout.strip() == HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT
     assert (
         canonical_replay_parent.stdout.strip()
         == HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT
@@ -1085,6 +1174,13 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert OPERATOR_RESULTS_RELATIVE_PATH not in AUTHRUNNER_CANONICAL_REPLAY_PATHS
     assert not (AUTHRUNNER_CANONICAL_REPLAY_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
     assert canonical_replay_current_match.returncode == 0
+    assert planconstraints_resolved.stdout.strip() == CURRENT_PLANCONSTRAINTS_CHECKPOINT
+    assert planconstraints_parent.stdout.strip() == CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT
+    assert frozenset(planconstraints_changed.stdout.splitlines()) == PLANCONSTRAINTS_SOURCE_PATHS
+    assert len(PLANCONSTRAINTS_SOURCE_PATHS) == 33
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in PLANCONSTRAINTS_SOURCE_PATHS
+    assert not (PLANCONSTRAINTS_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+    assert planconstraints_current_match.returncode == 0
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -1095,7 +1191,7 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
     combined = codex | canonical
     unfinished = sum(status != "COMPLETE" for status in combined.values())
 
-    assert unfinished == 44
+    assert unfinished == 43
     assert (
         "REMAINING_ACTIONABLE_TICKETS: The combined queues contain "
         f"{unfinished} unfinished tickets."
@@ -1116,7 +1212,7 @@ def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
     codex = ticket_section(CODEX_QUEUE_PATH.read_text(encoding="utf-8"))
 
     for section in (canonical, codex):
-        assert "**Status:** `QUEUED`" in section
+        assert "**Status:** `COMPLETE`" in section
         assert (
             "operator-reported, nonauthorizing `c627f2d` offline-valid sealed one-case" in section
         )
@@ -1143,8 +1239,11 @@ def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
         assert "necessary but never proves behavioral schema reliability" in section
         assert "Runtime schema conformance remains a separate empirical" in section
         assert "Item 5" in section and "`ADOPTED_NONAUTHORIZING / IMPLEMENTED`" in section
-        assert "current actionable provider-free slice" in section
-        assert "It authorizes no operator action, provider access, command, or campaign" in section
+        assert CURRENT_PLANCONSTRAINTS_CHECKPOINT in section
+        assert "exact 33-path provider-free" in section
+        assert (
+            "No operator action, provider access, inferred index, command, or campaign" in section
+        )
         assert "Keep queued until AUTHRUNNER produces a successful smoke bundle" not in section
         assert "Keep queued until the AUTHRUNNER smoke succeeds" not in section
         assert "Item 3's REPLAY allowlist is historical" in section
@@ -1166,7 +1265,7 @@ def test_modelrefresh_next_action_is_historicalized_behind_current_provider_free
         assert match is not None
         section = " ".join(match.group().split())
         assert "No provider or operator action is current" in section
-        assert "current actionable slice is provider-free `V3-PLANCONSTRAINTS-001`" in section
+        assert "`V3-PLANCONSTRAINTS-001` is complete at source checkpoint `7ef4717`" in section
         assert "separate future authorization" in section
         assert "do not emit or rerun an authenticated refresh command" in section
         assert "operator-run authenticated metadata discovery" not in section
@@ -1239,7 +1338,7 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "the then-current one-entry AUTHRUNNER campaign ledger" in traceability_text
     assert "then-current 29375-byte operator log" in traceability_text
     assert "then-current 35771-byte operator record" in traceability_text
-    assert "current operator-reported AUTHRUNNER ledger instead has 25 entries" in traceability_text
+    assert "global 25-entry ledger / 0.396223 USD" in traceability_text
     for requirement in requirements:
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
@@ -1290,7 +1389,16 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     model_selection = MODEL_SELECTION_PATH.read_text(encoding="utf-8")
     normalized_model_selection = " ".join(model_selection.split())
     selection_plan = json.loads(SELECTION_PLAN_PATH.read_text(encoding="utf-8"))
-    operator_result_bytes = OPERATOR_RESULTS_PATH.read_bytes()
+    operator_result_bytes = subprocess.run(
+        [
+            "git",
+            "show",
+            f"{CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT}:{OPERATOR_RESULTS_RELATIVE_PATH}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
     operator_results = operator_result_bytes.decode("utf-8")
     queues = (
         (ROOT / "docs/codex_work_queue.md").read_text(encoding="utf-8"),
@@ -1302,15 +1410,30 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         assert (
-            "AUTORUN_STATUS: PAUSED_AFTER_INDEX_19_OPERATOR_REPORTED_VALID_NONCREDITING_"
-            "NONAUTHORIZING_OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS"
+            "AUTORUN_STATUS: PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_"
+            "NONAUTHORIZING_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_"
+            "NEXT_INDEX_NOT_STATED"
         ) in worklog
         assert (
-            "AUTORUN_STATUS: PAUSED_AFTER_INDEX_19_VALID_NONCREDITING_NONAUTHORIZING_"
-            "OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS"
-        ) not in worklog
+            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_"
+            "OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET"
+        ) in worklog
+        assert (
+            f"LAST_RECONCILED_OPERATOR_RESULTS: `{LAST_RECONCILED_OPERATOR_RESULTS_SHA256}` / "
+            "115171 bytes / 2111 lines"
+        ) in worklog
     normalized_queues = tuple(" ".join(queue.split()) for queue in queues)
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+    assert runtime_status["operator_results_current_worktree_status"] == (
+        "USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_SOURCE_ONLY_PLANCONSTRAINTS_TICKET"
+    )
+    assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
+    assert (
+        runtime_status["last_reconciled_operator_results_sha256"]
+        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    )
+    assert runtime_status["last_reconciled_operator_results_bytes"] == 115_171
+    assert runtime_status["last_reconciled_operator_results_lines"] == 2_111
     autonomy_inventory_bytes = AUTONOMY_INVENTORY_PATH.read_bytes()
     autonomy_inventory = json.loads(autonomy_inventory_bytes)
     autonomy_schema_bytes = AUTONOMY_INVENTORY_SCHEMA_PATH.read_bytes()
@@ -1332,8 +1455,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "is_current_aggregate": False,
     }
     assert runtime_status["openrouter_budget_usd"] == {
+        "projection_scope": "LAST_RECONCILED_OPERATOR_RECORD_NOT_CURRENT_USER_OWNED_WORKTREE_STATE",
         "used_value_provenance": (
-            "OPERATOR_RESULTS_4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
+            "LAST_RECONCILED_OPERATOR_RESULTS_"
+            "4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
         ),
         "used_value_operator_reported": True,
         "independently_authenticated_by_codex": False,
@@ -1342,7 +1467,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "used": "0.396223",
         "reserved": None,
         "remaining": None,
-        "current_reserved_and_remaining_reported": False,
+        "last_reconciled_reserved_and_remaining_reported": False,
         "is_authority": False,
     }
     assert runtime_status["historical_governed_ledger_evidence"] == {
@@ -1352,9 +1477,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "remaining_usd": "249.9965235675",
         "is_current_live_campaign_ledger": False,
     }
-    assert runtime_status["live_authrunner_campaign_ledger"] == {
+    assert "live_authrunner_campaign_ledger" not in runtime_status
+    assert runtime_status["last_reconciled_authrunner_campaign_ledger"] == {
+        "projection_scope": "LAST_RECONCILED_OPERATOR_RECORD_NOT_CURRENT_USER_OWNED_WORKTREE_STATE",
         "projection_provenance": (
-            "OPERATOR_RESULTS_4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
+            "LAST_RECONCILED_OPERATOR_RESULTS_"
+            "4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
         ),
         "operator_reported": True,
         "independently_authenticated_by_codex": False,
@@ -1364,7 +1492,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "reserved_usd": None,
         "remaining_usd": None,
         "terminal_entry_count": None,
-        "current_reserved_remaining_and_terminal_count_reported": False,
+        "last_reconciled_reserved_remaining_and_terminal_count_reported": False,
         "reported_occupied_run_indexes": [
             1,
             2,
@@ -1447,7 +1575,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     smoke_status = runtime_status["authrunner_noncrediting_smoke"]
     exact_status = runtime_status["authrunner_exact_cost_admission"]
     assert exact_status["historical_committed_byte_preflight_scope"] == (
-        "HISTORICAL_F6ACF206_AND_FD1459B_MECHANISM_EVENTS_NOT_CURRENT_C627_"
+        "HISTORICAL_F6ACF206_AND_FD1459B_MECHANISM_EVENTS_NOT_CURRENT_7EF4717_"
         "PREFLIGHT_ROUTE_COMMAND_OR_AUTHORITY"
     )
     assert (
@@ -1590,12 +1718,17 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "verdict_policy.json": "79b1aee6b28fc90f64887fff189b9f404114bd7671a7363bdb437e19d258d68f",
     }
     assert "docs/remediation/v3/operator_results.md" in agents
-    assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
-        agents
-    )
+    assert "Before ending any turn" in agents
+    assert "issued, reissued, or depended on an operator command" in agents
+    assert "read `docs/remediation/v3/operator_results.md`" in agents
+    assert "reconcile its latest result" in agents
     assert "../remediation/v3/operator_results.md" in model_selection
-    assert hashlib.sha256(operator_result_bytes).hexdigest() == OPERATOR_RESULTS_SHA256
-    assert CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT in normalized_model_selection
+    assert (
+        hashlib.sha256(operator_result_bytes).hexdigest()
+        == PLANCONSTRAINTS_PARENT_OPERATOR_RESULTS_SHA256
+    )
+    assert PLANCONSTRAINTS_PARENT_OPERATOR_RESULTS_SHA256 != LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    assert HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT in normalized_model_selection
     assert (
         "activates receipt preparation, dispatch, all-or-none completion-plus-metadata composition"
         in normalized_model_selection
@@ -1638,16 +1771,22 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert HISTORICAL_PAID_DIAGNOSTIC_OPERATOR_RESULTS_SHA256 in model_selection
     assert all(HISTORICAL_PAID_DIAGNOSTIC_OPERATOR_RESULTS_SHA256 in queue for queue in queues)
     assert all(
-        f"Current selection-plan checkpoint `{CURRENT_SELECTION_SUCCESSOR_CHECKPOINT}`" in queue
+        f"Historical selection-plan checkpoint `{HISTORICAL_DCABE_SELECTION_CHECKPOINT}`" in queue
         for queue in normalized_queues
     )
+    assert all(CURRENT_PLANCONSTRAINTS_CHECKPOINT in queue for queue in normalized_queues)
     assert all(
-        f"Current checkpoint `{CURRENT_SELECTION_SUCCESSOR_CHECKPOINT}`" not in queue
+        f"Current selection-plan checkpoint `{HISTORICAL_DCABE_SELECTION_CHECKPOINT}`" not in queue
         for queue in normalized_queues
     )
     assert all("Historical exact-cost admission slice 2026-08-21" in queue for queue in queues)
     assert all("Exact-cost admission WIP 2026-08-21" not in queue for queue in queues)
-    assert all("Current operator-reported offline result / limitation" in queue for queue in queues)
+    assert all(
+        "Last reconciled operator-reported offline result / limitation" in queue for queue in queues
+    )
+    assert all(
+        "Current operator-reported offline result / limitation" not in queue for queue in queues
+    )
     assert all("Current live result / limitation" not in queue for queue in queues)
     assert all("independently verifies the same 282,802-byte" not in queue for queue in queues)
     assert all("No post-`c627f2d` provider call" in queue for queue in normalized_queues)
@@ -1664,7 +1803,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497" in (model_selection)
     assert selection_plan["plan_sha256"] == CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
     assert selection_plan["plan_sha256"] in model_selection
-    assert selection_plan["schema_version"] == "1.3"
+    assert selection_plan["schema_version"] == "1.4"
     assert selection_plan["authenticated_runner_selection"]["required_reasoning_effort"] == "high"
     assert (
         selection_plan["authenticated_runner_selection"]["required_completion_limit_source"]
@@ -1821,8 +1960,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "strict mypy over 206 source files" in normalized_model_selection
     assert "independent review reported `CLEAN` with no blocker/HIGH" in model_selection
     assert "no genuine owned-REAL parent capability" in normalized_model_selection
-    assert "required_output_mode = NATIVE_JSON_SCHEMA" in model_selection
-    assert "literal required provider parameter `structured_outputs`" in normalized_model_selection
+    assert "`NATIVE_JSON_SCHEMA` plus literal `structured_outputs`" in model_selection
+    assert "self-hashed selection plan" in normalized_model_selection
     assert selection_plan["authenticated_runner_selection"]["role_assignment_sha256"] in (
         model_selection
     )
@@ -1834,50 +1973,106 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["candidate_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+    assert runtime_status["updated_at"] == "2026-08-24T10:34:59Z"
+    assert runtime_status["candidate_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
-    assert runtime_status["candidate_successor_commit"] == (CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT)
+    assert runtime_status["candidate_successor_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
     assert runtime_status["candidate_successor_status"] == (
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
     assert (
-        "Exact three-path provider-free canonical-replay datetime repair"
+        "Exact 33-path provider-free V3-PLANCONSTRAINTS-001"
         in runtime_status["candidate_commit_scope"]
     )
-    assert "model-level strict contracts" in runtime_status["candidate_commit_scope"]
-    assert "exact parser type" in runtime_status["candidate_commit_scope"]
-    assert "exact canonical-byte equality" in runtime_status["candidate_commit_scope"]
-    assert "unchanged index-19 bundle offline-valid" in runtime_status["candidate_commit_scope"]
-    assert "without rerun or new spend" in runtime_status["candidate_commit_scope"]
-    assert "no AUTHRUNNER command is current" in runtime_status["candidate_commit_scope"]
+    assert (
+        "shared 29-predicate route-constraint profile" in runtime_status["candidate_commit_scope"]
+    )
+    assert "runtime output-token parity" in runtime_status["candidate_commit_scope"]
+    assert "typed UNAVAILABLE" in runtime_status["candidate_commit_scope"]
+    assert "operator_results" in runtime_status["candidate_commit_scope"]
+    assert "operator action are excluded" in runtime_status["candidate_commit_scope"]
     assert (
         "conditionally preauthorized" not in runtime_status["blocked_tickets"]["V3-AUTHRUNNER-001"]
     )
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
-    assert runtime_status["last_checkpoint_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
-    assert "exact three paths" in runtime_status["last_checkpoint_commit_scope"]
+    assert runtime_status["last_checkpoint_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
+    assert "exact 33-path" in runtime_status["last_checkpoint_commit_scope"]
     assert (
-        "AUTHRUNNER_PROVIDER_FREE_CANONICAL_REPLAY_DATETIME_REPAIR"
+        "V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
         in (runtime_status["last_checkpoint_commit_scope"])
     )
-    assert "exact canonical-byte equality" in runtime_status["last_checkpoint_commit_scope"]
+    assert "runtime output-token parity" in runtime_status["last_checkpoint_commit_scope"]
     assert "operator_results" in runtime_status["last_checkpoint_commit_scope"]
-    assert (
-        "later operator-supplied evidence reports"
-        in (runtime_status["last_checkpoint_commit_scope"])
-    )
-    assert "without rerun or new spend" in runtime_status["last_checkpoint_commit_scope"]
-    assert "zero AUTHRUNNER commands are current" in runtime_status["last_checkpoint_commit_scope"]
+    assert "provider/network execution" in runtime_status["last_checkpoint_commit_scope"]
+    assert "operator action are excluded" in runtime_status["last_checkpoint_commit_scope"]
+    planconstraints_status = runtime_status["planconstraints_provider_free_route_admission"]
+    assert planconstraints_status == {
+        "ticket": "V3-PLANCONSTRAINTS-001",
+        "status": "COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "source_checkpoint_commit": CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+        "source_checkpoint_parent": CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT,
+        "source_checkpoint_subject": "Enforce route constraint parity",
+        "source_checkpoint_exact_path_count": 33,
+        "source_checkpoint_pushed": False,
+        "source_checkpoint_remote_resolved": False,
+        "selection_plan_schema_version": "1.4",
+        "selection_plan_raw_sha256": hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest(),
+        "selection_plan_sha256": CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256,
+        "candidate_selection_plan_schema_raw_sha256": (
+            "d271ed3ce6ccde084653b9daaf4d56e5573c6f64a7a62f9bf198ce9cdf16b3b5"
+        ),
+        "authenticated_runner_smoke_evidence_bundle_schema_raw_sha256": (
+            "34f264a5fa9ae55ba6d0c02d2e1f78c81aa4abf2c19ab50b6366c2c4d6e75404"
+        ),
+        "shared_route_constraint_profile_count": 1,
+        "shared_route_constraint_predicate_count": 29,
+        "shared_route_constraint_profile_sha256": (
+            "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82"
+        ),
+        "selection_discovery_registry_candidate_judge_and_runtime_parity_bound": True,
+        "runtime_required_output_tokens_bound_to_serialized_max_tokens": True,
+        "full_admission_status": "BLOCKED_FAIL_CLOSED_TYPED_UNAVAILABLE_EVIDENCE",
+        "typed_unavailable_requirements": [
+            "EMPIRICAL_SCHEMA_VALIDATION",
+            "RUNTIME_TOKEN_DETAIL_CONVENTION",
+        ],
+        "changed_surface_tests_passed": 951,
+        "disjoint_adjacent_tests_passed": 201,
+        "generated_inventory_and_schema_tests_passed": 57,
+        "focused_route_constraint_and_admission_tests_passed": 111,
+        "actual_request_body_profile_test_passed": 1,
+        "ruff_check": "PASS",
+        "ruff_format_check": "PASS_534_FILES_ALREADY_FORMATTED",
+        "strict_mypy_source_files": 210,
+        "strict_mypy": "PASS",
+        "canonical_generator_write_and_verify": "PASS",
+        "pip_check": "PASS_NO_BROKEN_REQUIREMENTS",
+        "diff_integrity": "PASS",
+        "independent_mutation_probe_count": 1012,
+        "independent_import_order_count": 6,
+        "independent_review": "PASS_NO_BLOCKER_OR_HIGH",
+        "provider_or_network_accessed": False,
+        "secret_material_read": False,
+        "operator_private_ledger_accessed_or_mutated": False,
+        "campaign_or_operator_action_executed": False,
+        "runtime_authority": False,
+        "historical_repository_full_suite_status": "INCOMPLETE_NO_PASS_CREDIT",
+        "historical_repository_full_suite_passed": 1492,
+        "historical_repository_full_suite_skipped": 25,
+        "historical_repository_full_suite_failed": 1,
+    }
     assert runtime_status["autorun_status"] == (
-        "PAUSED_AFTER_C627F2D_INDEX_19_OPERATOR_REPORTED_VALID_NONCREDITING_"
-        "NONAUTHORIZING_OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
+        "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
+        "AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
     )
     assert runtime_status["autorun_status_evidence_scope"] == (
-        "OPERATOR_RESULTS_4616C5A_OFFLINE_REPLAY_NONAUTHORIZING_NOT_INDEPENDENTLY_"
-        "AUTHENTICATED_BY_CODEX"
+        "LOCAL_PROVIDER_FREE_ROUTE_CONSTRAINT_CHECKPOINT_7EF4717_PLUS_LAST_RECONCILED_"
+        "AUTHRUNNER_OPERATOR_REPLAY_EVIDENCE_NONAUTHORIZING_NOT_INDEPENDENTLY_AUTHENTICATED_"
+        "BY_CODEX; CURRENT_USER_OWNED_OPERATOR_FILE_DRIFTED_AND_WAS_NOT_OPENED_OR_RECONCILED_"
+        "FOR_THIS_SOURCE_ONLY_TICKET"
     )
     assert (
         runtime_status["autorun_status_operator_evidence_independently_authenticated_by_codex"]
@@ -1887,20 +2082,17 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "PAUSED_AFTER_C627F2D_INDEX_19_VALID_NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_"
         "ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
     )
-    assert runtime_status["current_ticket"] == "V3-AUTHRUNNER-001"
-    assert runtime_status["active_provider_free_work"] == {
-        "ticket": "V3-AUTHRUNNER-001",
-        "slice": (
-            "PROVIDER_FREE_CANONICAL_REPLAY_DATETIME_CONTRACT_AT_C627F2D_AFTER_03D6E8A_"
-            "INDEX_19_SMOKE"
-        ),
+    assert runtime_status["current_ticket"] == "V3-PLANCONSTRAINTS-001"
+    assert runtime_status["last_completed_provider_free_work"] == {
+        "ticket": "V3-PLANCONSTRAINTS-001",
+        "slice": "V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY_AT_7EF4717",
         "status": (
-            "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_REPLAY_REPAIR_OVERALL_PARTIAL_"
-            "BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS"
+            "PLANCONSTRAINTS_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTHRUNNER_OVERALL_"
+            "PARTIAL_BLOCKED_SAFETY_ZERO_CURRENT_COMMANDS"
         ),
         "next_slice": (
-            "PROVIDER_FREE_V3_PLANCONSTRAINTS_001; NO_OPERATOR_ACTION_AUTHORIZED; "
-            "NEXT_INDEX_NOT_STATED"
+            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_PENDING_SEPARATE_AUTHORITATIVE_EVIDENCE; "
+            "NO_OPERATOR_ACTION_OR_INDEX_INFERENCE; AUTONOMY_PHASE_2_PAUSED"
         ),
         "provider_access_authorized": False,
         "secret_access_authorized": False,
@@ -1911,8 +2103,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "operator_command_execution_authorized": False,
         "parked_ticket": "V3-AUTONOMY-001",
         "parked_ticket_status": (
-            "IN_PROGRESS_PHASE_2_PAUSED_WHILE_PROVIDER_FREE_V3_PLANCONSTRAINTS_001_IS_"
-            "CURRENT_PRIORITY_NO_EXTERNAL_SEQUENCE_OR_INDEX_AUTHORIZED"
+            "IN_PROGRESS_PHASE_2_PAUSED_PENDING_SEPARATE_AUTHRUNNER_AUTHORITATIVE_"
+            "EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX_AUTHORIZED"
         ),
         "historical_park_reason": "TIME_SENSITIVE_INDEXED_EXTERNAL_SEQUENCE_ENDED",
     }
@@ -1922,13 +2114,14 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "implementation_commit": HISTORICAL_PHASE_ZERO_CHECKPOINT,
         "implementation_commit_pushed": False,
         "implementation_commit_remote_resolved": False,
-        "current_reconciliation_commit": CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT,
+        "current_reconciliation_commit": CURRENT_PLANCONSTRAINTS_CHECKPOINT,
         "current_reconciliation_commit_pushed": False,
         "current_reconciliation_commit_remote_resolved": False,
-        "authrunner_entrypoint_successor_path_count": 3,
+        "historical_c627_authrunner_entrypoint_successor_path_count": 3,
+        "current_reconciliation_exact_path_count": 33,
         "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
-        "artifact_reconciled_for_slice": "AUTHRUNNER_PROVIDER_FREE_CANONICAL_REPLAY_DATETIME_REPAIR",
+        "artifact_reconciled_for_slice": "V3_PLANCONSTRAINTS_PROVIDER_FREE_ROUTE_CONSTRAINT_PARITY",
         "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
         "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
         "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
@@ -1939,9 +2132,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "67f1ff32913327913ab19adbe60ff54263bf0fcb347304b151bd009311cfe1b0"
         ),
         "inventory_sha256": AUTONOMY_INVENTORY_SHA256,
-        "source_count": 3649,
-        "source_occurrence_count": 3652,
-        "gate_source_count": 3606,
+        "source_count": 3651,
+        "source_occurrence_count": 3654,
+        "gate_source_count": 3608,
         "non_gating_source_count": 43,
         "source_kind_count": 13,
         "logical_gate_count": 35,
@@ -1957,9 +2150,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PAUSED_PROVIDER_FREE_V3_PLANCONSTRAINTS_001_FIRST_NO_EXTERNAL_SEQUENCE_OR_INDEX"
+            "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PENDING_SEPARATE_AUTHRUNNER_"
+            "AUTHORITATIVE_EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
-        "current_execution_next_action": "PROVIDER_FREE_V3_PLANCONSTRAINTS_001",
+        "current_execution_next_action": (
+            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
+        ),
     }
     assert runtime_status["managed_toolchain_phase_one"] == {
         "status": "COMPLETE_NONAUTHORIZING",
@@ -1995,9 +2191,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PAUSED_PROVIDER_FREE_V3_PLANCONSTRAINTS_001_FIRST_NO_EXTERNAL_SEQUENCE_OR_INDEX"
+            "PAUSED_AFTER_V3_PLANCONSTRAINTS_001_COMPLETE_PENDING_SEPARATE_AUTHRUNNER_"
+            "AUTHORITATIVE_EVIDENCE_NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
-        "current_execution_next_action": "PROVIDER_FREE_V3_PLANCONSTRAINTS_001",
+        "current_execution_next_action": (
+            "KEEP_AUTHRUNNER_PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
+        ),
     }
     assert "next_slice" not in phase_zero
     assert "next_slice" not in runtime_status["managed_toolchain_phase_one"]
@@ -2016,9 +2215,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert autonomy_inventory["source_universe_sha256"] == AUTONOMY_SOURCE_UNIVERSE_SHA256
     assert autonomy_inventory["inventory_sha256"] == AUTONOMY_INVENTORY_SHA256
-    assert autonomy_inventory["source_count"] == 3649
-    assert autonomy_inventory["source_occurrence_count"] == 3652
-    assert autonomy_inventory["gate_source_count"] == 3606
+    assert autonomy_inventory["source_count"] == 3651
+    assert autonomy_inventory["source_occurrence_count"] == 3654
+    assert autonomy_inventory["gate_source_count"] == 3608
     assert autonomy_inventory["logical_gate_count"] == 35
     assert autonomy_inventory["unsatisfied_gate_count"] == 29
     assert autonomy_inventory["current_manual_gate_count"] == 15
@@ -2079,14 +2278,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert runtime_status["last_validation"]["post_c627_new_spend"] is False
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
-    assert CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT in resume_action
-    assert HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT in resume_action
-    assert "VALID / NONCREDITING / NONAUTHORIZING under offline replay" in resume_action
-    assert "without rerun or new spend" in resume_action
-    assert "25 entries / 0.396223 USD" in resume_action
-    assert "four entries / 0.39622262 USD" in resume_action
-    assert "next unused index is not stated" in resume_action
-    assert "provider-free V3-PLANCONSTRAINTS-001" in resume_action
+    assert CURRENT_PLANCONSTRAINTS_CHECKPOINT in resume_action
+    assert HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT in resume_action
+    assert "V3-PLANCONSTRAINTS-001 is already complete provider-free" in resume_action
+    assert "FULL remains fail-closed on typed UNAVAILABLE" in resume_action
+    assert "separate authoritative AUTHRUNNER evidence" in resume_action
+    assert "no next index is stated or inferred" in resume_action
     assert "No AUTHRUNNER/operator command is current" in resume_action
     assert "V3-AUTONOMY-001 Phase 2 is paused" in resume_action
     pause_state = runtime_status["pause_state"]
@@ -2260,19 +2457,21 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         ]
         is True
     )
-    assert receipt_scaffold["current_canonical_replay_checkpoint"] == (
-        CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+    assert receipt_scaffold["historical_c627_canonical_replay_checkpoint"] == (
+        HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT
     )
-    assert receipt_scaffold["current_canonical_replay_parent_checkpoint"] == (
+    assert receipt_scaffold["historical_c627_canonical_replay_parent_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT
     )
-    assert receipt_scaffold["current_canonical_replay_owned_path_count"] == 3
-    assert receipt_scaffold["current_canonical_replay_runtime_tests_passed"] == 95
-    assert receipt_scaffold["current_canonical_replay_adjacent_tests_passed"] == 111
-    assert receipt_scaffold["current_canonical_replay_retained_authrunner_tests_passed"] == 789
-    assert receipt_scaffold["current_canonical_replay_operator_reported_valid"] is True
-    assert receipt_scaffold["current_canonical_replay_provider_rerun_executed"] is False
-    assert receipt_scaffold["current_canonical_replay_new_spend_incurred"] is False
+    assert receipt_scaffold["historical_c627_canonical_replay_owned_path_count"] == 3
+    assert receipt_scaffold["historical_c627_canonical_replay_runtime_tests_passed"] == 95
+    assert receipt_scaffold["historical_c627_canonical_replay_adjacent_tests_passed"] == 111
+    assert (
+        receipt_scaffold["historical_c627_canonical_replay_retained_authrunner_tests_passed"] == 789
+    )
+    assert receipt_scaffold["historical_c627_canonical_replay_operator_reported_valid"] is True
+    assert receipt_scaffold["historical_c627_canonical_replay_provider_rerun_executed"] is False
+    assert receipt_scaffold["historical_c627_canonical_replay_new_spend_incurred"] is False
     assert receipt_scaffold["all_or_none_composite_consumption"] is True
     assert receipt_scaffold["same_client_transport_task_thread_pid_and_ledger_custody"] is True
     assert receipt_scaffold[
@@ -2304,19 +2503,21 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "DELIBERATE_INTROSPECTIVE_WRITES" in receipt_scaffold["threat_model_excluded"]
     assert "TRACING_PROFILING_NATIVE_MEMORY" in receipt_scaffold["threat_model_excluded"]
     assert receipt_scaffold["runtime_authority"] is False
-    current_receipt = exact_status["current_receipt_composite_checkpoint"]
-    assert current_receipt["checkpoint_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
-    assert current_receipt["parent_commit"] == (
+    historical_c627_receipt = exact_status["historical_c627_receipt_composite_checkpoint"]
+    assert historical_c627_receipt["checkpoint_commit"] == HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT
+    assert historical_c627_receipt["parent_commit"] == (
         HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT
     )
-    assert current_receipt["owned_path_count"] == 3
-    assert current_receipt["owned_paths"] == [
+    assert historical_c627_receipt["owned_path_count"] == 3
+    assert historical_c627_receipt["owned_paths"] == [
         "docs/remediation/v3/autonomy_gate_inventory.json",
         "src/mmaudit/models/authenticated_runner_smoke.py",
         "tests/unit/test_authenticated_runner_smoke_runtime.py",
     ]
-    assert current_receipt["path_sha256"] == {
-        "docs/remediation/v3/autonomy_gate_inventory.json": AUTONOMY_INVENTORY_RAW_SHA256,
+    assert historical_c627_receipt["path_sha256"] == {
+        "docs/remediation/v3/autonomy_gate_inventory.json": (
+            HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256
+        ),
         "src/mmaudit/models/authenticated_runner_smoke.py": (
             "27e70a3c17ef5f03c503e594bca2c3e433fb2c4193de772eb7be829592c3555a"
         ),
@@ -2324,72 +2525,100 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "58eab4a75a0a944a2290789570aa410f26b2e0471b215cce45622076ad892d0f"
         ),
     }
-    assert current_receipt["receipt_state_seal_hotfix_checkpoint"] == (
+    assert historical_c627_receipt["receipt_state_seal_hotfix_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_RECEIPT_STATE_SEAL_CHECKPOINT
     )
-    assert current_receipt["receipt_state_seal_hotfix_parent_checkpoint"] == (
+    assert historical_c627_receipt["receipt_state_seal_hotfix_parent_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_RECEIPT_COMPOSITE_CHECKPOINT
     )
-    assert current_receipt["receipt_state_seal_hotfix_owned_path_count"] == 4
-    assert current_receipt["base_receipt_composite_checkpoint"] == (
+    assert historical_c627_receipt["receipt_state_seal_hotfix_owned_path_count"] == 4
+    assert historical_c627_receipt["base_receipt_composite_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_RECEIPT_COMPOSITE_CHECKPOINT
     )
-    assert current_receipt["base_receipt_composite_parent_checkpoint"] == (
+    assert historical_c627_receipt["base_receipt_composite_parent_checkpoint"] == (
         AUTHRUNNER_RECEIPT_COMPOSITE_PARENT_CHECKPOINT
     )
-    assert current_receipt["base_receipt_composite_owned_path_count"] == 14
-    assert current_receipt["operator_result_predates_checkpoint"] is False
-    assert current_receipt["operator_result_postdates_checkpoint"] is True
-    assert current_receipt["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
-    assert current_receipt["current_operator_results_bytes"] == 115_171
-    assert current_receipt["current_operator_results_lines"] == 2_111
-    assert current_receipt["operator_results_in_checkpoint"] is False
-    assert current_receipt["generic_and_release_parity"] is True
-    assert current_receipt["historical_receipt_state_seal_focused_tests_passed"] == 785
+    assert historical_c627_receipt["base_receipt_composite_owned_path_count"] == 14
+    assert historical_c627_receipt["operator_result_predates_checkpoint"] is False
+    assert historical_c627_receipt["operator_result_postdates_checkpoint"] is True
     assert (
-        current_receipt["historical_receipt_state_seal_local_numeric_loopback_httpx_tests_passed"]
+        historical_c627_receipt["last_reconciled_operator_results_sha256"]
+        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    )
+    assert historical_c627_receipt["last_reconciled_operator_results_bytes"] == 115_171
+    assert historical_c627_receipt["last_reconciled_operator_results_lines"] == 2_111
+    assert historical_c627_receipt["operator_results_in_checkpoint"] is False
+    assert historical_c627_receipt["generic_and_release_parity"] is True
+    assert historical_c627_receipt["historical_receipt_state_seal_focused_tests_passed"] == 785
+    assert (
+        historical_c627_receipt[
+            "historical_receipt_state_seal_local_numeric_loopback_httpx_tests_passed"
+        ]
         == 1
     )
-    assert current_receipt["historical_receipt_state_seal_independent_guard_root_count"] == 47
     assert (
-        current_receipt["historical_receipt_state_seal_independent_reachable_function_state_count"]
+        historical_c627_receipt["historical_receipt_state_seal_independent_guard_root_count"] == 47
+    )
+    assert (
+        historical_c627_receipt[
+            "historical_receipt_state_seal_independent_reachable_function_state_count"
+        ]
         == 1071
     )
-    assert current_receipt["current_authenticated_runner_smoke_runtime_tests_passed"] == 95
     assert (
-        current_receipt["current_adjacent_cli_durable_inventory_release_schema_tests_passed"] == 111
+        historical_c627_receipt["historical_c627_authenticated_runner_smoke_runtime_tests_passed"]
+        == 95
     )
-    assert current_receipt["current_retained_exact_authrunner_matrix_tests_passed"] == 789
     assert (
-        current_receipt["current_retained_exact_authrunner_matrix_known_deprecation_warnings"] == 2
+        historical_c627_receipt[
+            "historical_c627_adjacent_cli_durable_inventory_release_schema_tests_passed"
+        ]
+        == 111
     )
-    assert current_receipt["full_suite_status"] == (
+    assert (
+        historical_c627_receipt["historical_c627_retained_exact_authrunner_matrix_tests_passed"]
+        == 789
+    )
+    assert (
+        historical_c627_receipt[
+            "historical_c627_retained_exact_authrunner_matrix_known_deprecation_warnings"
+        ]
+        == 2
+    )
+    assert historical_c627_receipt["full_suite_status"] == (
         "INCOMPLETE_PREEXISTING_DETERMINISTIC_FAILURE_NO_PASS_CREDIT"
     )
-    assert current_receipt["full_suite_passed_before_failure"] == 1492
-    assert current_receipt["full_suite_skipped_before_failure"] == 25
-    assert current_receipt["full_suite_failed"] == 1
-    assert current_receipt["full_suite_failure_reproduced_on_untouched_parent"] is True
-    assert current_receipt["historical_index_14_metadata_gate_status_at_base_checkpoint"] == (
-        "VALID_OPERATOR_REPORTED_NONAUTHORIZING_AFTER_R15_JUDGE_REFREEZES"
-    )
-    assert current_receipt["historical_paid_launch_status_at_base_checkpoint"] == (
+    assert historical_c627_receipt["full_suite_passed_before_failure"] == 1492
+    assert historical_c627_receipt["full_suite_skipped_before_failure"] == 25
+    assert historical_c627_receipt["full_suite_failed"] == 1
+    assert historical_c627_receipt["full_suite_failure_reproduced_on_untouched_parent"] is True
+    assert historical_c627_receipt[
+        "historical_index_14_metadata_gate_status_at_base_checkpoint"
+    ] == ("VALID_OPERATOR_REPORTED_NONAUTHORIZING_AFTER_R15_JUDGE_REFREEZES")
+    assert historical_c627_receipt["historical_paid_launch_status_at_base_checkpoint"] == (
         "FAILED_SAFE_PRETRANSPORT_PROVIDER_RECEIPT_STATE_SEAL"
     )
-    assert current_receipt["historical_paid_launch_failure_at_base_checkpoint"] == (
+    assert historical_c627_receipt["historical_paid_launch_failure_at_base_checkpoint"] == (
         "provider transport receipt cannot seal owned request state"
     )
-    assert current_receipt["historical_provider_completion_or_charge_at_base_checkpoint"] is False
-    assert current_receipt["historical_ledger_changed_at_base_checkpoint"] is False
-    assert current_receipt["historical_index_14_consumed_at_base_checkpoint"] is False
-    assert current_receipt["historical_bundle_published_at_base_checkpoint"] is False
-    assert current_receipt["provider_free_receipt_state_seal_hotfix_validated"] is True
-    assert current_receipt["historical_live_evidence_scope"] == (
+    assert (
+        historical_c627_receipt["historical_provider_completion_or_charge_at_base_checkpoint"]
+        is False
+    )
+    assert historical_c627_receipt["historical_ledger_changed_at_base_checkpoint"] is False
+    assert historical_c627_receipt["historical_index_14_consumed_at_base_checkpoint"] is False
+    assert historical_c627_receipt["historical_bundle_published_at_base_checkpoint"] is False
+    assert historical_c627_receipt["provider_free_receipt_state_seal_hotfix_validated"] is True
+    assert historical_c627_receipt["historical_live_evidence_scope"] == (
         "HISTORICAL_POST_68126E0_THROUGH_03D6E8A_GENERATION_NOT_POST_C627_PROVIDER_EXECUTION"
     )
-    assert current_receipt["historical_post_68126e0_provider_call_executed"] is True
-    assert current_receipt["historical_post_68126e0_receipt_state_seal_cleared_live"] is True
-    assert current_receipt["historical_3a_structured_output_routing_negative_executed"] is True
+    assert historical_c627_receipt["historical_post_68126e0_provider_call_executed"] is True
+    assert (
+        historical_c627_receipt["historical_post_68126e0_receipt_state_seal_cleared_live"] is True
+    )
+    assert (
+        historical_c627_receipt["historical_3a_structured_output_routing_negative_executed"] is True
+    )
     for former_unscoped_live_key in (
         "post_hotfix_provider_call_executed",
         "post_hotfix_receipt_state_seal_cleared_live",
@@ -2399,122 +2628,144 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "production_strong_origin_positive_operator_reported",
         "actual_provider_tls_private_response_graph_operator_reported",
     ):
-        assert former_unscoped_live_key not in current_receipt
-    assert current_receipt["clause_level_diagnostic_source_checkpoint"] == (
+        assert former_unscoped_live_key not in historical_c627_receipt
+    assert historical_c627_receipt["clause_level_diagnostic_source_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_STRUCTURED_OUTPUT_DIAGNOSTIC_CHECKPOINT
     )
-    assert current_receipt["clause_level_diagnostic_owned_path_count"] == 5
-    assert current_receipt["clause_level_diagnostic_exact_matrix_tests_passed"] == 789
-    assert current_receipt["clause_level_diagnostic_adjacent_model_benchmark_tests_passed"] == 26
-    assert current_receipt["clause_level_diagnostic_independent_tests_passed"] == 564
-    assert current_receipt["clause_level_diagnostic_independent_guard_root_count"] == 47
+    assert historical_c627_receipt["clause_level_diagnostic_owned_path_count"] == 5
+    assert historical_c627_receipt["clause_level_diagnostic_exact_matrix_tests_passed"] == 789
     assert (
-        current_receipt["clause_level_diagnostic_independent_reachable_function_state_count"]
+        historical_c627_receipt["clause_level_diagnostic_adjacent_model_benchmark_tests_passed"]
+        == 26
+    )
+    assert historical_c627_receipt["clause_level_diagnostic_independent_tests_passed"] == 564
+    assert historical_c627_receipt["clause_level_diagnostic_independent_guard_root_count"] == 47
+    assert (
+        historical_c627_receipt[
+            "clause_level_diagnostic_independent_reachable_function_state_count"
+        ]
         == 1072
     )
-    assert current_receipt["historical_required_provider_parameters_join_checkpoint"] == (
+    assert historical_c627_receipt["historical_required_provider_parameters_join_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT
     )
-    assert current_receipt["historical_required_provider_parameters_join_parent_checkpoint"] == (
-        HISTORICAL_AUTHRUNNER_STRUCTURED_OUTPUT_DIAGNOSTIC_CHECKPOINT
-    )
-    assert current_receipt["historical_required_provider_parameters_join_owned_path_count"] == 5
+    assert historical_c627_receipt[
+        "historical_required_provider_parameters_join_parent_checkpoint"
+    ] == (HISTORICAL_AUTHRUNNER_STRUCTURED_OUTPUT_DIAGNOSTIC_CHECKPOINT)
     assert (
-        current_receipt[
+        historical_c627_receipt["historical_required_provider_parameters_join_owned_path_count"]
+        == 5
+    )
+    assert (
+        historical_c627_receipt[
             "historical_required_provider_parameters_join_exact_authrunner_matrix_tests_passed"
         ]
         == 789
     )
     assert (
-        current_receipt[
+        historical_c627_receipt[
             "historical_required_provider_parameters_join_request_cost_preview_tests_passed"
         ]
         == 19
     )
     assert (
-        current_receipt["historical_required_provider_parameters_join_model_benchmark_tests_passed"]
+        historical_c627_receipt[
+            "historical_required_provider_parameters_join_model_benchmark_tests_passed"
+        ]
         == 26
     )
     assert (
-        current_receipt[
+        historical_c627_receipt[
             "historical_required_provider_parameters_join_overlapping_usage_plus_preview_tests_passed"
         ]
         == 185
     )
     assert (
-        current_receipt[
+        historical_c627_receipt[
             "historical_required_provider_parameters_join_overlapping_usage_plus_preview_is_additive"
         ]
         is False
     )
     assert (
-        current_receipt["historical_required_provider_parameters_join_independent_guard_root_count"]
+        historical_c627_receipt[
+            "historical_required_provider_parameters_join_independent_guard_root_count"
+        ]
         == 47
     )
     assert (
-        current_receipt[
+        historical_c627_receipt[
             "historical_required_provider_parameters_join_independent_reachable_function_state_count"
         ]
         == 1073
     )
-    assert current_receipt["historical_generation_provider_call_executed"] is True
-    assert current_receipt["post_c627_provider_call_executed"] is False
-    assert current_receipt["current_complete_smoke_run_index"] == 19
-    assert current_receipt["current_complete_smoke_status"] == (
+    assert historical_c627_receipt["historical_generation_provider_call_executed"] is True
+    assert historical_c627_receipt["post_c627_provider_call_executed"] is False
+    assert historical_c627_receipt["last_reconciled_complete_smoke_run_index"] == 19
+    assert historical_c627_receipt["last_reconciled_complete_smoke_status"] == (
         "COMPLETE_NONCREDITING_NONAUTHORIZING"
     )
-    assert current_receipt["current_complete_smoke_bundle_path"] == (
+    assert historical_c627_receipt["last_reconciled_complete_smoke_bundle_path"] == (
         "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260824-s19.json"
     )
-    assert current_receipt["current_complete_smoke_bundle_sha256"] == (
+    assert historical_c627_receipt["last_reconciled_complete_smoke_bundle_sha256"] == (
         "e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703"
     )
-    assert current_receipt["current_complete_smoke_bundle_bytes"] == 282_802
-    assert current_receipt["current_complete_smoke_canonical_replay_passed"] is True
-    assert current_receipt["current_complete_smoke_canonical_replay_status"] == (
+    assert historical_c627_receipt["last_reconciled_complete_smoke_bundle_bytes"] == 282_802
+    assert historical_c627_receipt["last_reconciled_complete_smoke_canonical_replay_passed"] is True
+    assert historical_c627_receipt["last_reconciled_complete_smoke_canonical_replay_status"] == (
         "VALID_NONCREDITING_NONAUTHORIZING_OPERATOR_REPORTED"
     )
-    assert current_receipt["historical_pre_c627_complete_smoke_canonical_replay_failure"] == (
-        "authenticated runner smoke bundle failed canonical replay"
-    )
-    assert current_receipt[
+    assert historical_c627_receipt[
+        "historical_pre_c627_complete_smoke_canonical_replay_failure"
+    ] == ("authenticated runner smoke bundle failed canonical replay")
+    assert historical_c627_receipt[
         "historical_pre_c627_complete_smoke_canonical_replay_underlying_error"
     ] == ("AuthenticatedRunnerSmokeError: authenticated runner smoke bytes do not validate")
-    assert current_receipt["current_offline_replay_caused_provider_rerun"] is False
-    assert current_receipt["current_offline_replay_caused_new_spend"] is False
-    assert current_receipt["current_offline_replay_independently_authenticated_by_codex"] is False
-    assert current_receipt["current_next_unused_run_index"] is None
-    assert current_receipt["current_next_unused_run_index_stated"] is False
-    assert current_receipt["historical_3a_live_clause_specific_negative_executed"] is True
-    assert current_receipt["historical_3a_live_clause_specific_diagnostic"] == (
+    assert historical_c627_receipt["historical_c627_offline_replay_caused_provider_rerun"] is False
+    assert historical_c627_receipt["historical_c627_offline_replay_caused_new_spend"] is False
+    assert (
+        historical_c627_receipt[
+            "historical_c627_offline_replay_independently_authenticated_by_codex"
+        ]
+        is False
+    )
+    assert historical_c627_receipt["last_reconciled_next_unused_run_index"] is None
+    assert historical_c627_receipt["last_reconciled_next_unused_run_index_stated"] is False
+    assert historical_c627_receipt["historical_3a_live_clause_specific_negative_executed"] is True
+    assert historical_c627_receipt["historical_3a_live_clause_specific_diagnostic"] == (
         "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
     )
-    assert current_receipt["historical_03d_production_strong_origin_positive_operator_reported"]
-    assert current_receipt[
+    assert historical_c627_receipt[
+        "historical_03d_production_strong_origin_positive_operator_reported"
+    ]
+    assert historical_c627_receipt[
         "historical_03d_actual_provider_tls_private_response_graph_operator_reported"
     ]
     assert (
-        current_receipt[
+        historical_c627_receipt[
             "operator_reported_production_evidence_independently_authenticated_by_codex"
         ]
         is False
     )
-    assert current_receipt["complete_provider_compatibility_proven"] is False
-    assert current_receipt["full_publication_rollback_joins_behaviorally_executed"] is False
-    assert current_receipt["provider_access_authorized"] is False
-    assert current_receipt["paid_authority"] is False
-    assert current_receipt["runtime_authority"] is False
+    assert historical_c627_receipt["complete_provider_compatibility_proven"] is False
+    assert historical_c627_receipt["full_publication_rollback_joins_behaviorally_executed"] is False
+    assert historical_c627_receipt["provider_access_authorized"] is False
+    assert historical_c627_receipt["paid_authority"] is False
+    assert historical_c627_receipt["runtime_authority"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is True
-    operator_reconciliation = runtime_status["last_validation"]["operator_reconciliation"]
-    assert operator_reconciliation["operator_results_sha256"] == OPERATOR_RESULTS_SHA256
+    operator_reconciliation = runtime_status["last_validation"]["last_reconciled_operator_evidence"]
+    assert (
+        operator_reconciliation["operator_results_sha256"]
+        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    )
     assert operator_reconciliation["operator_results_bytes"] == 115_171
     assert operator_reconciliation["operator_results_lines"] == 2_111
     assert operator_reconciliation["generation_source_checkpoint"] == (
         OPERATOR_INDEX_19_SOURCE_CHECKPOINT
     )
     assert operator_reconciliation["offline_replay_checkpoint"] == (
-        CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+        HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT
     )
     assert operator_reconciliation["smoke_run_index"] == 19
     assert operator_reconciliation["smoke_status"] == (
@@ -2614,6 +2865,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "checkpoint_remote_resolved": False,
         "durable_schema_version": "1.2",
         "durable_schema_raw_sha256": (
+            "34f264a5fa9ae55ba6d0c02d2e1f78c81aa4abf2c19ab50b6366c2c4d6e75404"
+        ),
+        "historical_pre_planconstraints_durable_schema_raw_sha256": (
             "2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d"
         ),
         "required_cli_argument": True,
@@ -2678,13 +2932,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert former_unscoped_access_key not in smoke_status["smoke_run_index_contract"]
     assert smoke_status["real_execution_status"] == (
         "HISTORICAL_03D6E8A_INDEX_19_COMPLETE_NONCREDITING_NONAUTHORIZING_SEALED_BUNDLE_"
-        "CURRENT_C627F2D_OFFLINE_REPLAY_OPERATOR_REPORTED_VALID_NO_RERUN_NO_NEW_SPEND"
+        "HISTORICAL_C627F2D_OFFLINE_REPLAY_OPERATOR_REPORTED_VALID_NO_RERUN_NO_NEW_SPEND"
     )
     assert smoke_status["real_command_emission_status"] == (
         "ZERO_CURRENT_AUTHRUNNER_COMMANDS_NEXT_UNUSED_INDEX_NOT_STATED_PAID_NAMESPACE_NOT_AUTHORITY"
     )
     assert smoke_status["offline_verifier_command_emission_status"] == (
-        "HISTORICAL_OPERATOR_EXECUTED_CURRENT_RESULT_REPORTED_VALID_NONCREDITING_"
+        "HISTORICAL_OPERATOR_EXECUTED_LAST_RECONCILED_RESULT_REPORTED_VALID_NONCREDITING_"
         "NONAUTHORIZING_ZERO_CURRENT_COMMANDS"
     )
     assert smoke_status["live_route_preflight_command_emission_status"] == (
@@ -2692,15 +2946,18 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_NEXT_UNUSED_INDEX_NOT_STATED"
     )
     assert smoke_status["full_24_case_real_command_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
-    assert smoke_status["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
-    assert smoke_status["current_operator_results_bytes"] == 115_171
-    assert smoke_status["current_operator_results_lines"] == 2_111
-    complete_smoke = smoke_status["latest_complete_smoke_offline_replay"]
+    assert (
+        smoke_status["last_reconciled_operator_results_sha256"]
+        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    )
+    assert smoke_status["last_reconciled_operator_results_bytes"] == 115_171
+    assert smoke_status["last_reconciled_operator_results_lines"] == 2_111
+    complete_smoke = smoke_status["last_reconciled_complete_smoke_offline_replay"]
     assert complete_smoke["generation_source_checkpoint"] == (
         HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT
     )
-    assert complete_smoke["offline_replay_checkpoint"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
-    assert complete_smoke["operator_results_sha256"] == OPERATOR_RESULTS_SHA256
+    assert complete_smoke["offline_replay_checkpoint"] == HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT
+    assert complete_smoke["operator_results_sha256"] == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
     assert complete_smoke["operator_results_bytes"] == 115_171
     assert complete_smoke["operator_results_lines"] == 2_111
     assert complete_smoke["smoke_run_index"] == 19
@@ -2788,7 +3045,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert live_negative["exact_route_artifact_identities_stated_in_new_entry"] is False
     assert live_negative["run_16_terminal_status_stated"] is False
     assert (
-        live_negative["current_reserved_remaining_aggregate_call_counts_metadata_get_count_stated"]
+        live_negative[
+            "reserved_remaining_aggregate_call_counts_metadata_get_count_stated_at_that_boundary"
+        ]
         is False
     )
     assert live_negative["operator_diagnosis_independently_proven"] is False
@@ -2925,6 +3184,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "current_command": False,
         "authority": False,
     }
+    assert "34f264a5fa9ae55ba6d0c02d2e1f78c81aa4abf2c19ab50b6366c2c4d6e75404" in (model_selection)
+    assert "Historical AUTHRUNNER replay checkpoint `c627f2d" in model_selection
+    assert "Current checkpoint `c627f2d" not in model_selection
+    assert "Current `c627f2d`" not in model_selection
     assert smoke_status["zero_command_evidence_checkpoint"] == (
         "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"
     )
@@ -2949,16 +3212,17 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert smoke_status["paused_phase2_working_bytes_may_be_used"] is False
     assert smoke_status["executable_bytes_must_remain_unchanged_between_a_and_b"] is True
     assert smoke_status["paid_execution_adjacency_status"] == (
-        "HISTORICAL_INDEX_19_EXECUTION_AND_CURRENT_C627F2D_OFFLINE_REPLAY_RECORDED_"
+        "HISTORICAL_INDEX_19_EXECUTION_AND_HISTORICAL_C627F2D_OFFLINE_REPLAY_RECORDED_"
         "NONAUTHORIZING; NO_POST_C627_PROVIDER_RUN; CURRENT_ROUTE_ADJACENCY_NOT_"
         "ESTABLISHED; ZERO_CURRENT_COMMANDS; NEXT_UNUSED_INDEX_NOT_STATED"
     )
     assert smoke_status["paid_path_blocker"] == (
-        "CURRENT_C627F2D_OFFLINE_REPLAY_IS_OPERATOR_REPORTED_VALID_NONCREDITING_"
+        "HISTORICAL_C627F2D_OFFLINE_REPLAY_IS_OPERATOR_REPORTED_VALID_NONCREDITING_"
         "NONAUTHORIZING_BUT_GRANTS_NO_CAMPAIGN_AUTHORITY; COMPLETED_REAL_AUDITS_ZERO; "
-        "ONE_CASE_NOT_24; V3_PLANCONSTRAINTS_001_PENDING_PROVIDER_FREE; ZERO_CURRENT_"
-        "COMMANDS; NEXT_UNUSED_INDEX_NOT_STATED; ANY_FUTURE_OPERATOR_ACTION_REQUIRES_"
-        "SEPARATE_AUTHORIZATION"
+        "ONE_CASE_NOT_24; V3_PLANCONSTRAINTS_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
+        "AT_7EF4717; FULL_BLOCKED_TYPED_UNAVAILABLE_EMPIRICAL_SCHEMA_AND_TOKEN_DETAIL_"
+        "EVIDENCE; ZERO_CURRENT_COMMANDS; NEXT_UNUSED_INDEX_NOT_STATED; ANY_FUTURE_"
+        "OPERATOR_ACTION_REQUIRES_SEPARATE_AUTHORIZATION"
     )
     assert smoke_status["commands_must_not_be_chained"] is True
     assert smoke_status["pre_a_ledger_exactly_empty_inspection_required"] is False
@@ -3013,11 +3277,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "NOT_AUTHORIZED_ZERO_CURRENT_COMMANDS_POST_C627F2D_INDEX_19_OPERATOR_REPORTED_"
         "VALID_NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_NEXT_INDEX_NOT_STATED"
     )
-    assert smoke_status["current_offline_verifier_status"] == (
+    assert smoke_status["last_reconciled_offline_verifier_status"] == (
         "OPERATOR_REPORTED_VALID_NONCREDITING_NONAUTHORIZING_POST_C627F2D_NO_RERUN_NO_NEW_SPEND"
     )
-    assert smoke_status["current_offline_verifier_result_independently_authenticated_by_codex"] is (
-        False
+    assert (
+        smoke_status["last_reconciled_offline_verifier_result_independently_authenticated_by_codex"]
+        is False
     )
     assert smoke_status["historical_pre_c627_offline_verifier_status"] == (
         "ATTEMPTED_FAILED_SAFE_CANONICAL_REPLAY_NO_PASS_CREDIT"
@@ -3072,7 +3337,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb"
     )
     assert smoke_status["historical_component_validation_scope"] == (
-        "HISTORICAL_CHECKPOINT_LOCAL_VALIDATIONS_NOT_CURRENT_C627_VALIDATION_OR_REPOSITORY_"
+        "HISTORICAL_CHECKPOINT_LOCAL_VALIDATIONS_NOT_CURRENT_7EF4717_VALIDATION_OR_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert (
@@ -3144,7 +3409,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "NONAUTHORIZING_OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
     )
     assert exact_status["historical_component_validation_scope"] == (
-        "HISTORICAL_CHECKPOINT_LOCAL_VALIDATIONS_NOT_CURRENT_C627_VALIDATION_OR_REPOSITORY_"
+        "HISTORICAL_CHECKPOINT_LOCAL_VALIDATIONS_NOT_CURRENT_7EF4717_VALIDATION_OR_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert (
@@ -3192,7 +3457,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_NEXT_INDEX_NOT_STATED_NO_PAID_AUTHORITY"
     )
     assert exact_status["offline_smoke_verifier_command_status"] == (
-        "HISTORICAL_OPERATOR_EXECUTED_CURRENT_RESULT_REPORTED_VALID_NONCREDITING_"
+        "HISTORICAL_OPERATOR_EXECUTED_LAST_RECONCILED_RESULT_REPORTED_VALID_NONCREDITING_"
         "NONAUTHORIZING_ZERO_CURRENT_COMMANDS"
     )
     assert exact_status["real_command_emission_authorized_for_operator_review"] is False
@@ -3238,7 +3503,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert plan_entries["tencent/hy3"]["priority_rank"] == 10
     assert historical_selection["role_assignment_sha256"] == HISTORICAL_INELIGIBLE_GEMMA_ROLE_SHA256
     assert historical_selection["operator_results_binding_status"] == (
-        "UNRESOLVED_NONAUTHORIZING_CURRENT_RECORD"
+        "UNRESOLVED_NONAUTHORIZING_LAST_RECONCILED_RECORD"
     )
     assert historical_selection["replay_endpoint_tag"] == "together"
     assert historical_selection["candidate_registry_generation"] == "r7"
@@ -3255,20 +3520,65 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert historical_selection["normal_provider_free_preflight_command_currently_emitted"] is False
     assert historical_selection["current_live_route_preflight_command_emitted"] is False
     assert historical_selection["current_paid_smoke_command_emitted"] is False
-    current_successor = exact_status["current_selection_plan_checkpoint"]
-    assert current_successor["status"] == (
-        "CURRENT_NONAUTHORIZING_SELECTION_PLAN_CUSTODY_WITH_HISTORICAL_DCABE_ROUTE_EVIDENCE_ONLY"
+    historical_dcabe = exact_status["historical_dcabe_selection_plan_checkpoint"]
+    assert historical_dcabe["status"] == (
+        "HISTORICAL_NONAUTHORIZING_SELECTION_PLAN_CUSTODY_WITH_HISTORICAL_DCABE_ROUTE_EVIDENCE_ONLY"
     )
-    assert current_successor["route_evidence_scope"] == (
+    assert historical_dcabe["route_evidence_scope"] == (
         "HISTORICAL_DCABE_PLAN_BOUND_SNAPSHOT_NOT_CURRENT_ROUTE_FRESHNESS_OR_COMMAND"
+    )
+    assert historical_dcabe["selection_plan_sha256"] == (
+        "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f"
+    )
+    assert historical_dcabe["selection_plan_schema_version"] == "1.3"
+    assert historical_dcabe["checkpoint_commit"] == HISTORICAL_DCABE_SELECTION_CHECKPOINT
+    assert historical_dcabe["checkpoint_status"] == ("LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED")
+    assert historical_dcabe["historical_dcabe_plan_bound_candidate_registry"] == (
+        "candidate-registry-r9.json"
+    )
+    assert historical_dcabe["historical_dcabe_plan_bound_candidate_discovery_run"] == (
+        "authrunner-candidate-20260822-r9"
+    )
+    assert historical_dcabe["historical_dcabe_plan_bound_candidate_frozen_sha256"] == (
+        "cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad"
+    )
+    assert historical_dcabe["replay_route_selection_mode"] == (
+        "EXPLICIT_OPERATOR_CHOICE_NO_AUTOMATIC_FALLBACK"
+    )
+    assert historical_dcabe["operator_results_binding_status"] == (
+        "BOUND_NONAUTHORIZING_HISTORICAL_PLAN_RECORD"
+    )
+    assert historical_dcabe["operator_results_binding_sha256"] == (
+        "302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940"
+    )
+    assert (
+        historical_dcabe["last_reconciled_operator_results_sha256"]
+        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+    )
+    assert historical_dcabe["historical_dcabe_plan_bound_live_route_status"] == (
+        "ABSENT_AT_DCABE_PLAN_BOUNDARY_R10_R8_R8_GATE_NOT_CURRENT_FRESHNESS"
+    )
+    assert historical_dcabe["operator_command_emitted_by_dcabe_plan_checkpoint"] is False
+    assert historical_dcabe["authority"] is False
+
+    current_successor = exact_status["current_selection_plan_checkpoint"]
+    assert current_successor["status"] == "CURRENT_V1_4_NONAUTHORIZING_PLANCONSTRAINTS_CUSTODY"
+    assert current_successor["route_evidence_scope"] == (
+        "PROVIDER_FREE_STATIC_AND_REPLAY_CUSTODY_NOT_CURRENT_PROVIDER_ROUTE_FRESHNESS_"
+        "COMMAND_OR_AUTHORITY"
+    )
+    assert (
+        current_successor["selection_plan_raw_sha256"]
+        == hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest()
     )
     assert current_successor["selection_plan_sha256"] == selection_plan["plan_sha256"]
     assert current_successor["selection_plan_sha256"] == (
         CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
     )
-    assert current_successor["selection_plan_schema_version"] == "1.3"
-    assert current_successor["checkpoint_commit"] == CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
-    assert current_successor["checkpoint_status"] == ("LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED")
+    assert current_successor["selection_plan_schema_version"] == "1.4"
+    assert current_successor["checkpoint_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
+    assert current_successor["checkpoint_parent"] == CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT
+    assert current_successor["checkpoint_status"] == "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     assert current_successor["checkpoint_pushed"] is False
     assert current_successor["checkpoint_remote_resolved"] is False
     assert current_successor["role_assignment_sha256"] == (
@@ -3278,88 +3588,35 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         current_successor["role_assignment_sha256"]
         == (selection_plan["authenticated_runner_selection"]["role_assignment_sha256"])
     )
+    assert (
+        current_successor["route_predicate_profile_sha256"]
+        == (
+            selection_plan["authenticated_runner_selection"]["route_predicate_profile"][
+                "profile_sha256"
+            ]
+        )
+    )
+    assert current_successor["route_predicate_count"] == 29
     assert current_successor["required_output_mode"] == "NATIVE_JSON_SCHEMA"
     assert current_successor["required_supported_parameters"] == ["structured_outputs"]
     assert current_successor["required_reasoning_effort"] == "high"
     assert current_successor["required_completion_limit_source"] == "metadata"
+    assert current_successor["required_completion_tokens"] == 8192
+    assert current_successor["required_output_tokens"] == 4096
+    assert current_successor["reserved_reasoning_tokens"] == 4096
     assert current_successor["candidate_model_id"] == "deepseek/deepseek-v4-pro-0813"
     assert current_successor["candidate_endpoint_tag"] == "parasail/fp8"
-    assert (
-        current_successor["candidate_entry_sha256"] == CURRENT_NONAUTHORIZING_DEEPSEEK_ENTRY_SHA256
-    )
-    assert current_successor["historical_dcabe_plan_bound_candidate_registry"] == (
-        "candidate-registry-r9.json"
-    )
-    assert current_successor["historical_dcabe_plan_bound_candidate_discovery_run"] == (
-        "authrunner-candidate-20260822-r9"
-    )
-    assert current_successor["historical_dcabe_plan_bound_candidate_frozen_sha256"] == (
-        "cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad"
-    )
     assert current_successor["primary_model_id"] == "z-ai/glm-5.2"
     assert current_successor["primary_endpoint_tag"] == "sail-research/fp8"
-    assert current_successor["primary_entry_sha256"] == CURRENT_NONAUTHORIZING_ZAI_ENTRY_SHA256
-    assert (
-        current_successor["primary_entry_sha256"] == (plan_entries["z-ai/glm-5.2"]["entry_sha256"])
-    )
     assert current_successor["replay_model_id"] == "moonshotai/kimi-k3"
     assert current_successor["replay_allowed_endpoint_tags"] == ["modal/mxfp4", "phala"]
     assert current_successor["replay_route_selection_mode"] == (
-        "EXPLICIT_OPERATOR_CHOICE_NO_AUTOMATIC_FALLBACK"
+        "EXPLICIT_EXACT_ROUTE_NO_AUTOMATIC_FALLBACK"
     )
-    assert current_successor["replay_entry_sha256"] == CURRENT_NONAUTHORIZING_KIMI_ENTRY_SHA256
-    assert current_successor["operator_results_binding_status"] == (
-        "BOUND_NONAUTHORIZING_HISTORICAL_PLAN_RECORD"
-    )
-    assert current_successor["operator_results_binding_sha256"] == (
-        "302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940"
-    )
-    assert current_successor["latest_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
-    assert current_successor["operator_recommendation_authority"] is False
-    assert current_successor["documentary_lineage_status"] == "UNCONFIRMED"
-    assert current_successor["documentary_lineage_status_scope"] == "SEALED_PLAN_LOCAL_ADVISORY"
-    assert current_successor["selection_plan_distinct_root_lineages_verified"] is False
-    assert current_successor["compiled_public_lineage_status"] == (
-        "CONFIRMED_DOCUMENTARY_IDENTITY_ONLY"
-    )
-    assert (
-        current_successor["compiled_public_lineage_manifest_sha256"]
-        == CURRENT_LINEAGE_MANIFEST_SHA256
-    )
-    assert (
-        current_successor["compiled_public_lineage_semantic_bundle_sha256"]
-        == CURRENT_LINEAGE_SEMANTIC_BUNDLE_SHA256
-    )
-    assert current_successor["compiled_public_lineage_directed_independence_pairs_passed"] == 6
-    assert current_successor["documentary_lineage_capture_required"] is False
-    assert current_successor["documentary_lineage_capture_source_count"] == 17
-    assert current_successor["dcabe_plan_documentary_lineage_capture_completed"] is True
-    assert current_successor["dcabe_plan_lineage_reseal_completed"] is True
-    assert current_successor["historical_dcabe_plan_bound_discovery_evidence_present"] is True
-    assert (
-        current_successor["historical_dcabe_plan_bound_primary_r8_discovery_evidence_present"]
-        is True
-    )
-    assert (
-        current_successor["historical_dcabe_plan_bound_candidate_r9_discovery_evidence_present"]
-        is True
-    )
-    assert (
-        current_successor["historical_dcabe_plan_bound_replay_discovery_evidence_present"] is True
-    )
-    assert current_successor["historical_dcabe_plan_bound_route_discovery_was_required"] is True
-    assert current_successor["historical_dcabe_plan_bound_operationally_viable"] is False
-    assert current_successor["historical_dcabe_plan_bound_live_route_composition"] is None
-    assert current_successor["historical_dcabe_plan_bound_live_route_status"] == (
-        "ABSENT_AT_DCABE_PLAN_BOUNDARY_R10_R8_R8_GATE_NOT_CURRENT_FRESHNESS"
-    )
-    assert current_successor["historical_dcabe_plan_bound_smoke_run_index_fix_required"] is False
-    assert current_successor["smoke_run_index_fix_checkpoint"] == (
-        AUTHRUNNER_SMOKE_INDEX_IMPLEMENTATION_CHECKPOINT
-    )
-    assert current_successor["operator_command_emitted_by_dcabe_plan_checkpoint"] is False
-    assert "candidate_current_registry" not in current_successor
-    assert "current_live_route_composition" not in current_successor
+    assert current_successor["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
+    assert current_successor["token_detail_convention_disposition"] == "UNAVAILABLE"
+    assert current_successor["full_admission_authorized"] is False
+    assert current_successor["operator_command_emitted_by_checkpoint"] is False
     assert current_successor["authority"] is False
     assert "historical_full_r2_r5_r2_candidate_admission" in exact_status
     assert exact_status["zero_command_evidence_checkpoint"] == (
@@ -3377,12 +3634,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert exact_status["historical_ineligible_gemma_plan_checkpoint_pushed"] is False
     assert exact_status["historical_ineligible_gemma_plan_checkpoint_remote_verified"] is False
-    assert exact_status["selection_plan_candidate_successor_checkpoint"] == (
-        CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
+    assert exact_status["historical_dcabe_selection_plan_candidate_successor_checkpoint"] == (
+        HISTORICAL_DCABE_SELECTION_CHECKPOINT
     )
-    assert exact_status["selection_plan_candidate_successor_checkpoint_status"] == (
-        "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
-    )
+    assert exact_status[
+        "historical_dcabe_selection_plan_candidate_successor_checkpoint_status"
+    ] == ("LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED")
     assert "candidate_successor_checkpoint" not in exact_status
     assert "candidate_successor_checkpoint_status" not in exact_status
     assert exact_status["historical_revocation_cascade_validation_status"] == (
@@ -3434,12 +3691,14 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert completion_capacity["fails_before_ledger_reservation"] is True
     assert completion_capacity["operator_command_emitted_by_origin_checkpoint"] is False
     assert completion_capacity["authority"] is False
-    replay_successor = exact_status["current_selection_plan_replay_allowlist"]
+    replay_successor = exact_status["historical_dcabe_selection_plan_replay_allowlist"]
     assert replay_successor["route_evidence_scope"] == (
         "HISTORICAL_PRE_C627_PLAN_BOUND_NO_POST_C627_METADATA_OR_PROVIDER_PROOF"
     )
-    assert replay_successor["checkpoint_commit"] == CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
-    assert replay_successor["selection_plan_sha256"] == CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
+    assert replay_successor["checkpoint_commit"] == HISTORICAL_DCABE_SELECTION_CHECKPOINT
+    assert replay_successor["selection_plan_sha256"] == (
+        "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f"
+    )
     assert replay_successor["replay_allowed_endpoint_tags"] == ["modal/mxfp4", "phala"]
     assert replay_successor["explicit_operator_route_choice_required"] is True
     assert replay_successor["automatic_fallback_allowed"] is False
@@ -3471,19 +3730,24 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is True
     assert runtime_status["last_validation"]["status"] == (
-        "FOCUSED_PASS_C627F2D_INDEX_19_OPERATOR_REPORTED_VALID_NONCREDITING_"
-        "NONAUTHORIZING_FULL_SUITE_INCOMPLETE_OVERALL_PARTIAL_"
-        "BLOCKED_SAFETY"
+        "V3_PLANCONSTRAINTS_001_PROVIDER_FREE_GATES_PASS_TICKET_COMPLETE_"
+        "NONAUTHORIZING_FULL_FAIL_CLOSED_TYPED_UNAVAILABLE_AUTHRUNNER_PARTIAL_"
+        "BLOCKED_SAFETY_HISTORICAL_FULL_SUITE_INCOMPLETE"
     )
-    assert "95 PASS" in runtime_status["last_validation"]["command"]
+    assert "951 PASS" in runtime_status["last_validation"]["command"]
+    assert "201 PASS" in runtime_status["last_validation"]["command"]
+    assert "57 PASS" in runtime_status["last_validation"]["command"]
     assert "111 PASS" in runtime_status["last_validation"]["command"]
-    assert "789 PASS" in runtime_status["last_validation"]["command"]
     assert (
-        "Current exact three-path checkpoint c627f2d"
-        in (runtime_status["last_validation"]["result"])
+        "actual request-body/profile parity 1 PASS"
+        in (runtime_status["last_validation"]["command"])
     )
     assert (
-        "operator-reports that the unchanged index-19 bundle is VALID"
+        "V3-PLANCONSTRAINTS-001 is COMPLETE_PROVIDER_FREE_NONAUTHORIZING at exact "
+        "33-path source checkpoint 7ef4717" in (runtime_status["last_validation"]["result"])
+    )
+    assert (
+        "Historical c627f2d replay and operator evidence remain separate"
         in (runtime_status["last_validation"]["result"])
     )
     terminal_full_suite_attempt = runtime_status["last_validation"]["terminal_full_suite_attempt"]
@@ -3510,7 +3774,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     }
     historical_scheduler_recovery = runtime_status["historical_scheduler_full_suite_recovery"]
     assert historical_scheduler_recovery["scope"] == (
-        "HISTORICAL_SCHEDULER_RECOVERY_COMPONENT_EVIDENCE_NOT_CURRENT_C627_REPOSITORY_"
+        "HISTORICAL_SCHEDULER_RECOVERY_COMPONENT_EVIDENCE_NOT_CURRENT_7EF4717_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert historical_scheduler_recovery["status"] == "HISTORICAL_COMPLETE_COMPONENT"
@@ -3518,7 +3782,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "scheduler_full_suite_recovery" not in runtime_status
     historical_policy_validation = runtime_status["historical_policy_eligibility_core_validation"]
     assert historical_policy_validation["scope"] == (
-        "HISTORICAL_POLICY_ELIGIBILITY_COMPONENT_VALIDATION_NOT_CURRENT_C627_REPOSITORY_"
+        "HISTORICAL_POLICY_ELIGIBILITY_COMPONENT_VALIDATION_NOT_CURRENT_7EF4717_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert historical_policy_validation["status"] == ("HISTORICAL_COMPLETE_PROVIDER_FREE_MECHANISM")
@@ -3527,13 +3791,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert terminal_full_suite_attempt["terminal_full_suite_pass_credit"] is False
     historical_base_validation = exact_status["historical_base_checkpoint_validation"]
     assert historical_base_validation["scope"] == (
-        "HISTORICAL_F6ACF206_CHECKPOINT_LOCAL_VALIDATION_NOT_CURRENT_C627_REPOSITORY_"
+        "HISTORICAL_F6ACF206_CHECKPOINT_LOCAL_VALIDATION_NOT_CURRENT_7EF4717_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert historical_base_validation["terminal_full_unit_tests_passed"] == 5989
     historical_cache_validation = exact_status["historical_cache_dominance_checkpoint_validation"]
     assert historical_cache_validation["scope"] == (
-        "HISTORICAL_FD1459B_CHECKPOINT_LOCAL_VALIDATION_NOT_CURRENT_C627_REPOSITORY_"
+        "HISTORICAL_FD1459B_CHECKPOINT_LOCAL_VALIDATION_NOT_CURRENT_7EF4717_REPOSITORY_"
         "FULL_SUITE_CREDIT"
     )
     assert historical_cache_validation["terminal_full_suite_tests_passed"] == 6230
@@ -3544,7 +3808,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "historical_command_guide_successor_full_suite_attempt"
     ]
     assert historical_full_suite_attempt["scope"] == (
-        "HISTORICAL_COMMAND_GUIDE_SUCCESSOR_ATTEMPT_NOT_CURRENT_C627_REPOSITORY_FULL_SUITE_CREDIT"
+        "HISTORICAL_COMMAND_GUIDE_SUCCESSOR_ATTEMPT_NOT_CURRENT_7EF4717_REPOSITORY_FULL_SUITE_CREDIT"
     )
     assert historical_full_suite_attempt["command"] == ".venv/bin/pytest -q"
     assert historical_full_suite_attempt["started_before_final_governance_bytes"] is True
@@ -3734,8 +3998,15 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert historical_r9_sequence["existing_entry_released_or_superseded"] is False
     assert historical_r9_sequence["bundle_published"] is False
     assert historical_r9_sequence["authority"] is False
-    assert {key for key in smoke_status if key.startswith("latest_")} == {
-        "latest_complete_smoke_offline_replay"
+    assert not any(key.startswith("latest_") for key in smoke_status)
+    assert {key for key in smoke_status if key.startswith("last_reconciled_")} == {
+        "last_reconciled_operator_results_sha256",
+        "last_reconciled_operator_results_bytes",
+        "last_reconciled_operator_results_lines",
+        "last_reconciled_operator_results_status",
+        "last_reconciled_complete_smoke_offline_replay",
+        "last_reconciled_offline_verifier_status",
+        "last_reconciled_offline_verifier_result_independently_authenticated_by_codex",
     }
     assert not any(key.startswith("latest_") for key in exact_status)
     assert exact_status["historical_safety_withdrawal_checkpoint"] == (
@@ -3790,52 +4061,18 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "--replay-campaign-journal" not in smoke_real_command
     assert "--replay-portfolio" not in smoke_real_command
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
-    assert "PREFLIGHT r2/r5/r2 — **VALID**, with derived exact caps" in operator_results
-    assert "PAID SMOKE LAUNCH ATTEMPTED — failed closed" in operator_results
-    assert "PAID SMOKE LAUNCH #2 — failed closed" in operator_results
-    assert "smoke current discovery differs from its frozen exact route" in operator_results
-    assert "the token-budget mismatch from launch #1 is gone" in operator_results
-    assert "no provider completion" in operator_results
-    assert "no bundle produced" in operator_results
-    assert "naive recursive field scan" in operator_results
+    assert operator_results.strip()
     assert "cause was initially `INCONCLUSIVE`" in normalized_model_selection
     assert "naive, advisory, and nonauthorizing analysis" in normalized_model_selection
-    assert "LIVE-ROUTE PREFLIGHT **VALID** on fresh r6/r6/r2 evidence" in operator_results
-    assert "candidate=endpoint exact-model identity inventory" in operator_results
-    assert "PRIMARY judge=endpoint exact-model identity inventory" in operator_results
-    assert "Replay judge was unaffected" in operator_results
-    assert "logical_gets=15; maximum_provider_attempts=30" in operator_results
-    assert "SMOKE PREFLIGHT after token-budget fix `59f9f40` — VALID" in operator_results
-    assert "The output is byte-identical to the pre-fix preflight" in operator_results
-    assert "request and atomic global input token budgets differ" in operator_results
-    assert "before any provider request" in operator_results
-    assert "No bundle produced" in operator_results
-    assert "SMOKE PREFLIGHT after `af70559`" in operator_results
-    assert "SMOKE PREFLIGHT at checkpoint `f0a0f39` — **VALID**" in operator_results
-    assert "VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
     assert "944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19" in (model_selection)
     assert "b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d" in (model_selection)
     assert "0.21890352" in model_selection
     assert "33,621-byte operator record" in normalized_model_selection
     assert "35,771-byte operator record" in normalized_model_selection
     assert "withdrawn before execution" in normalized_model_selection
-    assert "The smoke path fails for any real registry set." in operator_results
-    assert "Not yet run:** the smoke REAL launch" in operator_results
     assert "f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57" in (model_selection)
     assert "3fc6e535d22baf9bbbdafe4ccb50f9127fdb6d5c2fba7ce0463388765d2f8436" in (model_selection)
     assert "5.27438208" in model_selection
-    assert "BOTH r5 prerequisites RUN AND PASSED" in operator_results
-    assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
-    assert "runner public lineage does not prove three distinct roots" in operator_results
-    assert "LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle" in operator_results
-    assert "AUTHRUNNER PREFLIGHT — **VALID**" in operator_results
-    assert "FAILED on unenforceable variable pricing" in operator_results
-    assert "variable endpoint pricing component cannot be provider-capped" in operator_results
-    assert "cache gate CLEARED; fails later on reasoning capability" in operator_results
-    assert "Lineage prerequisites for BOTH replacement candidates" in operator_results
-    assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
-    assert "f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e" in (operator_results)
-    assert "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da" in (operator_results)
     assert "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb" in (model_selection)
     assert "7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134" in (model_selection)
     assert "fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b" in (model_selection)
@@ -3871,9 +4108,6 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "origin/agent/v3-wip-checkpoint" in model_selection
     assert "input_cache_read" in model_selection
     assert "provider.max_price.prompt" in model_selection
-    assert "Written by the monitoring session; treat as operator-supplied evidence." in (
-        operator_results
-    )
     assert preflight_status["operator_reported_no_provider_egress"] is True
     assert preflight_status["operator_reported_ledger_unchanged"] is True
     assert preflight_status["operator_reported_provider_completion_calls"] == 0

@@ -125,17 +125,17 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "not pushed or remote-resolved" in autonomy_evidence
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
-    assert "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778" in (autonomy_evidence)
-    assert "d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432" in (autonomy_evidence)
-    assert "b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed" in (autonomy_evidence)
-    assert "bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8" in (autonomy_evidence)
-    assert "3649 unique completion inputs / 3652 occurrences" in autonomy_evidence
-    assert "3606 gate sources" in autonomy_evidence
-    assert "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce" in autonomy_evidence
-    assert "95 authenticated-runner smoke runtime tests" in autonomy_evidence
-    assert "111 adjacent CLI/durable/inventory/release-schema tests" in autonomy_evidence
-    assert "retained 789-test exact AUTHRUNNER matrix" in autonomy_evidence
-    assert "47-root / 1073-state evidence" in autonomy_evidence
+    assert "207160df54ee7c372c77356c4d5e8c561c913412088114532f50aa53d3fdfc0c" in (autonomy_evidence)
+    assert "c5694b3c0d0b282cbdd9b58c859d5c3a96edaedcc6aa0e9222cb51f946063e0a" in (autonomy_evidence)
+    assert "6ab0f578470e7ad659bf634040bf7df428de4d1a484dcfae3cc000ed2d08bbcc" in (autonomy_evidence)
+    assert "e574e82f68b8c1508d370b66b3b63007959992e2b36ea04d9fcfe7c13411813a" in (autonomy_evidence)
+    assert "3651 unique completion inputs / 3654 occurrences" in autonomy_evidence
+    assert "3608 gate sources" in autonomy_evidence
+    assert "7ef471744adfce557edf612a74b2847aafb3e8bc" in autonomy_evidence
+    assert "951 changed-surface" in autonomy_evidence
+    assert "201 disjoint-adjacent" in autonomy_evidence
+    assert "111 focused route-core/admission" in autonomy_evidence
+    assert "independent 1012-probe/six-import-order review" in autonomy_evidence
     assert "repository-wide suite remains INCOMPLETE, not a pass" in autonomy_evidence
     assert "VALID / NONCREDITING / NONAUTHORIZING" in autonomy_evidence
     assert "without rerun or new spend" in autonomy_evidence
@@ -143,13 +143,13 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "next unused index is not stated" in autonomy_evidence
     assert "not independently authenticated by Codex" in autonomy_evidence
     assert "No current AUTHRUNNER/operator command" in autonomy_evidence
-    assert "Three package resources are pinned" in autonomy_evidence
-    assert "25 external roles remain unresolved" in autonomy_evidence
+    assert "pins three package resources" in autonomy_evidence
+    assert "leaves 25 external roles unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
+    assert runtime_status["candidate_commit"] == "7ef471744adfce557edf612a74b2847aafb3e8bc"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
+        "7ef471744adfce557edf612a74b2847aafb3e8bc"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
