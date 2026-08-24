@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -10,26 +12,44 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import mmaudit.benchmark.cross_lineage_adjudication as adjudication_module
 import mmaudit.cli as cli_module
 import mmaudit.models.authenticated_runner_smoke as smoke_evidence_module
 import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.orchestration.authenticated_runner_smoke_openrouter as smoke_runtime_module
+import tests.unit.test_authenticated_runner_smoke_benchmark as smoke_benchmark_fixtures
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationDisposition,
     CrossLineageAdjudicationRunKind,
     build_cross_lineage_adjudication_case_result,
+    build_cross_lineage_adjudication_report,
     build_cross_lineage_adjudication_response,
     prepare_noncrediting_cross_lineage_adjudication_smoke,
 )
-from mmaudit.benchmark.models import load_model_benchmark_corpus
+from mmaudit.benchmark.models import (
+    ModelBenchmarkCaseResult,
+    NoncreditingModelBenchmarkSmokeReport,
+    authenticated_runner_smoke_model_benchmark_request_descriptor,
+    load_model_benchmark_corpus,
+)
 from mmaudit.config import AuditConfig
+from mmaudit.models.authenticated_runner import (
+    AuthenticatedCrossLineageLedgerEntryEvidence,
+    AuthenticatedCrossLineageLedgerIntervalEvidence,
+)
 from mmaudit.models.authenticated_runner_smoke import (
+    MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES,
     AuthenticatedRunnerSmokeCostPlan,
+    AuthenticatedRunnerSmokeError,
     AuthenticatedRunnerSmokeEvidenceBundle,
     AuthenticatedRunnerSmokeRunEvidence,
+    authenticated_runner_smoke_evidence_bytes,
     build_authenticated_runner_smoke_cost_plan,
+    revalidate_authenticated_runner_smoke_evidence_bytes,
+    seal_authenticated_runner_smoke_evidence_bundle,
+    seal_authenticated_runner_smoke_run_evidence,
 )
 from mmaudit.models.authenticated_runner_smoke_corpus import (
     load_authenticated_runner_smoke_corpus_bundle,
@@ -40,7 +60,8 @@ from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
 )
-from mmaudit.models.openrouter import OpenRouterModelError
+from mmaudit.models.openrouter import OpenRouterModelError, OpenRouterStructuredRequestCostPreview
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
     require_independent_public_model_lineage,
@@ -53,6 +74,7 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
 )
 from mmaudit.models.schemas import UsageRecord
+from mmaudit.models.token_planning import RequestTokenPlan
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OPENROUTER_API_KEY_NAME, OperatorSecrets
 from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
@@ -79,13 +101,20 @@ from mmaudit.orchestration.cost_ledger import (
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import PrivacyProfile
-from tests.identity_fixtures import bind_synthetic_usage_identity, rebind_synthetic_token_plan
+from mmaudit.reporting.json_report import stable_json_bytes
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+    rebind_synthetic_token_plan,
+)
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit import test_authenticated_runner_execution as execution_fixtures
 from tests.unit import test_candidate_benchmark as candidate_fixtures
 from tests.unit.test_authenticated_runner_cost_plan import _preview, _replace_preview
 from tests.unit.test_authenticated_runner_durable_bundle import (
     _cost_preview_for_usage,
     _usage_with_cost_preview,
+    _v2_token_plan_for_usage,
 )
 from tests.unit.test_authenticated_runner_execution import _config
 from tests.unit.test_authenticated_runner_smoke_benchmark import (
@@ -100,6 +129,7 @@ from tests.unit.test_model_benchmark_portfolio import (
     _candidate_registry,
     _report,
 )
+from tests.unit.test_openrouter import _as_v3_unknown_token_smoke_usage
 
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
@@ -117,6 +147,14 @@ _TOKEN_ROUTING_FIELDS = (
     "atomic_token_reservations",
     "atomic_token_reservation_sha256s",
 )
+
+
+class _CanonicalSmokeReportReplayEnvelope(BaseModel):
+    """Exercise the smoke bundle's strict outer-model/nested-usage JSON boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    report: NoncreditingModelBenchmarkSmokeReport
 
 
 def _snapshot(*, entries: tuple[CostEntry, ...], spent: Decimal) -> CostLedgerSnapshot:
@@ -531,6 +569,558 @@ def _validate_fake_bundle(
         AuthenticatedRunnerSmokeEvidenceBundle.protocol_is_exact_and_self_bound,
     )
     return validator(bundle)
+
+
+def _rebound_smoke_usage(
+    usage: UsageRecord,
+    *,
+    proof_kind: str,
+    generation_id: str,
+    request_body_sha256: str,
+    request_id: str | None = None,
+    privacy_source_sha256: str | None = None,
+) -> UsageRecord:
+    """Rebind one synthetic transport record to unique closed smoke coordinates."""
+
+    payload = usage.model_dump(mode="python")
+    payload.update(
+        {
+            "openrouter_generation_id": generation_id,
+            "request_body_sha256": request_body_sha256,
+            "request_id": usage.request_id if request_id is None else request_id,
+        }
+    )
+    routing = dict(payload["routing"])
+    for field in _TOKEN_ROUTING_FIELDS:
+        routing.pop(field, None)
+    routing.update(
+        {
+            "generation_id": generation_id,
+            "privacy_source_proof_kind": proof_kind,
+        }
+    )
+    if privacy_source_sha256 is not None:
+        routing.update(
+            {
+                "privacy_profile": "SYNTHETIC_BENCHMARK",
+                "privacy_source_classification": "SYNTHETIC_COMMITTED",
+                "privacy_source_sha256": privacy_source_sha256,
+            }
+        )
+    endpoint = usage.actual_provider_endpoint
+    prompt_sha256 = usage.prompt_sha256
+    schema_sha256 = usage.schema_sha256
+    response_sha256 = usage.response_sha256
+    validated_response_sha256 = usage.validated_response_sha256
+    provider_policy_sha256 = routing.get("provider_policy_sha256")
+    endpoint_snapshot_sha256 = routing.get("endpoint_snapshot_sha256")
+    output_capability_sha256 = routing.get("output_capability_sha256")
+    structured_output_mode = routing.get("structured_output_mode")
+    request_shape_sha256 = routing.get("structured_output_request_shape_sha256")
+    strict_protocol_sha256 = routing.get("structured_output_protocol_sha256")
+    assert endpoint is not None
+    assert prompt_sha256 is not None
+    assert schema_sha256 is not None
+    assert response_sha256 is not None
+    assert validated_response_sha256 is not None
+    assert isinstance(provider_policy_sha256, str)
+    assert isinstance(endpoint_snapshot_sha256, str)
+    assert isinstance(output_capability_sha256, str)
+    assert isinstance(structured_output_mode, str)
+    assert isinstance(request_shape_sha256, str)
+    assert strict_protocol_sha256 is None or isinstance(strict_protocol_sha256, str)
+    routing["structured_output"] = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(usage.configured_provider_endpoints),
+        selected_provider_endpoint=endpoint,
+        endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+        output_capability_sha256=output_capability_sha256,
+        prompt_sha256=prompt_sha256,
+        request_body_sha256=request_body_sha256,
+        provider_policy_sha256=provider_policy_sha256,
+        schema_sha256=schema_sha256,
+        original_response_sha256=response_sha256,
+        validated_response_sha256=validated_response_sha256,
+        mode=StructuredOutputMode(structured_output_mode),
+        request_shape_sha256=request_shape_sha256,
+        strict_protocol_sha256=strict_protocol_sha256,
+    )
+    payload["routing"] = routing
+    return bind_synthetic_usage_identity(
+        rebind_synthetic_token_plan(UsageRecord.model_validate(payload))
+    )
+
+
+def _rebound_generation(
+    generation: OpenRouterGenerationEvidence,
+    *,
+    usage: UsageRecord,
+) -> OpenRouterGenerationEvidence:
+    payload = generation.model_dump(mode="json", exclude={"evidence_sha256"})
+    payload.update(
+        {
+            "generation_id": usage.openrouter_generation_id,
+            "request_id": usage.request_id,
+        }
+    )
+    return OpenRouterGenerationEvidence.model_validate(
+        {**payload, "evidence_sha256": canonical_sha256(payload)}
+    )
+
+
+def _current_smoke_usage_and_preview(
+    usage: UsageRecord,
+    *,
+    index: int,
+    user_prompt_sha256: str | None = None,
+) -> tuple[UsageRecord, OpenRouterStructuredRequestCostPreview]:
+    """Upgrade one synthetic smoke usage and cost preview to current token accounting."""
+
+    if user_prompt_sha256 is not None and usage.user_prompt_sha256 != user_prompt_sha256:
+        payload = usage.model_dump(mode="python")
+        payload["user_prompt_sha256"] = user_prompt_sha256
+        usage = bind_synthetic_usage_identity(
+            rebind_synthetic_token_plan(UsageRecord.model_validate(payload))
+        )
+    legacy_preview = _cost_preview_for_usage(usage, index=index)
+    if (
+        usage.user_prompt_sha256 != legacy_preview.user_prompt_sha256
+        or usage.schema_sha256 != legacy_preview.response_schema_sha256
+    ):
+        payload = usage.model_dump(mode="python")
+        payload.update(
+            {
+                "user_prompt_sha256": legacy_preview.user_prompt_sha256,
+                "schema_sha256": legacy_preview.response_schema_sha256,
+            }
+        )
+        usage = bind_synthetic_usage_identity(
+            rebind_synthetic_token_plan(UsageRecord.model_validate(payload))
+        )
+        legacy_preview = _cost_preview_for_usage(usage, index=index)
+    legacy_plan = _v2_token_plan_for_usage(
+        usage,
+        endpoint_capability_sha256=legacy_preview.reasoning_capability_sha256,
+    )
+    reasoning_plan = legacy_plan.reasoning_plan
+    assert reasoning_plan is not None
+    usage = _as_v3_unknown_token_smoke_usage(usage, reasoning_plan=reasoning_plan)
+    raw_plan = usage.routing.get("request_token_plan")
+    plan = RequestTokenPlan.model_validate_json(
+        json.dumps(raw_plan, sort_keys=True, separators=(",", ":"))
+    )
+    assert plan.schema_version == "3.0"
+    assert plan.token_detail_accounting_method is not None
+    assert plan.wire_max_tokens is not None
+    preview_payload = legacy_preview.model_dump(mode="json", exclude={"preview_sha256"})
+    preview_payload.update(
+        {
+            "schema_version": "1.1",
+            "request_token_plan_projection_sha256": plan.plan_sha256,
+            "token_detail_accounting_method": plan.token_detail_accounting_method,
+            "wire_max_tokens": plan.wire_max_tokens,
+        }
+    )
+    preview = OpenRouterStructuredRequestCostPreview.model_validate_json(
+        json.dumps(
+            {**preview_payload, "preview_sha256": canonical_sha256(preview_payload)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        strict=True,
+    )
+    payload = usage.model_dump(mode="python")
+    routing = dict(payload["routing"])
+    routing.update(
+        {
+            "request_cost_preview_sha256": preview.preview_sha256,
+            "request_cost_preview_maximum_cost_usd_per_attempt_exact": (
+                preview.maximum_cost_usd_per_attempt_exact
+            ),
+            "request_cost_preview_maximum_cost_usd_all_attempts_exact": (
+                preview.maximum_cost_usd_all_attempts_exact
+            ),
+        }
+    )
+    payload["routing"] = routing
+    return reattest_synthetic_real_usage(UsageRecord.model_validate(payload)), preview
+
+
+def _model_bound_to_smoke_usage(candidate: CandidateModel, usage: UsageRecord) -> CandidateModel:
+    routing = usage.routing
+    provider_name = routing.get("selected_provider_name")
+    discovery_sha256 = routing.get("discovery_evidence_sha256")
+    endpoint_sha256 = routing.get("endpoint_snapshot_sha256")
+    metadata_sha256 = routing.get("model_metadata_snapshot_sha256")
+    pricing_sha256 = routing.get("endpoint_pricing_sha256")
+    capability_sha256 = routing.get("output_capability_sha256")
+    mode = routing.get("structured_output_mode")
+    assert usage.actual_model is not None
+    assert usage.actual_provider_endpoint is not None
+    assert isinstance(provider_name, str)
+    assert isinstance(discovery_sha256, str)
+    assert isinstance(endpoint_sha256, str)
+    assert isinstance(metadata_sha256, str)
+    assert isinstance(pricing_sha256, str)
+    assert isinstance(capability_sha256, str)
+    assert isinstance(mode, str)
+    return CandidateModel.model_validate(
+        {
+            **candidate.model_dump(mode="python"),
+            "canonical_model_slug": usage.actual_model,
+            "discovery_evidence_sha256": discovery_sha256,
+            "approved_provider_endpoint": usage.actual_provider_endpoint,
+            "approved_provider_name": provider_name,
+            "endpoint_snapshot_sha256": endpoint_sha256,
+            "output_capability_sha256": capability_sha256,
+            "model_metadata_snapshot_sha256": metadata_sha256,
+            "pricing_snapshot_sha256": pricing_sha256,
+            "structured_output_mode": mode,
+        }
+    )
+
+
+def _current_candidate_smoke_report(
+    suite: Any,
+    *,
+    run_kind: CrossLineageAdjudicationRunKind,
+    index: int,
+) -> tuple[
+    NoncreditingModelBenchmarkSmokeReport,
+    OpenRouterStructuredRequestCostPreview,
+]:
+    smoke = load_authenticated_runner_smoke_corpus_bundle(SMOKE_CORPUS_PATH)
+    full_source = _as_structural_real(_report(suite, CANDIDATE_ID))
+    source_model_result = full_source.results[0]
+    source_result = next(
+        result for result in source_model_result.cases if result.case_id == smoke.case.case_id
+    )
+    template = _smoke_report(
+        suite,
+        run_kind=run_kind.value,
+        model_id=CANDIDATE_ID,
+    )
+    source_usage = source_result.usage_record
+    source_generation = source_result.generation_evidence
+    assert source_usage is not None
+    assert source_generation is not None
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
+        run_kind=run_kind.value,
+        selection_sha256=smoke.bundle_sha256,
+        case=smoke.case,
+        target=source_model_result.target,
+    )
+    usage = _rebound_smoke_usage(
+        source_usage,
+        proof_kind="PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        generation_id=f"candidate-smoke-generation-{index}",
+        request_body_sha256=canonical_sha256({"candidate-smoke-body": index}),
+        request_id=descriptor.logical_request_id,
+        privacy_source_sha256=hashlib.sha256(smoke.case.source_excerpt.encode("utf-8")).hexdigest(),
+    )
+    usage, preview = _current_smoke_usage_and_preview(
+        usage,
+        index=index,
+        user_prompt_sha256=hashlib.sha256(descriptor.user_prompt.encode("utf-8")).hexdigest(),
+    )
+    generation = _rebound_generation(source_generation, usage=usage)
+    result = ModelBenchmarkCaseResult.model_validate(
+        {
+            **source_result.model_dump(mode="json"),
+            "usage_record": usage.model_dump(mode="json"),
+            "generation_evidence": generation.model_dump(mode="json"),
+        }
+    )
+    payload = template.model_dump(mode="json", exclude={"report_sha256"})
+    payload.update(
+        {
+            "schema_version": "1.2",
+            "selected_case_sha256": canonical_sha256(smoke.case.model_dump(mode="json")),
+            "selected_ground_truth_sha256": canonical_sha256(
+                smoke.ground_truth_case.model_dump(mode="json")
+            ),
+            "target": source_model_result.target.model_dump(mode="json"),
+            "result": result.model_dump(mode="json"),
+        }
+    )
+    return (
+        NoncreditingModelBenchmarkSmokeReport.model_validate(
+            {**payload, "report_sha256": canonical_sha256(payload)}
+        ),
+        preview,
+    )
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
+
+
+def _sealed_current_smoke_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AuthenticatedRunnerSmokeEvidenceBundle:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    smoke = load_authenticated_runner_smoke_corpus_bundle(SMOKE_CORPUS_PATH)
+    monkeypatch.setattr(smoke_benchmark_fixtures, "SELECTION_SHA256", smoke.bundle_sha256)
+    runs: list[AuthenticatedRunnerSmokeRunEvidence] = []
+    for index, (run_kind, judge_id) in enumerate(
+        (
+            (CrossLineageAdjudicationRunKind.PRIMARY, PRIMARY_JUDGE_ID),
+            (CrossLineageAdjudicationRunKind.REPLAY, REPLAY_JUDGE_ID),
+        )
+    ):
+        candidate_report, candidate_preview = _current_candidate_smoke_report(
+            suite,
+            run_kind=run_kind,
+            index=index,
+        )
+        candidate_usage = candidate_report.result.usage_record
+        assert candidate_usage is not None
+        candidate = _model_bound_to_smoke_usage(
+            _candidate_registry((CANDIDATE_ID,)).candidates[0],
+            candidate_usage,
+        )
+        judge = _judge(judge_id)
+        prepared = prepare_noncrediting_cross_lineage_adjudication_smoke(
+            public_lineage_capability=resolve_verified_public_model_lineage(),
+            suite=suite,
+            selected_case=smoke.case,
+            selected_ground_truth=smoke.ground_truth_case,
+            selection_sha256=smoke.bundle_sha256,
+            candidate_report=candidate_report,
+            judge=judge,
+            run_kind=run_kind,
+        )
+        request = prepared.requests[0]
+        response = build_cross_lineage_adjudication_response(
+            request=request,
+            dimension_outcomes=request.expected_dimension_outcomes,
+            disposition=CrossLineageAdjudicationDisposition.CONFIRMED,
+            rationale="Provider-free sealed smoke replay fixture.",
+        )
+        judge_usage, judge_generation = _judge_usage_and_generation(
+            case_index=index + 10,
+            request=request,
+            response=response,
+            judge=judge,
+        )
+        judge_usage = _rebound_smoke_usage(
+            judge_usage,
+            proof_kind="PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            generation_id=f"judge-smoke-generation-{index}",
+            request_body_sha256=canonical_sha256({"judge-smoke-body": index}),
+            request_id=adjudication_module._cross_lineage_adjudication_smoke_logical_request_id(
+                request, 1
+            ),
+        )
+        judge_usage, judge_preview = _current_smoke_usage_and_preview(
+            judge_usage,
+            index=index + 2,
+        )
+        judge_generation = _rebound_generation(judge_generation, usage=judge_usage)
+        judge_result = build_cross_lineage_adjudication_case_result(
+            request=request,
+            response=response,
+            usage_record=judge_usage,
+            generation_evidence=judge_generation,
+        )
+        adjudication_report = build_cross_lineage_adjudication_report(
+            prepared=prepared,
+            results=(judge_result,),
+        )
+        candidate_plan = build_authenticated_runner_smoke_cost_plan(
+            smoke_run_index=1,
+            run_kind=run_kind,
+            stage="CANDIDATE",
+            case_id=smoke.case.case_id,
+            selection_sha256=smoke.bundle_sha256,
+            request_preview=candidate_preview,
+        )
+        judge_plan = build_authenticated_runner_smoke_cost_plan(
+            smoke_run_index=1,
+            run_kind=run_kind,
+            stage="JUDGE",
+            case_id=smoke.case.case_id,
+            selection_sha256=smoke.bundle_sha256,
+            request_preview=judge_preview,
+        )
+        candidate_generation = candidate_report.result.generation_evidence
+        assert candidate_generation is not None
+        runs.append(
+            seal_authenticated_runner_smoke_run_evidence(
+                smoke_run_index=1,
+                run_kind=run_kind,
+                candidate=candidate,
+                judge=judge,
+                candidate_cost_plan=candidate_plan,
+                candidate_report=candidate_report,
+                candidate_generation_refetch=candidate_generation,
+                prepared_adjudication=prepared,
+                judge_cost_plan=judge_plan,
+                adjudication_report=adjudication_report,
+                judge_generation_refetch=judge_generation,
+            )
+        )
+    usages = tuple(
+        usage
+        for run in runs
+        for usage in (
+            run.candidate_report.result.usage_record,
+            run.adjudication_report.cases[0].usage_record,
+        )
+        if usage is not None
+    )
+    plans = tuple(plan for run in runs for plan in (run.candidate_cost_plan, run.judge_cost_plan))
+    entries = tuple(
+        AuthenticatedCrossLineageLedgerEntryEvidence(
+            request_id=usage.request_id,
+            entry_sha256=canonical_sha256(
+                {"smoke-ledger-entry": usage.request_id, "actual": usage.accounted_cost_usd_exact}
+            ),
+            reserved_usd=plan.maximum_cost_usd_per_attempt_exact,
+            actual_cost_usd=cast(str, usage.accounted_cost_usd_exact),
+        )
+        for plan, usage in sorted(
+            zip(plans, usages, strict=True),
+            key=lambda item: item[1].request_id,
+        )
+    )
+    interval_cost = sum((Decimal(item.actual_cost_usd) for item in entries), start=Decimal(0))
+    interval_cost_text = _canonical_decimal(interval_cost)
+    ledger = AuthenticatedCrossLineageLedgerIntervalEvidence(
+        ledger_identity_sha256=canonical_sha256("smoke-replay-ledger"),
+        initial_snapshot_sha256=canonical_sha256("smoke-replay-ledger-before"),
+        final_snapshot_sha256=canonical_sha256("smoke-replay-ledger-after"),
+        initial_spent_usd="0",
+        interval_spent_usd=interval_cost_text,
+        final_spent_usd=interval_cost_text,
+        entries=entries,
+    )
+    return seal_authenticated_runner_smoke_evidence_bundle(
+        smoke_run_index=1,
+        smoke_corpus_bundle_sha256=smoke.bundle_sha256,
+        parent_corpus_sha256=smoke.manifest.parent.corpus_sha256,
+        parent_ground_truth_sha256=smoke.manifest.parent.ground_truth_sha256,
+        effective_config_sha256=canonical_sha256("smoke-replay-effective-config"),
+        selected_case_id=smoke.case.case_id,
+        selected_case_count=1,
+        parent_case_count=24,
+        run_count=2,
+        logical_request_count=4,
+        maximum_provider_attempt_count=8,
+        generation_refetch_count=4,
+        execution_sequence_request_ids=(
+            usages[0].request_id,
+            usages[2].request_id,
+            usages[1].request_id,
+            usages[3].request_id,
+        ),
+        runs=tuple(runs),
+        closed_ledger_evidence=ledger,
+    )
+
+
+def test_smoke_replay_preserves_strict_models_without_call_level_strict_datetime_drift() -> None:
+    report = _smoke_report(load_model_benchmark_corpus(CORPUS_PATH))
+    envelope = _CanonicalSmokeReportReplayEnvelope(report=report)
+    raw = stable_json_bytes(envelope)
+
+    replayed = _CanonicalSmokeReportReplayEnvelope.model_validate_json(raw)
+
+    assert replayed == envelope
+    assert stable_json_bytes(replayed) == raw
+    with pytest.raises(ValidationError) as raised:
+        _CanonicalSmokeReportReplayEnvelope.model_validate_json(raw, strict=True)
+    assert {
+        (tuple(error["loc"]), error["type"]) for error in raised.value.errors(include_url=False)
+    } == {
+        (("report", "result", "usage_record", "timestamp"), "datetime_type"),
+        (("report", "result", "usage_record", "started_at"), "datetime_type"),
+        (("report", "result", "usage_record", "ended_at"), "datetime_type"),
+    }
+
+
+def test_smoke_revalidator_round_trips_genuine_sealed_current_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _sealed_current_smoke_bundle(monkeypatch)
+    raw = authenticated_runner_smoke_evidence_bytes(bundle)
+
+    replayed = revalidate_authenticated_runner_smoke_evidence_bytes(raw)
+
+    usages = tuple(
+        usage
+        for run in replayed.runs
+        for usage in (
+            run.candidate_report.result.usage_record,
+            run.adjudication_report.cases[0].usage_record,
+        )
+        if usage is not None
+    )
+    assert type(replayed) is AuthenticatedRunnerSmokeEvidenceBundle
+    assert replayed == bundle
+    assert replayed.schema_version == "1.2"
+    assert tuple(run.schema_version for run in replayed.runs) == ("1.2", "1.2")
+    assert len(usages) == 4
+    assert all(usage.token_detail_accounting_evidence is not None for usage in usages)
+    assert authenticated_runner_smoke_evidence_bytes(replayed) == raw
+
+
+def test_smoke_revalidator_omits_call_level_strict_and_requires_exact_parser_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b'{"synthetic":"bounded-parser-type-check"}\n'
+    calls: list[tuple[bytes, dict[str, object]]] = []
+
+    def wrong_type(
+        _cls: type[AuthenticatedRunnerSmokeEvidenceBundle],
+        value: bytes,
+        **kwargs: object,
+    ) -> object:
+        calls.append((value, kwargs))
+        return object()
+
+    monkeypatch.setattr(
+        AuthenticatedRunnerSmokeEvidenceBundle,
+        "model_validate_json",
+        classmethod(wrong_type),
+    )
+
+    with pytest.raises(AuthenticatedRunnerSmokeError, match="wrong exact type"):
+        revalidate_authenticated_runner_smoke_evidence_bytes(raw)
+    assert calls == [(raw, {})]
+
+
+def test_smoke_revalidator_rejects_real_coercive_and_noncanonical_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = authenticated_runner_smoke_evidence_bytes(_sealed_current_smoke_bundle(monkeypatch))
+    attempts = b'"attempts": 1'
+    assert attempts in canonical
+    coercive = canonical.replace(attempts, b'"attempts": "1"', 1)
+
+    with pytest.raises(AuthenticatedRunnerSmokeError, match="not canonical"):
+        revalidate_authenticated_runner_smoke_evidence_bytes(coercive)
+    with pytest.raises(AuthenticatedRunnerSmokeError, match="not canonical"):
+        revalidate_authenticated_runner_smoke_evidence_bytes(b" " + canonical)
+
+
+def test_smoke_revalidator_rejects_nonexact_byte_types_and_bounds() -> None:
+    canonical = b'{"synthetic":"bounded-input-check"}\n'
+
+    class ByteSubclass(bytes):
+        pass
+
+    for raw in (
+        bytearray(canonical),
+        memoryview(canonical),
+        canonical.decode("utf-8"),
+        ByteSubclass(canonical),
+        b"",
+        b"x" * (MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES + 1),
+    ):
+        with pytest.raises(AuthenticatedRunnerSmokeError):
+            revalidate_authenticated_runner_smoke_evidence_bytes(cast(Any, raw))
 
 
 def _fake_run_validator_subject(

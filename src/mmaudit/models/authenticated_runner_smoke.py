@@ -758,11 +758,20 @@ def revalidate_authenticated_runner_smoke_evidence_bytes(
     if type(raw) is not bytes or not raw or len(raw) > MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES:
         raise AuthenticatedRunnerSmokeError("authenticated runner smoke bytes are invalid")
     try:
-        bundle = AuthenticatedRunnerSmokeEvidenceBundle.model_validate_json(raw, strict=True)
+        # JSON timestamps are necessarily strings.  A call-level strict override is
+        # propagated into nested model-level ``before`` validators after they have
+        # materialized Python mappings, which incorrectly rejects those canonical
+        # timestamps.  The bundle's strict model contracts remain active, and exact
+        # canonical byte equality below rejects coercive alternate encodings.
+        bundle = AuthenticatedRunnerSmokeEvidenceBundle.model_validate_json(raw)
     except (TypeError, ValueError, ValidationError):
         raise AuthenticatedRunnerSmokeError(
             "authenticated runner smoke bytes do not validate"
         ) from None
+    if type(bundle) is not AuthenticatedRunnerSmokeEvidenceBundle:
+        raise AuthenticatedRunnerSmokeError(
+            "authenticated runner smoke parser returned the wrong exact type"
+        )
     if authenticated_runner_smoke_evidence_bytes(bundle) != raw:
         raise AuthenticatedRunnerSmokeError("authenticated runner smoke bytes are not canonical")
     return bundle
