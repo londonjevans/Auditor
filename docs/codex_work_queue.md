@@ -256,16 +256,20 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   promoted live parent/child usage identities, recovery coordinates, contexts, artifacts, and
   public hashes. The still-truncated parent is superseded in role failure accounting only by that
   live promotion; unrelated failures remain failures. MOCK recovery remains unpromoted,
-  noncreditable, and byte-stable across zero-transport resume.
-- **Remaining limitation:** Recursive consumption of a truncated recovery child is not implemented.
-  A positive nonempty full-pipeline REAL promotion remains an external criterion; synthetic
-  live-custody unit evidence and MOCK pipeline execution are not relabeled as provider evidence.
-  The broad maximum-assurance integration remained CPU-bound for a bounded `602.86s` and is
-  `INCONCLUSIVE`, not a pass.
-- **Current action:** Implement only bounded provider-free recursive recovery of one truncated
-  recovery child. Preserve exact depth, parent-family, surface partition, request/token/USD,
-  append-order, live-authority, and zero-transport resume custody; keep unpromoted, serialized-only,
-  MOCK, ambiguous, over-depth, and budget-exhausted paths noncreditable.
+  noncreditable, and byte-stable across zero-transport resume. Checkpoint
+  `dcd9ab2be15f4a0416372c110734b5079af1efe2` adds exactly one provider-free recursive level for
+  one generic zero-retained truncated child. Its nested family closes as v1.1 `COVERAGE_CLOSED`,
+  while the ancestor closes as v1.2 `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`; neither closure
+  creates promotion, coverage, specialist, or assurance credit. Exact shared request, token, USD,
+  global-ordinal, and append-order custody; max-cap refusal; zero-transport resume; and unchanged
+  direct and specialist paths pass locally.
+- **Remaining limitation:** Full-tree live opaque capability and promotion are not implemented for
+  this exact one-level generic zero-retained tree. Deeper recursion, retained-surface recursion,
+  specialist-role recursion, and positive nonempty REAL-provider execution remain external or
+  unimplemented; synthetic and MOCK evidence are not relabeled as provider evidence.
+- **Current action:** Add only full-tree live opaque capability and promotion for the exact
+  one-level generic zero-retained tree, preserving the nonauthorizing recursive closures until an
+  exact live promotion exists.
 
 ### V3-COVERAGE-001 — Risk-tiered feasible surface coverage
 

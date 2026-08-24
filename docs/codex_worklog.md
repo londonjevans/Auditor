@@ -4,21 +4,63 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T14:38:31Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T16:44:35Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_CHECKPOINTED_PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_NEXT
+AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_CHECKPOINTED_PROVIDER_FREE_NONAUTHORIZING_FULL_TREE_LIVE_PROMOTION_NEXT
 OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET
 LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
 CURRENT_TICKET: V3-TRUNCATION-001
-CURRENT_LOCAL_SLICE_STATUS: SPECIALIST_ROLE_RECOVERY_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_PENDING
+CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_NONAUTHORIZING
 LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001
-NEXT_ACTION: Implement only bounded provider-free recursive recovery of one truncated recovery child with exact depth, parent-family, surface partition, request/token/USD, append-order, live-authority, and zero-transport resume custody. Preserve no credit for unpromoted, serialized-only, MOCK, ambiguous, over-depth, or budget-exhausted paths. No provider, operator, or inferred run-index action is authorized.
-LAST_VALIDATION_COMMAND: Specialist recovery checkpoint `721d17a` passed `92` final release-schema/inventory/specialist tests, `4` promoted coverage/assurance tests, `2` focused v1.2 journal tests, and `1` frozen-byte MOCK/no-credit/zero-transport-resume integration. An earlier adjacent recovery/journal/evidence/promotion matrix passed `162` tests. Ruff check/format, strict mypy on `7` production files, canonical generator write/verify, py_compile, and diff-check passed. Independent latest-byte red team found no blocker/HIGH. The broad maximum-assurance integration remained CPU-bound for `602.86s` and was interrupted; it is `INCONCLUSIVE`, not a pass. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
-LAST_VALIDATION_RESULT: SPECIALIST_TRUNCATION_RECOVERY_CHECKPOINTED_PARTIAL_PROVIDER_FREE_NONAUTHORIZING — exact investigator roots may open bounded direct recovery; successful children carry v1.2 accepted-outcome custody and public hash-only v1.1 evidence. Specialist completion requires exact promoted live parent/child identities, contexts, recovery coordinates, artifacts, and public hashes. The truncated parent is superseded only under that live promotion; unrelated failures remain failures. MOCK and serialized-only evidence remain noncreditable and resume with zero transport.
-LAST_CHECKPOINT_COMMIT: `721d17a4ff08cc52ccdf0aa92ed04258e4137807`, direct child of `847e7180923e95768271c6fe7e8b06732a7d919a`, owns exactly 16 specialist-recovery source, generated-schema/inventory, fake-provider, unit-test, and local-integration paths; `git diff-tree --no-commit-id --name-only -r 721d17a4ff08cc52ccdf0aa92ed04258e4137807` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2`, `349af767d9e07bb44a7483a5ab3e309ee7d8f739d49902f5143508901d79f90e`, `4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042`, and `c0d55db7f01762a1f014290af40544fc1a20842a8bbff72e053b379792d17fa5`; counts remain 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; historical PLANCONSTRAINTS base: `7ef4717`; historical replay checkpoint: `c627f2d`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-PLANCONSTRAINTS-001` is repaired and complete. `V3-TRUNCATION-001` remains `PARTIAL`: retained-parent and specialist-role recovery are checkpointed, recursive child recovery is the active bounded provider-free gap, and positive nonempty full-pipeline REAL promotion remains external. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; the next unused index is NOT_STATED and no command or paid authority is current.
+NEXT_ACTION: Add only full-tree live opaque capability and promotion for the exact one-level generic zero-retained recovery tree. Keep deeper, retained-surface, specialist-role recursive, serialized-only, MOCK, ambiguous, over-depth, budget-exhausted, and unpromoted paths noncreditable. REAL provider execution remains external; no provider, operator, or inferred run-index action is authorized.
+LAST_VALIDATION_COMMAND: Recursive checkpoint `dcd9ab2` passed `66` journal tests, `2` recursive integrations, `1` direct integration, `1` specialist integration, `158` adjacent scheduler runtime/journal tests, `26` promotion/evidence tests, `64` adjacent recovery tests, `58` scheduler-model tests, `32` inventory tests, and `1` schema test. A separate operator-free governance selection passed `19` product-documentation/objective tests. Ruff check/format, strict mypy, canonical generator write/verify, import, and diff-check passed. Independent latest-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
+LAST_VALIDATION_RESULT: ONE_LEVEL_GENERIC_RECURSIVE_TRUNCATION_RECOVERY_CHECKPOINTED_PARTIAL_PROVIDER_FREE_NONAUTHORIZING — one exact zero-retained generic child may open one nested family. The nested family closes as v1.1 `COVERAGE_CLOSED`; its root ancestor closes as v1.2 `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`. Exact request/token/USD/global-ordinal/append-order custody, max-cap refusal, zero-transport resume, and direct/specialist compatibility pass. Recursive promotion, coverage, specialist, and assurance credit remain absent.
+LAST_CHECKPOINT_COMMIT: `dcd9ab2be15f4a0416372c110734b5079af1efe2`, direct child of `d738f2760da047d15d4e53f87d6e0aeaf13d442a`, owns exactly 8 source, generated-inventory, fake-provider, unit-test, and local-integration paths; `git diff-tree --no-commit-id --name-only -r dcd9ab2be15f4a0416372c110734b5079af1efe2` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `c9452fb8bb504a743312264ccaddfbd47d7a11997bd04c0861709960153c985a`, `701ff7994152cc5a8fc0174341a3e8963573741f200e24f0ff3566720a069140`, `4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042`, and `9fc20c8097d38f719169e360836806f8ffec0d175a1941aa942089163fed53e5`; counts remain 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; historical PLANCONSTRAINTS base: `7ef4717`; historical replay checkpoint: `c627f2d`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-PLANCONSTRAINTS-001` is repaired and complete. `V3-TRUNCATION-001` remains `PARTIAL`: direct retained-parent, specialist-role, and exactly one generic zero-retained recursive level are checkpointed; full-tree live opaque promotion and positive nonempty REAL execution remain outstanding. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; the next unused index is NOT_STATED and no command or paid authority is current.
+
+## 2026-08-24T16:44:35Z — one-level generic recursive recovery checkpointed
+
+- **Current ticket:** `V3-TRUNCATION-001` remains `PARTIAL`; the exact one-level generic
+  zero-retained recursive slice is complete provider-free and nonauthorizing at
+  `dcd9ab2be15f4a0416372c110734b5079af1efe2`, direct child of `d738f27`.
+- **Completed changes:** One exact v1.1 RUNTIME-truncated, findings-complete, zero-retained generic
+  child may open one depth-two family only after its direct sibling succeeds. The nested family
+  closes as v1.1 `COVERAGE_CLOSED`; the root closes as v1.2
+  `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`. Shared request/token/USD counts, global ordinals,
+  and append order remain exact. The max cap refuses grandchildren cleanly, resume performs zero
+  transport, and direct and specialist recovery behavior is unchanged. No recursive promotion or
+  coverage, specialist, or assurance credit exists.
+- **Files changed:** The source checkpoint owns exactly 8 paths: the generated autonomy inventory;
+  scheduler and truncation-journal models; pipeline and scheduler orchestration; fake provider;
+  recursive pipeline integration tests; and truncation-journal unit tests. This separate governance
+  reconciliation changes the four queue/worklog files and two product-assertion test files.
+  User-owned `.gitignore` and `docs/remediation/v3/operator_results.md` remain excluded and unread.
+- **Commands run / results:** `66` journal, `2` recursive integration, `1` direct integration, `1`
+  specialist integration, `158` adjacent scheduler runtime/journal, `26` promotion/evidence, `64`
+  adjacent recovery, `58` scheduler-model, `32` inventory, and `1` schema test passed. Ruff
+  check/format, strict mypy, canonical generator write/verify, import, and diff-check passed.
+  A separate operator-free governance selection passed `19` product-documentation/objective tests.
+  Independent latest-byte review found no blocker/HIGH.
+- **Remaining limitations:** Full-tree live opaque capability/promotion is absent for this exact
+  tree. Deeper, retained-surface, and specialist-role recursive recovery are unimplemented; REAL
+  provider execution remains external. MOCK and serialized artifacts remain nonauthorizing.
+- **Next safe action:** Add only full-tree live opaque capability and promotion for the exact
+  one-level generic zero-retained tree without granting authority from either structural closure.
+
+## 2026-08-24T15:06:55Z — recursive truncated-child recovery opened
+
+- **Current ticket:** `V3-TRUNCATION-001` is `IN_PROGRESS` only for bounded provider-free
+  recovery of one truncated recovery child.
+- **Planned change:** Preserve exact depth, ancestor-family and child identity, unfinished-surface
+  partition, request/token/USD ceilings, append order, live authority, promotion, and byte-stable
+  zero-transport resume. Reject ambiguous ancestry, overlap, over-depth, exhausted resources,
+  serialized-only authority, MOCK credit, and any recursive promotion that bypasses its parent.
+- **Prior custody:** Direct retained-parent and specialist-role recovery remain checkpointed at
+  source commit `721d17a`; governance reconciliation is checkpointed at `d738f27`.
+- **External effects:** None authorized or required; no provider, network, credential,
+  private-ledger, operator-record, or run-index action.
 
 ## 2026-08-24T14:38:31Z — specialist-role truncation recovery checkpointed
 
