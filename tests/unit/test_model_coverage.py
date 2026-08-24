@@ -34,6 +34,7 @@ from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextExcerpt,
     ContextPackage,
+    ContextRequestEvidence,
     CoverageMetric,
     CoverageProvenance,
     EconomicSimulationKind,
@@ -72,6 +73,8 @@ from mmaudit.models.schemas import (
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
     UsageRecord,
     solidity_graph_occurrence_sha256,
 )
@@ -85,6 +88,7 @@ from mmaudit.models.truncation import (
     CandidateReviewTruncationProjection,
     candidate_review_frame_wire_schema_sha256,
     frame_candidate_review_batch,
+    normalize_candidate_review_document,
     seal_candidate_review_truncated_envelope_evidence,
 )
 from mmaudit.models.truncation_closure import (
@@ -128,6 +132,7 @@ from tests.identity_fixtures import (
 from tests.scheduler_support import (
     bind_scheduler_test_usage_to_audit_selection,
     build_scheduler_test_model_payload,
+    build_scheduler_test_model_surface_review_custody,
     build_scheduler_test_real_usage,
     scheduler_test_delivered_source_descriptor_sha256s,
     scheduler_test_response_schema_sha256,
@@ -150,7 +155,6 @@ from tests.unit.test_scheduler_truncation_promotion_integration import (
 from tests.unit.test_scheduler_truncation_promotion_integration import (
     _recovery_plan as _promoted_recovery_plan,
 )
-from tests.unit.test_truncation_closure import _context_evidence as _promoted_context_evidence
 from tests.unit.test_truncation_recovery_journal import (
     _projection as _promoted_truncation_projection,
 )
@@ -823,6 +827,8 @@ class _PromotedParentSurfaceFixture:
     parent_context: ContextPackage
     child_contexts: tuple[ContextPackage, ...]
     child_artifacts: tuple[ModelSurfaceReviewArtifact, ...]
+    child_specialist_outcomes: tuple[SpecialistAcceptedOutcome, ...] = ()
+    scheduler_live_usages: tuple[UsageRecord, ...] = ()
 
 
 def _promoted_parent_truncation(
@@ -871,7 +877,21 @@ def _promoted_parent_truncation(
         wire_schema_sha256=projection.wire_schema_sha256,
         response_sha256=projection.original_response_sha256,
     )
-    context_evidence = _promoted_context_evidence(context, task.logical_request_id)
+    rendered_context = render_context(context)
+    context_evidence = ContextRequestEvidence.build(
+        request_id=task.logical_request_id,
+        request_role=task.role,
+        context_role=context.role,
+        byte_budget=context.byte_budget,
+        declared_bytes_used=context.bytes_used,
+        rendered_bytes=len(rendered_context.encode()),
+        source_bytes=sum(len(item.content.encode()) for item in context.excerpts),
+        configured_maximum_source_tokens_per_request=(
+            context.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=context.effective_source_byte_ceiling,
+        rendered_sha256=hashlib.sha256(rendered_context.encode()).hexdigest(),
+    )
     routing = {
         **base.routing,
         "generation_id": envelope.generation_id,
@@ -917,6 +937,10 @@ def _build_promoted_parent_surface_fixture(
     orientation_root_lineage: str | None = None,
     usage_transform: Callable[[UsageRecord], UsageRecord] | None = None,
     include_scheduler_test_refresh_pricing: bool = True,
+    parent_role: str = "source_audit",
+    specialist_role: str | None = None,
+    supporting_source_model_id: str | None = None,
+    supporting_source_root_lineage: str | None = None,
 ) -> _PromotedParentSurfaceFixture:
     """Issue one real journal-owned retained-parent surface capability for consumers."""
 
@@ -929,6 +953,14 @@ def _build_promoted_parent_surface_fixture(
     selected_orientation_model = orientation_model_id or parent_model_id
     selected_orientation_root = orientation_root_lineage or parent_root_lineage
     transform = usage_transform or (lambda usage: usage)
+    if (specialist_role is None) != (parent_role == "source_audit"):
+        raise ValueError("promoted surface specialist role mode is inconsistent")
+    if specialist_role is not None and (
+        parent_role != f"specialist:{specialist_role}"
+        or supporting_source_model_id is None
+        or supporting_source_root_lineage is None
+    ):
+        raise ValueError("promoted specialist surface fixture lacks source-review support")
     planner = PipelineScheduler(journal)
 
     orientation_task = planner.model_task(
@@ -1005,14 +1037,110 @@ def _build_promoted_parent_surface_fixture(
     blind_task = planner.model_task(
         pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
         scope=SchedulerScope.single_shard(journal.manifest.shard_inventory.shards[0].shard_id),
-        task_key="promoted-retained-parent-source-audit",
-        role="source_audit",
+        task_key=f"promoted-retained-parent-{parent_role}",
+        role=parent_role,
         requested_model=parent_model_id,
         root_lineage=parent_root_lineage,
         system_prompt_sha256=hashlib.sha256(b"promoted-retained-parent-system").hexdigest(),
         response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
     )
-    blind_plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, (blind_task,))
+    supporting_source_task = (
+        planner.model_task(
+            pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+            scope=SchedulerScope.single_shard(journal.manifest.shard_inventory.shards[0].shard_id),
+            task_key="promoted-retained-parent-source-audit",
+            role="source_audit",
+            requested_model=cast(str, supporting_source_model_id),
+            root_lineage=cast(str, supporting_source_root_lineage),
+            system_prompt_sha256=hashlib.sha256(
+                b"promoted-retained-supporting-source-system"
+            ).hexdigest(),
+            response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        if specialist_role is not None
+        else None
+    )
+    blind_plan = planner.prepare_pass(
+        SchedulerPassKind.BLIND_SHARD_REVIEW,
+        (blind_task,) if supporting_source_task is None else (supporting_source_task, blind_task),
+    )
+    supporting_usage: UsageRecord | None = None
+    if supporting_source_task is not None:
+        supporting_activation = journal.activate_task(
+            supporting_source_task.task_id,
+            actual_input_sha256=supporting_source_task.input_sha256,
+            system_prompt_sha256=supporting_source_task.system_prompt_sha256,
+            user_prompt_sha256=hashlib.sha256(
+                b"promoted-retained-supporting-source-user"
+            ).hexdigest(),
+            provider_prompt_sha256=hashlib.sha256(
+                b"promoted-retained-supporting-source-provider"
+            ).hexdigest(),
+            response_schema_sha256=supporting_source_task.response_schema_sha256,
+            delivered_source_descriptor_sha256s=(
+                scheduler_test_delivered_source_descriptor_sha256s(
+                    blind_plan,
+                    supporting_source_task,
+                )
+            ),
+        )
+        journal.mark_dispatched(supporting_source_task.task_id)
+        supporting_payload = CandidateReviewBatch.model_validate(
+            build_scheduler_test_model_payload(
+                blind_plan,
+                supporting_source_task,
+            )
+        )
+        supporting_document = frame_candidate_review_batch(supporting_payload)
+        normalized_supporting_payload, supporting_normalization = (
+            normalize_candidate_review_document(
+                supporting_document,
+                request_id=supporting_source_task.logical_request_id,
+            )
+        )
+        assert normalized_supporting_payload == supporting_payload
+        supporting_usage = transform(
+            build_scheduler_test_real_usage(
+                supporting_source_task,
+                supporting_activation,
+                seed="promoted-retained-supporting-source",
+                validated_output=supporting_document,
+                privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+                audit_model_selection=journal.manifest.bindings.audit_model_selection,
+                audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+                audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
+                include_audit_model_refresh_pricing=(include_scheduler_test_refresh_pricing),
+            )
+        )
+        supporting_surface_requests, supporting_surface_artifact = (
+            build_scheduler_test_model_surface_review_custody(
+                blind_plan,
+                supporting_source_task,
+                supporting_activation,
+                supporting_usage,
+                supporting_payload,
+                normalization_evidence=supporting_normalization,
+            )
+        )
+        assert supporting_surface_artifact is not None
+        supporting_output = journal.persist_output(
+            supporting_source_task.task_id,
+            supporting_payload,
+            usage_record=supporting_usage,
+            model_surface_review_requests=supporting_surface_requests,
+            model_surface_review_artifact=supporting_surface_artifact,
+            normalization_evidence=supporting_normalization,
+        )
+        journal.record_terminal(
+            SchedulerTaskResult.build(
+                plan=blind_plan,
+                task=supporting_source_task,
+                activation=supporting_activation,
+                terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+                terminal_evidence_sha256=(supporting_usage.validated_response_sha256 or "0" * 64),
+                output=supporting_output,
+            )
+        )
     parent_activation = journal.activate_task(
         blind_task.task_id,
         actual_input_sha256=blind_task.input_sha256,
@@ -1068,6 +1196,7 @@ def _build_promoted_parent_surface_fixture(
     child_usages = []
     child_contexts = []
     child_artifacts = []
+    child_specialist_outcomes = []
     for child in recovery_plan.children:
         child_context = build_truncation_recovery_child_context(
             parent_context=parent_context,
@@ -1095,7 +1224,7 @@ def _build_promoted_parent_surface_fixture(
                 surface_manifest=surface_manifest,
                 surfaces=records,
                 execution_evidence=ExecutionEvidenceKind.REAL,
-                request_role="source_audit",
+                request_role=parent_role,
                 exact_model_id=parent_model_id,
             )
         )
@@ -1118,7 +1247,49 @@ def _build_promoted_parent_surface_fixture(
                 if key in parent_usage.routing:
                     child_routing[key] = parent_usage.routing[key]
             child_usage = child_usage.model_copy(update={"routing": child_routing})
-        child_usage = transform(child_usage)
+        child_specialist_outcome = None
+        if specialist_role is not None:
+            rendered_child_context = render_context(child_context)
+            child_context_evidence = ContextRequestEvidence.build(
+                request_id=child_usage.request_id,
+                request_role=parent_role,
+                context_role=child_context.role,
+                byte_budget=child_context.byte_budget,
+                declared_bytes_used=child_context.bytes_used,
+                rendered_bytes=len(rendered_child_context.encode()),
+                source_bytes=sum(len(item.content.encode()) for item in child_context.excerpts),
+                configured_maximum_source_tokens_per_request=(
+                    child_context.configured_maximum_source_tokens_per_request
+                ),
+                effective_source_byte_ceiling=child_context.effective_source_byte_ceiling,
+                rendered_sha256=hashlib.sha256(rendered_child_context.encode()).hexdigest(),
+            )
+            child_routing = dict(child_usage.routing)
+            child_routing.update(
+                {
+                    "context_request_evidence": child_context_evidence.model_dump(mode="json"),
+                    "context_request_evidence_sha256": child_context_evidence.evidence_sha256,
+                }
+            )
+            child_usage = child_usage.model_copy(update={"routing": child_routing})
+            child_usage = transform(child_usage)
+            context_request_evidence_sha256 = child_usage.routing.get(
+                "context_request_evidence_sha256"
+            )
+            assert isinstance(context_request_evidence_sha256, str)
+            assert child_usage.validated_response_sha256 is not None
+            child_specialist_outcome = SpecialistAcceptedOutcome.build(
+                request_id=child_usage.request_id,
+                specialist_role=specialist_role,
+                request_role=parent_role,
+                outcome_kind=SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW,
+                validated_response_sha256=child_usage.validated_response_sha256,
+                context_request_evidence_sha256=context_request_evidence_sha256,
+                requested_surface_count=len(child_requests),
+                surface_review_artifact_sha256=child_artifact.artifact_sha256,
+            )
+        else:
+            child_usage = transform(child_usage)
         child_result = journal.record_truncation_recovery_child_success(
             child.child_task_id,
             usage_record=child_usage,
@@ -1126,11 +1297,14 @@ def _build_promoted_parent_surface_fixture(
             normalized_batch=batch,
             requested_surface_requests=child_requests,
             output_artifact=child_artifact,
+            specialist_accepted_outcome=child_specialist_outcome,
         )
         child_results.append(child_result)
         child_usages.append(child_usage)
         child_contexts.append(child_context)
         child_artifacts.append(child_artifact)
+        if child_specialist_outcome is not None:
+            child_specialist_outcomes.append(child_specialist_outcome)
 
     closure = journal.seal_truncation_recovery_family(family.family_id)
     assert closure.closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
@@ -1155,6 +1329,15 @@ def _build_promoted_parent_surface_fixture(
     blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
     assert blind_result.status is SchedulerPassStatus.COMPLETE
     scheduler_artifact = journal.artifact()
+    scheduler_live_usages: tuple[UsageRecord, ...] = ()
+    if specialist_role is not None:
+        assert supporting_usage is not None
+        scheduler_live_usages = (
+            orientation_usage,
+            supporting_usage,
+            parent_usage,
+            *child_usages,
+        )
     return _PromotedParentSurfaceFixture(
         journal=journal,
         family_id=family.family_id,
@@ -1170,6 +1353,8 @@ def _build_promoted_parent_surface_fixture(
         parent_context=parent_context,
         child_contexts=tuple(child_contexts),
         child_artifacts=tuple(child_artifacts),
+        child_specialist_outcomes=tuple(child_specialist_outcomes),
+        scheduler_live_usages=scheduler_live_usages,
     )
 
 

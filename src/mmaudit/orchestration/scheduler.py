@@ -75,7 +75,6 @@ from mmaudit.models.scheduler import (
     build_scheduler_model_request_evidence,
     build_scheduler_truncation_recovery_model_request_evidence,
     scheduler_canonical_sha256,
-    scheduler_role_requires_specialist_accepted_outcome,
 )
 from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
@@ -573,7 +572,6 @@ def _validate_root_scheduler_parent(
         or parent_request_limit_reservation.role != usage.role
         or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
         or pass_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
-        or scheduler_role_requires_specialist_accepted_outcome(task.role)
         or result.terminal_status is not SchedulerTerminalStatus.TRUNCATED
         or result.result_origin is not SchedulerResultOrigin.ACTIVATED
         or family.parent_terminal_result_sha256 != result.result_sha256
@@ -667,7 +665,7 @@ def _typed_recovery_usage_coordinate(
     )
     expected_count_before = family.request_limit_count_before_family + preceding_reserved_attempts
     if (
-        result.schema_version != "1.1"
+        result.schema_version not in {"1.1", "1.2"}
         or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
         or usage is None
         or result.runtime_activation != activation
@@ -710,7 +708,7 @@ def _expected_recovery_family_closure(
         result_hashes.append(result.entry_sha256)
         if (
             isinstance(result, SchedulerTruncationRecoveryChildResult)
-            and result.schema_version == "1.1"
+            and result.schema_version in {"1.1", "1.2"}
             and result.result_origin is SchedulerTruncationRecoveryResultOrigin.RUNTIME
             and result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
         ):
@@ -821,7 +819,7 @@ def _rebuild_recovered_candidate_review_content(
         result = indexes.results.get(child.child_task_id)
         if (
             not isinstance(result, SchedulerTruncationRecoveryChildResult)
-            or result.schema_version != "1.1"
+            or result.schema_version not in {"1.1", "1.2"}
             or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
             or result.runtime_usage_record is None
@@ -1221,7 +1219,7 @@ def _derive_truncation_recovery_indexes(
             ):
                 raise ValueError("scheduler recovery result lacks one exact durable dispatch")
             assert activation is not None
-            if entry.schema_version == "1.1":
+            if entry.schema_version in {"1.1", "1.2"}:
                 _typed_recovery_usage_coordinate(
                     result=entry,
                     child=child,
@@ -1671,7 +1669,6 @@ class SchedulerJournal:
             if (
                 parent_pass_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
                 or parent_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
-                or scheduler_role_requires_specialist_accepted_outcome(parent_task.role)
                 or parent_task.response_schema_sha256 != projection.wire_schema_sha256
             ):
                 raise ValueError(
@@ -1873,8 +1870,9 @@ class SchedulerJournal:
         normalized_batch: CandidateReviewBatch,
         requested_surface_requests: Iterable[ModelSurfaceReviewRequest],
         output_artifact: ModelSurfaceReviewArtifact,
+        specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
     ) -> SchedulerTruncationRecoveryChildResult:
-        """Construct and persist one owned, exact v1.1 successful child terminal."""
+        """Construct and persist one owned, exact successful child terminal."""
 
         self._assert_writable_custody()
         child, activation, dispatch = self._live_dispatched_truncation_recovery_child(child_task_id)
@@ -1887,6 +1885,7 @@ class SchedulerJournal:
             normalized_batch=normalized_batch,
             requested_surface_requests=requested_surface_requests,
             output_artifact=output_artifact,
+            specialist_accepted_outcome=specialist_accepted_outcome,
             entry_index=len(self._truncation_recovery_entries),
             previous_entry_sha256=self._truncation_recovery_chain_head,
         )
@@ -2500,10 +2499,9 @@ class SchedulerJournal:
     ]:
         retained: list[tuple[UsageRecord, tuple[str, str, int], str]] = []
         for child_task_id, result in self._truncation_recovery_indexes.results.items():
-            if (
-                not isinstance(result, SchedulerTruncationRecoveryChildResult)
-                or result.schema_version != "1.1"
-            ):
+            if not isinstance(
+                result, SchedulerTruncationRecoveryChildResult
+            ) or result.schema_version not in {"1.1", "1.2"}:
                 continue
             child, family_id = self._truncation_recovery_indexes.children[child_task_id]
             activation = self._truncation_recovery_indexes.activations[child_task_id]
@@ -2549,7 +2547,7 @@ class SchedulerJournal:
                 continue
             if (
                 not isinstance(result, SchedulerTruncationRecoveryChildResult)
-                or result.schema_version != "1.1"
+                or result.schema_version not in {"1.1", "1.2"}
                 or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
                 or result.runtime_usage_record is None
             ):

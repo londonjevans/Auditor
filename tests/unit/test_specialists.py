@@ -26,6 +26,7 @@ from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     Location,
+    ModelRequestValidationStatus,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
     RepositoryMap,
@@ -768,6 +769,197 @@ def test_exact_host_accepted_investigator_outcome_receives_source_review_credit(
     assert record.accepted_outcomes == (accepted,)
     assert record.source_review_creditable_requests == 1
     assert completed_specialist_roles([record]) == {"access_control"}
+
+
+def test_promoted_recovery_coordinate_can_credit_an_exact_specialist_child(
+    config_factory,
+    monkeypatch,
+) -> None:
+    config = config_factory(
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                }
+            }
+        }
+    )
+    surface = _surface_request()
+    context = _context(
+        role="specialist:access_control",
+        source="contract Synthetic {}",
+        requested_model_surfaces=(surface,),
+    )
+    usage = _usage(
+        request_id="scheduler-recovery-request-" + "a" * 64,
+        role="specialist:access_control",
+        context=context,
+    )
+    accepted = _accepted(
+        usage,
+        requested_surface_count=1,
+        surface_review_artifact_sha256="c" * 64,
+    )
+    monkeypatch.setattr(
+        specialists_module,
+        "is_creditable_usage_record",
+        lambda _record: False,
+    )
+
+    def recovery_is_creditable(
+        record: UsageRecord,
+        *,
+        request_limit_scope: str,
+        request_limit_count_before: int,
+    ) -> bool:
+        assert record is usage
+        assert request_limit_scope == "scheduler-request-" + "b" * 64
+        assert request_limit_count_before == 7
+        return True
+
+    monkeypatch.setattr(
+        specialists_module,
+        "is_recovery_creditable_usage_record",
+        recovery_is_creditable,
+    )
+
+    record = next(
+        item
+        for item in build_specialist_execution_records(
+            config,
+            usage_records=[usage],
+            contexts=[context],
+            accepted_outcomes=[accepted],
+            structurally_successful_request_ids={usage.request_id},
+            recovery_usage_coordinates=((usage.request_id, "scheduler-request-" + "b" * 64, 7),),
+        )
+        if item.role == "access_control"
+    )
+
+    assert record.status is SpecialistExecutionStatus.COMPLETED
+    assert record.successful_request_ids == (usage.request_id,)
+    assert record.source_review_creditable_requests == 1
+    assert completed_specialist_roles([record]) == {"access_control"}
+
+
+def test_promoted_live_truncated_parent_is_superseded_without_hiding_other_failures(
+    config_factory,
+    monkeypatch,
+) -> None:
+    config = config_factory(
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                }
+            }
+        }
+    )
+    surface = _surface_request()
+    parent_context = _context(
+        role="specialist:access_control",
+        source="contract Parent {}",
+        requested_model_surfaces=(surface,),
+    )
+    child_context = _context(
+        role="specialist:access_control",
+        source="contract Child {}",
+        requested_model_surfaces=(surface,),
+    )
+    parent = _usage(
+        request_id="scheduler-request-" + "a" * 64,
+        role="specialist:access_control",
+        context=parent_context,
+    ).model_copy(
+        update={
+            "status": "rejected_truncated_response",
+            "validation_status": ModelRequestValidationStatus.TRUNCATED,
+        }
+    )
+    child = _usage(
+        request_id="scheduler-recovery-request-" + "b" * 64,
+        role="specialist:access_control",
+        context=child_context,
+    )
+    accepted = _accepted(
+        child,
+        requested_surface_count=1,
+        surface_review_artifact_sha256="c" * 64,
+    )
+    monkeypatch.setattr(specialists_module, "is_creditable_usage_record", lambda _record: False)
+    monkeypatch.setattr(
+        specialists_module,
+        "is_recovery_creditable_usage_record",
+        lambda _record, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        specialists_module,
+        "is_accountable_usage_record",
+        lambda record, *, require_real=False: record is parent and require_real,
+    )
+    common = {
+        "config": config,
+        "usage_records": [parent, child],
+        "contexts": [parent_context, child_context],
+        "accepted_outcomes": [accepted],
+        "structurally_successful_request_ids": {child.request_id},
+        "recovery_usage_coordinates": ((child.request_id, "scheduler-request-" + "c" * 64, 7),),
+    }
+
+    without_promotion = next(
+        item
+        for item in build_specialist_execution_records(**common)
+        if item.role == "access_control"
+    )
+    assert without_promotion.status is SpecialistExecutionStatus.PARTIAL
+    assert without_promotion.failed_request_ids == (parent.request_id,)
+
+    promoted = next(
+        item
+        for item in build_specialist_execution_records(
+            **common,
+            promoted_recovery_parent_usage_records=(parent,),
+        )
+        if item.role == "access_control"
+    )
+    assert promoted.status is SpecialistExecutionStatus.COMPLETED
+    assert promoted.successful_request_ids == (child.request_id,)
+    assert promoted.failed_request_ids == ()
+    assert completed_specialist_roles([promoted]) == {"access_control"}
+
+    ordinary_failure = _usage(
+        request_id="ordinary-specialist-failure",
+        role="specialist:access_control",
+        context=child_context,
+    ).model_copy(
+        update={
+            "status": "provider_error",
+            "validation_status": ModelRequestValidationStatus.INVALID_RESPONSE,
+        }
+    )
+    with_other_failure = next(
+        item
+        for item in build_specialist_execution_records(
+            config,
+            usage_records=[parent, child, ordinary_failure],
+            contexts=[parent_context, child_context],
+            accepted_outcomes=[accepted],
+            structurally_successful_request_ids={child.request_id},
+            recovery_usage_coordinates=((child.request_id, "scheduler-request-" + "c" * 64, 7),),
+            promoted_recovery_parent_usage_records=(parent,),
+        )
+        if item.role == "access_control"
+    )
+    assert with_other_failure.status is SpecialistExecutionStatus.PARTIAL
+    assert with_other_failure.failed_request_ids == (ordinary_failure.request_id,)
+
+    with pytest.raises(ValueError, match="exact live truncated custody"):
+        build_specialist_execution_records(
+            **common,
+            promoted_recovery_parent_usage_records=(parent.model_copy(),),
+        )
 
 
 def test_stale_hash_accepted_outcome_is_rejected_during_normalization(

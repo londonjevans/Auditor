@@ -1478,32 +1478,37 @@ class FakeOpenRouter:
             if self.mode == "truncation_recovery_specialist":
                 metadata = body.get("metadata") or {}
                 logical_request_id = metadata.get("mmaudit_request_id")
-                if not isinstance(logical_request_id, str) or not logical_request_id.startswith(
-                    "scheduler-request-"
-                ):
+                if not isinstance(logical_request_id, str):
                     raise AssertionError(
-                        "synthetic specialist truncation omitted its scheduler request"
+                        "synthetic specialist truncation omitted its logical request"
                     )
-                content["findings"] = [
-                    _candidate(
-                        candidate_id="raw-specialist-retained",
-                        role=f"specialist:{specialist}",
-                    ),
-                    _candidate(
-                        candidate_id="raw-specialist-private-tail",
-                        role=f"specialist:{specialist}",
-                    ),
-                ]
-                self.specialist_truncation_calls += 1
-                return self._completion(
-                    body,
-                    _truncated_candidate_review_wire(
-                        content,
-                        retained_finding_count=1,
-                    ),
-                    finish_reason="length",
-                    native_finish_reason="max_tokens",
-                )
+                if logical_request_id.startswith("scheduler-recovery-request-"):
+                    self.recovery_child_calls += 1
+                elif not logical_request_id.startswith("scheduler-request-"):
+                    raise AssertionError(
+                        "synthetic specialist truncation used an unexpected request identity"
+                    )
+                else:
+                    content["findings"] = [
+                        _candidate(
+                            candidate_id="raw-specialist-retained",
+                            role=f"specialist:{specialist}",
+                        ),
+                        _candidate(
+                            candidate_id="raw-specialist-private-tail",
+                            role=f"specialist:{specialist}",
+                        ),
+                    ]
+                    self.specialist_truncation_calls += 1
+                    return self._completion(
+                        body,
+                        _truncated_candidate_review_wire(
+                            content,
+                            retained_finding_count=1,
+                        ),
+                        finish_reason="length",
+                        native_finish_reason="max_tokens",
+                    )
         elif schema_name == "mmaudit_report_quality_review":
             content = {
                 "passed": True,

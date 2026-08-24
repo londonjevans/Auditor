@@ -594,7 +594,7 @@ def _verify_live_truncation_recovery_material(
         )
     for child, result in zip(plan.children, exact_results, strict=True):
         if (
-            result.schema_version != "1.1"
+            result.schema_version not in {"1.1", "1.2"}
             or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
             or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
             or result.family_id != exact_family.family_id

@@ -3168,6 +3168,8 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         contexts: list[ContextPackage],
         accepted_outcomes: Any = (),
         structurally_successful_request_ids: Any = None,
+        recovery_usage_coordinates: Any = (),
+        promoted_recovery_parent_usage_records: Any = (),
     ) -> Any:
         execution_contexts.extend(contexts)
         return build_specialist_execution_records(
@@ -3176,6 +3178,8 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
             contexts=contexts,
             accepted_outcomes=accepted_outcomes,
             structurally_successful_request_ids=structurally_successful_request_ids,
+            recovery_usage_coordinates=recovery_usage_coordinates,
+            promoted_recovery_parent_usage_records=(promoted_recovery_parent_usage_records),
         )
 
     monkeypatch.setattr(

@@ -11,7 +11,11 @@ import pytest
 
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.constants import ExitCode
-from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
+)
 from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryEntryKind,
@@ -465,7 +469,7 @@ async def test_retained_parent_surface_closes_incomplete_mock_family_without_cre
 
 
 @pytest.mark.asyncio
-async def test_specialist_truncation_never_opens_recovery_family(
+async def test_mock_specialist_truncation_recovers_without_credit_and_resumes_zero_transport(
     config_factory: Any,
     monkeypatch: pytest.MonkeyPatch,
     vulnerable_repo: Path,
@@ -495,15 +499,132 @@ async def test_specialist_truncation_never_opens_recovery_family(
     assert first.exit_code is ExitCode.INCOMPLETE
     assert not first.report.completed
     assert fake.specialist_truncation_calls == 1
-    assert fake.recovery_child_calls == 0
+    assert fake.recovery_child_calls == 2
     parent = _truncated_parent_attempt(first.run_dir)
     assert parent["usage_record"]["role"] == "specialist:access_control"
     assert [finding["candidate_id"] for finding in parent["truncation_projection"]["findings"]] == [
         "raw-specialist-retained"
     ]
-    assert _recovery_entries(first.run_dir) == ()
+    entries = _recovery_entries(first.run_dir)
+    family_roots = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_ROOT.value
+    )
+    activations = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value
+    )
+    child_results = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+    )
+    closures = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value
+    )
+    assert len(family_roots) == len(closures) == 1
+    assert len(activations) == len(child_results) == 2
+    assert closures[0]["closure_status"] == (
+        SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED.value
+    )
+    assert all(
+        entry["entry_kind"] != SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED.value
+        for entry in entries
+    )
+    assert {
+        family_roots[0]["request_limit_binding"]["parent_request_limit_reservation"]["role"],
+        *(entry["request_role"] for entry in activations),
+        *(entry["runtime_usage_record"]["role"] for entry in child_results),
+        *(
+            entry["runtime_usage_record"]["routing"]["context_request_evidence"]["request_role"]
+            for entry in child_results
+        ),
+        *(
+            entry["runtime_usage_record"]["routing"]["context_request_evidence"]["context_role"]
+            for entry in child_results
+        ),
+    } == {"specialist:access_control"}
+    assert all(
+        entry["child_logical_request_id"].startswith("scheduler-recovery-request-")
+        for entry in activations
+    )
+    assert [
+        (
+            entry["runtime_usage_record"]["attempts"],
+            entry["runtime_usage_record"]["retry_count"],
+            entry["runtime_request_limit_reservation"]["request_limit_count_before"],
+            entry["runtime_request_limit_reservation"]["request_limit_count_after"],
+        )
+        for entry in child_results
+    ] == [(1, 0, 1, 2), (1, 0, 2, 3)]
+    parent_request_id = parent["usage_record"]["request_id"]
+    assert {
+        entry["runtime_request_limit_reservation"]["request_limit_scope"] for entry in child_results
+    } == {parent_request_id}
+    assert all(
+        Decimal(entry["accounted_cost_usd_exact"])
+        == Decimal(entry["runtime_usage_record"]["accounted_cost_usd_exact"])
+        == Decimal("0.001")
+        and Decimal(entry["accounted_cost_usd_exact"]) <= Decimal(entry["reserved_usd_exact"])
+        for entry in child_results
+    )
+    assert all(
+        entry["terminal_status"] == SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value
+        and entry["runtime_usage_record"]["execution_evidence"] == ExecutionEvidenceKind.MOCK.value
+        for entry in child_results
+    )
+    for entry in child_results:
+        usage = entry["runtime_usage_record"]
+        context_evidence = usage["routing"]["context_request_evidence"]
+        output_artifact = entry["runtime_output_artifact"]
+        outcome = SpecialistAcceptedOutcome.model_validate_json(
+            json.dumps(entry["runtime_specialist_accepted_outcome"]),
+            strict=True,
+        )
+        assert entry["schema_version"] == "1.2"
+        assert outcome.outcome_kind is SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+        assert outcome.request_id == entry["child_logical_request_id"] == usage["request_id"]
+        assert outcome.request_role == entry["runtime_activation"]["request_role"] == usage["role"]
+        assert outcome.specialist_role == "access_control"
+        assert outcome.context_request_evidence_sha256 == context_evidence["evidence_sha256"]
+        assert (
+            outcome.context_request_evidence_sha256
+            == usage["routing"]["context_request_evidence_sha256"]
+        )
+        assert outcome.validated_response_sha256 == usage["validated_response_sha256"]
+        assert (
+            outcome.surface_review_artifact_sha256
+            == entry["runtime_output_artifact_sha256"]
+            == output_artifact["artifact_sha256"]
+        )
+        assert (
+            outcome.requested_surface_count
+            == len(entry["runtime_requested_surface_requests"])
+            == len(entry["child_surface_ids"])
+        )
+        assert entry["runtime_specialist_accepted_outcome_sha256"] == outcome.evidence_sha256
     first_inventory = _candidate_and_surface_inventory(first.run_dir)
     assert b"raw-specialist-retained" not in first_inventory[0]
+    assert b"scheduler-recovery-request-" not in first_inventory[1]
+    specialist_execution = (first.run_dir / "specialist-execution.json").read_bytes()
+    access_control = next(
+        record
+        for record in json.loads(specialist_execution)["records"]
+        if record["role"] == "access_control"
+    )
+    assert access_control["status"] == "failed"
+    assert access_control["successful_requests"] == 0
+    assert access_control["source_review_creditable_requests"] == 0
+    assert access_control["accepted_outcomes"] == []
+    assert set(access_control["failed_request_ids"]) == {
+        parent_request_id,
+        *(entry["child_logical_request_id"] for entry in activations),
+    }
+    first_ledger = ledger.snapshot()
 
     resumed_fake = FakeOpenRouter(mode="truncation_recovery_specialist")
     resumed = await _run(
@@ -521,4 +642,7 @@ async def test_specialist_truncation_never_opens_recovery_family(
     assert resumed_fake.chat_calls == 0
     assert resumed_fake.specialist_truncation_calls == 0
     assert resumed_fake.recovery_child_calls == 0
+    assert _recovery_entries(first.run_dir) == entries
     assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
+    assert (resumed.run_dir / "specialist-execution.json").read_bytes() == specialist_execution
+    assert ledger.snapshot() == first_ledger

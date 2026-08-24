@@ -137,12 +137,15 @@ _MAX_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_SCHEDULER_MODEL_REQUESTS = 700_000
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$"
 _WHOLE_PROTOCOL_REVIEW_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
+_SPECIALIST_INVESTIGATOR_REQUEST_ROLES = frozenset(
+    f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
+)
 _BLIND_SHARD_REVIEW_ROLES = frozenset(
     {
         "source_audit",
         "business_logic",
         "configuration",
-        *(f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES),
+        *_SPECIALIST_INVESTIGATOR_REQUEST_ROLES,
     }
 )
 _SPECIALIST_ACCEPTED_OUTCOME_ROLES = frozenset(
@@ -6598,11 +6601,11 @@ class SchedulerModelRequestEvidence(StrictModel):
 
 
 class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
-    """Public hash-only projection of one typed v1.1 recovery child usage."""
+    """Public hash-only projection of one typed recovery child usage."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     provider_dispatch_authorized: Literal[False] = False
     review_credit_authorized: Literal[False] = False
@@ -6662,6 +6665,11 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         exclude_if=lambda value: value is None,
     )
     output_artifact_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    specialist_accepted_outcome_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
@@ -6753,8 +6761,13 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         succeeded = (
             exact_result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
         )
+        specialist_outcome = exact_result.runtime_specialist_accepted_outcome
+        specialist_outcome_sha256 = exact_result.runtime_specialist_accepted_outcome_sha256
+        requires_specialist_outcome = (
+            succeeded and exact_parent.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
+        )
         if (
-            exact_result.schema_version != "1.1"
+            exact_result.schema_version != ("1.2" if requires_specialist_outcome else "1.1")
             or exact_result.terminal_status
             not in {
                 SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED,
@@ -6774,6 +6787,15 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 and usage.validated_response_sha256 is not None
             )
             or (exact_promotion is not None and not succeeded)
+            or requires_specialist_outcome
+            != (
+                specialist_outcome is not None
+                and specialist_outcome_sha256 == specialist_outcome.evidence_sha256
+            )
+            or (
+                not requires_specialist_outcome
+                and (specialist_outcome is not None or specialist_outcome_sha256 is not None)
+            )
             or (
                 exact_promotion is not None
                 and exact_result.entry_sha256 not in exact_promotion.direct_child_result_sha256s
@@ -6801,7 +6823,6 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or exact_result.family_root_sha256 != exact_family.entry_sha256
             or exact_parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
             or exact_parent.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
-            or scheduler_role_requires_specialist_accepted_outcome(exact_parent.role)
             or exact_activation.campaign_id != exact_manifest.campaign_id
             or exact_activation.child_task_id != exact_result.child_task_id
             or exact_activation.child_logical_request_id != exact_result.child_logical_request_id
@@ -6843,6 +6864,26 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or reservation.request_limit_count_after
             != exact_activation.request_limit_count_after_child
             or reservation.request_limit_maximum != exact_activation.request_limit_maximum
+            or (
+                specialist_outcome is not None
+                and (
+                    output_artifact is None
+                    or usage.validated_response_sha256 is None
+                    or specialist_outcome.outcome_kind
+                    is not SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+                    or specialist_outcome.request_id != exact_activation.child_logical_request_id
+                    or specialist_outcome.specialist_role
+                    != exact_activation.request_role.removeprefix("specialist:")
+                    or specialist_outcome.request_role != exact_activation.request_role
+                    or specialist_outcome.validated_response_sha256
+                    != usage.validated_response_sha256
+                    or specialist_outcome.context_request_evidence_sha256 != context.evidence_sha256
+                    or specialist_outcome.requested_surface_count
+                    != len(exact_result.child_surface_ids)
+                    or specialist_outcome.surface_review_artifact_sha256
+                    != output_artifact.artifact_sha256
+                )
+            )
         ):
             raise ValueError("recovery public request differs from typed provider evidence")
 
@@ -6875,7 +6916,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 refresh_binding=exact_manifest.bindings.audit_model_refresh,
             )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if specialist_outcome is not None else "1.0",
             "evidence_authority": "comparison_required",
             "provider_dispatch_authorized": False,
             "review_credit_authorized": False,
@@ -6926,6 +6967,11 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                     "validated_response_sha256": usage.validated_response_sha256,
                     "normalization_evidence_sha256": normalization.evidence_sha256,
                     "output_artifact_sha256": output_artifact.artifact_sha256,
+                    **(
+                        {"specialist_accepted_outcome_sha256": (specialist_outcome.evidence_sha256)}
+                        if specialist_outcome is not None
+                        else {}
+                    ),
                 }
                 if succeeded and normalization is not None and output_artifact is not None
                 else {}
@@ -6968,6 +7014,9 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             self.output_artifact_sha256,
         )
         succeeded = self.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+        requires_specialist_outcome = (
+            succeeded and self.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
+        )
         if (
             self.request_limit_count_after <= self.request_limit_count_before
             or self.request_limit_count_after > self.request_limit_maximum
@@ -6975,6 +7024,9 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or succeeded != all(item is not None for item in completion_fields)
             or (not succeeded and any(item is not None for item in completion_fields))
             or (self.promotion_entry_sha256 is not None and not succeeded)
+            or (self.schema_version == "1.1")
+            != (self.specialist_accepted_outcome_sha256 is not None)
+            or requires_specialist_outcome != (self.specialist_accepted_outcome_sha256 is not None)
             or (
                 any(item is None for item in audit_fields)
                 and any(item is not None for item in audit_fields)
@@ -7025,7 +7077,7 @@ def build_scheduler_truncation_recovery_model_request_evidence(
     model_requests: Iterable[SchedulerModelRequestEvidence],
     truncation_recovery_entries: Iterable[SchedulerTruncationRecoveryEntry],
 ) -> tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]:
-    """Derive public request evidence for every typed v1.1 child UsageRecord."""
+    """Derive public request evidence for every typed child UsageRecord."""
 
     exact_manifest = SchedulerCampaignManifest.model_validate(manifest.model_dump(mode="python"))
     request_items = _bounded_scheduler_items(
@@ -7070,7 +7122,7 @@ def build_scheduler_truncation_recovery_model_request_evidence(
             promotion_by_result_sha256[result_sha256] = promotion
     recovered: list[SchedulerTruncationRecoveryModelRequestEvidence] = []
     for result in results_by_sha.values():
-        if result.schema_version != "1.1" or result.runtime_usage_record is None:
+        if result.schema_version not in {"1.1", "1.2"} or result.runtime_usage_record is None:
             continue
         family = families_by_id.get(result.family_id)
         activation = activations_by_sha.get(result.activation_sha256)

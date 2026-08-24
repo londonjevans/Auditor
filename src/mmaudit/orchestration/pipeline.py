@@ -524,6 +524,8 @@ def _exact_completed_usage(
     completion_usage: UsageRecord,
     *,
     expected_role: str,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> UsageRecord:
     """Join one host-validated result to exactly one immutable ledger request."""
 
@@ -539,11 +541,22 @@ def _exact_completed_usage(
             "validated agent result did not join exactly one provider usage record"
         )
     selected = matches[0]
+    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
+        raise OpenRouterSchemaError("recovery usage coordinates are all-or-none")
+    creditable = (
+        is_creditable_usage_record(selected)
+        if recovery_request_limit_scope is None
+        else is_recovery_creditable_usage_record(
+            selected,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=cast(int, recovery_request_limit_count_before),
+        )
+    )
     if (
         selected.model_dump(mode="json") != normalized.model_dump(mode="json")
         or selected.role != expected_role
         or normalized.role != expected_role
-        or not is_creditable_usage_record(selected)
+        or not creditable
     ):
         raise OpenRouterSchemaError(
             "validated agent result differed from its exact completed provider request"
@@ -4533,6 +4546,9 @@ class AuditPipeline:
                 outcome_kind: SpecialistAcceptedOutcomeKind,
                 requested_surface_count: int = 0,
                 surface_artifact: ModelSurfaceReviewArtifact | None = None,
+                retain: bool = True,
+                recovery_request_limit_scope: str | None = None,
+                recovery_request_limit_count_before: int | None = None,
             ) -> SpecialistAcceptedOutcome:
                 """Record one role result only after all host-side validation returned."""
 
@@ -4540,6 +4556,8 @@ class AuditPipeline:
                     usage.records,
                     completion_usage,
                     expected_role=request_role,
+                    recovery_request_limit_scope=recovery_request_limit_scope,
+                    recovery_request_limit_count_before=(recovery_request_limit_count_before),
                 )
                 sealed_context, context_evidence = _bound_context_request_evidence(
                     record,
@@ -4595,7 +4613,8 @@ class AuditPipeline:
                         surface_artifact.artifact_sha256 if surface_artifact is not None else None
                     ),
                 )
-                accepted_specialist_outcomes.append(accepted)
+                if retain:
+                    accepted_specialist_outcomes.append(accepted)
                 return accepted
 
             def register_finding_result(
@@ -5751,8 +5770,6 @@ class AuditPipeline:
                     ) -> bool:
                         """Queue only a fully typed parent; no provisional record is consumed."""
 
-                        if scheduler_role_requires_specialist_accepted_outcome(scheduler_task.role):
-                            return False
                         attempts = tuple(
                             attempt
                             for attempt in scheduler.journal.provider_attempts
@@ -6039,9 +6056,10 @@ class AuditPipeline:
                             raise OpenRouterSchemaError(
                                 "truncation recovery cannot begin before blind-task quiescence"
                             )
+                    promotion_denied_family_ids: set[str] = set()
                     for (
                         request_role,
-                        _configured_role,
+                        configured_role,
                         scheduler_task,
                         parent_context,
                         blind_agent,
@@ -6211,6 +6229,30 @@ class AuditPipeline:
                                     raise OpenRouterSchemaError(
                                         "recovery child completion lacks exact typed custody"
                                     )
+                                child_specialist_outcome = (
+                                    accept_specialist_outcome(
+                                        completion_usage=exact_usage[0],
+                                        validated_context=prepared.child_context,
+                                        specialist_role=configured_role,
+                                        request_role=request_role,
+                                        outcome_kind=(
+                                            SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+                                        ),
+                                        requested_surface_count=len(
+                                            prepared.child_context.requested_model_surfaces
+                                        ),
+                                        surface_artifact=(child_review.surface_review_artifact),
+                                        retain=False,
+                                        recovery_request_limit_scope=(prepared.request_limit_scope),
+                                        recovery_request_limit_count_before=(
+                                            prepared.request_limit_count_before
+                                        ),
+                                    )
+                                    if scheduler_role_requires_specialist_accepted_outcome(
+                                        scheduler_task.role
+                                    )
+                                    else None
+                                )
                                 terminal_entries[child.child_task_id] = (
                                     scheduler.journal.record_truncation_recovery_child_success(
                                         child.child_task_id,
@@ -6223,6 +6265,7 @@ class AuditPipeline:
                                             prepared.child_context.requested_model_surfaces
                                         ),
                                         output_artifact=child_review.surface_review_artifact,
+                                        specialist_accepted_outcome=(child_specialist_outcome),
                                     )
                                 )
                             except OpenRouterTruncatedResponseError as exc:
@@ -6419,6 +6462,7 @@ class AuditPipeline:
                                     promoted_surface_capability
                                 )
                             except TruncationRecoveryEvidenceError:
+                                promotion_denied_family_ids.add(family.family_id)
                                 reason = (
                                     f"{request_role}: recovery closure lacked genuine REAL "
                                     "runtime custody; no review or coverage credit was granted"
@@ -6439,6 +6483,21 @@ class AuditPipeline:
                             raise OpenRouterSchemaError(
                                 "promoted recovery lacks live surface-coverage custody"
                             )
+                        promoted_child_outcomes = tuple(
+                            result.runtime_specialist_accepted_outcome for result in typed_results
+                        )
+                        requires_specialist_outcomes = (
+                            scheduler_role_requires_specialist_accepted_outcome(scheduler_task.role)
+                        )
+                        if requires_specialist_outcomes != all(
+                            outcome is not None for outcome in promoted_child_outcomes
+                        ) or (not requires_specialist_outcomes and any(promoted_child_outcomes)):
+                            raise OpenRouterSchemaError(
+                                "promoted recovery differs from exact specialist outcome custody"
+                            )
+                        accepted_specialist_outcomes.extend(
+                            outcome for outcome in promoted_child_outcomes if outcome is not None
+                        )
                         promoted_surface_projection = (
                             require_verified_promoted_truncation_recovery_surface_coverage(
                                 promoted_surface_capability
@@ -6532,6 +6591,7 @@ class AuditPipeline:
                             recovery_closures[family.family_id].closure_status
                             is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
                             or family.family_id in recovery_promotions
+                            or family.family_id in promotion_denied_family_ids
                         )
                         for family in scheduler.journal.truncation_recovery_families
                     )
@@ -9633,6 +9693,21 @@ class AuditPipeline:
                 }
                 if scheduler_usage_accounting_consistent
                 else set()
+            ),
+            recovery_usage_coordinates=tuple(
+                (
+                    request.logical_request_id,
+                    request.request_limit_scope,
+                    request.request_limit_count_before,
+                )
+                for request in promoted_recovery_requests
+                if scheduler_usage_accounting_consistent
+            ),
+            promoted_recovery_parent_usage_records=tuple(
+                projection.parent_usage_record
+                for projection in promoted_surface_projections
+                if scheduler_usage_accounting_consistent
+                if canonical_specialist_role(projection.parent_usage_record.role) is not None
             ),
         )
         write_json(

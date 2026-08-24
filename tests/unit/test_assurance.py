@@ -12,7 +12,11 @@ import pytest
 
 import mmaudit.orchestration.assurance as assurance_module
 import tests.scheduler_support as scheduler_support
-from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY, canonical_specialist_role
+from mmaudit.agents.specialists import (
+    SPECIALIST_ROLE_REGISTRY,
+    build_specialist_execution_records,
+    canonical_specialist_role,
+)
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -2573,6 +2577,7 @@ def _assurance_promoted_surface_fixture(
     runtime: AssuranceRuntime,
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
+    specialist_role: str | None = None,
 ) -> tuple[
     _PromotedParentSurfaceFixture,
     SoliditySymbolIndex,
@@ -2599,11 +2604,23 @@ def _assurance_promoted_surface_fixture(
         audit_model_selection=runtime.verified_audit_model_selection,
     )
     index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
-    parent_model_id = config.models.source_audit.primary
+    parent_request_role = (
+        f"specialist:{specialist_role}" if specialist_role is not None else "source_audit"
+    )
+    parent_model_id = (
+        config.models.role(specialist_role).primary
+        if specialist_role is not None
+        else config.models.source_audit.primary
+    )
+    source_model_id = config.models.source_audit.primary
     orientation_model_id = config.models.threat_model.primary
     assert runtime.production_qualification is not None
     parent_root = runtime.production_qualification.model_for(
         parent_model_id,
+        now=authorities.refresh_runtime.verified_at,
+    ).root_lineage
+    source_root = runtime.production_qualification.model_for(
+        source_model_id,
         now=authorities.refresh_runtime.verified_at,
     ).root_lineage
     orientation_root = runtime.production_qualification.model_for(
@@ -2611,14 +2628,23 @@ def _assurance_promoted_surface_fixture(
         now=authorities.refresh_runtime.verified_at,
     ).root_lineage
     context_seed = _promoted_surface_usage(
-        "source_audit",
+        parent_request_role,
         parent_model_id,
         "promoted-assurance-context-only",
     )
     context = _promoted_surface_context(requests, context_seed, index, graphs)
     records = tuple(
-        _promoted_surface_record(request, "source_audit", index, graphs) for request in requests
+        _promoted_surface_record(request, parent_request_role, index, graphs)
+        for request in requests
     )
+    specialist_fixture_args: dict[str, object] = {}
+    if specialist_role is not None:
+        specialist_fixture_args = {
+            "parent_role": parent_request_role,
+            "specialist_role": specialist_role,
+            "supporting_source_model_id": source_model_id,
+            "supporting_source_root_lineage": source_root,
+        }
     fixture = _build_promoted_parent_surface_fixture(
         journal,
         requests=requests,
@@ -2630,6 +2656,7 @@ def _assurance_promoted_surface_fixture(
         orientation_root_lineage=orientation_root,
         usage_transform=lambda usage: _bind_promoted_assurance_usage(usage, authorities),
         include_scheduler_test_refresh_pricing=False,
+        **specialist_fixture_args,
     )
     return fixture, index, graphs, invariants, audited_suite
 
@@ -2640,12 +2667,14 @@ def _runtime_with_promoted_parent_surface(
     runtime: AssuranceRuntime,
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
+    specialist_role: str | None = None,
 ) -> tuple[AssuranceRuntime, _PromotedParentSurfaceFixture]:
     fixture, index, graphs, invariants, audited_suite = _assurance_promoted_surface_fixture(
         config=config,
         runtime=runtime,
         authorities=authorities,
         root=root,
+        specialist_role=specialist_role,
     )
     ordinary_model_id = config.models.business_logic.primary
     ordinary_usage = _promoted_surface_usage(
@@ -2668,6 +2697,44 @@ def _runtime_with_promoted_parent_surface(
         graphs,
         context=ordinary_context,
     )
+    coverage_usages = [fixture.parent_usage, *fixture.child_usages, ordinary_usage]
+    coverage_artifacts = [*fixture.child_artifacts, ordinary_artifact]
+    coverage_contexts = {
+        fixture.parent_usage.request_id: [fixture.parent_context],
+        **{
+            usage.request_id: [context]
+            for usage, context in zip(
+                fixture.child_usages,
+                fixture.child_contexts,
+                strict=True,
+            )
+        },
+        ordinary_usage.request_id: [ordinary_context],
+    }
+    if specialist_role is not None:
+        source_usage = _promoted_surface_usage(
+            "source_audit",
+            config.models.source_audit.primary,
+            "promoted-assurance-specialist-source-review",
+        )
+        source_context = _promoted_surface_context(
+            fixture.requests,
+            source_usage,
+            index,
+            graphs,
+        )
+        _bind_promoted_usage_to_context(source_usage, source_context)
+        source_usage = _bind_promoted_assurance_usage(source_usage, authorities)
+        source_artifact = _promoted_ordinary_artifact(
+            list(fixture.requests),
+            source_usage,
+            index,
+            graphs,
+            context=source_context,
+        )
+        coverage_usages.append(source_usage)
+        coverage_artifacts.append(source_artifact)
+        coverage_contexts[source_usage.request_id] = [source_context]
     recovery_coordinates = tuple(
         (
             request.logical_request_id,
@@ -2678,24 +2745,9 @@ def _runtime_with_promoted_parent_surface(
     )
     coverage = build_model_review_coverage(
         config,
-        usage_records=[
-            fixture.parent_usage,
-            *fixture.child_usages,
-            ordinary_usage,
-        ],
-        review_artifacts=[*fixture.child_artifacts, ordinary_artifact],
-        review_contexts_by_request={
-            fixture.parent_usage.request_id: [fixture.parent_context],
-            **{
-                usage.request_id: [context]
-                for usage, context in zip(
-                    fixture.child_usages,
-                    fixture.child_contexts,
-                    strict=True,
-                )
-            },
-            ordinary_usage.request_id: [ordinary_context],
-        },
+        usage_records=coverage_usages,
+        review_artifacts=coverage_artifacts,
+        review_contexts_by_request=coverage_contexts,
         index=index,
         graphs=graphs,
         invariants=invariants,
@@ -2728,13 +2780,11 @@ def _runtime_with_promoted_parent_surface(
             fixture.scheduler_artifact.summary.manifest.cost_ledger_baseline
         ),
         model_review_coverage=coverage,
-        model_surface_review_artifacts=[*fixture.child_artifacts, ordinary_artifact],
+        model_surface_review_artifacts=coverage_artifacts,
         promoted_truncation_recovery_surface_coverages=[fixture.surface_capability],
         model_usage=[
             *runtime.model_usage,
-            fixture.parent_usage,
-            *fixture.child_usages,
-            ordinary_usage,
+            *coverage_usages,
         ],
     )
     return promoted_runtime, fixture
@@ -2763,6 +2813,36 @@ def _scheduler_artifact_with_swapped_recovery_result_associations(
     for request, swapped_hash in zip(requests, swapped_hashes, strict=True):
         payload = request.model_dump(mode="python", exclude={"request_evidence_sha256"})
         payload["child_result_entry_sha256"] = swapped_hash
+        swapped_requests.append(
+            SchedulerTruncationRecoveryModelRequestEvidence.model_validate(
+                {
+                    **payload,
+                    "request_evidence_sha256": scheduler_canonical_sha256(payload),
+                }
+            )
+        )
+    return type(artifact).build(
+        summary=artifact.summary,
+        journal_evidence=artifact.journal_evidence,
+        model_requests=artifact.model_requests,
+        recovery_model_requests=swapped_requests,
+    )
+
+
+def _scheduler_artifact_with_swapped_recovery_specialist_outcomes(
+    fixture: _PromotedParentSurfaceFixture,
+) -> SchedulerArtifact:
+    artifact = fixture.scheduler_artifact
+    requests = artifact.recovery_model_requests
+    outcome_sha256s = tuple(item.specialist_accepted_outcome_sha256 for item in requests)
+    assert len(requests) == 2
+    assert all(item is not None for item in outcome_sha256s)
+    swapped_sha256s = tuple(reversed(outcome_sha256s))
+    assert swapped_sha256s != outcome_sha256s
+    swapped_requests = []
+    for request, swapped_sha256 in zip(requests, swapped_sha256s, strict=True):
+        payload = request.model_dump(mode="python", exclude={"request_evidence_sha256"})
+        payload["specialist_accepted_outcome_sha256"] = swapped_sha256
         swapped_requests.append(
             SchedulerTruncationRecoveryModelRequestEvidence.model_validate(
                 {
@@ -4450,6 +4530,181 @@ def test_assurance_accepts_only_exact_promoted_parent_and_child_custody(
         requirement = _critical_surface_requirement(invalid_runtime, config)
         assert not requirement.passed, label
 
+    fixture.journal.close()
+
+
+def test_assurance_joins_promoted_specialist_parent_to_exact_child_outcomes(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = _maximum_config(config_factory)
+    base_runtime = _complete_runtime(config)
+    authorities = _assurance_policy_selection(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    runtime, fixture = _runtime_with_promoted_parent_surface(
+        config=config,
+        runtime=base_runtime,
+        authorities=authorities,
+        root=tmp_path / "promoted-specialist-assurance-runtime",
+        specialist_role="access_control",
+    )
+    artifact = fixture.scheduler_artifact
+    recovery_requests = artifact.recovery_model_requests
+    outcomes = fixture.child_specialist_outcomes
+    assert len(recovery_requests) == len(outcomes) == 2
+    assert {item.specialist_accepted_outcome_sha256 for item in recovery_requests} == {
+        item.evidence_sha256 for item in outcomes
+    }
+    promoted_parent_task_ids = {
+        binding.parent_task_id
+        for result in artifact.summary.pass_results
+        for binding in result.recovery_promotion_bindings
+    }
+    promoted_parent = next(
+        request
+        for request in artifact.model_requests
+        if request.task_id in promoted_parent_task_ids
+    )
+    assert promoted_parent.role == "specialist:access_control"
+    assert promoted_parent.logical_request_id not in {item.request_id for item in outcomes}
+
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in recovery_requests
+    )
+
+    def specialist_records(
+        accepted_outcomes: tuple[SpecialistAcceptedOutcome, ...],
+        *,
+        promoted_parents: tuple[UsageRecord, ...] = (fixture.parent_usage,),
+    ) -> list[SpecialistExecutionRecord]:
+        return build_specialist_execution_records(
+            config,
+            usage_records=[fixture.parent_usage, *fixture.child_usages],
+            contexts=[fixture.parent_context, *fixture.child_contexts],
+            accepted_outcomes=accepted_outcomes,
+            structurally_successful_request_ids={item.request_id for item in fixture.child_usages},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recovery_parent_usage_records=promoted_parents,
+        )
+
+    scheduler_request_ids = {
+        request.logical_request_id
+        for request in (*artifact.model_requests, *artifact.recovery_model_requests)
+    }
+    exact_usage = list(fixture.scheduler_live_usages)
+    assert {item.request_id for item in exact_usage} == scheduler_request_ids
+    retained_scheduler_artifacts = tuple(
+        surface_artifact
+        for output in fixture.journal.outputs
+        if (surface_artifact := output.model_surface_review_artifact) is not None
+    )
+    exact_surface_artifacts = [*retained_scheduler_artifacts, *fixture.child_artifacts]
+    expected_surface_request_ids = {
+        request.logical_request_id
+        for request in artifact.model_requests
+        if request.model_surface_review_request_count > 0
+    }
+    expected_surface_request_ids.update(
+        request.logical_request_id
+        for request in recovery_requests
+        if request.promotion_entry_sha256 is not None and request.output_artifact_sha256 is not None
+    )
+    assert {item.request_id for item in exact_surface_artifacts} == expected_surface_request_ids
+    exact_specialist_records = specialist_records(outcomes)
+    access_control_record = next(
+        item for item in exact_specialist_records if item.role == "access_control"
+    )
+    assert access_control_record.status is SpecialistExecutionStatus.COMPLETED
+    assert access_control_record.failed_request_ids == ()
+    assert set(access_control_record.successful_request_ids) == {
+        item.request_id for item in outcomes
+    }
+    assert access_control_record.accepted_outcomes == tuple(
+        sorted(outcomes, key=lambda item: item.request_id)
+    )
+    omitted_parent_record = next(
+        item
+        for item in specialist_records(outcomes, promoted_parents=())
+        if item.role == "access_control"
+    )
+    assert omitted_parent_record.status is SpecialistExecutionStatus.PARTIAL
+    assert omitted_parent_record.failed_request_ids == (fixture.parent_usage.request_id,)
+    with pytest.raises(ValueError, match="exact live truncated custody"):
+        specialist_records(
+            outcomes,
+            promoted_parents=(fixture.parent_usage.model_copy(),),
+        )
+    exact_runtime = replace(
+        runtime,
+        model_usage=exact_usage,
+        model_surface_review_artifacts=exact_surface_artifacts,
+        specialist_execution_records=exact_specialist_records,
+    )
+
+    def scheduler_errors(candidate: AssuranceRuntime) -> tuple[str, ...]:
+        selection = _current_audit_model_selection(
+            candidate.audit_model_selection_evidence,
+            candidate.verified_audit_model_selection,
+            candidate.production_qualification,
+        )
+        refresh = _current_audit_model_refresh(
+            candidate.audit_model_refresh_evidence,
+            candidate.audit_model_refresh_guard,
+            candidate.production_qualification,
+            selection,
+        )
+        pricing = _current_audit_model_refresh_pricing(
+            candidate.audit_model_refresh_pricing_evidence,
+            candidate.audit_model_refresh_pricing_authority,
+            candidate.production_qualification,
+            selection,
+            refresh,
+            candidate.audit_model_refresh_guard,
+        )
+        return assurance_module._scheduler_assurance_errors(
+            config,
+            candidate,
+            selection,
+            refresh,
+            pricing,
+        )
+
+    exact_errors = scheduler_errors(exact_runtime)
+    assert (
+        "scheduler specialist requests differ from exact host-accepted outcomes" not in exact_errors
+    )
+    assert not any("scheduler recovery specialist request" in item for item in exact_errors)
+
+    missing_errors = scheduler_errors(
+        replace(
+            exact_runtime,
+            specialist_execution_records=specialist_records(outcomes[:-1]),
+        )
+    )
+    assert (
+        "scheduler specialist requests differ from exact host-accepted outcomes" in missing_errors
+    )
+
+    swapped_errors = scheduler_errors(
+        replace(
+            exact_runtime,
+            scheduler_artifact=(
+                _scheduler_artifact_with_swapped_recovery_specialist_outcomes(fixture)
+            ),
+        )
+    )
+    assert swapped_errors
+    assert any(
+        "structurally invalid" in item or "scheduler recovery specialist request" in item
+        for item in swapped_errors
+    ), swapped_errors
     fixture.journal.close()
 
 

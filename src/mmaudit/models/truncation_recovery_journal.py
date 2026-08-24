@@ -19,12 +19,16 @@ from typing import Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
+    ContextRequestEvidence,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
     StrictModel,
     UsageRecord,
 )
@@ -87,6 +91,9 @@ _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{1,36})?$"
 _MAX_SURFACES = 10_000
 _MAX_SOURCE_DESCRIPTORS = 100_000
 _MAX_PROMOTED_CANDIDATES = MAX_CANDIDATE_REVIEW_FINDINGS * 3
+_SPECIALIST_INVESTIGATOR_REQUEST_ROLES = frozenset(
+    f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
+)
 
 
 class SchedulerTruncationRecoveryEntryKind(StrEnum):
@@ -518,7 +525,7 @@ class SchedulerTruncationRecoveryRequestLimitBinding(_NonAuthorizingRecoveryJour
 class _SchedulerTruncationRecoveryEntry(_NonAuthorizingRecoveryJournalModel):
     """Shared exact chain custody for each typed private recovery entry."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     journal_version: Literal["mmaudit.scheduler.truncation-recovery-journal.v1"] = (
         SCHEDULER_TRUNCATION_RECOVERY_JOURNAL_VERSION
     )
@@ -1095,18 +1102,76 @@ def _typed_completion_sha256(
     normalized_batch_sha256: str,
     requested_surface_manifest_sha256: str,
     output_artifact_sha256: str,
+    specialist_accepted_outcome_sha256: str | None = None,
 ) -> str:
-    return _canonical_sha256(
-        {
-            "domain": "mmaudit.scheduler.truncation-recovery-typed-completion.v1",
-            "activation_sha256": activation_sha256,
-            "usage_record_sha256": usage_record_sha256,
-            "normalization_evidence_sha256": normalization_evidence_sha256,
-            "normalized_batch_sha256": normalized_batch_sha256,
-            "requested_surface_manifest_sha256": requested_surface_manifest_sha256,
-            "output_artifact_sha256": output_artifact_sha256,
-        }
+    values = {
+        "domain": (
+            "mmaudit.scheduler.truncation-recovery-typed-completion.v1.2"
+            if specialist_accepted_outcome_sha256 is not None
+            else "mmaudit.scheduler.truncation-recovery-typed-completion.v1"
+        ),
+        "activation_sha256": activation_sha256,
+        "usage_record_sha256": usage_record_sha256,
+        "normalization_evidence_sha256": normalization_evidence_sha256,
+        "normalized_batch_sha256": normalized_batch_sha256,
+        "requested_surface_manifest_sha256": requested_surface_manifest_sha256,
+        "output_artifact_sha256": output_artifact_sha256,
+    }
+    if specialist_accepted_outcome_sha256 is not None:
+        values["specialist_accepted_outcome_sha256"] = specialist_accepted_outcome_sha256
+    return _canonical_sha256(values)
+
+
+def _freeze_exact_specialist_success_outcome(
+    *,
+    specialist_accepted_outcome: SpecialistAcceptedOutcome | None,
+    activation: SchedulerTruncationRecoveryChildActivation,
+    usage: UsageRecord,
+    requested_surface_count: int,
+    output_artifact_sha256: str,
+) -> SpecialistAcceptedOutcome | None:
+    """Bind accepted investigator credit to one exact successful recovery request."""
+
+    requires_outcome = activation.request_role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
+    if not requires_outcome:
+        if specialist_accepted_outcome is not None:
+            raise ValueError("non-investigator recovery child cannot carry a specialist outcome")
+        return None
+    if specialist_accepted_outcome is None:
+        raise ValueError("specialist investigator recovery child lacks an accepted outcome")
+    exact_outcome = _freeze_exact_model(
+        SpecialistAcceptedOutcome,
+        specialist_accepted_outcome,
+        label="specialist accepted outcome",
     )
+    raw_context = usage.routing.get("context_request_evidence")
+    if not isinstance(raw_context, Mapping):
+        raise ValueError("specialist recovery child lacks typed context-request custody")
+    try:
+        context = ContextRequestEvidence.model_validate(raw_context)
+    except (TypeError, ValueError):
+        raise ValueError("specialist recovery child context-request custody is invalid") from None
+    _require_every_field_supplied(context, label="specialist context-request evidence")
+    assert activation.request_role is not None
+    specialist_role = activation.request_role.removeprefix("specialist:")
+    if (
+        exact_outcome.outcome_kind is not SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+        or exact_outcome.request_id != activation.child_logical_request_id
+        or exact_outcome.request_id != usage.request_id
+        or exact_outcome.request_role != activation.request_role
+        or exact_outcome.request_role != usage.role
+        or exact_outcome.specialist_role != specialist_role
+        or exact_outcome.validated_response_sha256 != usage.validated_response_sha256
+        or exact_outcome.context_request_evidence_sha256 != context.evidence_sha256
+        or usage.routing.get("context_request_evidence_sha256") != context.evidence_sha256
+        or context.request_id != activation.child_logical_request_id
+        or context.request_role != activation.request_role
+        or context.rendered_sha256 != activation.user_prompt_sha256
+        or exact_outcome.requested_surface_count != requested_surface_count
+        or exact_outcome.surface_review_artifact_sha256 != output_artifact_sha256
+    ):
+        raise ValueError("specialist recovery accepted outcome custody is inconsistent")
+    return exact_outcome
 
 
 def _require_exact_request_limit_reservation(
@@ -1232,7 +1297,7 @@ def _expected_truncation_projection_routing(
 class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
     """Structural terminal custody; neither legacy nor typed results grant credit."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL] = (
         SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL
     )
@@ -1269,6 +1334,11 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         default=None,
         pattern=_SHA256_PATTERN,
     )
+    runtime_specialist_accepted_outcome_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     runtime_activation: SchedulerTruncationRecoveryChildActivation | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -1296,6 +1366,10 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         exclude_if=lambda value: value is None,
     )
     runtime_output_artifact: ModelSurfaceReviewArtifact | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    runtime_specialist_accepted_outcome: SpecialistAcceptedOutcome | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -1357,10 +1431,11 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         normalized_batch: CandidateReviewBatch,
         requested_surface_requests: Iterable[ModelSurfaceReviewRequest],
         output_artifact: ModelSurfaceReviewArtifact,
+        specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         entry_index: int,
         previous_entry_sha256: str | None,
     ) -> SchedulerTruncationRecoveryChildResult:
-        """Build exact v1.1 successful runtime custody without authorizing its output."""
+        """Build exact successful runtime custody without authorizing its output."""
 
         frozen_activation = _freeze_exact_model(
             SchedulerTruncationRecoveryChildActivation,
@@ -1412,6 +1487,18 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             reservation=reservation,
             child=child,
         )
+        frozen_specialist_outcome = _freeze_exact_specialist_success_outcome(
+            specialist_accepted_outcome=specialist_accepted_outcome,
+            activation=frozen_activation,
+            usage=frozen_usage,
+            requested_surface_count=len(frozen_requests),
+            output_artifact_sha256=frozen_artifact.artifact_sha256,
+        )
+        specialist_outcome_sha256 = (
+            frozen_specialist_outcome.evidence_sha256
+            if frozen_specialist_outcome is not None
+            else None
+        )
         completion_sha256 = _typed_completion_sha256(
             activation_sha256=frozen_activation.entry_sha256,
             usage_record_sha256=usage_sha256,
@@ -1419,9 +1506,10 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             normalized_batch_sha256=frozen_normalization.normalized_batch_sha256,
             requested_surface_manifest_sha256=(frozen_artifact.requested_surface_manifest_sha256),
             output_artifact_sha256=frozen_artifact.artifact_sha256,
+            specialist_accepted_outcome_sha256=specialist_outcome_sha256,
         )
         return cls._build(
-            schema_version="1.1",
+            schema_version="1.2" if frozen_specialist_outcome is not None else "1.1",
             child=child,
             activation=frozen_activation,
             dispatch=dispatch,
@@ -1438,12 +1526,14 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             runtime_completion_evidence_sha256=completion_sha256,
             runtime_usage_record_sha256=usage_sha256,
             runtime_output_artifact_sha256=frozen_artifact.artifact_sha256,
+            runtime_specialist_accepted_outcome_sha256=specialist_outcome_sha256,
             runtime_request_limit_reservation=reservation,
             runtime_usage_record=frozen_usage,
             runtime_normalization_evidence=frozen_normalization,
             runtime_normalized_batch=frozen_batch,
             runtime_requested_surface_requests=frozen_requests,
             runtime_output_artifact=frozen_artifact,
+            runtime_specialist_accepted_outcome=frozen_specialist_outcome,
             runtime_truncated_envelope_evidence=None,
             truncation_projection=None,
             cost_disposition=SchedulerTruncationRecoveryCostDisposition.ACTUAL_ACCOUNTED,
@@ -1652,7 +1742,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
     def _build(
         cls,
         *,
-        schema_version: Literal["1.0", "1.1"],
+        schema_version: Literal["1.0", "1.1", "1.2"],
         child: TruncationRecoveryChildPlan,
         activation: SchedulerTruncationRecoveryChildActivation | None,
         dispatch: SchedulerTruncationRecoveryChildDispatch,
@@ -1672,6 +1762,8 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         runtime_normalized_batch: CandidateReviewBatch | None,
         runtime_requested_surface_requests: tuple[ModelSurfaceReviewRequest, ...] | None,
         runtime_output_artifact: ModelSurfaceReviewArtifact | None,
+        runtime_specialist_accepted_outcome_sha256: str | None = None,
+        runtime_specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         runtime_truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None,
         truncation_projection: CandidateReviewTruncationProjection | None,
         cost_disposition: SchedulerTruncationRecoveryCostDisposition,
@@ -1724,6 +1816,9 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             "runtime_completion_evidence_sha256": (runtime_completion_evidence_sha256),
             "runtime_usage_record_sha256": runtime_usage_record_sha256,
             "runtime_output_artifact_sha256": runtime_output_artifact_sha256,
+            "runtime_specialist_accepted_outcome_sha256": (
+                runtime_specialist_accepted_outcome_sha256
+            ),
             "runtime_activation": activation,
             "runtime_request_limit_reservation": runtime_request_limit_reservation,
             "runtime_usage_record": runtime_usage_record,
@@ -1731,6 +1826,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             "runtime_normalized_batch": runtime_normalized_batch,
             "runtime_requested_surface_requests": runtime_requested_surface_requests,
             "runtime_output_artifact": runtime_output_artifact,
+            "runtime_specialist_accepted_outcome": runtime_specialist_accepted_outcome,
             "runtime_truncated_envelope_evidence": runtime_truncated_envelope_evidence,
             "truncation_projection": projection,
             "completed_surface_ids": completed,
@@ -1751,6 +1847,8 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             "runtime_normalized_batch",
             "runtime_requested_surface_requests",
             "runtime_output_artifact",
+            "runtime_specialist_accepted_outcome_sha256",
+            "runtime_specialist_accepted_outcome",
             "runtime_truncated_envelope_evidence",
         ):
             if values[optional_typed_field] is None:
@@ -1758,7 +1856,9 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         result_id = "scheduler-recovery-result-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-result.v1.1"
+                    "mmaudit.scheduler.truncation-recovery-result.v1.2"
+                    if schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-result.v1.1"
                     if schema_version == "1.1"
                     else "mmaudit.scheduler.truncation-recovery-result.v1"
                 ),
@@ -1785,14 +1885,16 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             or accounted_usd > reserved_usd
         ):
             raise ValueError("scheduler truncation recovery result exceeds reserved resources")
-        if self.schema_version == "1.1":
+        if self.schema_version in {"1.1", "1.2"}:
             self._require_exact_typed_runtime_custody()
         else:
             self._require_exact_legacy_runtime_custody()
         expected_id = "scheduler-recovery-result-" + _canonical_sha256(
             {
                 "domain": (
-                    "mmaudit.scheduler.truncation-recovery-result.v1.1"
+                    "mmaudit.scheduler.truncation-recovery-result.v1.2"
+                    if self.schema_version == "1.2"
+                    else "mmaudit.scheduler.truncation-recovery-result.v1.1"
                     if self.schema_version == "1.1"
                     else "mmaudit.scheduler.truncation-recovery-result.v1"
                 ),
@@ -1814,9 +1916,12 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             self.runtime_normalized_batch,
             self.runtime_requested_surface_requests,
             self.runtime_output_artifact,
+            self.runtime_specialist_accepted_outcome,
             self.runtime_truncated_envelope_evidence,
         )
-        if any(item is not None for item in typed_fields):
+        if any(item is not None for item in typed_fields) or (
+            self.runtime_specialist_accepted_outcome_sha256 is not None
+        ):
             raise ValueError("legacy recovery child cannot carry typed v1.1 runtime custody")
         completion_fields = (
             self.runtime_completion_evidence_sha256,
@@ -2015,6 +2120,18 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             artifact,
             label="typed output artifact",
         )
+        exact_specialist_outcome = _freeze_exact_specialist_success_outcome(
+            specialist_accepted_outcome=self.runtime_specialist_accepted_outcome,
+            activation=activation,
+            usage=usage,
+            requested_surface_count=len(exact_requests),
+            output_artifact_sha256=exact_artifact.artifact_sha256,
+        )
+        specialist_outcome_sha256 = (
+            exact_specialist_outcome.evidence_sha256
+            if exact_specialist_outcome is not None
+            else None
+        )
         requested_ids = tuple(request.surface_id for request in exact_requests)
         try:
             exact_batch.require_exact_surface_set(requested_ids)
@@ -2041,9 +2158,12 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             normalized_batch_sha256=exact_normalization.normalized_batch_sha256,
             requested_surface_manifest_sha256=(exact_artifact.requested_surface_manifest_sha256),
             output_artifact_sha256=exact_artifact.artifact_sha256,
+            specialist_accepted_outcome_sha256=specialist_outcome_sha256,
         )
         if (
-            requested_ids != self.child_surface_ids
+            self.schema_version != ("1.2" if exact_specialist_outcome is not None else "1.1")
+            or self.runtime_specialist_accepted_outcome_sha256 != specialist_outcome_sha256
+            or requested_ids != self.child_surface_ids
             or not requests_match_records
             or usage.validation_status is not ModelRequestValidationStatus.VALID
             or usage.status != "success"
@@ -2091,9 +2211,13 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
                 self.runtime_normalized_batch,
                 self.runtime_requested_surface_requests,
                 self.runtime_output_artifact,
+                self.runtime_specialist_accepted_outcome_sha256,
+                self.runtime_specialist_accepted_outcome,
             )
         ):
             raise ValueError("truncated typed recovery child claims completion custody")
+        if self.schema_version != "1.1":
+            raise ValueError("truncated typed recovery child has an invalid schema generation")
         exact_envelope = _freeze_exact_model(
             CandidateReviewTruncatedEnvelopeEvidence,
             envelope,

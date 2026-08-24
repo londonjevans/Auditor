@@ -3363,7 +3363,7 @@
           }
         }
       ],
-      "description": "Public hash-only projection of one typed v1.1 recovery child usage.",
+      "description": "Public hash-only projection of one typed recovery child usage.",
       "properties": {
         "activation_entry_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -3677,10 +3677,26 @@
           "title": "Runtime Completion Evidence Sha256"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
+        },
+        "specialist_accepted_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Specialist Accepted Outcome Sha256"
         },
         "system_prompt_sha256": {
           "pattern": "^[0-9a-f]{64}$",

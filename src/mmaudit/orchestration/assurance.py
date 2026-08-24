@@ -994,11 +994,26 @@ def _scheduler_assurance_errors(
             if outcome.request_id in specialist_outcomes:
                 specialist_outcome_duplicate = True
             specialist_outcomes[outcome.request_id] = outcome
+    promoted_parent_task_ids = {
+        binding.parent_task_id
+        for pass_result in artifact.summary.pass_results
+        for binding in pass_result.recovery_promotion_bindings
+    }
     scheduler_specialist_requests = {
         request_id: role
         for request_id, request in requests.items()
+        if request.task_id not in promoted_parent_task_ids
         if (role := canonical_specialist_role(request.role)) is not None
     }
+    promoted_recovery_specialist_requests = {
+        request_id: role
+        for request_id, request in recovery_requests.items()
+        if request.promotion_entry_sha256 is not None
+        and (role := canonical_specialist_role(request.role)) is not None
+    }
+    if set(scheduler_specialist_requests) & set(promoted_recovery_specialist_requests):
+        errors.append("scheduler specialist request identity is ambiguous")
+    scheduler_specialist_requests.update(promoted_recovery_specialist_requests)
     if specialist_outcome_duplicate or set(specialist_outcomes) != set(
         scheduler_specialist_requests
     ):
@@ -1014,11 +1029,6 @@ def _scheduler_assurance_errors(
     )
     global_scope_sha256 = SchedulerScope.global_scope().scope_sha256
     production_qualification = _current_production_qualification(runtime.production_qualification)
-    promoted_parent_task_ids = {
-        binding.parent_task_id
-        for pass_result in artifact.summary.pass_results
-        for binding in pass_result.recovery_promotion_bindings
-    }
     for request_id, request in sorted(all_requests.items()):
         usage = usages[request_id]
         routed_lineage = usage.routing.get("qualified_root_lineage")
@@ -1112,6 +1122,36 @@ def _scheduler_assurance_errors(
                 errors.append(
                     f"scheduler recovery request {request_id} differs from exact runtime "
                     "model-surface artifact"
+                )
+                continue
+            specialist_role = scheduler_specialist_requests.get(request_id)
+            accepted_outcome = specialist_outcomes.get(request_id)
+            if specialist_role is not None:
+                if (
+                    accepted_outcome is None
+                    or accepted_outcome.outcome_kind
+                    is not SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+                    or accepted_outcome.specialist_role != specialist_role
+                    or accepted_outcome.request_role != request.role
+                    or accepted_outcome.validated_response_sha256
+                    != request.validated_response_sha256
+                    or accepted_outcome.context_request_evidence_sha256
+                    != request.context_request_evidence_sha256
+                    or accepted_outcome.requested_surface_count != len(surface_artifact.records)
+                    or accepted_outcome.surface_review_artifact_sha256
+                    != surface_artifact.artifact_sha256
+                    or request.specialist_accepted_outcome_sha256
+                    != accepted_outcome.evidence_sha256
+                ):
+                    errors.append(
+                        f"scheduler recovery specialist request {request_id} differs from its "
+                        "exact host-accepted outcome"
+                    )
+                    continue
+            elif request.specialist_accepted_outcome_sha256 is not None:
+                errors.append(
+                    f"non-specialist scheduler recovery request {request_id} claims a "
+                    "specialist outcome"
                 )
                 continue
             if (

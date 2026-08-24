@@ -51,6 +51,7 @@ from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     Finding,
+    ModelRequestValidationStatus,
     QualityGateResult,
     ReportQualityReview,
     SolidityCoverage,
@@ -67,7 +68,9 @@ from mmaudit.models.truncation import (
 )
 from mmaudit.models.usage import (
     _validated_usage_copy_preserving_owned_attestation,
+    is_accountable_usage_record,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
 )
 from mmaudit.orchestration.context import render_context, revalidate_context_package
 from mmaudit.orchestration.model_review_evidence import (
@@ -636,6 +639,8 @@ def build_specialist_execution_records(
     contexts: list[ContextPackage],
     accepted_outcomes: Sequence[SpecialistAcceptedOutcome] = (),
     structurally_successful_request_ids: Collection[str] | None = None,
+    recovery_usage_coordinates: Sequence[tuple[str, str, int]] = (),
+    promoted_recovery_parent_usage_records: Sequence[UsageRecord] = (),
 ) -> list[SpecialistExecutionRecord]:
     """Normalize provider attempts against host-accepted specialist workflow results."""
 
@@ -661,6 +666,50 @@ def build_specialist_execution_records(
         raise ValueError("accepted specialist outcome lacks provider usage evidence")
     if structural_success_ids is not None and set(accepted_ids) - structural_success_ids:
         raise ValueError("accepted specialist outcome lacks successful scheduler custody")
+    recovery_coordinates: dict[str, tuple[str, int]] = {}
+    for request_id, request_limit_scope, request_limit_count_before in recovery_usage_coordinates:
+        if request_id in recovery_coordinates:
+            raise ValueError("specialist recovery coordinates repeat a request identity")
+        recovery_coordinates[request_id] = (
+            request_limit_scope,
+            request_limit_count_before,
+        )
+    if set(recovery_coordinates) - set(usage_by_id):
+        raise ValueError("specialist recovery coordinate lacks provider usage evidence")
+    promoted_parent_ids: set[str] = set()
+    for parent_usage in promoted_recovery_parent_usage_records:
+        if parent_usage.request_id in promoted_parent_ids:
+            raise ValueError("promoted specialist recovery parents repeat a request identity")
+        retained_usage = usage_by_id.get(parent_usage.request_id)
+        if (
+            retained_usage is not parent_usage
+            or canonical_specialist_role(parent_usage.role) is None
+            or parent_usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
+            or parent_usage.status != "rejected_truncated_response"
+            or not is_accountable_usage_record(parent_usage, require_real=True)
+            or parent_usage.request_id in accepted_ids
+            or (
+                structural_success_ids is not None
+                and parent_usage.request_id in structural_success_ids
+            )
+            or parent_usage.request_id in recovery_coordinates
+        ):
+            raise ValueError(
+                "promoted specialist recovery parent lacks exact live truncated custody"
+            )
+        promoted_parent_ids.add(parent_usage.request_id)
+
+    def usage_is_creditable(record: UsageRecord) -> bool:
+        coordinate = recovery_coordinates.get(record.request_id)
+        if coordinate is None:
+            return is_creditable_usage_record(record)
+        request_limit_scope, request_limit_count_before = coordinate
+        return is_recovery_creditable_usage_record(
+            record,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=request_limit_count_before,
+        )
+
     records: list[SpecialistExecutionRecord] = []
     for role in ALL_SPECIALIST_ROLES:
         definition = SPECIALIST_ROLE_REGISTRY[role]
@@ -673,10 +722,16 @@ def build_specialist_execution_records(
         )
         request_prefix = f"specialist:{role}"
         role_usage = [
-            record for record in usage_records if canonical_specialist_role(record.role) == role
+            record
+            for record in usage_records
+            if canonical_specialist_role(record.role) == role
+            and record.request_id not in promoted_parent_ids
         ]
         role_outcomes = tuple(
-            outcome for outcome in normalized_outcomes if outcome.specialist_role == role
+            sorted(
+                (outcome for outcome in normalized_outcomes if outcome.specialist_role == role),
+                key=lambda outcome: outcome.request_id,
+            )
         )
         if role_outcomes and role not in configured_roles:
             raise ValueError(f"unconfigured specialist {role} has an accepted outcome")
@@ -690,9 +745,14 @@ def build_specialist_execution_records(
                 f"specialist {role} context exceeds its effective configured package limit"
             )
         request_contexts = tuple(
-            evidence
-            for record in role_usage
-            if (evidence := _usage_context_evidence(record)) is not None
+            sorted(
+                (
+                    evidence
+                    for record in role_usage
+                    if (evidence := _usage_context_evidence(record)) is not None
+                ),
+                key=lambda evidence: evidence.request_id,
+            )
         )
         request_ids = [record.request_id for record in role_usage]
         if len(request_ids) != len(set(request_ids)):
@@ -704,7 +764,7 @@ def build_specialist_execution_records(
             record
             for record in role_usage
             if (structural_success_ids is None or record.request_id in structural_success_ids)
-            and is_creditable_usage_record(record)
+            and usage_is_creditable(record)
             and (evidence := request_contexts_by_id.get(record.request_id)) is not None
             and evidence.context_binding() in retained_context_bindings
             and (outcome := outcomes_by_id.get(record.request_id)) is not None

@@ -31,6 +31,8 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
     UsageRecord,
 )
 from mmaudit.models.truncation import (
@@ -348,6 +350,7 @@ def _journal_with_truncated_parent(
     retain_validated_hash: bool = False,
     wrong_truncation_status: bool = False,
     parent_cost_usd_exact: str = "0",
+    parent_role: str | None = None,
 ) -> tuple[
     SchedulerJournal,
     TruncationRecoveryPlan,
@@ -363,34 +366,73 @@ def _journal_with_truncated_parent(
     )
     _complete_recovery_orientation(journal)
     surface_manifest, surfaces = _requested_surfaces()
+    if parent_role is not None:
+        surfaces = tuple(
+            ModelSurfaceReviewRecord.model_validate(
+                {**record.model_dump(mode="python"), "review_role": parent_role}
+            )
+            for record in surfaces
+        )
     projection = _projection(surfaces, retained_count=1)
     base_plan = _plan(journal, SchedulerPassKind.BLIND_SHARD_REVIEW, task_count=2)
     base_task = base_plan.tasks[0]
-    task = SchedulerTaskPlan.build(
-        manifest=journal.manifest,
-        pass_kind=base_task.pass_kind,
-        scope=base_task.scope,
-        task_kind=base_task.task_kind,
-        task_key=base_task.task_key,
-        role=base_task.role,
-        input_sha256=base_task.input_sha256,
-        prompt_sha256=base_task.prompt_sha256,
-        response_schema_sha256=projection.wire_schema_sha256,
-        system_prompt_sha256=base_task.system_prompt_sha256,
-        normalizer_sha256=scheduler_response_normalizer_sha256(projection.wire_schema_sha256),
-        requested_model=base_task.requested_model,
-        root_lineage=base_task.root_lineage,
-        candidate_ids=base_task.candidate_ids,
-    )
+    specialist_tasks: tuple[SchedulerTaskPlan, ...] = ()
+    if parent_role is not None:
+        specialist_tasks = tuple(
+            SchedulerTaskPlan.build(
+                manifest=journal.manifest,
+                pass_kind=item.pass_kind,
+                scope=item.scope,
+                task_kind=item.task_kind,
+                task_key=item.task_key,
+                role=parent_role,
+                input_sha256=item.input_sha256,
+                prompt_sha256=item.prompt_sha256,
+                response_schema_sha256=(
+                    projection.wire_schema_sha256 if index == 0 else item.response_schema_sha256
+                ),
+                system_prompt_sha256=item.system_prompt_sha256,
+                normalizer_sha256=(
+                    scheduler_response_normalizer_sha256(projection.wire_schema_sha256)
+                    if index == 0
+                    else item.normalizer_sha256
+                ),
+                requested_model=item.requested_model,
+                root_lineage=item.root_lineage,
+                candidate_ids=item.candidate_ids,
+            )
+            for index, item in enumerate(base_plan.tasks)
+        )
+        task = specialist_tasks[0]
+        planned_tasks = (*base_plan.tasks, *specialist_tasks)
+    else:
+        task = SchedulerTaskPlan.build(
+            manifest=journal.manifest,
+            pass_kind=base_task.pass_kind,
+            scope=base_task.scope,
+            task_kind=base_task.task_kind,
+            task_key=base_task.task_key,
+            role=base_task.role,
+            input_sha256=base_task.input_sha256,
+            prompt_sha256=base_task.prompt_sha256,
+            response_schema_sha256=projection.wire_schema_sha256,
+            system_prompt_sha256=base_task.system_prompt_sha256,
+            normalizer_sha256=scheduler_response_normalizer_sha256(projection.wire_schema_sha256),
+            requested_model=base_task.requested_model,
+            root_lineage=base_task.root_lineage,
+            candidate_ids=base_task.candidate_ids,
+        )
+        planned_tasks = (task, *base_plan.tasks[1:])
+    target_task_id = task.task_id
     plan = journal.seal_pass_plan(
         SchedulerPassPlan.build(
             manifest=journal.manifest,
             pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
             dependencies=journal.next_dependencies,
-            tasks=(task, *base_plan.tasks[1:]),
+            tasks=planned_tasks,
         )
     )
-    task = plan.tasks[0]
+    task = next(item for item in plan.tasks if item.task_id == target_task_id)
     activation = journal.activate_task(
         task.task_id,
         actual_input_sha256=task.input_sha256,
@@ -841,6 +883,7 @@ def _open_dispatched_child(
     path: Path,
     *,
     parent_cost_usd_exact: str = "0",
+    parent_role: str | None = None,
 ) -> tuple[
     SchedulerJournal,
     TruncationRecoveryChildPlan,
@@ -852,6 +895,7 @@ def _open_dispatched_child(
     journal, plan, projection, surfaces, surface_manifest = _journal_with_truncated_parent(
         path,
         parent_cost_usd_exact=parent_cost_usd_exact,
+        parent_role=parent_role,
     )
     journal.open_truncation_recovery_family(
         recovery_plan=plan,
@@ -862,6 +906,27 @@ def _open_dispatched_child(
     activation = _activate_child(journal, child.child_task_id)
     dispatch = journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
     return journal, child, activation, dispatch, surfaces, surface_manifest
+
+
+def _specialist_success_outcome(
+    *,
+    usage: UsageRecord,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    artifact: ModelSurfaceReviewArtifact,
+) -> SpecialistAcceptedOutcome:
+    context_sha256 = usage.routing.get("context_request_evidence_sha256")
+    assert isinstance(context_sha256, str)
+    assert usage.validated_response_sha256 is not None
+    return SpecialistAcceptedOutcome.build(
+        request_id=usage.request_id,
+        specialist_role=usage.role.removeprefix("specialist:"),
+        request_role=usage.role,
+        outcome_kind=SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW,
+        validated_response_sha256=usage.validated_response_sha256,
+        context_request_evidence_sha256=context_sha256,
+        requested_surface_count=len(requests),
+        surface_review_artifact_sha256=artifact.artifact_sha256,
+    )
 
 
 def _replace_recovery_request_limit(
@@ -1412,6 +1477,137 @@ def test_typed_success_retains_exact_non_authorizing_custody_and_reloads(
     assert resumed._truncation_recovery_indexes.results[child.child_task_id] == result
     assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
     resumed.close()
+
+
+def test_specialist_typed_success_requires_durable_outcome_and_projects_only_its_hash(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "typed-specialist-success"
+    journal, child, activation, _dispatch, surfaces, surface_manifest = _open_dispatched_child(
+        path,
+        parent_role="specialist:access_control",
+    )
+    usage, normalization, batch, requests, artifact = _success_custody(
+        child=child,
+        activation=activation,
+        surface_manifest=surface_manifest,
+        surfaces=surfaces,
+    )
+    entries_before = journal.truncation_recovery_entries
+    with pytest.raises(ValueError, match="lacks an accepted outcome"):
+        journal.record_truncation_recovery_child_success(
+            child.child_task_id,
+            usage_record=usage,
+            normalization_evidence=normalization,
+            normalized_batch=batch,
+            requested_surface_requests=requests,
+            output_artifact=artifact,
+        )
+    assert journal.truncation_recovery_entries == entries_before
+
+    outcome = _specialist_success_outcome(usage=usage, requests=requests, artifact=artifact)
+    result = journal.record_truncation_recovery_child_success(
+        child.child_task_id,
+        usage_record=usage,
+        normalization_evidence=normalization,
+        normalized_batch=batch,
+        requested_surface_requests=requests,
+        output_artifact=artifact,
+        specialist_accepted_outcome=outcome,
+    )
+    assert result.schema_version == "1.2"
+    assert result.runtime_specialist_accepted_outcome == outcome
+    assert result.runtime_specialist_accepted_outcome_sha256 == outcome.evidence_sha256
+    public_request = journal.recovery_model_requests[0]
+    assert public_request.schema_version == "1.1"
+    assert public_request.specialist_accepted_outcome_sha256 == outcome.evidence_sha256
+    assert public_request.review_credit_authorized is False
+    assert "runtime_specialist_accepted_outcome" not in public_request.model_dump_json()
+
+    detached_result = SchedulerTruncationRecoveryChildResult.model_validate_json(
+        result.model_dump_json(),
+        strict=True,
+    )
+    assert detached_result == result
+    with pytest.raises(ValueError, match="live construction API"):
+        journal.record_truncation_recovery_child_result(detached_result)
+
+    stripped_payload = json.loads(result.model_dump_json())
+    stripped_payload["schema_version"] = "1.1"
+    stripped_payload.pop("runtime_specialist_accepted_outcome")
+    stripped_payload.pop("runtime_specialist_accepted_outcome_sha256")
+    stripped_payload["entry_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in stripped_payload.items() if key != "entry_sha256"}
+    )
+    with pytest.raises(ValueError, match="lacks an accepted outcome"):
+        SchedulerTruncationRecoveryChildResult.model_validate_json(
+            json.dumps(stripped_payload),
+            strict=True,
+        )
+
+    evidence = journal.journal_evidence
+    journal.close()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=evidence,
+    )
+    assert resumed._truncation_recovery_indexes.results[child.child_task_id] == result
+    assert (
+        resumed.recovery_model_requests[0].specialist_accepted_outcome_sha256
+        == outcome.evidence_sha256
+    )
+    resumed.close()
+
+
+def test_specialist_typed_success_rejects_an_outcome_from_another_recovery_child(
+    tmp_path: Path,
+) -> None:
+    journal, plan, projection, surfaces, surface_manifest = _journal_with_truncated_parent(
+        tmp_path / "typed-specialist-swapped-outcome",
+        parent_role="specialist:access_control",
+    )
+    journal.open_truncation_recovery_family(
+        recovery_plan=plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    first_child, second_child = plan.children
+    first_activation = _activate_child(journal, first_child.child_task_id)
+    journal.mark_truncation_recovery_child_dispatched(first_child.child_task_id)
+    second_activation = _activate_child(journal, second_child.child_task_id)
+    journal.mark_truncation_recovery_child_dispatched(second_child.child_task_id)
+    first_custody = _success_custody(
+        child=first_child,
+        activation=first_activation,
+        surface_manifest=surface_manifest,
+        surfaces=surfaces,
+    )
+    second_custody = _success_custody(
+        child=second_child,
+        activation=second_activation,
+        surface_manifest=surface_manifest,
+        surfaces=surfaces,
+    )
+    second_outcome = _specialist_success_outcome(
+        usage=second_custody[0],
+        requests=second_custody[3],
+        artifact=second_custody[4],
+    )
+    entries_before = journal.truncation_recovery_entries
+    with pytest.raises(ValueError, match="accepted outcome custody"):
+        journal.record_truncation_recovery_child_success(
+            first_child.child_task_id,
+            usage_record=first_custody[0],
+            normalization_evidence=first_custody[1],
+            normalized_batch=first_custody[2],
+            requested_surface_requests=first_custody[3],
+            output_artifact=first_custody[4],
+            specialist_accepted_outcome=second_outcome,
+        )
+    assert journal.truncation_recovery_entries == entries_before
+    journal.close()
 
 
 def test_typed_success_requires_owned_real_usage_before_detached_custody(
