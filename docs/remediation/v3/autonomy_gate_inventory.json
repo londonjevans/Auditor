@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 3606,
-  "inventory_sha256": "c446ea73cbad4a0acf812746bbee30e4cdd8821416a9bd0f9df10450e2bd6a33",
+  "inventory_sha256": "bab10efc4a5472ce6dacddbb5133505a59a0813df9200679d34badcf6fa7072d",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -9904,7 +9904,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/usage.py",
-      "source_semantics_sha256": "67f1ff32913327913ab19adbe60ff54263bf0fcb347304b151bd009311cfe1b0"
+      "source_semantics_sha256": "5ee0b0c99d91746c63c1670e5f683966807b638d5b8af954c1c8a599852824fa"
     },
     {
       "classification": "GATE",
@@ -36879,7 +36879,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 3652,
-  "source_universe_sha256": "b865186b4a21b3219cb20a84a224255d802b28e89d5aa28b2350f4977ae254e2",
+  "source_universe_sha256": "421e6ac9925388fc5c81baf43f4e50dda83d6c567a473a35bc2c47906c8dbb78",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

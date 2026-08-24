@@ -873,7 +873,11 @@ async def _dispatch_mock_smoke_request(
     return client, http_client, completion, manifest, discovery
 
 
-def _as_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRecord:
+def _as_v3_unknown_token_smoke_usage(
+    record: UsageRecord,
+    *,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
+) -> UsageRecord:
     """Upgrade one synthetic provisional smoke fixture to the exact v3 envelope."""
 
     raw_plan = record.routing.get("request_token_plan")
@@ -886,17 +890,19 @@ def _as_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRecord:
             "wire_max_tokens": plan_payload["reserved_output_tokens"],
         }
     )
-    disabled = ReasoningControlProfile.build(
-        mode="disabled",
-        reserved_reasoning_tokens=0,
-    )
-    policy = ReasoningPolicyArtifact.build(
-        controls_by_role={role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
-    )
-    plan_payload["reasoning_plan"] = ReasoningRequestPlanEvidence.build(
-        request_role=record.role,
-        policy=policy,
-    ).model_dump(mode="json")
+    if reasoning_plan is None:
+        disabled = ReasoningControlProfile.build(
+            mode="disabled",
+            reserved_reasoning_tokens=0,
+        )
+        policy = ReasoningPolicyArtifact.build(
+            controls_by_role={role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+        )
+        reasoning_plan = ReasoningRequestPlanEvidence.build(
+            request_role=record.role,
+            policy=policy,
+        )
+    plan_payload["reasoning_plan"] = reasoning_plan.model_dump(mode="json")
     plan_payload["plan_sha256"] = canonical_sha256(
         {key: value for key, value in plan_payload.items() if key != "plan_sha256"}
     )

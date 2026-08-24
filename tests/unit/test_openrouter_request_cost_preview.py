@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -9,25 +10,42 @@ import httpx
 import pytest
 
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.usage as usage_module
+from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.openrouter import (
     OpenRouterCostControlError,
     OpenRouterProviderPolicy,
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
     preview_openrouter_structured_request_cost,
+    validate_openrouter_generation_payload,
 )
+from mmaudit.models.output_modes import StructuredOutputMode, output_mode_request_parameters
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     ReasoningControlProfile,
     ReasoningPolicyArtifact,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    StructuredOutputEvidence,
+    UsageRecord,
+    seal_structured_output_evidence,
+    structured_output_request_shape_sha256,
+)
+from mmaudit.models.usage import (
+    _structured_output_routing_failure_code,
+    is_creditable_usage_record,
+    noncrediting_unknown_token_smoke_usage_diagnostics,
+)
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from tests.unit.test_openrouter import (
     Answer,
+    _as_v3_unknown_token_smoke_usage,
     _client,
     _completion_response,
+    _generation_payload,
     _model_discovery_run,
 )
 
@@ -64,6 +82,120 @@ def _high_effort_reasoning_policy() -> ReasoningPolicyArtifact:
     )
 
 
+def _effort_none_reasoning_policy() -> ReasoningPolicyArtifact:
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={
+            role: ReasoningControlProfile.build(
+                mode="effort",
+                effort="none",
+                reserved_reasoning_tokens=0,
+            )
+            for role in CANONICAL_REASONING_POLICY_ROLES
+        }
+    )
+
+
+_PER_ROLE_REASONING_OUTPUT_MATRIX = (
+    (
+        StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        False,
+        ("json_schema", "max_tokens", "reasoning", "response_format", "temperature"),
+    ),
+    (
+        StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        True,
+        ("json_schema", "max_tokens", "reasoning", "response_format", "temperature"),
+    ),
+    (
+        StructuredOutputMode.JSON_OBJECT,
+        False,
+        ("max_tokens", "reasoning", "response_format", "temperature"),
+    ),
+    (
+        StructuredOutputMode.JSON_OBJECT,
+        True,
+        ("max_tokens", "reasoning", "response_format", "temperature"),
+    ),
+    (
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+        False,
+        ("max_tokens", "reasoning", "temperature"),
+    ),
+    (
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+        True,
+        ("max_tokens", "reasoning", "temperature"),
+    ),
+)
+
+
+def _with_structured_reasoning_state(
+    record: UsageRecord,
+    *,
+    reasoning_requested: bool,
+) -> UsageRecord:
+    """Return canonical output evidence with one explicitly selected reasoning state."""
+
+    evidence = StructuredOutputEvidence.model_validate(record.routing["structured_output"])
+    required_parameters = tuple(
+        sorted(
+            {
+                *(
+                    parameter
+                    for parameter in evidence.required_provider_parameters
+                    if parameter != "reasoning"
+                ),
+                *(("reasoning",) if reasoning_requested else ()),
+            }
+        )
+    )
+    reasoning_request_sha256 = (
+        evidence.reasoning_request_sha256 or ("a" * 64) if reasoning_requested else None
+    )
+    request_shape_sha256 = structured_output_request_shape_sha256(
+        mode=evidence.requested_mode,
+        schema_sha256=evidence.schema_sha256,
+        required_provider_parameters=required_parameters,
+        reasoning_request_sha256=reasoning_request_sha256,
+        strict_protocol_sha256=evidence.strict_protocol_sha256,
+    )
+    without_reasoning = seal_structured_output_evidence(
+        requested_mode=evidence.requested_mode,
+        achieved_mode=evidence.achieved_mode,
+        configured_provider_endpoints=evidence.configured_provider_endpoints,
+        selected_provider_endpoint=evidence.selected_provider_endpoint,
+        endpoint_snapshot_sha256=evidence.endpoint_snapshot_sha256,
+        output_capability_sha256=evidence.output_capability_sha256,
+        endpoint_structured_output_parameters=(evidence.endpoint_structured_output_parameters),
+        prompt_sha256=evidence.prompt_sha256,
+        request_body_sha256=evidence.request_body_sha256,
+        provider_policy_sha256=evidence.provider_policy_sha256,
+        schema_sha256=evidence.schema_sha256,
+        original_response_sha256=evidence.original_response_sha256,
+        decoded_response_sha256=evidence.decoded_response_sha256,
+        validated_response_sha256=evidence.validated_response_sha256,
+        response_format=evidence.response_format,
+        required_provider_parameters=required_parameters,
+        provider_require_parameters=bool(required_parameters),
+        reasoning_request_sha256=reasoning_request_sha256,
+        request_shape_sha256=request_shape_sha256,
+        strict_protocol_sha256=evidence.strict_protocol_sha256,
+        repair_evidence=evidence.repair_evidence,
+    )
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "structured_output": without_reasoning.model_dump(mode="json"),
+                "structured_output_request_shape_sha256": request_shape_sha256,
+                "structured_output_require_parameters": bool(required_parameters),
+                "structured_output_required_provider_parameters": list(required_parameters),
+                "structured_output_reasoning_request_sha256": reasoning_request_sha256,
+            }
+        }
+    )
+
+
 def _preview(
     *,
     config: Any,
@@ -72,6 +204,7 @@ def _preview(
     policy: OpenRouterProviderPolicy,
     reasoning_policy: ReasoningPolicyArtifact,
     user_prompt: str = "synthetic provider-free request",
+    logical_request_id: str = "authrunner-candidate-case-001",
 ) -> OpenRouterStructuredRequestCostPreview:
     return preview_openrouter_structured_request_cost(
         execution=config.execution,
@@ -86,7 +219,7 @@ def _preview(
         user_prompt=user_prompt,
         response_model=Answer,
         schema_name="answer",
-        logical_request_id="authrunner-candidate-case-001",
+        logical_request_id=logical_request_id,
     )
 
 
@@ -269,6 +402,399 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
     )
     assert result.usage_record.routing["request_cost_preview_sha256"] == preview.preview_sha256
     assert usage.records == [result.usage_record]
+
+
+@pytest.mark.parametrize(
+    ("smoke_scope", "privacy_proof_kind", "request_segment"),
+    (
+        (
+            "CANDIDATE",
+            "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+            "candidate.primary",
+        ),
+        (
+            "JUDGE",
+            "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            "judge.primary",
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    ("expected_mode", "reasoning_active", "supported_parameters"),
+    _PER_ROLE_REASONING_OUTPUT_MATRIX,
+)
+@pytest.mark.asyncio
+async def test_v3_smoke_identity_join_covers_six_per_role_output_reasoning_cases(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    smoke_scope: str,
+    privacy_proof_kind: str,
+    request_segment: str,
+    expected_mode: StructuredOutputMode,
+    reasoning_active: bool,
+    supported_parameters: tuple[str, ...],
+) -> None:
+    observed: list[httpx.Request] = []
+    effort_none = bool(
+        reasoning_active
+        and expected_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+        and smoke_scope == "CANDIDATE"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+            reasoning_tokens=(6 if reasoning_active and not effort_none else None),
+        )
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    manifest, discovery = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=supported_parameters,
+        endpoint_supported_parameters=supported_parameters,
+        model_reasoning={
+            "default_enabled": False,
+            "mandatory": False,
+            "supported_efforts": ["none", "low", "high", "max"],
+        },
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
+    provider_policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+    reasoning_policy = (
+        (_effort_none_reasoning_policy() if effort_none else _high_effort_reasoning_policy())
+        if reasoning_active
+        else _disabled_reasoning_policy()
+    )
+    request_id = f"authrunner.smoke.r1.{request_segment}:{'4' * 64}"
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=discovery,
+        policy=provider_policy,
+        reasoning_policy=reasoning_policy,
+        logical_request_id=request_id,
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        atomic_ledger=AtomicCostLedger.initialize(
+            tmp_path / "smoke-reasoning-identity-ledger.json",
+            cap_usd=Decimal(str(config.execution.budget_usd)),
+        ),
+        require_endpoint_cost_bound=True,
+    )
+    client, http_client, _usage = _client(
+        config,
+        handler,
+        provider_policy=provider_policy,
+        reasoning_policy=reasoning_policy,
+        qualification_routing=(),
+        budget=budget,
+    )
+    client.register_model_discovery(evidence=discovery, manifest=manifest)
+    try:
+        completion = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=["alpha/atlas-secure"],
+            system_prompt="bounded synthetic system prompt",
+            user_prompt="synthetic provider-free request",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id=request_id,
+            expected_request_cost_preview=preview,
+        )
+        retrieved_at = datetime.now(UTC)
+        generation = validate_openrouter_generation_payload(
+            _generation_payload(),
+            requested_generation_id="generation-test",
+            retrieved_at=retrieved_at,
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+        )
+        identity_binding = client.bind_generation_identity(
+            usage_record=completion.usage_record,
+            generation_evidence=generation,
+            evaluated_at=retrieved_at,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert len(observed) == 1
+    request_body = json.loads(observed[0].content)
+    assert ("reasoning" in request_body) is reasoning_active
+    assert ("response_format" in request_body) is bool(
+        output_mode_request_parameters(expected_mode)
+    )
+    routed = completion.usage_record.model_dump(mode="json")
+    routed["execution_evidence"] = ExecutionEvidenceKind.REAL.value
+    routed["routing"] = {
+        **routed["routing"],
+        "privacy_source_proof_kind": privacy_proof_kind,
+        "identity_binding": identity_binding.model_dump(mode="json"),
+    }
+    provisional = UsageRecord.model_validate(routed)
+    assert provisional.reasoning_evidence is not None
+    if effort_none:
+        assert provisional.reasoning_evidence.request_plan.control_profile.mode == "effort"
+        assert provisional.reasoning_evidence.request_plan.control_profile.effort == "none"
+        assert (
+            provisional.reasoning_evidence.request_plan.control_profile.reserved_reasoning_tokens
+            == 0
+        )
+    record = _as_v3_unknown_token_smoke_usage(
+        provisional,
+        reasoning_plan=provisional.reasoning_evidence.request_plan,
+    )
+    assert usage_module.authrunner_noncrediting_unknown_token_smoke_scope(record) == smoke_scope
+    structured = StructuredOutputEvidence.model_validate(record.routing["structured_output"])
+    binding = OpenRouterIdentityBindingResult.model_validate(record.routing["identity_binding"])
+    capabilities = binding.snapshot.endpoint_capabilities
+    identity_special_parameters = set(capabilities.required_parameters) - {
+        "max_tokens",
+        "temperature",
+    }
+    expected_output_parameters = set(output_mode_request_parameters(expected_mode))
+
+    assert structured.requested_mode is expected_mode
+    assert identity_special_parameters == expected_output_parameters
+    assert capabilities.reasoning_supported
+    assert "reasoning" in capabilities.reasoning_parameters
+    assert set(structured.required_provider_parameters) == expected_output_parameters | (
+        {"reasoning"} if reasoning_active else set()
+    )
+    assert set(structured.required_provider_parameters) == {
+        parameter for parameter in ("reasoning", "response_format") if parameter in request_body
+    }
+    assert _structured_output_routing_failure_code(record) == (
+        "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+        if reasoning_active
+        else None
+    )
+    assert (
+        _structured_output_routing_failure_code(
+            record,
+            allow_noncrediting_unknown_token_accounting=True,
+        )
+        is None
+    )
+    assert (
+        noncrediting_unknown_token_smoke_usage_diagnostics(
+            record,
+            require_runtime_attestation=False,
+        )
+        == ()
+    )
+    assert not is_creditable_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+    )
+
+    if reasoning_active:
+        for outside_request_id, outside_proof in (
+            (
+                "authrunner.candidate.primary:case-0123456789abcdef",
+                "RELEASE_PINNED_MODEL_BENCHMARK",
+            ),
+            ("generic-request", "SYNTHETIC_TEST"),
+        ):
+            outside = record.model_copy(
+                update={
+                    "request_id": outside_request_id,
+                    "routing": {
+                        **record.routing,
+                        "privacy_source_proof_kind": outside_proof,
+                    },
+                }
+            )
+            assert (
+                _structured_output_routing_failure_code(
+                    outside,
+                    allow_noncrediting_unknown_token_accounting=True,
+                )
+                == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+            )
+
+        omitted_reasoning = _with_structured_reasoning_state(
+            record,
+            reasoning_requested=False,
+        )
+        assert (
+            set(
+                StructuredOutputEvidence.model_validate(
+                    omitted_reasoning.routing["structured_output"]
+                ).required_provider_parameters
+            )
+            == identity_special_parameters
+        )
+        assert (
+            _structured_output_routing_failure_code(
+                omitted_reasoning,
+                allow_noncrediting_unknown_token_accounting=True,
+            )
+            == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+        )
+
+        raw_plan = record.routing["request_token_plan"]
+        assert isinstance(raw_plan, dict)
+        malformed_plan = record.model_copy(
+            update={
+                "routing": {
+                    **record.routing,
+                    "request_token_plan": {**raw_plan, "plan_sha256": "0" * 64},
+                }
+            }
+        )
+        assert (
+            _structured_output_routing_failure_code(
+                malformed_plan,
+                allow_noncrediting_unknown_token_accounting=True,
+            )
+            == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+        )
+
+        if expected_mode is StructuredOutputMode.JSON_OBJECT and smoke_scope == "CANDIDATE":
+
+            def malformed_scope_classifier(_record: UsageRecord) -> Any:
+                return []
+
+            assert (
+                _structured_output_routing_failure_code(
+                    record,
+                    allow_noncrediting_unknown_token_accounting=True,
+                    authrunner_smoke_scope_classifier=malformed_scope_classifier,
+                )
+                == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+            )
+
+            def malformed_join_return(*_args: Any, **_kwargs: Any) -> Any:
+                return []
+
+            def unknown_join_return(*_args: Any, **_kwargs: Any) -> Any:
+                return "UNKNOWN"
+
+            for malformed_join in (malformed_join_return, unknown_join_return):
+                assert (
+                    _structured_output_routing_failure_code(
+                        record,
+                        allow_noncrediting_unknown_token_accounting=True,
+                        validate_smoke_reasoning_identity_join=malformed_join,
+                    )
+                    == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+                )
+
+            unsupported_capabilities = capabilities.model_copy(
+                update={
+                    "reasoning_parameters": (),
+                    "reasoning_supported": False,
+                }
+            )
+            unsupported_binding = binding.model_copy(
+                update={
+                    "snapshot": binding.snapshot.model_copy(
+                        update={"endpoint_capabilities": unsupported_capabilities}
+                    )
+                }
+            )
+            with monkeypatch.context() as context:
+                context.setattr(
+                    usage_module,
+                    "_validated_identity_binding",
+                    lambda _record: unsupported_binding,
+                )
+                assert (
+                    _structured_output_routing_failure_code(
+                        record,
+                        allow_noncrediting_unknown_token_accounting=True,
+                    )
+                    == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+                )
+
+            output_drift_capabilities = capabilities.model_copy(
+                update={"required_parameters": ("max_tokens", "temperature")}
+            )
+            output_drift_binding = binding.model_copy(
+                update={
+                    "snapshot": binding.snapshot.model_copy(
+                        update={"endpoint_capabilities": output_drift_capabilities}
+                    )
+                }
+            )
+            with monkeypatch.context() as context:
+                context.setattr(
+                    usage_module,
+                    "_validated_identity_binding",
+                    lambda _record: output_drift_binding,
+                )
+                assert (
+                    _structured_output_routing_failure_code(
+                        record,
+                        allow_noncrediting_unknown_token_accounting=True,
+                    )
+                    == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+                )
+
+    elif expected_mode is StructuredOutputMode.JSON_OBJECT and smoke_scope == "CANDIDATE":
+
+        def invalid_scope_classifier(_record: UsageRecord) -> Any:
+            return "INVALID"
+
+        assert (
+            _structured_output_routing_failure_code(
+                record,
+                allow_noncrediting_unknown_token_accounting=True,
+                authrunner_smoke_scope_classifier=invalid_scope_classifier,
+            )
+            is None
+        )
+        static_reasoning_record = _with_structured_reasoning_state(
+            record,
+            reasoning_requested=True,
+        )
+        static_reasoning_capabilities = capabilities.model_copy(
+            update={
+                "required_parameters": tuple(
+                    sorted({*capabilities.required_parameters, "reasoning"})
+                )
+            }
+        )
+        static_reasoning_binding = binding.model_copy(
+            update={
+                "snapshot": binding.snapshot.model_copy(
+                    update={
+                        "endpoint_capabilities": static_reasoning_capabilities,
+                        "provider_policy": binding.snapshot.provider_policy.model_copy(
+                            update={"require_parameters": True}
+                        ),
+                    }
+                )
+            }
+        )
+        with monkeypatch.context() as context:
+            context.setattr(
+                usage_module,
+                "_validated_identity_binding",
+                lambda _record: static_reasoning_binding,
+            )
+            assert _structured_output_routing_failure_code(static_reasoning_record) is None
+            assert (
+                _structured_output_routing_failure_code(
+                    static_reasoning_record,
+                    allow_noncrediting_unknown_token_accounting=True,
+                )
+                == "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+            )
 
 
 @pytest.mark.parametrize("cache_bound", ["0.0000001", "0.000001000000000001"])

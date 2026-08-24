@@ -361,6 +361,8 @@ def test_strict_usage_nested_helper_retargets_remain_fail_closed(
         "_has_valid_structured_output_routing",
         "_structured_output_routing_failure_code",
         "_has_valid_token_plan_routing",
+        "authrunner_noncrediting_unknown_token_smoke_scope",
+        "_validate_noncrediting_smoke_reasoning_identity_join",
         "_is_sha256",
         "_has_valid_bound_identity",
     )
@@ -486,10 +488,17 @@ def test_structured_output_helpers_retargeted_during_evaluation_fail_closed(
     record = _creditable_record()
     trusted_predicate = usage_module._has_valid_structured_output_routing
     trusted_diagnostic = usage_module._structured_output_routing_failure_code
+    trusted_scope_classifier = usage_module.authrunner_noncrediting_unknown_token_smoke_scope
+    trusted_reasoning_join = usage_module._validate_noncrediting_smoke_reasoning_identity_join
 
     for helper_name, replacement in (
         ("_has_valid_structured_output_routing", lambda _record: True),
         ("_structured_output_routing_failure_code", lambda _record: None),
+        ("authrunner_noncrediting_unknown_token_smoke_scope", lambda _record: None),
+        (
+            "_validate_noncrediting_smoke_reasoning_identity_join",
+            lambda *_args, **_kwargs: "DYNAMIC",
+        ),
     ):
         callback_values: list[object] = []
         with monkeypatch.context() as context:
@@ -535,6 +544,14 @@ def test_structured_output_helpers_retargeted_during_evaluation_fail_closed(
 
         assert usage_module._has_valid_structured_output_routing is trusted_predicate
         assert usage_module._structured_output_routing_failure_code is trusted_diagnostic
+        assert (
+            usage_module.authrunner_noncrediting_unknown_token_smoke_scope
+            is trusted_scope_classifier
+        )
+        assert (
+            usage_module._validate_noncrediting_smoke_reasoning_identity_join
+            is trusted_reasoning_join
+        )
 
 
 def _token_plan_for_record(

@@ -780,8 +780,12 @@ def _strict_usage_record_failure_code(
     has_owned_real_attestation: Callable[[UsageRecord], bool],
     has_valid_privacy_routing: Callable[[UsageRecord], bool],
     structured_output_routing_failure_code: Callable[
-        [UsageRecord], StructuredOutputRoutingFailureCode | None
+        ..., StructuredOutputRoutingFailureCode | None
     ],
+    authrunner_smoke_scope_classifier: Callable[
+        [UsageRecord], AuthrunnerNoncreditingUnknownTokenSmokeScope | None
+    ],
+    validate_smoke_reasoning_identity_join: Callable[..., str],
     has_valid_token_plan_routing: Callable[..., bool],
     is_sha256: Callable[[Any], bool],
     has_valid_bound_identity: Callable[[UsageRecord], bool],
@@ -920,7 +924,12 @@ def _strict_usage_record_failure_code(
         return "ROUTER_IDENTITY"
     if not has_valid_privacy_routing(record):
         return "PRIVACY_ROUTING"
-    structured_output_failure = structured_output_routing_failure_code(record)
+    structured_output_failure = structured_output_routing_failure_code(
+        record,
+        allow_noncrediting_unknown_token_accounting=(allow_noncrediting_unknown_token_accounting),
+        authrunner_smoke_scope_classifier=authrunner_smoke_scope_classifier,
+        validate_smoke_reasoning_identity_join=validate_smoke_reasoning_identity_join,
+    )
     if structured_output_failure is not None:
         return structured_output_failure
     if not has_valid_token_plan_routing(
@@ -1012,6 +1021,8 @@ def _build_strict_usage_record_validators() -> tuple[
     structured_output_routing_predicate = _has_valid_structured_output_routing
     structured_output_routing_failure = _structured_output_routing_failure_code
     token_plan_routing_predicate = _has_valid_token_plan_routing
+    authrunner_smoke_scope_classifier = authrunner_noncrediting_unknown_token_smoke_scope
+    validate_smoke_reasoning_identity_join = _validate_noncrediting_smoke_reasoning_identity_join
     sha256_predicate = _is_sha256
     bound_identity_predicate = _has_valid_bound_identity
     nested_helpers = (
@@ -1027,6 +1038,14 @@ def _build_strict_usage_record_validators() -> tuple[
             structured_output_routing_failure,
         ),
         ("_has_valid_token_plan_routing", token_plan_routing_predicate),
+        (
+            "authrunner_noncrediting_unknown_token_smoke_scope",
+            authrunner_smoke_scope_classifier,
+        ),
+        (
+            "_validate_noncrediting_smoke_reasoning_identity_join",
+            validate_smoke_reasoning_identity_join,
+        ),
         ("_is_sha256", sha256_predicate),
         ("_has_valid_bound_identity", bound_identity_predicate),
     )
@@ -1109,6 +1128,8 @@ def _build_strict_usage_record_validators() -> tuple[
             has_owned_real_attestation=owned_attestation_predicate,
             has_valid_privacy_routing=privacy_routing_predicate,
             structured_output_routing_failure_code=structured_output_routing_failure,
+            authrunner_smoke_scope_classifier=authrunner_smoke_scope_classifier,
+            validate_smoke_reasoning_identity_join=validate_smoke_reasoning_identity_join,
             has_valid_token_plan_routing=token_plan_routing_predicate,
             is_sha256=sha256_predicate,
             has_valid_bound_identity=bound_identity_predicate,
@@ -1731,8 +1752,80 @@ def _has_valid_noncrediting_unknown_token_plan_routing(
     )
 
 
+def _build_noncrediting_smoke_reasoning_identity_join_validator() -> Callable[..., str]:
+    """Capture the exact v3 smoke-plan roots governing the complete reasoning join."""
+
+    token_plan_routing_predicate = _has_valid_token_plan_routing
+    reasoning_parameter = "reasoning"
+    valid_scopes = frozenset({"CANDIDATE", "JUDGE"})
+
+    def validate(
+        record: UsageRecord,
+        *,
+        evidence_required_parameters: set[str],
+        identity_required_parameters: set[str],
+        identity_reasoning_parameters: tuple[str, ...],
+        identity_reasoning_supported: bool,
+        authrunner_smoke_scope_classifier: Callable[
+            [UsageRecord], AuthrunnerNoncreditingUnknownTokenSmokeScope | None
+        ],
+    ) -> Literal["OUTSIDE", "INVALID", "STATIC", "DYNAMIC"]:
+        try:
+            scope = authrunner_smoke_scope_classifier(record)
+        except (TypeError, ValueError):
+            return "INVALID"
+        if scope is None:
+            return "OUTSIDE"
+        if type(scope) is not str:
+            return "INVALID"
+        if scope == "INVALID":
+            return "OUTSIDE"
+        if scope not in valid_scopes:
+            return "INVALID"
+        if not token_plan_routing_predicate(
+            record,
+            allow_noncrediting_unknown_token_accounting=True,
+        ):
+            return "INVALID"
+        reasoning = record.reasoning_evidence
+        if reasoning is None:
+            return "INVALID"
+        evidence_has_reasoning = reasoning_parameter in evidence_required_parameters
+        identity_has_reasoning = reasoning_parameter in identity_required_parameters
+        if evidence_required_parameters - {reasoning_parameter} != (
+            identity_required_parameters - {reasoning_parameter}
+        ):
+            return "INVALID"
+        reasoning_is_active = reasoning.request_plan.control_profile.mode != "disabled"
+        if not reasoning_is_active:
+            return "INVALID" if evidence_has_reasoning or identity_has_reasoning else "STATIC"
+        if (
+            not evidence_has_reasoning
+            or identity_reasoning_supported is not True
+            or reasoning_parameter not in identity_reasoning_parameters
+        ):
+            return "INVALID"
+        return "STATIC" if identity_has_reasoning else "DYNAMIC"
+
+    return validate
+
+
+_validate_noncrediting_smoke_reasoning_identity_join = (
+    _build_noncrediting_smoke_reasoning_identity_join_validator()
+)
+del _build_noncrediting_smoke_reasoning_identity_join_validator
+
+
 def _structured_output_routing_failure_code(
     record: UsageRecord,
+    *,
+    allow_noncrediting_unknown_token_accounting: bool = False,
+    authrunner_smoke_scope_classifier: Callable[
+        [UsageRecord], AuthrunnerNoncreditingUnknownTokenSmokeScope | None
+    ] = authrunner_noncrediting_unknown_token_smoke_scope,
+    validate_smoke_reasoning_identity_join: Callable[
+        ..., str
+    ] = _validate_noncrediting_smoke_reasoning_identity_join,
 ) -> StructuredOutputRoutingFailureCode | None:
     """Return one closed, value-free structured-output routing failure clause."""
 
@@ -1883,10 +1976,11 @@ def _structured_output_routing_failure_code(
     if binding is None:
         return None
     capabilities = binding.snapshot.endpoint_capabilities
-    required_special_parameters = set(capabilities.required_parameters) - {
+    identity_required_parameters = set(capabilities.required_parameters) - {
         "max_tokens",
         "temperature",
     }
+    evidence_required_parameters = set(evidence.required_provider_parameters)
     if binding.snapshot.endpoint_snapshot_sha256 != evidence.endpoint_snapshot_sha256:
         return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_ENDPOINT_SNAPSHOT_SHA256"
     if capabilities.output_capability_sha256 != evidence.output_capability_sha256:
@@ -1897,12 +1991,36 @@ def _structured_output_routing_failure_code(
         capabilities.structured_output_parameters
     ):
         return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_PARAMETER_SUBSET"
-    if set(evidence.required_provider_parameters) != required_special_parameters:
-        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
-    if (
-        binding.snapshot.provider_policy.require_parameters
-        is not evidence.provider_require_parameters
+    smoke_reasoning_join = (
+        validate_smoke_reasoning_identity_join(
+            record,
+            evidence_required_parameters=evidence_required_parameters,
+            identity_required_parameters=identity_required_parameters,
+            identity_reasoning_parameters=capabilities.reasoning_parameters,
+            identity_reasoning_supported=capabilities.reasoning_supported,
+            authrunner_smoke_scope_classifier=authrunner_smoke_scope_classifier,
+        )
+        if allow_noncrediting_unknown_token_accounting is True
+        else "OUTSIDE"
+    )
+    if type(smoke_reasoning_join) is not str or smoke_reasoning_join not in (
+        "OUTSIDE",
+        "INVALID",
+        "STATIC",
+        "DYNAMIC",
     ):
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+    if smoke_reasoning_join == "INVALID":
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+    dynamic_reasoning_extension = smoke_reasoning_join == "DYNAMIC"
+    if smoke_reasoning_join == "OUTSIDE" and (
+        evidence_required_parameters != identity_required_parameters
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+    expected_require_parameters = (
+        True if dynamic_reasoning_extension else binding.snapshot.provider_policy.require_parameters
+    )
+    if expected_require_parameters is not evidence.provider_require_parameters:
         return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRE_PARAMETERS"
     return None
 
