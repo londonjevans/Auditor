@@ -989,7 +989,7 @@ def run_qualification_workflow(
         discovery_run_manifest.model_dump(mode="json")
     )
     discovery_evidence = tuple(
-        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        OpenRouterModelDiscoveryEvidence.model_validate_json(item.model_dump_json())
         for item in discovery_evidence
     )
     benchmark_suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))

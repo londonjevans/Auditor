@@ -2809,7 +2809,7 @@ def _validated_candidate(candidate: CandidateModel) -> CandidateModel:
     if type(candidate) is not CandidateModel:
         raise TypeError("candidate model has the wrong type")
     try:
-        return CandidateModel.model_validate(candidate.model_dump(mode="json"))
+        return CandidateModel.model_validate_json(candidate.model_dump_json())
     except ValidationError as exc:
         raise CrossLineageAdjudicationError("judge candidate metadata is invalid") from exc
 

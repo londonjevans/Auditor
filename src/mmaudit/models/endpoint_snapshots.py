@@ -29,6 +29,21 @@ from mmaudit.models.reasoning import (
     REASONING_EFFORT_ORDER,
     ReasoningControlProfile,
     ReasoningEffort,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    NormalizedRouteFacts,
+    RouteConstraintError,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
+    RoutePredicateReport,
+    RoutePredicateRequirementError,
+    evaluate_route_predicates,
+    normalize_exact_route_pricing,
+    project_provider_price_cap,
+    project_route_emitted_request_parameters,
+    require_route_predicates,
 )
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
@@ -62,6 +77,62 @@ ReasoningParameterSupport = Literal["supported", "unsupported", "unknown"]
 
 class EndpointSnapshotValidationError(ValueError):
     """Raised when endpoint metadata cannot prove the configured routing policy."""
+
+
+class OpenRouterConstrainedRouteContext(BaseModel):
+    """Selection-bound facts required before a constrained snapshot can be sealed."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    route_predicate_profile: RoutePredicateProfile
+    exact_route_constraint: ExactRouteConstraint
+    expected_selection_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_policy: ReasoningPolicyArtifact
+    reasoning_request_role: str = Field(min_length=1, max_length=200)
+    model_supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    model_supported_reasoning_efforts: tuple[ReasoningEffort, ...] | None = Field(
+        default=None,
+        max_length=len(REASONING_EFFORT_ORDER),
+    )
+    automatic_fallbacks_allowed: bool
+
+    @field_validator("model_supported_parameters")
+    @classmethod
+    def model_parameters_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("constrained model parameters must be sorted and unique")
+        return value
+
+    @field_validator("model_supported_reasoning_efforts")
+    @classmethod
+    def model_efforts_are_canonical(
+        cls,
+        value: tuple[ReasoningEffort, ...] | None,
+    ) -> tuple[ReasoningEffort, ...] | None:
+        if value is None:
+            return None
+        selected = frozenset(value)
+        if value != tuple(effort for effort in REASONING_EFFORT_ORDER if effort in selected):
+            raise ValueError("constrained model reasoning efforts must be canonical")
+        return value
+
+    @model_validator(mode="after")
+    def context_is_exact_and_self_validating(self) -> OpenRouterConstrainedRouteContext:
+        if (
+            self.exact_route_constraint.profile_sha256
+            != self.route_predicate_profile.profile_sha256
+        ):
+            raise ValueError("constrained route does not bind its predicate profile")
+        try:
+            self.reasoning_policy.role_policy_for_request(self.reasoning_request_role)
+        except ValueError as exc:
+            raise ValueError("constrained route reasoning request role is invalid") from exc
+        return self
 
 
 class OpenRouterEndpointEvidence(BaseModel):
@@ -450,6 +521,22 @@ class OpenRouterEndpointSnapshotEvidence(BaseModel):
     output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_metadata_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     zdr_metadata_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    route_predicate_profile: RoutePredicateProfile | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    exact_route_constraint: ExactRouteConstraint | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    normalized_route_facts: NormalizedRouteFacts | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    route_predicate_report: RoutePredicateReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -476,6 +563,7 @@ class OpenRouterEndpointSnapshotEvidence(BaseModel):
                 raise ValueError("ZDR-required endpoint evidence omits its ZDR snapshot")
             if any(item.zdr_eligible is not True for item in self.endpoints):
                 raise ValueError("ZDR-required endpoint evidence contains an ineligible endpoint")
+        _validate_embedded_route_predicate_evidence(self)
         expected = _canonical_sha256(
             self.model_dump(
                 mode="json",
@@ -506,6 +594,7 @@ def validate_openrouter_endpoint_snapshot(
     reasoning_requested: bool = False,
     structured_output_required: bool = False,
     required_output_mode: StructuredOutputMode | None = None,
+    route_constraint_context: OpenRouterConstrainedRouteContext | None = None,
 ) -> OpenRouterEndpointSnapshotEvidence:
     """Validate provider snapshots and return canonical non-secret evidence.
 
@@ -590,6 +679,7 @@ def validate_openrouter_endpoint_snapshot(
             configured=configured,
             payload=zdr_payload,
             required_request_parameters=required_request_parameters,
+            enforce_required_parameter_support=route_constraint_context is None,
         )
 
     endpoint_evidence: list[OpenRouterEndpointEvidence] = []
@@ -600,6 +690,7 @@ def validate_openrouter_endpoint_snapshot(
             configured_endpoint=endpoint_id,
             raw_endpoint=raw_endpoint,
             required_request_parameters=required_request_parameters,
+            enforce_required_parameter_support=route_constraint_context is None,
         )
         zdr_raw = zdr_matches[endpoint_id]
         zdr_hash: str | None = None
@@ -611,6 +702,7 @@ def validate_openrouter_endpoint_snapshot(
                 raw_endpoint=zdr_raw,
                 require_item_model_binding=True,
                 required_request_parameters=required_request_parameters,
+                enforce_required_parameter_support=route_constraint_context is None,
             )
             _validate_zdr_counterpart(normalized, normalized_zdr)
             zdr_eligible = True
@@ -618,6 +710,16 @@ def validate_openrouter_endpoint_snapshot(
         if require_zdr and zdr_eligible is not True:
             raise EndpointSnapshotValidationError(
                 f"configured endpoint is not present in the exact-model ZDR snapshot: {endpoint_id}"
+            )
+        if route_constraint_context is not None and not endpoint_evidence:
+            _evaluate_route_predicate_evidence(
+                exact_model_id=exact_model_id,
+                provider_policy_mode=provider_policy_mode,
+                configured_provider_endpoints=configured,
+                identity_inventory=identity_inventory,
+                selected_endpoint={**normalized, "zdr_eligible": zdr_eligible},
+                structured_output_mode=negotiated_output_mode,
+                context=route_constraint_context,
             )
         endpoint_projection.append(normalized)
         endpoint_evidence.append(
@@ -666,12 +768,258 @@ def validate_openrouter_endpoint_snapshot(
             _canonical_sha256(zdr_projection) if zdr_projection is not None else None
         ),
     }
+    if route_constraint_context is not None:
+        serialized.update(
+            _build_route_predicate_evidence(
+                exact_model_id=exact_model_id,
+                provider_policy_mode=provider_policy_mode,
+                configured_provider_endpoints=configured,
+                identity_inventory=identity_inventory,
+                endpoints=tuple(endpoint_evidence),
+                structured_output_mode=negotiated_output_mode,
+                context=route_constraint_context,
+            )
+        )
     return OpenRouterEndpointSnapshotEvidence.model_validate(
         {
             **serialized,
             "snapshot_sha256": _canonical_sha256(serialized),
         }
     )
+
+
+def _build_route_predicate_evidence(
+    *,
+    exact_model_id: str,
+    provider_policy_mode: Literal["only", "order"],
+    configured_provider_endpoints: tuple[str, ...],
+    identity_inventory: Sequence[Mapping[str, str | None]],
+    endpoints: tuple[OpenRouterEndpointEvidence, ...],
+    structured_output_mode: StructuredOutputMode,
+    context: OpenRouterConstrainedRouteContext,
+) -> dict[str, Any]:
+    """Evaluate every discovery predicate before a constrained snapshot can exist."""
+
+    if not endpoints:
+        raise EndpointSnapshotValidationError("constrained endpoint snapshot has no route")
+    facts, report, context = _evaluate_route_predicate_evidence(
+        exact_model_id=exact_model_id,
+        provider_policy_mode=provider_policy_mode,
+        configured_provider_endpoints=configured_provider_endpoints,
+        identity_inventory=identity_inventory,
+        selected_endpoint=endpoints[0].model_dump(mode="python"),
+        structured_output_mode=structured_output_mode,
+        context=context,
+    )
+    return {
+        "route_predicate_profile": context.route_predicate_profile,
+        "exact_route_constraint": context.exact_route_constraint,
+        "normalized_route_facts": facts,
+        "route_predicate_report": report,
+    }
+
+
+def _evaluate_route_predicate_evidence(
+    *,
+    exact_model_id: str,
+    provider_policy_mode: Literal["only", "order"],
+    configured_provider_endpoints: tuple[str, ...],
+    identity_inventory: Sequence[Mapping[str, str | None]],
+    selected_endpoint: Mapping[str, Any],
+    structured_output_mode: StructuredOutputMode,
+    context: OpenRouterConstrainedRouteContext,
+) -> tuple[NormalizedRouteFacts, RoutePredicateReport, OpenRouterConstrainedRouteContext]:
+    """Build and require the one complete report before constrained endpoint sealing."""
+
+    if type(context) is not OpenRouterConstrainedRouteContext:
+        raise EndpointSnapshotValidationError(
+            "constrained endpoint snapshot requires an exact route context"
+        )
+    try:
+        context = OpenRouterConstrainedRouteContext.model_validate_json(
+            context.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise EndpointSnapshotValidationError(
+            "constrained endpoint route context failed detached validation"
+        ) from exc
+    role_policy = context.reasoning_policy.role_policy_for_request(context.reasoning_request_role)
+    control = role_policy.control
+    try:
+        exact_pricing = normalize_exact_route_pricing(selected_endpoint["pricing"])
+    except RouteConstraintError as exc:
+        raise EndpointSnapshotValidationError(
+            "constrained endpoint pricing contains an unsupported component"
+        ) from exc
+    try:
+        configured_cap = project_provider_price_cap(exact_pricing)
+    except RouteConstraintError:
+        configured_cap = None
+    provider_display_names = tuple(
+        sorted(
+            (
+                provider_name
+                for identity in identity_inventory
+                if isinstance((provider_name := identity["provider_name"]), str)
+            ),
+            key=lambda item: (item.casefold(), item),
+        )
+    )
+    emitted_parameters = project_route_emitted_request_parameters(
+        structured_output_mode=structured_output_mode,
+        reasoning_emitted=control.mode != "disabled",
+    )
+    try:
+        facts = NormalizedRouteFacts.build(
+            observed_model_id=exact_model_id,
+            observed_provider_endpoint=selected_endpoint["provider_endpoint"],
+            selected_provider_display_name=selected_endpoint["provider_name"],
+            provider_display_names=provider_display_names,
+            provider_identity_inventory_complete=True,
+            operational_status=selected_endpoint["operational_status"],
+            zdr_eligible=selected_endpoint["zdr_eligible"],
+            emitted_request_parameters=emitted_parameters,
+            model_supported_parameters=context.model_supported_parameters,
+            endpoint_supported_parameters=selected_endpoint["supported_parameters"],
+            structured_output_mode=structured_output_mode,
+            configured_provider_endpoints=configured_provider_endpoints,
+            provider_policy_mode=provider_policy_mode,
+            automatic_fallbacks_allowed=context.automatic_fallbacks_allowed,
+            reasoning_policy_sha256=context.reasoning_policy.artifact_sha256,
+            reasoning_role_profile_sha256=(context.reasoning_policy.role_profile.profile_sha256),
+            reasoning_role_binding_sha256=role_policy.binding_sha256,
+            reasoning_control_profile_sha256=control.profile_sha256,
+            reasoning_mode=control.mode,
+            reasoning_effort=control.effort,
+            reasoning_max_tokens=control.max_tokens,
+            reasoning_exclude=control.exclude,
+            reserved_reasoning_tokens=control.reserved_reasoning_tokens,
+            endpoint_supported_reasoning_efforts=(selected_endpoint["supported_reasoning_efforts"]),
+            model_supported_reasoning_efforts=(context.model_supported_reasoning_efforts),
+            max_prompt_tokens=selected_endpoint["max_prompt_tokens"],
+            max_completion_tokens=selected_endpoint["max_completion_tokens"],
+            max_completion_tokens_source=selected_endpoint["max_completion_tokens_source"],
+            context_tokens=selected_endpoint["context_length"],
+            exact_pricing=exact_pricing,
+            configured_provider_max_price=configured_cap,
+            frozen_live_equivalent=None,
+            expected_selection_plan_sha256=context.expected_selection_plan_sha256,
+        )
+        report = evaluate_route_predicates(
+            profile=context.route_predicate_profile,
+            constraint=context.exact_route_constraint,
+            facts=facts,
+        )
+        require_route_predicates(
+            report,
+            purpose=RouteConstraintPurpose.DISCOVERY_PUBLICATION,
+        )
+    except RoutePredicateRequirementError as exc:
+        reasons = ",".join(result.reason.value for result in exc.failures)
+        raise EndpointSnapshotValidationError(
+            "constrained endpoint snapshot failed discovery route predicates: " + reasons
+        ) from exc
+    except (RouteConstraintError, ValueError) as exc:
+        raise EndpointSnapshotValidationError(
+            "constrained endpoint snapshot route facts are invalid"
+        ) from exc
+    return facts, report, context
+
+
+def _validate_embedded_route_predicate_evidence(
+    snapshot: OpenRouterEndpointSnapshotEvidence,
+) -> None:
+    embedded = (
+        snapshot.route_predicate_profile,
+        snapshot.exact_route_constraint,
+        snapshot.normalized_route_facts,
+        snapshot.route_predicate_report,
+    )
+    if all(value is None for value in embedded):
+        return
+    if any(value is None for value in embedded):
+        raise ValueError("constrained endpoint route evidence must be all present or absent")
+    profile = snapshot.route_predicate_profile
+    constraint = snapshot.exact_route_constraint
+    facts = snapshot.normalized_route_facts
+    report = snapshot.route_predicate_report
+    assert profile is not None
+    assert constraint is not None
+    assert facts is not None
+    assert report is not None
+    endpoint = snapshot.endpoints[0]
+    exact_pricing = normalize_exact_route_pricing(endpoint.pricing)
+    try:
+        expected_cap = project_provider_price_cap(exact_pricing)
+    except RouteConstraintError as exc:
+        raise ValueError("constrained endpoint pricing is not provider-cap expressible") from exc
+    expected_emitted = project_route_emitted_request_parameters(
+        structured_output_mode=snapshot.structured_output_mode,
+        reasoning_emitted=facts.reasoning_mode != "disabled",
+    )
+    if endpoint.required_request_parameters != expected_emitted:
+        raise ValueError(
+            "constrained endpoint required request parameters differ from shared emission"
+        )
+    expected_endpoint_facts = (
+        snapshot.exact_model_id,
+        endpoint.provider_endpoint,
+        endpoint.provider_name,
+        endpoint.operational_status,
+        endpoint.zdr_eligible,
+        expected_emitted,
+        endpoint.supported_parameters,
+        snapshot.structured_output_mode,
+        snapshot.configured_provider_endpoints,
+        snapshot.provider_policy_mode,
+        endpoint.supported_reasoning_efforts,
+        endpoint.max_prompt_tokens,
+        endpoint.max_completion_tokens,
+        endpoint.max_completion_tokens_source,
+        endpoint.context_length,
+        exact_pricing,
+        expected_cap,
+    )
+    observed_endpoint_facts = (
+        facts.observed_model_id,
+        facts.observed_provider_endpoint,
+        facts.selected_provider_display_name,
+        facts.operational_status,
+        facts.zdr_eligible,
+        facts.emitted_request_parameters,
+        facts.endpoint_supported_parameters,
+        facts.structured_output_mode,
+        facts.configured_provider_endpoints,
+        facts.provider_policy_mode,
+        facts.endpoint_supported_reasoning_efforts,
+        facts.max_prompt_tokens,
+        facts.max_completion_tokens,
+        facts.max_completion_tokens_source,
+        facts.context_tokens,
+        facts.exact_pricing,
+        facts.configured_provider_max_price,
+    )
+    if observed_endpoint_facts != expected_endpoint_facts:
+        raise ValueError("constrained endpoint route facts differ from sealed endpoint metadata")
+    if facts.provider_identity_inventory_complete is not True:
+        raise ValueError("constrained endpoint provider identity inventory is incomplete")
+    expected_report = evaluate_route_predicates(
+        profile=profile,
+        constraint=constraint,
+        facts=facts,
+    )
+    if report != expected_report:
+        raise ValueError("constrained endpoint route predicate report is inconsistent")
+    try:
+        require_route_predicates(
+            report,
+            purpose=RouteConstraintPurpose.DISCOVERY_PUBLICATION,
+        )
+    except RoutePredicateRequirementError as exc:
+        raise ValueError(
+            "constrained endpoint route predicate report is not publication eligible"
+        ) from exc
 
 
 def _validate_exact_model_id(model_id: str) -> None:
@@ -753,6 +1101,7 @@ def _match_zdr_endpoints(
     configured: tuple[str, ...],
     payload: Any,
     required_request_parameters: tuple[str, ...],
+    enforce_required_parameter_support: bool,
 ) -> tuple[dict[str, Mapping[str, Any] | None], dict[str, Any]]:
     envelope = _required_mapping(payload, "ZDR endpoint metadata")
     raw_items = _required_endpoint_list(
@@ -793,6 +1142,7 @@ def _match_zdr_endpoints(
                         raw_endpoint=match,
                         require_item_model_binding=True,
                         required_request_parameters=required_request_parameters,
+                        enforce_required_parameter_support=(enforce_required_parameter_support),
                     )
                     if match is not None
                     else None
@@ -867,6 +1217,7 @@ def _normalize_endpoint(
     raw_endpoint: Mapping[str, Any],
     require_item_model_binding: bool = False,
     required_request_parameters: tuple[str, ...],
+    enforce_required_parameter_support: bool = True,
 ) -> dict[str, Any]:
     item_model_id = raw_endpoint.get("model_id")
     if (
@@ -893,7 +1244,9 @@ def _normalize_endpoint(
     supported_reasoning_efforts = _optional_endpoint_reasoning_efforts(raw_endpoint)
     structured = structured_output_parameters(supported)
     output_modes = supported_output_modes(supported)
-    if not set(required_request_parameters).issubset(supported):
+    if enforce_required_parameter_support and not set(required_request_parameters).issubset(
+        supported
+    ):
         missing = sorted(set(required_request_parameters) - set(supported))
         raise EndpointSnapshotValidationError(
             "configured endpoint lacks emitted request parameter support: " + ", ".join(missing)
@@ -1223,5 +1576,12 @@ def _canonical_sha256(value: Any) -> str:
         separators=(",", ":"),
         ensure_ascii=False,
         allow_nan=False,
+        default=_canonical_json_default,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_json_default(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"unsupported canonical endpoint value: {type(value).__name__}")

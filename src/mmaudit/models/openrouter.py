@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -35,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from pydantic_core import SchemaValidator
 
 import mmaudit.models.generation_evidence as generation_evidence_module
+import mmaudit.models.route_constraints as route_constraints_module
 import mmaudit.models.usage as usage_module
 from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
@@ -53,6 +55,7 @@ from mmaudit.models.discovery import (
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
     openrouter_model_query,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import (
@@ -123,6 +126,12 @@ from mmaudit.models.reasoning import (
     TokenDetailAccountingEvidence,
     reasoning_policy_roles_for_qualified_role,
     resolve_reasoning_request_role,
+)
+from mmaudit.models.route_constraints import (
+    RouteConstraintError,
+    normalize_exact_route_pricing,
+    project_provider_price_cap,
+    project_route_emitted_request_parameters,
 )
 
 if TYPE_CHECKING:
@@ -3250,6 +3259,9 @@ def _assemble_structured_request_body(
     wire_max_tokens: int,
     request_metadata: Mapping[str, str],
     routing_max_price: Mapping[str, float] | None,
+    _route_parameter_projection: Callable[..., tuple[str, ...]] = (
+        project_route_emitted_request_parameters
+    ),
 ) -> dict[str, Any]:
     """Assemble the sole canonical structured request shape used by preview and dispatch."""
 
@@ -3275,6 +3287,28 @@ def _assemble_structured_request_body(
         provider["max_price"] = dict(routing_max_price)
     if structured_output_plan.reasoning_payload is not None:
         body["reasoning"] = structured_output_plan.reasoning_payload
+    try:
+        if _route_parameter_projection is not _TRUSTED_PROJECT_ROUTE_EMITTED_REQUEST_PARAMETERS:
+            raise RouteConstraintError("route request-parameter projection changed")
+        expected_route_parameters = _route_parameter_projection(
+            structured_output_mode=structured_output_plan.mode,
+            reasoning_emitted=structured_output_plan.reasoning_payload is not None,
+        )
+    except RouteConstraintError as exc:
+        raise OpenRouterRequestLimitError(
+            "structured request route-parameter projection is invalid"
+        ) from exc
+    observed_route_parameters = tuple(
+        sorted(
+            field
+            for field in ("max_tokens", "reasoning", "response_format", "temperature")
+            if field in body
+        )
+    )
+    if observed_route_parameters != expected_route_parameters:
+        raise OpenRouterRequestLimitError(
+            "structured request differs from the shared route-parameter projection"
+        )
     if any(not _is_safe_metadata_pair(key, value) for key, value in request_metadata.items()):
         raise OpenRouterRequestLimitError("request metadata is invalid")
     if request_metadata:
@@ -8849,6 +8883,66 @@ def _require_exact_atomic_ledger_configuration(ledger: AtomicCostLedger) -> None
         raise OpenRouterPrivacyError("paid provider cost-ledger configuration is invalid")
 
 
+_DISCOVERY_REPLAY_MAX_JSON_DEPTH = 256
+_DISCOVERY_REPLAY_MAX_JSON_NODES = 2_000_000
+
+
+def _detach_exact_discovery_json_object(value: object, *, label: str) -> dict[str, Any]:
+    """Detach one exact decoded JSON object before hashing and replaying it."""
+
+    def detach(current: object, *, depth: int, nodes: int) -> tuple[Any, int]:
+        nodes += 1
+        if depth > _DISCOVERY_REPLAY_MAX_JSON_DEPTH or nodes > _DISCOVERY_REPLAY_MAX_JSON_NODES:
+            raise OpenRouterPrivacyError("REAL discovery replay JSON exceeds its structural bound")
+        if type(current) is dict:
+            detached: dict[str, Any] = {}
+            for key, item in dict.items(current):
+                if type(key) is not str:
+                    raise OpenRouterPrivacyError(
+                        "REAL discovery replay JSON contains a non-string object key"
+                    )
+                detached_item, nodes = detach(item, depth=depth + 1, nodes=nodes)
+                detached[key] = detached_item
+            return detached, nodes
+        if type(current) is list:
+            detached_items: list[Any] = []
+            for item in list.__iter__(current):
+                detached_item, nodes = detach(item, depth=depth + 1, nodes=nodes)
+                detached_items.append(detached_item)
+            return detached_items, nodes
+        if current is None or type(current) in {str, int, bool}:
+            return current, nodes
+        if type(current) is float and math.isfinite(current):
+            return current, nodes
+        raise OpenRouterPrivacyError(f"{label} is not an exact finite decoded JSON object")
+
+    if type(value) is not dict:
+        raise OpenRouterPrivacyError(f"{label} is not an exact decoded JSON object")
+    detached, _nodes = detach(value, depth=0, nodes=0)
+    assert type(detached) is dict
+    return detached
+
+
+def _detach_exact_discovery_json_mapping(
+    value: object,
+    *,
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    """Detach an exact model-ID-to-response mapping without invoking subclass hooks."""
+
+    if type(value) is not dict:
+        raise OpenRouterPrivacyError(f"{label} is not an exact response mapping")
+    detached: dict[str, dict[str, Any]] = {}
+    for model_id, payload in dict.items(value):
+        if type(model_id) is not str:
+            raise OpenRouterPrivacyError(f"{label} contains a non-string model identity")
+        detached[model_id] = _detach_exact_discovery_json_object(
+            payload,
+            label=f"{label} response",
+        )
+    return detached
+
+
 def _trusted_paid_controls_required(subject: object) -> bool:
     """Return the construction-time paid-control requirement or fail closed."""
 
@@ -8866,6 +8960,84 @@ def _trusted_paid_controls_required(subject: object) -> bool:
     ):
         raise OpenRouterPrivacyError("provider paid-control requirement changed after validation")
     return binding.paid_controls_required
+
+
+def _revalidate_openrouter_discovery_payload(
+    *,
+    supplied_discovery: OpenRouterModelDiscoveryPayload,
+    models_payload: dict[str, Any],
+    single_model_payload: dict[str, Any],
+    endpoint_payload: dict[str, Any],
+    zdr_payload: dict[str, Any],
+    route: DiscoveryCandidateRoute,
+    reasoning_policy: ReasoningPolicyArtifact | None,
+    automatic_fallbacks_allowed: bool,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None,
+    _generic_endpoint_validator: Callable[..., OpenRouterEndpointSnapshotEvidence] = (
+        validate_openrouter_endpoint_snapshot
+    ),
+    _generic_model_validator: Callable[..., OpenRouterModelDiscoveryPayload] = (
+        validate_openrouter_model_discovery
+    ),
+    _constrained_model_validator: Callable[..., OpenRouterModelDiscoveryPayload] = (
+        validate_openrouter_constrained_model_discovery
+    ),
+) -> OpenRouterModelDiscoveryPayload:
+    """Rebuild one supplied discovery payload from the exact observed response bodies."""
+
+    snapshot = supplied_discovery.endpoint_snapshot
+    route_evidence = (
+        snapshot.route_predicate_profile,
+        snapshot.exact_route_constraint,
+        snapshot.normalized_route_facts,
+        snapshot.route_predicate_report,
+    )
+    if all(value is None for value in route_evidence):
+        observed_endpoint_snapshot = _generic_endpoint_validator(
+            exact_model_id=route.exact_model_id,
+            configured_provider_endpoints=(route.approved_provider_endpoint,),
+            provider_policy_mode="only",
+            endpoint_payload=endpoint_payload,
+            require_zdr=snapshot.require_zdr,
+            zdr_payload=zdr_payload,
+            reasoning_requested=False,
+            structured_output_required=(
+                snapshot.structured_output_mode is not StructuredOutputMode.VALIDATED_TEXT_JSON
+            ),
+        )
+        return _generic_model_validator(
+            exact_model_id=route.exact_model_id,
+            models_payload=models_payload,
+            single_model_payload=single_model_payload,
+            endpoint_snapshot=observed_endpoint_snapshot,
+            effective_privacy_policy=effective_privacy_policy,
+        )
+    if any(value is None for value in route_evidence) or reasoning_policy is None:
+        raise OpenRouterPrivacyError(
+            "constrained discovery replay lacks complete route-policy custody"
+        )
+    profile = snapshot.route_predicate_profile
+    constraint = snapshot.exact_route_constraint
+    facts = snapshot.normalized_route_facts
+    assert profile is not None
+    assert constraint is not None
+    assert facts is not None
+    return _constrained_model_validator(
+        exact_model_id=route.exact_model_id,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+        configured_provider_endpoints=(route.approved_provider_endpoint,),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=snapshot.require_zdr,
+        zdr_payload=zdr_payload,
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256=facts.expected_selection_plan_sha256,
+        reasoning_policy=reasoning_policy,
+        automatic_fallbacks_allowed=automatic_fallbacks_allowed,
+        effective_privacy_policy=effective_privacy_policy,
+    )
 
 
 class OpenRouterClient:
@@ -9712,6 +9884,55 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "REAL discovery evidence requires an authenticated owned provider client"
             )
+        try:
+            detached_models_payload = _detach_exact_discovery_json_object(
+                models_payload,
+                label="REAL discovery catalog payload",
+            )
+            detached_zdr_payload = _detach_exact_discovery_json_object(
+                zdr_payload,
+                label="REAL discovery ZDR payload",
+            )
+            detached_single_model_payloads = _detach_exact_discovery_json_mapping(
+                single_model_payloads,
+                label="REAL discovery single-model payloads",
+            )
+            detached_endpoint_payloads = _detach_exact_discovery_json_mapping(
+                endpoint_payloads,
+                label="REAL discovery endpoint payloads",
+            )
+            if type(candidate_routes) is not tuple or any(
+                type(route) is not DiscoveryCandidateRoute for route in candidate_routes
+            ):
+                raise OpenRouterPrivacyError("REAL discovery routes have the wrong exact type")
+            if type(payloads) is not tuple or any(
+                type(payload) is not OpenRouterModelDiscoveryPayload for payload in payloads
+            ):
+                raise OpenRouterPrivacyError("REAL discovery payloads have the wrong exact type")
+            detached_candidate_routes = tuple(
+                DiscoveryCandidateRoute.model_validate_json(
+                    route.model_dump_json(),
+                    strict=True,
+                )
+                for route in candidate_routes
+            )
+            detached_payloads = tuple(
+                OpenRouterModelDiscoveryPayload.model_validate_json(
+                    payload.model_dump_json(),
+                    strict=True,
+                )
+                for payload in payloads
+            )
+        except (AttributeError, TypeError, ValueError, ValidationError):
+            raise OpenRouterPrivacyError(
+                "REAL discovery replay inputs failed exact detachment"
+            ) from None
+        models_payload = detached_models_payload
+        zdr_payload = detached_zdr_payload
+        single_model_payloads = detached_single_model_payloads
+        endpoint_payloads = detached_endpoint_payloads
+        candidate_routes = detached_candidate_routes
+        payloads = detached_payloads
         expected_catalog_hash = _canonical_sha256(models_payload)
         expected_zdr_hash = _canonical_sha256(zdr_payload)
         if (
@@ -9773,24 +9994,15 @@ class OpenRouterClient:
             )
             route = next(route for route in candidate_routes if route.exact_model_id == model_id)
             try:
-                observed_endpoint_snapshot = validate_openrouter_endpoint_snapshot(
-                    exact_model_id=model_id,
-                    configured_provider_endpoints=(route.approved_provider_endpoint,),
-                    provider_policy_mode="only",
-                    endpoint_payload=payload,
-                    require_zdr=supplied_discovery.endpoint_snapshot.require_zdr,
-                    zdr_payload=zdr_payload,
-                    reasoning_requested=False,
-                    structured_output_required=(
-                        supplied_discovery.endpoint_snapshot.structured_output_mode
-                        is not StructuredOutputMode.VALIDATED_TEXT_JSON
-                    ),
-                )
-                observed_payload = validate_openrouter_model_discovery(
-                    exact_model_id=model_id,
+                observed_payload = _revalidate_openrouter_discovery_payload(
+                    supplied_discovery=supplied_discovery,
                     models_payload=models_payload,
                     single_model_payload=single_model_payload,
-                    endpoint_snapshot=observed_endpoint_snapshot,
+                    endpoint_payload=payload,
+                    zdr_payload=zdr_payload,
+                    route=route,
+                    reasoning_policy=self.reasoning_policy,
+                    automatic_fallbacks_allowed=self.provider_policy.allow_fallbacks,
                     effective_privacy_policy=self.effective_privacy_policy,
                 )
             except (ValueError, ValidationError):
@@ -19181,6 +19393,10 @@ _TRUSTED_USAGE_LEDGER_REPLACE_WITH_UNBOUND_IDENTITY = UsageLedger.replace_with_u
 _TRUSTED_USAGE_LEDGER_REPLACE_WITH_IDENTITY_RESULT = UsageLedger._replace_with_identity_result
 _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY = OpenRouterClient._require_terminal_usage_cost_custody
 _TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
+_TRUSTED_DETACH_EXACT_DISCOVERY_JSON_OBJECT = _detach_exact_discovery_json_object
+_TRUSTED_DETACH_EXACT_DISCOVERY_JSON_MAPPING = _detach_exact_discovery_json_mapping
+_TRUSTED_REVALIDATE_OPENROUTER_DISCOVERY_PAYLOAD = _revalidate_openrouter_discovery_payload
+_TRUSTED_SEAL_REAL_MODEL_DISCOVERY_RUN = OpenRouterClient.seal_real_model_discovery_run
 _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_ISSUE_GENERATION_VERIFICATION = _issue_trusted_generation_verification
 _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN = _attest_authrunner_generation_origin
@@ -19364,7 +19580,11 @@ def _build_provider_authority_function_graph_guard() -> tuple[
             try:
                 contents = (
                     untracked_snapshot_cell
-                    if name == "issuer_callable_states"
+                    if name
+                    in {
+                        "issuer_callable_states",
+                        "issuer_callable_states_seal",
+                    }
                     else cell.cell_contents
                 )
             except ValueError:
@@ -19578,6 +19798,20 @@ def _openrouter_client_callables_are_pristine(
         tuple[str, object], ...
     ] = _provider_authority_graph_guard_attribute_items,
     _provider_authority_graph_frozen_states: tuple[tuple[object, ...], ...] | None = None,
+    _route_emitted_projection: Callable[..., object] = (project_route_emitted_request_parameters),
+    _route_pricing_normalizer: Callable[..., object] = normalize_exact_route_pricing,
+    _route_price_cap_projection: Callable[..., object] = project_provider_price_cap,
+    _structured_request_assembler: Callable[..., object] = _assemble_structured_request_body,
+    _routing_price_projector: Callable[..., object] | None = None,
+    _discovery_revalidator: Callable[..., object] = _revalidate_openrouter_discovery_payload,
+    _discovery_sealer: Callable[..., object] = OpenRouterClient.seal_real_model_discovery_run,
+    _discovery_json_detacher: Callable[..., object] = _detach_exact_discovery_json_object,
+    _discovery_json_mapping_detacher: Callable[..., object] = (
+        _detach_exact_discovery_json_mapping
+    ),
+    _route_admission_pristine: Callable[[], bool] | None = None,
+    _route_admission_single: Callable[..., object] | None = None,
+    _route_admission_three: Callable[..., object] | None = None,
 ) -> bool:
     """Verify the client-owned request and evidence dispatch boundary is unchanged."""
 
@@ -19597,6 +19831,13 @@ def _openrouter_client_callables_are_pristine(
         guard_frozen_states_seal = guard_closure_by_name["frozen_states_seal"].cell_contents
     except (KeyError, ValueError):
         return False
+    if (
+        _route_admission_pristine is None
+        or _route_admission_single is None
+        or _route_admission_three is None
+    ):
+        return False
+    route_admission_pristine: Callable[[], bool] = _route_admission_pristine
     return (
         _openrouter_client_callables_are_pristine
         is _TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE
@@ -19923,6 +20164,36 @@ def _openrouter_client_callables_are_pristine(
         and (_authrunner_usage_origin_scope is _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE)
         and _validated_usage_copy_preserving_owned_attestation is _TRUSTED_VALIDATED_USAGE_COPY
         and OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
+        and _detach_exact_discovery_json_object is _discovery_json_detacher
+        and _TRUSTED_DETACH_EXACT_DISCOVERY_JSON_OBJECT is _discovery_json_detacher
+        and _detach_exact_discovery_json_mapping is _discovery_json_mapping_detacher
+        and _TRUSTED_DETACH_EXACT_DISCOVERY_JSON_MAPPING is _discovery_json_mapping_detacher
+        and sys.modules.get("mmaudit.models.route_admission") is _TRUSTED_ROUTE_ADMISSION_MODULE
+        and (
+            getattr(_TRUSTED_ROUTE_ADMISSION_MODULE, "route_admission_callables_are_pristine", None)
+            is _route_admission_pristine
+        )
+        and (
+            getattr(
+                _TRUSTED_ROUTE_ADMISSION_MODULE,
+                "require_authenticated_runner_route_admission",
+                None,
+            )
+            is _route_admission_single
+        )
+        and (
+            getattr(
+                _TRUSTED_ROUTE_ADMISSION_MODULE,
+                "require_authenticated_runner_three_route_admission",
+                None,
+            )
+            is _route_admission_three
+        )
+        and route_admission_pristine()
+        and _revalidate_openrouter_discovery_payload is _discovery_revalidator
+        and _TRUSTED_REVALIDATE_OPENROUTER_DISCOVERY_PAYLOAD is _discovery_revalidator
+        and OpenRouterClient.seal_real_model_discovery_run is _discovery_sealer
+        and _TRUSTED_SEAL_REAL_MODEL_DISCOVERY_RUN is _discovery_sealer
         and OpenRouterClient.get_generation_evidence is _TRUSTED_GET_GENERATION_EVIDENCE
         and (
             OpenRouterClient.create_trusted_generation_verification
@@ -19948,6 +20219,18 @@ def _openrouter_client_callables_are_pristine(
             _endpoint_request_cost_bound_projection_sha256
             is _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256
         )
+        and route_constraints_module is _TRUSTED_ROUTE_CONSTRAINTS_MODULE
+        and (
+            route_constraints_module.project_route_emitted_request_parameters
+            is _route_emitted_projection
+        )
+        and project_route_emitted_request_parameters is _route_emitted_projection
+        and (route_constraints_module.normalize_exact_route_pricing is _route_pricing_normalizer)
+        and normalize_exact_route_pricing is _route_pricing_normalizer
+        and (route_constraints_module.project_provider_price_cap is _route_price_cap_projection)
+        and project_provider_price_cap is _route_price_cap_projection
+        and _assemble_structured_request_body is _structured_request_assembler
+        and _routing_max_price is _routing_price_projector
         and (_provider_capped_cost_bound_pricing is _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING)
         and copy.deepcopy is _TRUSTED_COPY_DEEPCOPY
         and _copy_deepcopy_dispatch_is_pristine()
@@ -20447,15 +20730,51 @@ _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION = (
 _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256 = (
     _endpoint_request_cost_bound_projection_sha256
 )
+_TRUSTED_ROUTE_CONSTRAINTS_MODULE = route_constraints_module
+_TRUSTED_PROJECT_ROUTE_EMITTED_REQUEST_PARAMETERS = project_route_emitted_request_parameters
+_TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING = normalize_exact_route_pricing
+_TRUSTED_PROJECT_PROVIDER_PRICE_CAP = project_provider_price_cap
+_TRUSTED_ASSEMBLE_STRUCTURED_REQUEST_BODY = _assemble_structured_request_body
 
 
 def _routing_max_price(
     endpoints: tuple[_RegisteredEndpointPricing, ...],
+    *,
+    _normalize_pricing: Callable[..., object] = normalize_exact_route_pricing,
+    _project_price_cap: Callable[..., object] = project_provider_price_cap,
 ) -> dict[str, float]:
     """Return provider-side price ceilings that cannot round below snapshot prices."""
 
     if not endpoints:
         raise OpenRouterCostControlError("endpoint pricing policy is empty")
+    if len(endpoints) == 1:
+        raw_pricing = endpoints[0].pricing
+        raw_fields = tuple(field for field, _raw_price in raw_pricing)
+        if (
+            any(type(field) is not str for field in raw_fields)
+            or len(raw_fields) != len(set(raw_fields))
+            or not set(raw_fields).issubset(_SUPPORTED_TEXT_PRICING_FIELDS)
+        ):
+            raise OpenRouterCostControlError(
+                "endpoint pricing contains an unknown or duplicate component"
+            )
+        if set(raw_fields).intersection(_UNENFORCEABLE_VARIABLE_PRICING_FIELDS):
+            raise OpenRouterCostControlError(
+                "variable endpoint pricing component cannot be provider-capped"
+            )
+        try:
+            if (
+                _normalize_pricing is not _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING
+                or _project_price_cap is not _TRUSTED_PROJECT_PROVIDER_PRICE_CAP
+            ):
+                raise RouteConstraintError("route price-cap projection changed")
+            exact_pricing = _normalize_pricing(dict(raw_pricing))
+            projected_cap = _project_price_cap(exact_pricing)
+        except (RouteConstraintError, TypeError, ValueError) as exc:
+            raise OpenRouterCostControlError(
+                "endpoint pricing cannot produce the shared provider price cap"
+            ) from exc
+        return {item.component.value: item.value for item in projected_cap}
     with localcontext() as context:
         context.prec = 160
         maxima: dict[str, Decimal] = {}
@@ -20628,6 +20947,15 @@ def _provider_capped_cost_bound_pricing(
 
 
 _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING = _provider_capped_cost_bound_pricing
+_TRUSTED_ROUTING_MAX_PRICE = _routing_max_price
+_route_pristine_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+if type(_route_pristine_kwdefaults) is not dict:
+    raise RuntimeError("provider route-pristine keyword defaults are unavailable")
+_openrouter_client_callables_are_pristine.__kwdefaults__ = {
+    **_route_pristine_kwdefaults,
+    "_routing_price_projector": _routing_max_price,
+}
+del _route_pristine_kwdefaults
 
 
 def _validated_model_catalog(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -21908,6 +22236,40 @@ _register_authrunner_generation_origin_issuer(
     receipt_consumer=_consume_provider_refetch_receipt_composite,
 )
 
+_TRUSTED_ROUTE_ADMISSION_MODULE = importlib.import_module("mmaudit.models.route_admission")
+_route_admission_pristine = getattr(
+    _TRUSTED_ROUTE_ADMISSION_MODULE,
+    "route_admission_callables_are_pristine",
+    None,
+)
+_route_admission_single = getattr(
+    _TRUSTED_ROUTE_ADMISSION_MODULE,
+    "require_authenticated_runner_route_admission",
+    None,
+)
+_route_admission_three = getattr(
+    _TRUSTED_ROUTE_ADMISSION_MODULE,
+    "require_authenticated_runner_three_route_admission",
+    None,
+)
+if (
+    type(_route_admission_pristine) is not FunctionType
+    or type(_route_admission_single) is not FunctionType
+    or type(_route_admission_three) is not FunctionType
+    or not _route_admission_pristine()
+):
+    raise RuntimeError("route admission authority boundary is unavailable")
+_route_admission_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+if type(_route_admission_kwdefaults) is not dict:
+    raise RuntimeError("provider route-admission keyword defaults are unavailable")
+_openrouter_client_callables_are_pristine.__kwdefaults__ = {
+    **_route_admission_kwdefaults,
+    "_route_admission_pristine": _route_admission_pristine,
+    "_route_admission_single": _route_admission_single,
+    "_route_admission_three": _route_admission_three,
+}
+del _route_admission_kwdefaults
+
 _install_provider_authority_function_graph(
     (
         _register_provider_transport_attempt_issuer,
@@ -21940,6 +22302,18 @@ _install_provider_authority_function_graph(
         _revoke_authrunner_generation_origin,
         *_AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS,
         _issue_trusted_generation_verification,
+        _route_admission_pristine,
+        _route_admission_single,
+        _route_admission_three,
+        _detach_exact_discovery_json_object,
+        _detach_exact_discovery_json_mapping,
+        _revalidate_openrouter_discovery_payload,
+        OpenRouterClient.seal_real_model_discovery_run,
+        _assemble_structured_request_body,
+        _routing_max_price,
+        project_route_emitted_request_parameters,
+        normalize_exact_route_pricing,
+        project_provider_price_cap,
         OpenRouterClient._bounded_request,
         OpenRouterClient._complete_one,
         OpenRouterClient._request_metadata,

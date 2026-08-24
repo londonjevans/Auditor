@@ -13,8 +13,10 @@ from mmaudit.models.candidate_selection import (
     OBJECTIVE_SHA256,
     CandidateSelectionError,
     CandidateSelectionPlan,
+    authenticated_runner_route_constraint,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
+    seal_authenticated_runner_route_predicate_profile,
     seal_authenticated_runner_selection,
     seal_candidate_selection_entry,
     seal_candidate_selection_plan,
@@ -22,14 +24,35 @@ from mmaudit.models.candidate_selection import (
     validate_candidate_selection_plan_sources,
     validate_candidate_selection_routes,
 )
-from mmaudit.models.discovery import DiscoveryCandidateRoute
+from mmaudit.models.discovery import (
+    DiscoveryCandidateRoute,
+    OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryRunManifest,
+    validate_openrouter_constrained_model_discovery,
+)
 from mmaudit.models.public_lineage_authority import (
     require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
 )
-from mmaudit.models.qualification import CandidateBenchmarkStatus, LineageReviewStatus
-from mmaudit.models.reasoning import ReasoningEffort
+from mmaudit.models.qualification import (
+    CandidateBenchmarkStatus,
+    CandidateModel,
+    LineageReviewStatus,
+    seal_candidate_registry,
+    validate_candidate_registry_discovery,
+)
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningEffort,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RoutePredicateProfile,
+)
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
@@ -60,6 +83,157 @@ NON_HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "medium",
     "xhigh",
 )
+
+
+def _reasoning_policy() -> ReasoningPolicyArtifact:
+    control = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={role: control for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+
+
+def _route_profile_and_constraints() -> tuple[
+    RoutePredicateProfile,
+    tuple[ExactRouteConstraint, ...],
+]:
+    profile = seal_authenticated_runner_route_predicate_profile(
+        reasoning_policy=_reasoning_policy(),
+        minimum_prompt_tokens=65_536,
+        required_output_tokens=4_096,
+        minimum_context_tokens=73_728,
+    )
+    constraints = tuple(
+        sorted(
+            (
+                ExactRouteConstraint.build(
+                    role=ExactRouteRole.CANDIDATE,
+                    exact_model_id=MODEL_A,
+                    provider_endpoint=ENDPOINT_A,
+                    profile=profile,
+                ),
+                ExactRouteConstraint.build(
+                    role=ExactRouteRole.CANDIDATE,
+                    exact_model_id=MODEL_A,
+                    provider_endpoint="provider-alpha/alternate",
+                    profile=profile,
+                ),
+                ExactRouteConstraint.build(
+                    role=ExactRouteRole.PRIMARY_JUDGE,
+                    exact_model_id=MODEL_B,
+                    provider_endpoint=ENDPOINT_B,
+                    profile=profile,
+                ),
+                ExactRouteConstraint.build(
+                    role=ExactRouteRole.REPLAY_JUDGE,
+                    exact_model_id=MODEL_C,
+                    provider_endpoint=ENDPOINT_C,
+                    profile=profile,
+                ),
+            ),
+            key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+        )
+    )
+    return profile, constraints
+
+
+def _constrained_discovery(
+    *,
+    tmp_path: Path,
+    config: AuditConfig,
+    plan: CandidateSelectionPlan,
+    specs: tuple[fixtures._CandidateSpec, ...],
+) -> tuple[OpenRouterModelDiscoveryRunManifest, tuple[OpenRouterModelDiscoveryEvidence, ...]]:
+    ordered = tuple(sorted(specs, key=lambda item: item.model_id))
+    catalog_payload = {"data": [fixtures._catalog_model(spec) for spec in ordered]}
+    zdr_payload = {"data": [fixtures._endpoint(spec) for spec in ordered]}
+    payloads = []
+    endpoint_payloads: dict[str, dict[str, object]] = {}
+    for spec in ordered:
+        endpoint_payload: dict[str, object] = {
+            "data": {
+                "id": spec.model_id,
+                "endpoints": [
+                    {
+                        key: value
+                        for key, value in fixtures._endpoint(spec).items()
+                        if key != "model_id"
+                    }
+                ],
+            }
+        }
+        endpoint_payloads[spec.model_id] = endpoint_payload
+        profile, constraint = authenticated_runner_route_constraint(
+            plan,
+            exact_model_id=spec.model_id,
+            provider_endpoint=spec.provider_endpoint,
+        )
+        payloads.append(
+            validate_openrouter_constrained_model_discovery(
+                exact_model_id=spec.model_id,
+                models_payload=catalog_payload,
+                single_model_payload={"data": fixtures._catalog_model(spec)},
+                configured_provider_endpoints=(spec.provider_endpoint,),
+                provider_policy_mode="only",
+                endpoint_payload=endpoint_payload,
+                require_zdr=config.privacy.require_zdr,
+                zdr_payload=zdr_payload,
+                route_predicate_profile=profile,
+                exact_route_constraint=constraint,
+                expected_selection_plan_sha256=plan.plan_sha256,
+                reasoning_policy=_reasoning_policy(),
+                automatic_fallbacks_allowed=False,
+            )
+        )
+    provenance, evidence = fixtures._issue_real_openrouter_discovery_run(
+        run_id="1" * 32,
+        retrieved_at=fixtures._NOW,
+        client_fingerprint_sha256="a" * 64,
+        provider_fingerprint_sha256="b" * 64,
+        catalog_snapshot_sha256=fixtures._canonical_hash(catalog_payload),
+        zdr_snapshot_sha256=fixtures._canonical_hash(zdr_payload),
+        candidate_routes=tuple(
+            DiscoveryCandidateRoute(
+                exact_model_id=spec.model_id,
+                approved_provider_endpoint=spec.provider_endpoint,
+            )
+            for spec in ordered
+        ),
+        model_metadata_bindings=tuple(
+            fixtures.DiscoveryModelMetadataBinding(
+                exact_model_id=payload.exact_model_id,
+                canonical_slug=payload.canonical_slug,
+                api_query=fixtures.openrouter_model_query(payload.exact_model_id),
+                response_snapshot_sha256=fixtures._canonical_hash(
+                    {
+                        "data": fixtures._catalog_model(
+                            next(
+                                spec for spec in ordered if spec.model_id == payload.exact_model_id
+                            )
+                        )
+                    }
+                ),
+                model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+            )
+            for payload in payloads
+        ),
+        endpoint_metadata_bindings=tuple(
+            fixtures.DiscoveryEndpointMetadataBinding(
+                exact_model_id=spec.model_id,
+                api_query=fixtures.openrouter_endpoint_query(spec.model_id),
+                response_snapshot_sha256=fixtures._canonical_hash(endpoint_payloads[spec.model_id]),
+            )
+            for spec in ordered
+        ),
+        payloads=tuple(payloads),
+        issuer=fixtures._TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
+    )
+    manifest = fixtures.write_model_discovery_run(tmp_path / "discovery-run", evidence)
+    assert manifest.run_provenance == provenance
+    return manifest, evidence
 
 
 def _plan() -> CandidateSelectionPlan:
@@ -95,10 +269,13 @@ def _plan() -> CandidateSelectionPlan:
             allowed_provider_endpoints=(ENDPOINT_B,),
         ),
     )
+    profile, constraints = _route_profile_and_constraints()
     assignment = seal_authenticated_runner_selection(
         candidate_model_id=MODEL_A,
         primary_judge_model_id=MODEL_B,
         replay_judge_model_id=MODEL_C,
+        route_predicate_profile=profile,
+        route_constraints=constraints,
     )
     return seal_candidate_selection_plan(
         source_bindings=sources,
@@ -151,7 +328,7 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "serialized_authority",
     }.issubset(required)
     assert schema["properties"]["objective_sha256"]["const"] == OBJECTIVE_SHA256
-    assert schema["properties"]["schema_version"]["const"] == "1.3"
+    assert schema["properties"]["schema_version"]["const"] == "1.4"
     assignment_schema = schema["$defs"]["AuthenticatedRunnerSelection"]
     assert assignment_schema["properties"]["required_output_mode"]["const"] == (
         "NATIVE_JSON_SCHEMA"
@@ -163,6 +340,8 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "metadata"
     )
     assert "required_completion_limit_source" in assignment_schema["required"]
+    assert "route_predicate_profile" in assignment_schema["required"]
+    assert "route_constraints" in assignment_schema["required"]
     entry_schema = schema["$defs"]["CandidateSelectionEntry"]
     assert entry_schema["properties"]["exact_model_id"]["pattern"]
     assert "entry_authority" in entry_schema["required"]
@@ -172,8 +351,8 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.schema_version == "1.3"
-    assert plan.plan_sha256 == "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f"
+    assert plan.schema_version == "1.4"
+    assert plan.plan_sha256 == "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 12
     assert plan.authenticated_runner_selection is not None
@@ -189,9 +368,16 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     )
     assert plan.authenticated_runner_selection.primary_judge_model_id == "z-ai/glm-5.2"
     assert plan.authenticated_runner_selection.role_assignment_sha256 == (
-        "93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421"
+        "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14"
     )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
+    assert plan.authenticated_runner_selection.route_predicate_profile.profile_sha256 == (
+        "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82"
+    )
+    assert len(plan.authenticated_runner_selection.route_predicate_profile.predicate_ids) == 29
+    assert len(plan.authenticated_runner_selection.route_constraints) == 4
+    assert plan.authenticated_runner_selection.route_predicate_profile.require_singleton_route
+    assert not plan.authenticated_runner_selection.route_predicate_profile.allow_automatic_fallbacks
     entries = {entry.exact_model_id: entry for entry in plan.entries}
     assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("parasail/fp8",)
     assert entries["deepseek/deepseek-v4-pro-0813"].entry_sha256 == (
@@ -227,6 +413,66 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert any("5fb3d3091e339b84" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
+
+
+def test_runner_route_constraints_exactly_cover_selected_endpoint_policy() -> None:
+    plan = _plan()
+    selection = plan.authenticated_runner_selection
+    assert selection is not None
+    expected = {
+        (MODEL_A, ENDPOINT_A),
+        (MODEL_A, "provider-alpha/alternate"),
+        (MODEL_B, ENDPOINT_B),
+        (MODEL_C, ENDPOINT_C),
+    }
+
+    observed = {
+        (constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in selection.route_constraints
+    }
+    assert observed == expected
+    for model_id, endpoint in expected:
+        profile, constraint = authenticated_runner_route_constraint(
+            plan,
+            exact_model_id=model_id,
+            provider_endpoint=endpoint,
+        )
+        assert profile == selection.route_predicate_profile
+        assert constraint.profile_sha256 == profile.profile_sha256
+
+    with pytest.raises(CandidateSelectionError, match="one exact route constraint"):
+        authenticated_runner_route_constraint(
+            plan,
+            exact_model_id=MODEL_A,
+            provider_endpoint="provider-alpha/unlisted",
+        )
+
+
+def test_plan_rejects_valid_constraint_outside_selected_endpoint_policy() -> None:
+    plan = _plan()
+    selection = plan.authenticated_runner_selection
+    assert selection is not None
+    extra = ExactRouteConstraint.build(
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id=MODEL_A,
+        provider_endpoint="provider-alpha/unlisted",
+        profile=selection.route_predicate_profile,
+    )
+    changed = seal_authenticated_runner_selection(
+        candidate_model_id=selection.candidate_model_id,
+        primary_judge_model_id=selection.primary_judge_model_id,
+        replay_judge_model_id=selection.replay_judge_model_id,
+        route_predicate_profile=selection.route_predicate_profile,
+        route_constraints=(*selection.route_constraints, extra),
+    )
+
+    with pytest.raises(CandidateSelectionError, match="candidate selection plan is invalid"):
+        seal_candidate_selection_plan(
+            source_bindings=plan.source_bindings,
+            entries=plan.entries,
+            authenticated_runner_selection=changed,
+            unresolved_requirements=plan.unresolved_requirements,
+        )
 
 
 def test_selection_plan_replays_exact_staged_source_bytes() -> None:
@@ -437,14 +683,16 @@ def test_fresh_discovery_derives_only_rootless_pending_registry(
         native_structured_output_parameter="structured_outputs",
         endpoint_reasoning_efforts_published=False,
     )
-    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
+    plan = _plan()
+    manifest, evidence = _constrained_discovery(
         tmp_path=tmp_path,
         config=config,
+        plan=plan,
         specs=(spec,),
     )
 
     registry = derive_pending_candidate_registry_from_selection_plan(
-        plan=_plan(),
+        plan=plan,
         run_manifest=manifest,
         evidence=evidence,
     )
@@ -465,7 +713,28 @@ def test_fresh_discovery_derives_only_rootless_pending_registry(
     assert candidate.output_capability_sha256 == discovered.output_capability_sha256
     assert candidate.model_metadata_snapshot_sha256 == discovered.model_metadata_snapshot_sha256
     assert candidate.pricing_snapshot_sha256 == discovered.pricing_snapshot_sha256
-    assert _plan().plan_sha256 in candidate.lineage_review.rationale
+    assert plan.plan_sha256 in candidate.lineage_review.rationale
+    assert candidate.selection_plan_sha256 == plan.plan_sha256
+    assert candidate.route_predicate_profile_sha256 == (
+        plan.authenticated_runner_selection.route_predicate_profile.profile_sha256
+    )
+    assert candidate.exact_route_constraint_sha256 is not None
+    assert candidate.route_predicate_report_sha256 is not None
+
+    changed_payload = candidate.model_dump(mode="python")
+    changed_payload["selection_plan_sha256"] = "f" * 64
+    changed_candidate = CandidateModel.model_validate(changed_payload)
+    changed_registry = seal_candidate_registry(
+        created_at=registry.created_at,
+        discovery_run_sha256=registry.discovery_run_sha256,
+        candidates=(changed_candidate,),
+    )
+    with pytest.raises(ValueError, match="route predicate custody"):
+        validate_candidate_registry_discovery(
+            registry=changed_registry,
+            run_manifest=manifest,
+            evidence=evidence,
+        )
 
 
 def test_derivation_rejects_route_not_authorized_by_plan(
@@ -518,17 +787,15 @@ def test_selected_runner_route_requires_literal_native_structured_outputs(
         provider_name="Provider Alpha",
         native_structured_output_parameter=native_parameter,
     )
-    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
-        tmp_path=tmp_path,
-        config=config,
-        specs=(spec,),
-    )
-
-    with pytest.raises(CandidateSelectionError, match="native structured_outputs"):
-        derive_pending_candidate_registry_from_selection_plan(
+    with pytest.raises(
+        ValueError,
+        match=r"required structured-output mode|NATIVE_MARKER_MISSING",
+    ):
+        _constrained_discovery(
+            tmp_path=tmp_path,
+            config=config,
             plan=_plan(),
-            run_manifest=manifest,
-            evidence=evidence,
+            specs=(spec,),
         )
 
 
@@ -581,17 +848,18 @@ def test_selected_runner_route_requires_explicit_high_reasoning_effort(
         model_reasoning_efforts=model_reasoning_efforts,
         endpoint_reasoning_efforts=endpoint_reasoning_efforts,
     )
-    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
-        tmp_path=tmp_path,
-        config=config,
-        specs=(spec,),
-    )
-
-    with pytest.raises(CandidateSelectionError, match="reasoning effort=high"):
-        derive_pending_candidate_registry_from_selection_plan(
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"REASONING_(?:EFFORT|CONTROL)|REASONING_NOT_EMITTED|"
+            r"EMITTED_PARAMETER_SUPPORT_MISMATCH"
+        ),
+    ):
+        _constrained_discovery(
+            tmp_path=tmp_path,
+            config=config,
             plan=_plan(),
-            run_manifest=manifest,
-            evidence=evidence,
+            specs=(spec,),
         )
 
 
@@ -617,17 +885,12 @@ def test_selected_runner_route_requires_explicit_metadata_completion_limit(
         native_structured_output_parameter="structured_outputs",
         endpoint_completion_limit_published=False,
     )
-    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
-        tmp_path=tmp_path,
-        config=config,
-        specs=(spec,),
-    )
-
-    with pytest.raises(CandidateSelectionError, match="explicit metadata completion limit"):
-        derive_pending_candidate_registry_from_selection_plan(
+    with pytest.raises(ValueError, match="COMPLETION_CAPACITY_NOT_METADATA"):
+        _constrained_discovery(
+            tmp_path=tmp_path,
+            config=config,
             plan=_plan(),
-            run_manifest=manifest,
-            evidence=evidence,
+            specs=(spec,),
         )
 
 

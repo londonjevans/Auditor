@@ -71,7 +71,14 @@ from mmaudit.models.public_lineage_authority import (
 from mmaudit.models.qualification import (
     CandidateModel,
     LineageReviewStatus,
+    seal_candidate_registry,
     seal_operator_lineage_review,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateDisposition,
+    RoutePredicateId,
 )
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.token_planning import RequestTokenPlan
@@ -266,13 +273,6 @@ def _judge_smoke_plan(
     )
 
 
-def _discovery_stub(label: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        discovery_evidence_sha256=canonical_sha256({"discovery": label}),
-        require_compatible_reasoning_profile=lambda _control: None,
-    )
-
-
 def _launch(
     *,
     config: AuditConfig,
@@ -302,28 +302,63 @@ def _launch(
             role: str(cap) for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
         },
     )
-    candidate_manifest = SimpleNamespace(
-        manifest_sha256=canonical_sha256({"manifest": "candidate"})
+    candidate_manifest, candidate_evidence, candidate_registry = (
+        candidate_fixtures._discovery_and_registry(
+            tmp_path=tmp_path / "candidate-route",
+            config=config,
+            route_role=ExactRouteRole.CANDIDATE,
+            specs=(
+                candidate_fixtures._CandidateSpec(
+                    model_id=CANDIDATE_ID,
+                    provider_endpoint="candidate-provider/fp8",
+                    provider_name="Candidate Provider",
+                    native_structured_output_parameter="structured_outputs",
+                ),
+            ),
+        )
     )
-    primary_manifest = SimpleNamespace(manifest_sha256=canonical_sha256({"manifest": "primary"}))
-    replay_manifest = SimpleNamespace(manifest_sha256=canonical_sha256({"manifest": "replay"}))
-    candidate_evidence = _discovery_stub("candidate")
-    primary_evidence = _discovery_stub("primary")
-    replay_evidence = _discovery_stub("replay")
+    primary_manifest, primary_evidence, primary_registry = (
+        candidate_fixtures._discovery_and_registry(
+            tmp_path=tmp_path / "primary-route",
+            config=config,
+            route_role=ExactRouteRole.PRIMARY_JUDGE,
+            specs=(
+                candidate_fixtures._CandidateSpec(
+                    model_id=PRIMARY_JUDGE_ID,
+                    provider_endpoint="provider-judge-1",
+                    provider_name="Synthetic Judge 1",
+                    native_structured_output_parameter="structured_outputs",
+                ),
+            ),
+        )
+    )
+    replay_manifest, replay_evidence, replay_registry = candidate_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "replay-route",
+        config=config,
+        route_role=ExactRouteRole.REPLAY_JUDGE,
+        specs=(
+            candidate_fixtures._CandidateSpec(
+                model_id=REPLAY_JUDGE_ID,
+                provider_endpoint="provider-judge-2",
+                provider_name="Synthetic Judge 2",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+    )
     run_plans = (
         AuthenticatedRunnerSmokeRunPlan(
             run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
-            judge_discovery_manifest=cast(Any, primary_manifest),
-            judge_discovery_evidence=cast(Any, (primary_evidence,)),
-            judge_registry=_candidate_registry((PRIMARY_JUDGE_ID,)),
+            judge_discovery_manifest=primary_manifest,
+            judge_discovery_evidence=primary_evidence,
+            judge_registry=primary_registry,
             candidate_cost_tripwire_usd_per_attempt=candidate_tripwires[0],
             judge_cost_tripwire_usd_per_attempt=judge_tripwires[0],
         ),
         AuthenticatedRunnerSmokeRunPlan(
             run_kind=CrossLineageAdjudicationRunKind.REPLAY,
-            judge_discovery_manifest=cast(Any, replay_manifest),
-            judge_discovery_evidence=cast(Any, (replay_evidence,)),
-            judge_registry=_candidate_registry((REPLAY_JUDGE_ID,)),
+            judge_discovery_manifest=replay_manifest,
+            judge_discovery_evidence=replay_evidence,
+            judge_registry=replay_registry,
             candidate_cost_tripwire_usd_per_attempt=candidate_tripwires[1],
             judge_cost_tripwire_usd_per_attempt=judge_tripwires[1],
         ),
@@ -335,9 +370,9 @@ def _launch(
         public_lineage_capability=resolve_verified_public_model_lineage(),
         benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
         smoke_corpus=load_authenticated_runner_smoke_corpus_bundle(SMOKE_CORPUS_PATH),
-        candidate_discovery_manifest=cast(Any, candidate_manifest),
-        candidate_discovery_evidence=cast(Any, (candidate_evidence,)),
-        candidate_registry=_candidate_registry((CANDIDATE_ID,)),
+        candidate_discovery_manifest=candidate_manifest,
+        candidate_discovery_evidence=candidate_evidence,
+        candidate_registry=candidate_registry,
         budget=budget,
         usage=UsageLedger(),
         run_plans=run_plans,
@@ -349,7 +384,11 @@ async def _live_route_launch(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> AuthenticatedRunnerSmokeOpenRouterLaunch:
-    harness = await execution_fixtures._harness(tmp_path / "full-runner", config_factory)
+    harness = await execution_fixtures._harness(
+        tmp_path / "full-runner",
+        config_factory,
+        constrained_routes=True,
+    )
     return AuthenticatedRunnerSmokeOpenRouterLaunch(
         smoke_run_index=1,
         config=harness.config,
@@ -2314,6 +2353,44 @@ async def test_live_route_preflight_refreshes_all_roles_without_completion_or_st
         launch,
         canonical_shape_models={item.exact_model_id for item in models},
     )
+    admission_calls: list[tuple[RouteConstraintPurpose, ExactRouteRole, bool | None]] = []
+    original_admission = smoke_runtime_module.require_authenticated_runner_route_admission
+
+    def observe_admission(**kwargs: Any) -> Any:
+        purpose = kwargs["purpose"]
+        role = kwargs["expected_role"]
+        live = kwargs.get("frozen_live_equivalent")
+        assert type(purpose) is RouteConstraintPurpose
+        assert type(role) is ExactRouteRole
+        assert live is None or type(live) is bool
+        admission_calls.append((purpose, role, live))
+        if purpose is RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION:
+            model = kwargs["model"]
+            client = next(
+                item
+                for item in factory.clients
+                if item.provider_policy.configured_endpoints == (model.approved_provider_endpoint,)
+            )
+            with pytest.raises(OpenRouterModelError):
+                client.registered_model_identity_snapshot(model.exact_model_id)
+            assert factory.request_bodies == []
+        report = original_admission(**kwargs)
+        if purpose is RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION:
+            results = {item.predicate_id: item for item in report.results}
+            assert results[RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE].disposition is (
+                RoutePredicateDisposition.UNAVAILABLE
+            )
+            assert (
+                results[RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION].disposition
+                is RoutePredicateDisposition.UNAVAILABLE
+            )
+        return report
+
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "require_authenticated_runner_route_admission",
+        observe_admission,
+    )
 
     def forbidden_proof(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("metadata-only route probes must not issue request-source proof")
@@ -2364,6 +2441,38 @@ async def test_live_route_preflight_refreshes_all_roles_without_completion_or_st
                 "/api/v1/endpoints/zdr",
             )
         ]
+        assert admission_calls == [
+            (
+                RouteConstraintPurpose.REGISTRY_PUBLICATION,
+                ExactRouteRole.CANDIDATE,
+                None,
+            ),
+            (
+                RouteConstraintPurpose.REGISTRY_PUBLICATION,
+                ExactRouteRole.PRIMARY_JUDGE,
+                None,
+            ),
+            (
+                RouteConstraintPurpose.REGISTRY_PUBLICATION,
+                ExactRouteRole.REPLAY_JUDGE,
+                None,
+            ),
+            (
+                RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+                ExactRouteRole.CANDIDATE,
+                True,
+            ),
+            (
+                RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+                ExactRouteRole.PRIMARY_JUDGE,
+                True,
+            ),
+            (
+                RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+                ExactRouteRole.REPLAY_JUDGE,
+                True,
+            ),
+        ]
     finally:
         await factory.close()
 
@@ -2395,6 +2504,61 @@ async def test_live_route_launch_preflight_retains_pure_synthetic_privacy_checks
     assert inventory.case_count == 1
     assert launch.explicitly_allow_synthetic_egress is False
     assert observed == [(launch.config, launch.benchmark_suite, True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_index", (0, 1, 2))
+async def test_static_smoke_rejects_each_route_report_custody_before_live_client_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    route_index: int,
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    registries = [
+        launch.candidate_registry,
+        launch.run_plans[0].judge_registry,
+        launch.run_plans[1].judge_registry,
+    ]
+    registry = registries[route_index]
+    model = registry.candidates[0]
+    tampered = CandidateModel.model_validate(
+        {
+            **model.model_dump(mode="python"),
+            "route_predicate_report_sha256": "0" * 64,
+        },
+        strict=True,
+    )
+    registries[route_index] = seal_candidate_registry(
+        created_at=registry.created_at,
+        discovery_run_sha256=registry.discovery_run_sha256,
+        candidates=(tampered,),
+    )
+    plans = list(launch.run_plans)
+    plans[0] = replace(plans[0], judge_registry=registries[1])
+    plans[1] = replace(plans[1], judge_registry=registries[2])
+    launch = replace(
+        launch,
+        candidate_registry=registries[0],
+        run_plans=tuple(plans),
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("route custody must reject before live client construction")
+
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden_client)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="registry differs from fresh discovery",
+    ):
+        preflight_authenticated_runner_smoke_live_route_launch(launch)
+
+    assert launch.usage.records == []
+    assert ledger.snapshot() == before
 
 
 @pytest.mark.asyncio

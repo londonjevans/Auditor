@@ -23,6 +23,7 @@ from typing import Any, Literal, Never, Self, SupportsIndex
 
 from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+import mmaudit.models.route_admission as _route_admission_module
 from mmaudit.benchmark.models import (
     DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS,
     MIN_BENCHMARK_JUDGMENT_CASES,
@@ -65,6 +66,12 @@ from mmaudit.models.reasoning import (
     resolve_reasoning_request_role,
 )
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
+from mmaudit.models.route_constraints import (
+    RouteConstraintPurpose,
+    bind_registry_route_facts,
+    evaluate_route_predicates,
+    require_route_predicates,
+)
 from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import (
     _is_structurally_creditable_usage_record,
@@ -538,6 +545,26 @@ class CandidateModel(StrictModel):
     )
     model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selection_plan_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    route_predicate_profile_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    exact_route_constraint_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    route_predicate_report_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     context_size: int = Field(ge=1)
     max_prompt_tokens: int | None = Field(
         default=None,
@@ -616,6 +643,16 @@ class CandidateModel(StrictModel):
 
     @model_validator(mode="after")
     def lineage_and_benchmark_state_are_consistent(self) -> CandidateModel:
+        route_custody = (
+            self.selection_plan_sha256,
+            self.route_predicate_profile_sha256,
+            self.exact_route_constraint_sha256,
+            self.route_predicate_report_sha256,
+        )
+        if any(value is None for value in route_custody) and any(
+            value is not None for value in route_custody
+        ):
+            raise ValueError("candidate route-constraint custody must be complete or absent")
         privacy_values = (
             self.data_collection_deny_request_policy_enforced,
             self.data_collection_deny_evidence_source,
@@ -803,17 +840,20 @@ def seal_candidate_registry(
     discovery_run_sha256: str,
     candidates: tuple[CandidateModel, ...],
 ) -> CandidateRegistry:
+    ordered_candidates = tuple(sorted(candidates, key=lambda item: item.exact_model_id))
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "created_at": created_at,
         "discovery_run_sha256": discovery_run_sha256,
-        "candidates": [
-            candidate.model_dump(mode="json")
-            for candidate in sorted(candidates, key=lambda item: item.exact_model_id)
-        ],
+        "candidates": [candidate.model_dump(mode="json") for candidate in ordered_candidates],
     }
     payload["registry_sha256"] = _canonical_json_sha256(payload)
-    return CandidateRegistry.model_validate(payload)
+    return CandidateRegistry.model_validate(
+        {
+            **payload,
+            "candidates": ordered_candidates,
+        }
+    )
 
 
 def validate_candidate_registry_discovery(
@@ -824,12 +864,12 @@ def validate_candidate_registry_discovery(
 ) -> None:
     """Cross-check every candidate against independently validated discovery evidence."""
 
-    registry = CandidateRegistry.model_validate(registry.model_dump(mode="json"))
-    run_manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
-        run_manifest.model_dump(mode="json")
+    registry = CandidateRegistry.model_validate_json(registry.model_dump_json())
+    run_manifest = OpenRouterModelDiscoveryRunManifest.model_validate_json(
+        run_manifest.model_dump_json()
     )
     validated = tuple(
-        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        OpenRouterModelDiscoveryEvidence.model_validate_json(item.model_dump_json())
         for item in evidence
     )
     if registry.discovery_run_sha256 != run_manifest.manifest_sha256:
@@ -857,6 +897,7 @@ def validate_candidate_registry_discovery(
         raise ValueError("candidate registry differs from the discovery model inventory")
     for candidate in registry.candidates:
         item = by_model[candidate.exact_model_id]
+        _validate_candidate_route_constraint_custody(candidate, item)
         endpoint = item.endpoint_snapshot.endpoint(item.approved_provider_endpoint)
         expected = (
             item.canonical_slug,
@@ -912,6 +953,83 @@ def validate_candidate_registry_discovery(
             raise ValueError(
                 f"candidate metadata differs from validated discovery: {candidate.exact_model_id}"
             )
+
+
+def _validate_candidate_route_constraint_custody(
+    candidate: CandidateModel,
+    evidence: OpenRouterModelDiscoveryEvidence,
+) -> None:
+    snapshot = evidence.endpoint_snapshot
+    candidate_custody = (
+        candidate.selection_plan_sha256,
+        candidate.route_predicate_profile_sha256,
+        candidate.exact_route_constraint_sha256,
+        candidate.route_predicate_report_sha256,
+    )
+    snapshot_custody = (
+        snapshot.route_predicate_profile,
+        snapshot.exact_route_constraint,
+        snapshot.normalized_route_facts,
+        snapshot.route_predicate_report,
+    )
+    if all(value is None for value in candidate_custody):
+        if any(value is not None for value in snapshot_custody):
+            raise ValueError("unconstrained candidate carries route predicate evidence")
+        return
+    if any(value is None for value in candidate_custody) or any(
+        value is None for value in snapshot_custody
+    ):
+        raise ValueError("candidate route predicate custody is incomplete")
+    selection_plan_sha256 = candidate.selection_plan_sha256
+    profile_sha256 = candidate.route_predicate_profile_sha256
+    constraint_sha256 = candidate.exact_route_constraint_sha256
+    report_sha256 = candidate.route_predicate_report_sha256
+    snapshot_profile = snapshot.route_predicate_profile
+    snapshot_constraint = snapshot.exact_route_constraint
+    discovery_facts = snapshot.normalized_route_facts
+    assert selection_plan_sha256 is not None
+    assert profile_sha256 is not None
+    assert constraint_sha256 is not None
+    assert report_sha256 is not None
+    assert snapshot_profile is not None
+    assert snapshot_constraint is not None
+    assert discovery_facts is not None
+    if (
+        snapshot_profile.profile_sha256 != profile_sha256
+        or snapshot_constraint.constraint_sha256 != constraint_sha256
+        or discovery_facts.expected_selection_plan_sha256 != selection_plan_sha256
+    ):
+        raise ValueError("candidate route predicate custody differs from discovery")
+    try:
+        registry_facts = bind_registry_route_facts(
+            discovery_facts,
+            registry_selection_plan_sha256=selection_plan_sha256,
+            profile=snapshot_profile,
+            constraint=snapshot_constraint,
+        )
+        registry_report = evaluate_route_predicates(
+            profile=snapshot_profile,
+            constraint=snapshot_constraint,
+            facts=registry_facts,
+        )
+        require_route_predicates(
+            registry_report,
+            purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
+        )
+    except ValueError as exc:
+        raise ValueError("candidate registry route predicate report is invalid") from exc
+    if registry_report.report_sha256 != report_sha256:
+        raise ValueError("candidate registry route predicate report custody changed")
+
+
+_route_admission_module._register_candidate_registry_validation_surface(
+    module_globals=globals(),
+    candidate_model_type=CandidateModel,
+    candidate_registry_type=CandidateRegistry,
+    validator=validate_candidate_registry_discovery,
+    custody_validator=_validate_candidate_route_constraint_custody,
+)
+del _route_admission_module
 
 
 class QualificationDimensionThreshold(StrictModel):

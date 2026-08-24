@@ -2,18 +2,31 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import ValidationError
 
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
+    OpenRouterConstrainedRouteContext,
     OpenRouterEndpointSnapshotEvidence,
     output_capability_binding_sha256,
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningEffort,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RoutePredicateDisposition,
+    RoutePredicateProfile,
+)
 from mmaudit.orchestration.budgets import EndpointRequestCostBound
 
 
@@ -88,6 +101,114 @@ def _validate(
     )
 
 
+def _reasoning_policy(
+    *,
+    mode: Literal["effort", "disabled"] = "effort",
+) -> ReasoningPolicyArtifact:
+    control = (
+        ReasoningControlProfile.build(
+            mode="effort",
+            effort="high",
+            reserved_reasoning_tokens=4_096,
+        )
+        if mode == "effort"
+        else ReasoningControlProfile.build(mode="disabled", reserved_reasoning_tokens=0)
+    )
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={role: control for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+
+
+def _constrained_endpoint(
+    endpoint_id: str = "approved-provider",
+    *,
+    use_slug: bool = False,
+    provider_name: str = "Approved Provider",
+    supported_efforts: tuple[ReasoningEffort, ...] | None = ("high",),
+) -> dict[str, Any]:
+    endpoint = _endpoint(
+        endpoint_id,
+        use_slug=use_slug,
+        provider_name=provider_name,
+    )
+    endpoint["supported_parameters"].append("structured_outputs")
+    if supported_efforts is not None:
+        endpoint["reasoning"] = {"supported_efforts": list(supported_efforts)}
+    return endpoint
+
+
+def _route_bundle(
+    *,
+    endpoint_id: str = "approved-provider",
+    model_efforts: tuple[ReasoningEffort, ...] | None = ("high",),
+    observed_policy: ReasoningPolicyArtifact | None = None,
+    automatic_fallbacks_allowed: bool = False,
+) -> tuple[RoutePredicateProfile, ExactRouteConstraint, OpenRouterConstrainedRouteContext]:
+    profile_policy = _reasoning_policy()
+    role_policy = profile_policy.role_policy_for_request("model_benchmark")
+    profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=profile_policy.artifact_sha256,
+        reasoning_role_profile_sha256=profile_policy.role_profile.profile_sha256,
+        reasoning_role_binding_sha256=role_policy.binding_sha256,
+        reasoning_control_profile_sha256=role_policy.control.profile_sha256,
+        reserved_reasoning_tokens=4_096,
+        minimum_prompt_tokens=100_000,
+        required_output_tokens=4_096,
+        minimum_context_tokens=120_000,
+    )
+    constraint = ExactRouteConstraint.build(
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id="alpha/atlas-secure",
+        provider_endpoint=endpoint_id,
+        profile=profile,
+    )
+    context = OpenRouterConstrainedRouteContext(
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256="1" * 64,
+        reasoning_policy=observed_policy or profile_policy,
+        reasoning_request_role="model_benchmark",
+        model_supported_parameters=(
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "structured_outputs",
+            "temperature",
+        ),
+        model_supported_reasoning_efforts=model_efforts,
+        automatic_fallbacks_allowed=automatic_fallbacks_allowed,
+    )
+    return profile, constraint, context
+
+
+def _validate_constrained(
+    endpoint: dict[str, Any],
+    *,
+    context: OpenRouterConstrainedRouteContext,
+    endpoint_id: str = "approved-provider",
+    endpoint_payload: Any | None = None,
+    reasoning_requested: bool | None = None,
+) -> OpenRouterEndpointSnapshotEvidence:
+    if reasoning_requested is None:
+        reasoning_requested = (
+            context.reasoning_policy.role_policy_for_request(
+                context.reasoning_request_role
+            ).control.mode
+            != "disabled"
+        )
+    return validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=(endpoint_id,),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload or _endpoint_payload(endpoint),
+        require_zdr=True,
+        zdr_payload=_zdr_payload(endpoint),
+        reasoning_requested=reasoning_requested,
+        required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        route_constraint_context=context,
+    )
+
+
 def test_valid_snapshot_exposes_exact_cost_proof_inputs() -> None:
     evidence = _validate()
 
@@ -121,6 +242,11 @@ def test_valid_snapshot_exposes_exact_cost_proof_inputs() -> None:
     assert len(evidence.endpoint_metadata_sha256) == 64
     assert len(evidence.zdr_metadata_sha256 or "") == 64
     assert len(evidence.snapshot_sha256) == 64
+    assert evidence.route_predicate_profile is None
+    assert evidence.exact_route_constraint is None
+    assert evidence.normalized_route_facts is None
+    assert evidence.route_predicate_report is None
+    assert "route_predicate_report" not in evidence.model_dump(mode="json")
 
     bound = EndpointRequestCostBound.from_endpoint_pricing(
         exact_model_id=endpoint.exact_model_id,
@@ -611,3 +737,201 @@ def test_self_hash_rejects_tampered_serialized_evidence() -> None:
     payload["output_capability_sha256"] = "0" * 64
     with pytest.raises(ValidationError, match="output-capability hash"):
         OpenRouterEndpointSnapshotEvidence.model_validate(payload)
+
+
+def test_constrained_slug_only_snapshot_embeds_complete_discovery_report() -> None:
+    endpoint_id = "approved-provider/fp8"
+    endpoint = _constrained_endpoint(endpoint_id, use_slug=True)
+    _, _, context = _route_bundle(endpoint_id=endpoint_id)
+
+    evidence = _validate_constrained(
+        endpoint,
+        context=context,
+        endpoint_id=endpoint_id,
+    )
+
+    assert evidence.endpoints[0].endpoint_tag is None
+    assert evidence.endpoints[0].endpoint_slug == endpoint_id
+    assert evidence.normalized_route_facts is not None
+    assert evidence.normalized_route_facts.observed_provider_endpoint == endpoint_id
+    assert evidence.normalized_route_facts.emitted_request_parameters == (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "temperature",
+    )
+    assert evidence.route_predicate_report is not None
+    required_results = evidence.route_predicate_report.results[:-5]
+    assert all(
+        result.disposition is RoutePredicateDisposition.SATISFIED for result in required_results
+    )
+    assert (
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(evidence.model_dump_json())
+        == evidence
+    )
+
+
+def test_constrained_snapshot_rejects_ambiguous_provider_display_inventory() -> None:
+    selected = _constrained_endpoint(provider_name="Repeated Provider")
+    unrelated = _constrained_endpoint(
+        "unrelated-provider",
+        provider_name="repeated provider",
+    )
+    _, _, context = _route_bundle()
+
+    with pytest.raises(EndpointSnapshotValidationError, match="display name is ambiguous"):
+        _validate_constrained(
+            selected,
+            context=context,
+            endpoint_payload=_endpoint_payload(selected, unrelated),
+        )
+
+
+def test_constrained_snapshot_rejects_ambiguity_only_between_unselected_providers() -> None:
+    selected = _constrained_endpoint(provider_name="Selected Provider")
+    first_unselected = _constrained_endpoint(
+        "first-unselected",
+        provider_name="Repeated Other Provider",
+    )
+    second_unselected = _constrained_endpoint(
+        "second-unselected",
+        provider_name="repeated other provider",
+    )
+    _, _, context = _route_bundle()
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="DISPLAY_NAME_NOT_INJECTIVE",
+    ):
+        _validate_constrained(
+            selected,
+            context=context,
+            endpoint_payload=_endpoint_payload(
+                selected,
+                first_unselected,
+                second_unselected,
+            ),
+        )
+
+
+def test_constrained_reasoning_inventory_uses_endpoint_first_and_model_fallback() -> None:
+    _, _, context = _route_bundle(model_efforts=("high",))
+    fallback_endpoint = _constrained_endpoint(supported_efforts=None)
+    fallback = _validate_constrained(fallback_endpoint, context=context)
+    assert fallback.normalized_route_facts is not None
+    assert fallback.normalized_route_facts.endpoint_supported_reasoning_efforts is None
+    assert fallback.normalized_route_facts.model_supported_reasoning_efforts == ("high",)
+
+    empty_endpoint = _constrained_endpoint(supported_efforts=())
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="REASONING_EFFORT_INVENTORY_EMPTY",
+    ):
+        _validate_constrained(empty_endpoint, context=context)
+
+    _, _, narrow_model_context = _route_bundle(model_efforts=("high",))
+    contradictory_endpoint = _constrained_endpoint(supported_efforts=("high", "xhigh"))
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="REASONING_EFFORT_INVENTORY_CONTRADICTORY",
+    ):
+        _validate_constrained(contradictory_endpoint, context=narrow_model_context)
+
+
+def test_constrained_snapshot_rejects_reasoning_emission_without_endpoint_support() -> None:
+    _, _, context = _route_bundle(model_efforts=("high",))
+    endpoint = _constrained_endpoint(supported_efforts=None)
+    endpoint["supported_parameters"].remove("reasoning")
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="EMITTED_PARAMETER_SUPPORT_MISMATCH",
+    ):
+        _validate_constrained(endpoint, context=context)
+
+    with pytest.raises(
+        ValidationError,
+        match="required request parameters differ from shared emission",
+    ):
+        _validate_constrained(
+            _constrained_endpoint(supported_efforts=None),
+            context=context,
+            reasoning_requested=False,
+        )
+
+
+def test_constrained_snapshot_rejects_reasoning_emission_without_model_support() -> None:
+    _, _, context = _route_bundle(model_efforts=None)
+    context = OpenRouterConstrainedRouteContext.model_validate(
+        {
+            **context.model_dump(mode="python"),
+            "model_supported_parameters": tuple(
+                parameter
+                for parameter in context.model_supported_parameters
+                if parameter != "reasoning"
+            ),
+        }
+    )
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="EMITTED_PARAMETER_SUPPORT_MISMATCH",
+    ):
+        _validate_constrained(_constrained_endpoint(), context=context)
+
+
+def test_constrained_snapshot_derives_emitted_parameters_from_actual_reasoning_policy() -> None:
+    _, _, context = _route_bundle(observed_policy=_reasoning_policy(mode="disabled"))
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="REASONING_NOT_EMITTED",
+    ):
+        _validate_constrained(_constrained_endpoint(), context=context)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    (
+        ("prompt", "PROMPT_CAPACITY_INSUFFICIENT"),
+        ("completion", "OUTPUT_CAPACITY_INSUFFICIENT"),
+        ("context", "CONTEXT_CAPACITY_INSUFFICIENT"),
+    ),
+)
+def test_constrained_snapshot_rejects_insufficient_capacity(
+    mutation: str,
+    reason: str,
+) -> None:
+    endpoint = _constrained_endpoint()
+    if mutation == "prompt":
+        endpoint["max_prompt_tokens"] = 99_999
+    elif mutation == "completion":
+        endpoint["max_completion_tokens"] = 4_095
+    else:
+        endpoint["context_length"] = 119_999
+        endpoint["max_prompt_tokens"] = 100_000
+    _, _, context = _route_bundle()
+
+    with pytest.raises(EndpointSnapshotValidationError, match=reason):
+        _validate_constrained(endpoint, context=context)
+
+
+def test_constrained_snapshot_rejects_unexpressible_provider_price() -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["pricing"]["input_cache_write"] = "0.000001"
+    _, _, context = _route_bundle()
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="PRICE_CAP_NOT_EXPRESSIBLE",
+    ):
+        _validate_constrained(endpoint, context=context)
+
+
+def test_constrained_snapshot_rejects_partial_embedded_route_evidence() -> None:
+    generic = _validate()
+    serialized = generic.model_dump(mode="json")
+    serialized["route_predicate_profile"] = _route_bundle()[0].model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="all present or absent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(json.dumps(serialized))

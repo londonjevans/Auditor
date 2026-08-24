@@ -13,6 +13,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.models.candidate_benchmark as candidate_benchmark_module
 from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkCaseResult,
@@ -35,6 +36,9 @@ from mmaudit.models.candidate_benchmark import (
     validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
 )
+from mmaudit.models.candidate_selection import (
+    seal_authenticated_runner_route_predicate_profile,
+)
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     DiscoveryCandidateRoute,
@@ -45,12 +49,14 @@ from mmaudit.models.discovery import (
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
     openrouter_model_query,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.openrouter import (
     OpenRouterClient,
+    OpenRouterModelError,
     OpenRouterProviderPolicy,
     OpenRouterStructuredRequestCostPreview,
     preview_openrouter_structured_request_cost,
@@ -67,6 +73,18 @@ from mmaudit.models.qualification import (
     seal_qualification_policy,
 )
 from mmaudit.models.reasoning import ReasoningEffort, ReasoningPolicyArtifact
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateId,
+    RoutePredicateProfile,
+    RoutePredicateReason,
+    RoutePredicateRequirementError,
+    bind_registry_route_facts,
+    evaluate_route_predicates,
+    require_route_predicates,
+)
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
@@ -84,6 +102,7 @@ ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
 POLICY_PATH = ROOT / "config" / "models.maximum-assurance.toml"
 _NOW = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
+_ROUTE_SELECTION_PLAN_SHA256 = "f" * 64
 _DEFAULT_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "none",
     "minimal",
@@ -399,8 +418,29 @@ def _discovery_and_registry(
     tmp_path: Path,
     config: AuditConfig,
     specs: tuple[_CandidateSpec, ...],
+    route_role: ExactRouteRole | None = None,
+    selection_plan_sha256: str = _ROUTE_SELECTION_PLAN_SHA256,
+    route_predicate_profile: RoutePredicateProfile | None = None,
 ) -> tuple[Any, tuple[OpenRouterModelDiscoveryEvidence, ...], Any]:
     ordered = tuple(sorted(specs, key=lambda item: item.model_id))
+    if route_role is not None and (type(route_role) is not ExactRouteRole or len(ordered) != 1):
+        raise ValueError("constrained test discovery requires one exact route role")
+    if route_role is None and route_predicate_profile is not None:
+        raise ValueError("generic test discovery cannot carry a route predicate profile")
+    reasoning_policy = build_reasoning_policy(config)
+    route_profile = (
+        None
+        if route_role is None
+        else (
+            route_predicate_profile
+            or seal_authenticated_runner_route_predicate_profile(
+                reasoning_policy=reasoning_policy,
+                minimum_prompt_tokens=65_536,
+                required_output_tokens=config.effective_reserved_output_tokens,
+                minimum_context_tokens=73_728,
+            )
+        )
+    )
     catalog_payload = {"data": [_catalog_model(spec) for spec in ordered]}
     zdr_payload = {"data": [_endpoint(spec) for spec in ordered]}
     payloads: list[OpenRouterModelDiscoveryPayload] = []
@@ -415,24 +455,47 @@ def _discovery_and_registry(
             }
         }
         endpoint_payloads[spec.model_id] = endpoint_payload
-        snapshot = validate_openrouter_endpoint_snapshot(
-            exact_model_id=spec.model_id,
-            configured_provider_endpoints=(spec.provider_endpoint,),
-            provider_policy_mode="only",
-            endpoint_payload=endpoint_payload,
-            require_zdr=config.privacy.require_zdr,
-            zdr_payload=zdr_payload,
-            reasoning_requested=False,
-            structured_output_required=False,
-        )
-        payloads.append(
-            validate_openrouter_model_discovery(
+        if route_profile is None:
+            snapshot = validate_openrouter_endpoint_snapshot(
+                exact_model_id=spec.model_id,
+                configured_provider_endpoints=(spec.provider_endpoint,),
+                provider_policy_mode="only",
+                endpoint_payload=endpoint_payload,
+                require_zdr=config.privacy.require_zdr,
+                zdr_payload=zdr_payload,
+                reasoning_requested=False,
+                structured_output_required=False,
+            )
+            payload = validate_openrouter_model_discovery(
                 exact_model_id=spec.model_id,
                 models_payload=catalog_payload,
                 single_model_payload={"data": _catalog_model(spec)},
                 endpoint_snapshot=snapshot,
             )
-        )
+        else:
+            assert route_role is not None
+            constraint = ExactRouteConstraint.build(
+                role=route_role,
+                exact_model_id=spec.model_id,
+                provider_endpoint=spec.provider_endpoint,
+                profile=route_profile,
+            )
+            payload = validate_openrouter_constrained_model_discovery(
+                exact_model_id=spec.model_id,
+                models_payload=catalog_payload,
+                single_model_payload={"data": _catalog_model(spec)},
+                configured_provider_endpoints=(spec.provider_endpoint,),
+                provider_policy_mode="only",
+                endpoint_payload=endpoint_payload,
+                require_zdr=config.privacy.require_zdr,
+                zdr_payload=zdr_payload,
+                route_predicate_profile=route_profile,
+                exact_route_constraint=constraint,
+                expected_selection_plan_sha256=selection_plan_sha256,
+                reasoning_policy=reasoning_policy,
+                automatic_fallbacks_allowed=(config.models.provider_policy.allow_fallbacks),
+            )
+        payloads.append(payload)
     provenance, evidence = _issue_real_openrouter_discovery_run(
         run_id="1" * 32,
         retrieved_at=_NOW,
@@ -499,6 +562,28 @@ def _discovery_and_registry(
                 evidence_sha256=canonical_sha256({"model": item.exact_model_id}),
             )
             root_lineage = lineage.root_lineage
+        route_report_sha256: str | None = None
+        if route_profile is not None:
+            constraint = item.endpoint_snapshot.exact_route_constraint
+            discovery_facts = item.endpoint_snapshot.normalized_route_facts
+            assert constraint is not None
+            assert discovery_facts is not None
+            registry_facts = bind_registry_route_facts(
+                discovery_facts,
+                registry_selection_plan_sha256=selection_plan_sha256,
+                profile=route_profile,
+                constraint=constraint,
+            )
+            registry_report = evaluate_route_predicates(
+                profile=route_profile,
+                constraint=constraint,
+                facts=registry_facts,
+            )
+            require_route_predicates(
+                registry_report,
+                purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
+            )
+            route_report_sha256 = registry_report.report_sha256
         candidates.append(
             CandidateModel(
                 exact_model_id=item.exact_model_id,
@@ -512,6 +597,18 @@ def _discovery_and_registry(
                 output_capability_sha256=item.output_capability_sha256,
                 model_metadata_snapshot_sha256=item.model_metadata_snapshot_sha256,
                 pricing_snapshot_sha256=item.pricing_snapshot_sha256,
+                selection_plan_sha256=(
+                    selection_plan_sha256 if route_profile is not None else None
+                ),
+                route_predicate_profile_sha256=(
+                    route_profile.profile_sha256 if route_profile is not None else None
+                ),
+                exact_route_constraint_sha256=(
+                    item.endpoint_snapshot.exact_route_constraint.constraint_sha256
+                    if item.endpoint_snapshot.exact_route_constraint is not None
+                    else None
+                ),
+                route_predicate_report_sha256=route_report_sha256,
                 context_size=item.context_size,
                 max_prompt_tokens=item.endpoint_snapshot.endpoint(
                     item.approved_provider_endpoint
@@ -1007,9 +1104,10 @@ def test_authenticated_runner_candidate_request_descriptors_are_closed_and_deter
 
 
 @pytest.mark.asyncio
-async def test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory(
+async def test_authenticated_runner_candidate_full_admission_rejects_before_registration(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(config_factory)
     spec = _CandidateSpec(
@@ -1023,6 +1121,7 @@ async def test_authenticated_runner_candidate_consumes_exact_cost_preview_invent
         tmp_path=tmp_path,
         config=config,
         specs=(spec,),
+        route_role=ExactRouteRole.CANDIDATE,
     )
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     previews = _authenticated_runner_cost_previews(
@@ -1034,6 +1133,26 @@ async def test_authenticated_runner_candidate_consumes_exact_cost_preview_invent
         suite=suite,
     )
     factory = _MockClientFactory()
+    budget = _budget(tmp_path / "budget", config)
+    usage = UsageLedger()
+    ledger = budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    rejections: list[RoutePredicateRequirementError] = []
+    original_admission = candidate_benchmark_module.require_authenticated_runner_route_admission
+
+    def observe_admission(**kwargs: Any) -> Any:
+        try:
+            return original_admission(**kwargs)
+        except RoutePredicateRequirementError as exc:
+            rejections.append(exc)
+            raise
+
+    monkeypatch.setattr(
+        candidate_benchmark_module,
+        "require_authenticated_runner_route_admission",
+        observe_admission,
+    )
     try:
         result = await run_candidate_registry_benchmarks(
             config=config,
@@ -1041,8 +1160,8 @@ async def test_authenticated_runner_candidate_consumes_exact_cost_preview_invent
             discovery_evidence=evidence,
             candidate_registry=registry,
             benchmark_suite=suite,
-            budget=_budget(tmp_path / "budget", config),
-            usage=UsageLedger(),
+            budget=budget,
+            usage=usage,
             operator_api_key="synthetic-key",
             explicitly_allow_synthetic_egress=True,
             client_factory=factory,
@@ -1052,15 +1171,21 @@ async def test_authenticated_runner_candidate_consumes_exact_cost_preview_invent
     finally:
         await factory.close()
 
-    usage_records = tuple(
-        case.usage_record
-        for case in result.reports[0].results[0].cases
-        if case.usage_record is not None
+    assert result.diagnostics[0].state is CandidateBenchmarkRunState.UNVERIFIED_FAILURE
+    assert result.diagnostics[0].failure_stage is (
+        CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
     )
-    assert tuple(item.request_id for item in usage_records) == tuple(
-        item.logical_request_id for item in previews
+    assert len(rejections) == 1
+    assert any(
+        item.predicate_id is RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION
+        and item.reason is RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+        for item in rejections[0].failures
     )
-    assert factory.request_bodies
+    assert factory.request_bodies == []
+    assert usage.records == []
+    assert ledger.snapshot() == before
+    with pytest.raises(OpenRouterModelError):
+        factory.clients[0].registered_model_identity_snapshot(spec.model_id)
 
 
 @pytest.mark.asyncio

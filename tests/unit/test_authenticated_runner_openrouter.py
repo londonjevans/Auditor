@@ -6,7 +6,7 @@ from dataclasses import fields, replace
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Never, cast
 
 import pytest
 
@@ -45,6 +45,13 @@ from mmaudit.models.ground_truth_authority import (
     resolve_verified_frozen_ground_truth,
 )
 from mmaudit.models.openrouter import OpenRouterModelError, OpenRouterProviderPolicy
+from mmaudit.models.route_constraints import (
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateId,
+    RoutePredicateReason,
+    RoutePredicateRequirementError,
+)
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.operator_secrets import OPENROUTER_API_KEY_NAME, OperatorSecrets
 from mmaudit.orchestration.authenticated_runner_openrouter import (
@@ -866,11 +873,16 @@ def test_ground_truth_method_retarget_is_rejected_before_authseal(
 
 
 @pytest.mark.asyncio
-async def test_provider_free_preflight_returns_exact_inventory_without_dispatch(
+async def test_full_preflight_rejects_unavailable_runtime_predicates_before_state(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    harness = await execution_fixtures._harness(tmp_path, config_factory)
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
     run_plans = tuple(
         replace(
             plan,
@@ -895,34 +907,92 @@ async def test_provider_free_preflight_returns_exact_inventory_without_dispatch(
     )
     assert harness.budget.atomic_ledger is not None
     before = harness.budget.atomic_ledger.snapshot()
+    trusted_calls: list[str] = []
 
-    inventory = preflight_authenticated_openrouter_launch(launch)
+    def forbidden_trusted_preflight(**_kwargs: object) -> Any:
+        trusted_calls.append("called")
+        raise AssertionError("route admission must run before trusted execution preflight")
 
-    assert inventory.run_count == 2
-    assert inventory.case_count == 24
-    assert inventory.logical_request_count == 96
-    assert inventory.generation_refetch_count == 96
-    assert len(inventory.candidate_stage_plan_sha256s) == 2
-    assert len(set(inventory.candidate_stage_plan_sha256s)) == 2
-    assert inventory.candidate_derived_interval_cost_cap_usd > Decimal(0)
-    assert inventory.candidate_derived_final_spent_cap_usd == (
-        before.spent_usd + inventory.candidate_derived_interval_cost_cap_usd
+    monkeypatch.setattr(
+        adapter_module,
+        "_TRUSTED_EXECUTION_PREFLIGHT",
+        forbidden_trusted_preflight,
     )
-    assert inventory.judge_cost_admission_status == "PENDING_REAL_CANDIDATE_OUTPUTS"
+    monkeypatch.setattr(
+        adapter_module._runner_execution_module,
+        "_preflight_execution",
+        forbidden_trusted_preflight,
+    )
+
+    with pytest.raises(RoutePredicateRequirementError) as captured:
+        preflight_authenticated_openrouter_launch(launch)
+
+    assert captured.value.purpose is RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
+    failures = {item.predicate_id: item.reason for item in captured.value.failures}
+    assert failures[RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE] is (
+        RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE
+    )
+    assert failures[RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION] is (
+        RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+    )
+    assert trusted_calls == []
     assert harness.usage.records == []
     assert harness.budget.atomic_ledger.snapshot() == before
     assert all(not plan.campaign_path.exists() for plan in run_plans)
     assert all(not plan.portfolio_path.exists() for plan in run_plans)
 
-    with pytest.raises(
-        AuthenticatedRunnerExecutionError,
-        match="explicit synthetic-source egress authorization",
-    ):
-        preflight_authenticated_openrouter_launch(
-            replace(launch, explicitly_allow_synthetic_egress=False)
+
+@pytest.mark.asyncio
+async def test_direct_execute_clears_preloaded_secret_when_full_admission_rejects(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
+    launch = AuthenticatedRunnerOpenRouterLaunch(
+        config=harness.config,
+        explicitly_allow_synthetic_egress=True,
+        public_lineage_capability=harness.public_lineage,
+        ground_truth_capability=harness.ground_truth,
+        benchmark_suite=harness.suite,
+        candidate_discovery_manifest=harness.discovery_manifest,
+        candidate_discovery_evidence=harness.discovery_evidence,
+        candidate_registry=harness.registry,
+        qualification_policy=harness.policy,
+        budget=harness.budget,
+        usage=harness.usage,
+        run_plans=harness.plans,
+    )
+    ledger = harness.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-preloaded-unit-key"})
+
+    def forbidden_adapter(**_kwargs: object) -> Never:
+        raise AssertionError("full route rejection must precede adapter construction")
+
+    monkeypatch.setattr(adapter_module, "_OpenRouterExecutionAdapter", forbidden_adapter)
+
+    with pytest.raises(RoutePredicateRequirementError) as captured:
+        await execute_authenticated_openrouter_runner(
+            launch=launch,
+            operator_secrets=secrets,
         )
+
+    assert any(
+        item.predicate_id is RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION
+        and item.reason is RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+        for item in captured.value.failures
+    )
+    assert secrets.cleared
     assert harness.usage.records == []
-    assert harness.budget.atomic_ledger.snapshot() == before
+    assert ledger.snapshot() == before
+    assert all(not plan.campaign_path.exists() for plan in harness.plans)
+    assert all(not plan.portfolio_path.exists() for plan in harness.plans)
 
 
 @pytest.mark.asyncio
@@ -974,11 +1044,15 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
 
 
 @pytest.mark.asyncio
-async def test_judge_refresh_observes_current_metadata_in_order_before_registration(
+async def test_judge_refresh_full_admission_rejects_after_metadata_before_registration(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    harness = await execution_fixtures._harness(tmp_path, config_factory)
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
     plan = harness.plans[0]
     judge = plan.judge
     factory = execution_fixtures.candidate_fixtures._MockClientFactory(
@@ -999,18 +1073,25 @@ async def test_judge_refresh_observes_current_metadata_in_order_before_registrat
         token_budgets=harness.config.token_budgets,
     )
     try:
-        await adapter_module._refresh_and_register_judge_discovery(
-            client=client,
-            config=harness.config,
-            judge=judge,
-            evidence=plan.judge_discovery_evidence[0],
-            manifest=plan.judge_discovery_manifest,
-        )
-        registered = client.registered_model_identity_snapshot(judge.exact_model_id)
+        with pytest.raises(RoutePredicateRequirementError) as captured:
+            await adapter_module._refresh_and_register_judge_discovery(
+                client=client,
+                config=harness.config,
+                judge=judge,
+                evidence=plan.judge_discovery_evidence[0],
+                manifest=plan.judge_discovery_manifest,
+                expected_role=ExactRouteRole.PRIMARY_JUDGE,
+            )
+        with pytest.raises(OpenRouterModelError, match="not registered"):
+            client.registered_model_identity_snapshot(judge.exact_model_id)
     finally:
         await factory.close()
 
-    assert registered.discovery_evidence_sha256 == judge.discovery_evidence_sha256
+    assert any(
+        item.predicate_id is RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION
+        and item.reason is RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+        for item in captured.value.failures
+    )
     assert factory.metadata_requests == [
         "/api/v1/key",
         "/api/v1/models",
@@ -1026,7 +1107,11 @@ async def test_judge_refresh_rejects_pricing_drift_without_registration_or_compl
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    harness = await execution_fixtures._harness(tmp_path, config_factory)
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
     plan = harness.plans[0]
     judge = plan.judge
     factory = execution_fixtures.candidate_fixtures._MockClientFactory(
@@ -1054,6 +1139,7 @@ async def test_judge_refresh_rejects_pricing_drift_without_registration_or_compl
                 judge=judge,
                 evidence=plan.judge_discovery_evidence[0],
                 manifest=plan.judge_discovery_manifest,
+                expected_role=ExactRouteRole.PRIMARY_JUDGE,
             )
         with pytest.raises(OpenRouterModelError, match="not registered"):
             client.registered_model_identity_snapshot(judge.exact_model_id)

@@ -105,6 +105,11 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
     TokenDetailAccountingEvidence,
 )
+from mmaudit.models.route_constraints import (
+    normalize_exact_route_pricing,
+    project_provider_price_cap,
+    project_route_emitted_request_parameters,
+)
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextExcerpt,
@@ -3517,6 +3522,33 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         ),
         ("_provider_httpx_inflight_response_graph",),
         ("_provider_httpx_completed_response_graph",),
+        (
+            "project_route_emitted_request_parameters",
+            "_TRUSTED_PROJECT_ROUTE_EMITTED_REQUEST_PARAMETERS",
+        ),
+        (
+            "normalize_exact_route_pricing",
+            "_TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING",
+        ),
+        (
+            "project_provider_price_cap",
+            "_TRUSTED_PROJECT_PROVIDER_PRICE_CAP",
+        ),
+        ("_assemble_structured_request_body", "_TRUSTED_ASSEMBLE_STRUCTURED_REQUEST_BODY"),
+        ("_routing_max_price", "_TRUSTED_ROUTING_MAX_PRICE"),
+        ("_revalidate_openrouter_discovery_payload",),
+        (
+            "_revalidate_openrouter_discovery_payload",
+            "_TRUSTED_REVALIDATE_OPENROUTER_DISCOVERY_PAYLOAD",
+        ),
+        (
+            "_detach_exact_discovery_json_object",
+            "_TRUSTED_DETACH_EXACT_DISCOVERY_JSON_OBJECT",
+        ),
+        (
+            "_detach_exact_discovery_json_mapping",
+            "_TRUSTED_DETACH_EXACT_DISCOVERY_JSON_MAPPING",
+        ),
     ],
 )
 def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
@@ -3558,12 +3590,35 @@ def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
         "_revoke_authrunner_owned_real_usage_origin",
         "_attest_authrunner_generation_origin",
         "_has_authrunner_generation_origin",
+        "_assemble_structured_request_body",
+        "_routing_max_price",
+        "project_route_emitted_request_parameters",
+        "normalize_exact_route_pricing",
+        "project_provider_price_cap",
+        "_revalidate_openrouter_discovery_payload",
+        "_detach_exact_discovery_json_object",
+        "_detach_exact_discovery_json_mapping",
     ),
 )
 def test_receipt_authority_function_code_retarget_is_not_pristine(
     binding_name: str,
 ) -> None:
     function = getattr(openrouter_module, binding_name)
+    original_code = function.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    function.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        function.__code__ = original_code
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_real_discovery_sealer_code_retarget_is_not_pristine() -> None:
+    function = OpenRouterClient.seal_real_model_discovery_run
     original_code = function.__code__
 
     def changed(*_args: object, **_kwargs: object) -> bool:
@@ -5459,6 +5514,18 @@ async def test_provider_price_ceiling_never_rounds_below_validated_snapshot(
         await http_client.aclose()
 
     max_price = request["provider"]["max_price"]
+    expected_max_price = {
+        item.component.value: item.value
+        for item in project_provider_price_cap(
+            normalize_exact_route_pricing(
+                {
+                    "prompt": format(prompt_price, "f"),
+                    "completion": format(completion_price, "f"),
+                }
+            )
+        )
+    }
+    assert max_price == expected_max_price
     assert Decimal(str(max_price["prompt"])) >= prompt_price * 1_000_000
     assert Decimal(str(max_price["completion"])) >= completion_price * 1_000_000
 
@@ -10709,6 +10776,16 @@ async def test_certification_request_pins_provider_reasoning_and_single_model(
         "only": ["approved-provider"],
     }
     assert observed[0]["reasoning"] == {"exclude": False, "effort": "high"}
+    assert tuple(
+        sorted(
+            field
+            for field in ("max_tokens", "reasoning", "response_format", "temperature")
+            if field in observed[0]
+        )
+    ) == project_route_emitted_request_parameters(
+        structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        reasoning_emitted=True,
+    )
     assert usage.records[0].configured_provider_endpoints == ["approved-provider"]
 
 

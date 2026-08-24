@@ -123,6 +123,7 @@ from mmaudit.models.candidate_registry_bridge import (
 )
 from mmaudit.models.candidate_selection import (
     CandidateSelectionPlan,
+    authenticated_runner_route_constraint,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
     read_candidate_selection_source,
@@ -134,6 +135,7 @@ from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     load_model_discovery_run,
     openrouter_catalog_canonical_slug,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -214,6 +216,10 @@ from mmaudit.models.release_attestation import (
     observe_and_verify_qualification_release,
     write_observed_qualification_release_bindings,
 )
+from mmaudit.models.route_admission import (
+    require_authenticated_runner_three_route_admission,
+)
+from mmaudit.models.route_constraints import RouteConstraintPurpose
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
@@ -1020,6 +1026,26 @@ def models_discover(
                 raise ConfigError(f"candidate selection bridge is invalid: {exc}") from exc
         _preflight_model_discovery_output_dir(output_dir)
         config = load_config(config_path)
+        constrained_controls = (
+            build_openrouter_runtime_controls(config, certification=False)
+            if selection_plan is not None
+            and selection_plan.authenticated_runner_selection is not None
+            else None
+        )
+        authenticated_selection = (
+            None if selection_plan is None else selection_plan.authenticated_runner_selection
+        )
+        selected_route_ids = (
+            frozenset()
+            if authenticated_selection is None
+            else frozenset(
+                (
+                    authenticated_selection.candidate_model_id,
+                    authenticated_selection.primary_judge_model_id,
+                    authenticated_selection.replay_judge_model_id,
+                )
+            )
+        )
         budget, usage = _budget_and_usage(config)
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
@@ -1030,6 +1056,12 @@ def models_discover(
                 privacy=config.privacy,
                 budget=budget,
                 usage=usage,
+                provider_policy=(
+                    None if constrained_controls is None else constrained_controls.provider_policy
+                ),
+                reasoning_policy=(
+                    None if constrained_controls is None else constrained_controls.reasoning_policy
+                ),
             )
             if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
                 raise ConfigError("models discover requires the trusted concrete OpenRouter client")
@@ -1049,21 +1081,49 @@ def models_discover(
                     single_model_payloads[model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(model_id)
                     endpoint_payloads[model_id] = endpoint_payload
-                    endpoint_snapshot = validate_openrouter_endpoint_snapshot(
-                        exact_model_id=model_id,
-                        configured_provider_endpoints=(provider_endpoint,),
-                        provider_policy_mode="only",
-                        endpoint_payload=endpoint_payload,
-                        require_zdr=config.privacy.require_zdr,
-                        zdr_payload=zdr_payload,
-                        structured_output_required=False,
-                    )
-                    structural_payload = validate_openrouter_model_discovery(
-                        exact_model_id=model_id,
-                        models_payload=models_payload,
-                        single_model_payload=single_model_payload,
-                        endpoint_snapshot=endpoint_snapshot,
-                    )
+                    if selection_plan is not None and model_id in selected_route_ids:
+                        if constrained_controls is None:
+                            raise ConfigError(
+                                "selected candidate route lacks constrained runtime controls"
+                            )
+                        route_profile, route_constraint = authenticated_runner_route_constraint(
+                            selection_plan,
+                            exact_model_id=model_id,
+                            provider_endpoint=provider_endpoint,
+                        )
+                        structural_payload = validate_openrouter_constrained_model_discovery(
+                            exact_model_id=model_id,
+                            models_payload=models_payload,
+                            single_model_payload=single_model_payload,
+                            configured_provider_endpoints=(provider_endpoint,),
+                            provider_policy_mode="only",
+                            endpoint_payload=endpoint_payload,
+                            require_zdr=config.privacy.require_zdr,
+                            zdr_payload=zdr_payload,
+                            route_predicate_profile=route_profile,
+                            exact_route_constraint=route_constraint,
+                            expected_selection_plan_sha256=selection_plan.plan_sha256,
+                            reasoning_policy=constrained_controls.reasoning_policy,
+                            automatic_fallbacks_allowed=(
+                                constrained_controls.provider_policy.allow_fallbacks
+                            ),
+                        )
+                    else:
+                        endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+                            exact_model_id=model_id,
+                            configured_provider_endpoints=(provider_endpoint,),
+                            provider_policy_mode="only",
+                            endpoint_payload=endpoint_payload,
+                            require_zdr=config.privacy.require_zdr,
+                            zdr_payload=zdr_payload,
+                            structured_output_required=False,
+                        )
+                        structural_payload = validate_openrouter_model_discovery(
+                            exact_model_id=model_id,
+                            models_payload=models_payload,
+                            single_model_payload=single_model_payload,
+                            endpoint_snapshot=endpoint_snapshot,
+                        )
                     if selection_plan is not None:
                         validate_candidate_selection_discovery_capability(
                             selection_plan,
@@ -2080,6 +2140,21 @@ def models_authenticated_runner(
             config=config,
             policy=policy,
             benchmark_suite=benchmark_suite,
+        )
+        require_authenticated_runner_three_route_admission(
+            candidate=(candidate, candidate_manifest, candidate_evidence),
+            primary_judge=(
+                primary_judge,
+                primary_judge_manifest,
+                primary_judge_evidence,
+            ),
+            replay_judge=(
+                replay_judge,
+                replay_judge_manifest,
+                replay_judge_evidence,
+            ),
+            purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+            runtime_required_output_tokens=config.effective_reserved_output_tokens,
         )
         ledger_path = _selected_cost_ledger_path(config, cost_ledger)
         if ledger_path is None:

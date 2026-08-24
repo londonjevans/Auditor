@@ -11,6 +11,9 @@ import pytest
 
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.usage as usage_module
+from mmaudit.models.candidate_selection import (
+    seal_authenticated_runner_route_predicate_profile,
+)
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.openrouter import (
     OpenRouterCostControlError,
@@ -329,6 +332,12 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
         certification=True,
     )
     reasoning_policy = _high_effort_reasoning_policy()
+    route_profile = seal_authenticated_runner_route_predicate_profile(
+        reasoning_policy=reasoning_policy,
+        minimum_prompt_tokens=8_192,
+        required_output_tokens=config.effective_reserved_output_tokens,
+        minimum_context_tokens=16_384,
+    )
     preview = _preview(
         config=config,
         manifest=manifest,
@@ -377,8 +386,9 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
     assert preview.reserved_reasoning_tokens == 4_096
     assert preview.schema_version == "1.1"
     assert preview.wire_max_tokens == preview.reserved_output_tokens
+    assert preview.wire_max_tokens == route_profile.required_output_tokens
     assert preview.requested_completion_tokens == (
-        preview.reserved_output_tokens + preview.reserved_reasoning_tokens
+        route_profile.required_output_tokens + route_profile.reserved_reasoning_tokens
     )
     assert len(observed) == 1
     request_body = json.loads(observed[0].content)
@@ -387,6 +397,7 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
         "exclude": False,
     }
     assert request_body["max_tokens"] == preview.wire_max_tokens
+    assert request_body["max_tokens"] == route_profile.required_output_tokens
     token_detail = result.usage_record.token_detail_accounting_evidence
     assert token_detail is not None
     assert result.usage_record.prompt_tokens == token_detail.provider_prompt_tokens == 10
@@ -1041,7 +1052,7 @@ def test_provider_free_request_cost_preview_rejects_cache_read_above_prompt(
 
     with pytest.raises(
         OpenRouterCostControlError,
-        match="input-cache-read endpoint price exceeds its provider-capped prompt price",
+        match="endpoint pricing cannot produce the shared provider price cap",
     ):
         _preview(
             config=config,

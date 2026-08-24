@@ -66,11 +66,10 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
     require_openrouter_live_discovery_equivalence,
-    validate_openrouter_model_discovery,
+    validate_openrouter_constrained_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
-    validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import (
     GenerationEvidenceValidationError,
@@ -86,7 +85,6 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicy,
     preview_openrouter_structured_request_cost,
 )
-from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
     VerifiedPublicModelLineage,
@@ -97,6 +95,13 @@ from mmaudit.models.qualification import (
     CandidateRegistry,
     LineageReviewStatus,
     validate_candidate_registry_discovery,
+)
+from mmaudit.models.route_admission import require_authenticated_runner_route_admission
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
 )
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import UsageRecord
@@ -876,6 +881,7 @@ def _preflight_authenticated_runner_smoke_launch(
         manifest=launch.candidate_discovery_manifest,
         evidence=launch.candidate_discovery_evidence,
         label="candidate",
+        expected_role=ExactRouteRole.CANDIDATE,
     )
     if (
         type(launch.run_plans) is not tuple
@@ -909,6 +915,11 @@ def _preflight_authenticated_runner_smoke_launch(
             manifest=plan.judge_discovery_manifest,
             evidence=plan.judge_discovery_evidence,
             label="judge",
+            expected_role=(
+                ExactRouteRole.PRIMARY_JUDGE
+                if plan.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
+                else ExactRouteRole.REPLAY_JUDGE
+            ),
         )
         try:
             plan.judge_discovery_evidence[0].require_compatible_reasoning_profile(reasoning_control)
@@ -1409,11 +1420,13 @@ def _require_singleton_registry(
     manifest: OpenRouterModelDiscoveryRunManifest,
     evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
     label: str,
+    expected_role: ExactRouteRole,
 ) -> CandidateModel:
     if (
         type(registry) is not CandidateRegistry
         or type(manifest) is not OpenRouterModelDiscoveryRunManifest
         or type(evidence) is not tuple
+        or type(expected_role) is not ExactRouteRole
         or len(registry.candidates) != 1
         or len(evidence) != 1
     ):
@@ -1462,6 +1475,12 @@ def _require_singleton_registry(
         raise AuthenticatedRunnerSmokeOpenRouterError(
             f"smoke {label} identity differs from fresh discovery"
         )
+    require_authenticated_runner_route_admission(
+        model=model,
+        evidence=discovery,
+        expected_role=expected_role,
+        purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
+    )
     return model
 
 
@@ -1591,22 +1610,33 @@ async def _refresh_and_register_exact_route(
             f"smoke {route_role.value} ZDR metadata request failed safely"
         ) from None
     try:
-        current_endpoint = validate_openrouter_endpoint_snapshot(
+        profile = evidence.endpoint_snapshot.route_predicate_profile
+        constraint = evidence.endpoint_snapshot.exact_route_constraint
+        selection_plan_sha256 = model.selection_plan_sha256
+        if (
+            type(profile) is not RoutePredicateProfile
+            or type(constraint) is not ExactRouteConstraint
+            or selection_plan_sha256 is None
+            or model.route_predicate_profile_sha256 != profile.profile_sha256
+            or model.exact_route_constraint_sha256 != constraint.constraint_sha256
+        ):
+            raise ValueError("smoke route lacks constrained registry custody")
+        current_model = validate_openrouter_constrained_model_discovery(
             exact_model_id=model.exact_model_id,
+            models_payload=models_payload,
+            single_model_payload=single_model_payload,
             configured_provider_endpoints=(model.approved_provider_endpoint,),
             provider_policy_mode="only",
             endpoint_payload=endpoint_payload,
             require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
-            reasoning_requested=False,
-            required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            route_predicate_profile=profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256=selection_plan_sha256,
+            reasoning_policy=build_reasoning_policy(config),
+            automatic_fallbacks_allowed=client.provider_policy.allow_fallbacks,
         )
-        current_model = validate_openrouter_model_discovery(
-            exact_model_id=model.exact_model_id,
-            models_payload=models_payload,
-            single_model_payload=single_model_payload,
-            endpoint_snapshot=current_endpoint,
-        )
+        current_endpoint = current_model.endpoint_snapshot
     except (TypeError, ValueError):
         raise AuthenticatedRunnerSmokeOpenRouterError(
             f"smoke {route_role.value} current model, route, ZDR, pricing, or output metadata "
@@ -1635,6 +1665,19 @@ async def _refresh_and_register_exact_route(
         ) from None
     except ModelDiscoveryValidationError as exc:
         raise AuthenticatedRunnerSmokeOpenRouterError(f"smoke {route_role.value} {exc}") from None
+    expected_role = {
+        AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE: ExactRouteRole.CANDIDATE,
+        AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE: ExactRouteRole.PRIMARY_JUDGE,
+        AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE: ExactRouteRole.REPLAY_JUDGE,
+    }[route_role]
+    require_authenticated_runner_route_admission(
+        model=model,
+        evidence=evidence,
+        expected_role=expected_role,
+        purpose=RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+        frozen_live_equivalent=True,
+        runtime_required_output_tokens=config.effective_reserved_output_tokens,
+    )
     try:
         client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
         registered = client.registered_model_identity_snapshot(model.exact_model_id)

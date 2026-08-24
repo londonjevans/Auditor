@@ -13,6 +13,8 @@ from mmaudit.config import AuditConfig
 from mmaudit.constants import ExitCode
 from mmaudit.models.candidate_registry_bridge import write_candidate_registry_json
 from mmaudit.models.candidate_selection import (
+    load_candidate_selection_plan,
+    seal_authenticated_runner_route_predicate_profile,
     seal_authenticated_runner_selection,
     seal_candidate_selection_entry,
     seal_candidate_selection_plan,
@@ -29,7 +31,13 @@ from mmaudit.models.qualification import (
     load_candidate_registry,
     validate_candidate_registry_discovery,
 )
-from mmaudit.models.reasoning import ReasoningEffort
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningEffort,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import ExactRouteConstraint, ExactRouteRole
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
@@ -59,7 +67,10 @@ NON_HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
 
 
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
-    return config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    return config_factory(
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
 
 
 def _selection_plan_paths(
@@ -105,6 +116,40 @@ def _selection_plan_paths(
             allowed_provider_endpoints=("provider-gamma",),
         ),
     )
+    control = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    policy = ReasoningPolicyArtifact.build(
+        controls_by_role={role: control for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+    profile = seal_authenticated_runner_route_predicate_profile(
+        reasoning_policy=policy,
+        minimum_prompt_tokens=65_536,
+        required_output_tokens=4_096,
+        minimum_context_tokens=73_728,
+    )
+    constraints = (
+        ExactRouteConstraint.build(
+            role=ExactRouteRole.CANDIDATE,
+            exact_model_id=model_id,
+            provider_endpoint=provider_endpoint,
+            profile=profile,
+        ),
+        ExactRouteConstraint.build(
+            role=ExactRouteRole.PRIMARY_JUDGE,
+            exact_model_id="beta/beacon-secure",
+            provider_endpoint="provider-beta",
+            profile=profile,
+        ),
+        ExactRouteConstraint.build(
+            role=ExactRouteRole.REPLAY_JUDGE,
+            exact_model_id="gamma/compass-secure",
+            provider_endpoint="provider-gamma",
+            profile=profile,
+        ),
+    )
     plan = seal_candidate_selection_plan(
         source_bindings=sources,
         entries=entries,
@@ -112,6 +157,8 @@ def _selection_plan_paths(
             candidate_model_id=model_id,
             primary_judge_model_id="beta/beacon-secure",
             replay_judge_model_id="gamma/compass-secure",
+            route_predicate_profile=profile,
+            route_constraints=constraints,
         ),
     )
     plan_path = tmp_path / "candidate-selection-plan.json"
@@ -629,6 +676,8 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     config = _config(config_factory)
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
+    selection_plan = load_candidate_selection_plan(plan_path)
     spec = fixtures._CandidateSpec(
         model_id=MODEL_ID,
         provider_endpoint=PROVIDER_ENDPOINT,
@@ -640,8 +689,12 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
         tmp_path=tmp_path / "fixture-discovery",
         config=config,
         specs=(spec,),
+        route_role=ExactRouteRole.CANDIDATE,
+        selection_plan_sha256=selection_plan.plan_sha256,
+        route_predicate_profile=(
+            selection_plan.authenticated_runner_selection.route_predicate_profile
+        ),
     )
-    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
     secret_file = tmp_path / "synthetic-secrets.env"
     secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
     secret_file.chmod(0o600)
@@ -657,6 +710,12 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
     class ProviderFreeSelectionClient:
         def __init__(self, *, api_key: str, **_kwargs: object) -> None:
             assert api_key == CANARY
+            reasoning_policy = _kwargs.get("reasoning_policy")
+            assert type(reasoning_policy) is ReasoningPolicyArtifact
+            assert (
+                reasoning_policy.artifact_sha256
+                == selection_plan.authenticated_runner_selection.route_predicate_profile.reasoning_policy_sha256
+            )
 
         async def validate_authentication(self) -> None:
             return None
@@ -748,19 +807,19 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
         "expected",
     ),
     (
-        (None, HIGH_REASONING_EFFORTS, True, "native structured_outputs"),
-        ("json_schema", HIGH_REASONING_EFFORTS, True, "native structured_outputs"),
+        (None, HIGH_REASONING_EFFORTS, True, "required structured-output mode"),
+        ("json_schema", HIGH_REASONING_EFFORTS, True, "MODEL_NATIVE_MARKER_MISSING"),
         (
             "structured_outputs",
             NON_HIGH_REASONING_EFFORTS,
             True,
-            "reasoning effort=high",
+            "REASONING_EFFORT_UNSUPPORTED",
         ),
         (
             "structured_outputs",
             HIGH_REASONING_EFFORTS,
             False,
-            "explicit metadata completion limit",
+            "COMPLETION_CAPACITY_NOT_METADATA",
         ),
     ),
 )

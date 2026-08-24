@@ -21,11 +21,18 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
 )
 from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerExecutionError,
-    AuthenticatedRunnerExecutionInventory,
 )
 from mmaudit.models.evidence_seal_authority import (
     EvidenceSealCollisionMap,
     EvidenceSealDecisionProjection,
+)
+from mmaudit.models.route_constraints import (
+    RouteConstraintPurpose,
+    RoutePredicateDisposition,
+    RoutePredicateId,
+    RoutePredicateReason,
+    RoutePredicateRequirementError,
+    RoutePredicateResult,
 )
 from mmaudit.orchestration.authenticated_runner_openrouter import (
     AuthenticatedRunnerOpenRouterExecutionSnapshot,
@@ -413,17 +420,15 @@ def test_authenticated_runner_requires_opt_in_before_loading_or_secret_access(
     assert "requires explicit --allow-code-egress" in " ".join(result.stdout.split())
 
 
-def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_outputs(
+def test_authenticated_runner_full_admission_rejects_before_ledger_secret_or_output_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
-    ledger = SimpleNamespace(
-        path=tmp_path / "cost-ledger.json",
-        lock_path=tmp_path / "cost-ledger.json.lock",
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=2_048,
     )
-    budget = SimpleNamespace(atomic_ledger=ledger)
-    captured: dict[str, object] = {}
+    admission_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
     monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
@@ -450,45 +455,37 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
     )
     monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
     monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+
+    def reject_full_admission(**kwargs: object) -> None:
+        admission_calls.append(dict(kwargs))
+        raise RoutePredicateRequirementError(
+            RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+            (
+                RoutePredicateResult(
+                    predicate_id=RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION,
+                    disposition=RoutePredicateDisposition.UNAVAILABLE,
+                    reason=RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE,
+                ),
+            ),
+        )
+
     monkeypatch.setattr(
         cli_module,
-        "_budget_and_usage",
-        lambda *_args, **_kwargs: (budget, object()),
-    )
-
-    def paths(**kwargs: object) -> None:
-        captured["source_paths"] = kwargs["source_paths"]
-
-    monkeypatch.setattr(cli_module, "_preflight_authenticated_runner_cli_paths", paths)
-    monkeypatch.setattr(cli_module, "_preflight_authenticated_runner_output", lambda _path: None)
-    inventory = AuthenticatedRunnerExecutionInventory(
-        run_count=2,
-        case_count=24,
-        candidate_logical_request_count=48,
-        judge_logical_request_count=48,
-        logical_request_count=96,
-        maximum_attempts_per_logical_request=2,
-        maximum_provider_attempt_count=192,
-        generation_refetch_count=96,
-        effective_config_sha256="a" * 64,
-        initial_spent_usd=Decimal("0.0034764325"),
-        declared_interval_cost_cap_usd=Decimal("192.00"),
-        declared_final_spent_cap_usd=Decimal("192.0034764325"),
-        candidate_stage_plan_sha256s=("b" * 64, "c" * 64),
-        candidate_derived_interval_cost_cap_usd=Decimal("1.25"),
-        candidate_derived_final_spent_cap_usd=Decimal("1.2534764325"),
-        judge_cost_admission_status="PENDING_REAL_CANDIDATE_OUTPUTS",
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "preflight_authenticated_openrouter_launch",
-        lambda _launch: inventory,
+        "require_authenticated_runner_three_route_admission",
+        reject_full_admission,
     )
 
     def forbidden(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("preflight-only must not select secrets, execute, or publish")
+        raise AssertionError(
+            "full route admission must precede ledger, path, secret, execution, and output state"
+        )
 
     for name in (
+        "_selected_cost_ledger_path",
+        "_budget_and_usage",
+        "_preflight_authenticated_runner_cli_paths",
+        "_preflight_authenticated_runner_output",
+        "preflight_authenticated_openrouter_launch",
         "select_operator_secret_file",
         "load_operator_secrets",
         "execute_authenticated_openrouter_runner",
@@ -506,20 +503,13 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
         },
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in result.stdout
-    assert "logical_requests=96" in result.stdout
-    assert "maximum_provider_attempts=192" in result.stdout
-    assert "operator_interval_cap_usd=192.00" in result.stdout
-    assert "operator_final_spent_cap_usd=192.0034764325" in result.stdout
-    assert f"plan_sha256s={'b' * 64},{'c' * 64}" in result.stdout
-    assert "derived_interval_cap_usd=1.25" in result.stdout
-    assert "derived_final_spent_cap_usd=1.2534764325" in result.stdout
-    assert "status=PENDING_REAL_CANDIDATE_OUTPUTS" in result.stdout
-    assert "full_campaign_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in result.stdout
-    source_paths = cast(tuple[Path, ...], captured["source_paths"])
-    assert tmp_path / "operator-secrets.env" not in source_paths
-    assert tmp_path / "different-secret.env" not in source_paths
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "route predicate report does not satisfy its closed purpose" in result.stdout
+    assert "VALID / NONAUTHORIZING" not in result.stdout
+    assert len(admission_calls) == 1
+    assert admission_calls[0]["purpose"] is RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
+    assert admission_calls[0]["runtime_required_output_tokens"] == 2_048
+    assert not (tmp_path / "cost-ledger.json").exists()
     for name in (
         "primary-campaign",
         "primary-portfolio",
@@ -549,7 +539,10 @@ def test_authenticated_runner_route_eligibility_rejection_precedes_secret_select
     message: str,
     expected: str,
 ) -> None:
-    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=2_048,
+    )
     ledger = SimpleNamespace(
         path=tmp_path / "cost-ledger.json",
         lock_path=tmp_path / "cost-ledger.json.lock",
@@ -579,6 +572,11 @@ def test_authenticated_runner_route_eligibility_rejection_precedes_secret_select
     )
     monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
     monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_three_route_admission",
+        lambda **_kwargs: (),
+    )
     monkeypatch.setattr(
         cli_module,
         "_budget_and_usage",
@@ -630,7 +628,10 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
     authseal_reject: bool,
 ) -> None:
     events: list[str] = []
-    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=2_048,
+    )
     suite = object()
     provenance = object()
     ground_truth = object()
@@ -689,6 +690,17 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
     monkeypatch.setattr(cli_module, "load_model_discovery_run", load_discovery)
     monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: policy)
     monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+
+    def admit_routes(**kwargs: object) -> tuple[()]:
+        assert kwargs["runtime_required_output_tokens"] == 2_048
+        events.append("route-admission")
+        return ()
+
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_three_route_admission",
+        admit_routes,
+    )
     monkeypatch.setattr(
         cli_module,
         "_budget_and_usage",
@@ -775,6 +787,7 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
     else:
         assert result.exit_code == 0, result.stdout
     assert events == [
+        "route-admission",
         "paths",
         "output-preflight",
         "launch-preflight",
@@ -821,6 +834,7 @@ def test_authenticated_runner_budget_drift_rejects_before_secret_selection_or_mu
     config = SimpleNamespace(
         execution=SimpleNamespace(cost_ledger_path=None),
         token_budgets=SimpleNamespace(global_input_token_budget=8_000_000),
+        effective_reserved_output_tokens=2_048,
     )
     budget = SimpleNamespace(
         atomic_ledger=ledger,
@@ -849,6 +863,11 @@ def test_authenticated_runner_budget_drift_rejects_before_secret_selection_or_mu
     )
     monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
     monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_three_route_admission",
+        lambda **_kwargs: (),
+    )
     monkeypatch.setattr(
         cli_module,
         "_budget_and_usage",

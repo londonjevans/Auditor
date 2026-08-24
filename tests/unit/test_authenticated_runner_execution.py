@@ -84,6 +84,7 @@ from mmaudit.models.qualification import (
 from mmaudit.models.qualification_workflow import (
     candidate_generation_verification_requests,
 )
+from mmaudit.models.route_constraints import ExactRouteRole
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import (
@@ -614,6 +615,7 @@ async def _harness(
     candidate_fault: str | None = None,
     judge_fault: str | None = None,
     generation_fault: tuple[AuthenticatedRunnerGenerationSubject, str] | None = None,
+    constrained_routes: bool = False,
 ) -> _Harness:
     tmp_path.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp_path.chmod(0o700)
@@ -621,6 +623,7 @@ async def _harness(
     discovery_manifest, discovery_evidence, registry = candidate_fixtures._discovery_and_registry(
         tmp_path=tmp_path / "inputs",
         config=config,
+        route_role=(ExactRouteRole.CANDIDATE if constrained_routes else None),
         specs=(
             candidate_fixtures._CandidateSpec(
                 model_id=CANDIDATE_ID,
@@ -660,6 +663,11 @@ async def _harness(
         candidate_fixtures._discovery_and_registry(
             tmp_path=tmp_path / f"judge-input-{index}",
             config=config,
+            route_role=(
+                (ExactRouteRole.PRIMARY_JUDGE if index == 1 else ExactRouteRole.REPLAY_JUDGE)
+                if constrained_routes
+                else None
+            ),
             specs=(
                 candidate_fixtures._CandidateSpec(
                     model_id=model_id,

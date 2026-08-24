@@ -73,9 +73,8 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
     require_openrouter_live_discovery_equivalence,
-    validate_openrouter_model_discovery,
+    validate_openrouter_constrained_model_discovery,
 )
-from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.evidence_seal_authority import (
     EvidenceSealCollisionMap,
     EvidenceSealDecisionProjection,
@@ -93,9 +92,18 @@ from mmaudit.models.ground_truth_authority import (
     VerifiedFrozenGroundTruthProjection,
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterProviderPolicy
-from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.public_lineage_authority import VerifiedPublicModelLineage
 from mmaudit.models.qualification import CandidateModel, CandidateRegistry, QualificationPolicy
+from mmaudit.models.route_admission import (
+    require_authenticated_runner_route_admission,
+    require_authenticated_runner_three_route_admission,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
+)
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OperatorSecrets
@@ -447,6 +455,11 @@ class _OpenRouterExecutionAdapter:
                     judge=judge,
                     evidence=plan.judge_discovery_evidence[0],
                     manifest=plan.judge_discovery_manifest,
+                    expected_role=(
+                        ExactRouteRole.PRIMARY_JUDGE
+                        if plan.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
+                        else ExactRouteRole.REPLAY_JUDGE
+                    ),
                 )
         except BaseException:
             for client in clients.values():
@@ -847,6 +860,33 @@ def preflight_authenticated_openrouter_launch(
             "authenticated runner provider-free preflight binding changed"
         )
     _require_launch_ground_truth(launch)
+    if len(launch.run_plans) != 2 or tuple(plan.run_kind for plan in launch.run_plans) != (
+        CrossLineageAdjudicationRunKind.PRIMARY,
+        CrossLineageAdjudicationRunKind.REPLAY,
+    ):
+        raise AuthenticatedRunnerOpenRouterError(
+            "authenticated runner launch requires exact PRIMARY then REPLAY plans"
+        )
+    primary_plan, replay_plan = launch.run_plans
+    require_authenticated_runner_three_route_admission(
+        candidate=(
+            launch.candidate_registry,
+            launch.candidate_discovery_manifest,
+            launch.candidate_discovery_evidence,
+        ),
+        primary_judge=(
+            primary_plan.judge_registry,
+            primary_plan.judge_discovery_manifest,
+            primary_plan.judge_discovery_evidence,
+        ),
+        replay_judge=(
+            replay_plan.judge_registry,
+            replay_plan.judge_discovery_manifest,
+            replay_plan.judge_discovery_evidence,
+        ),
+        purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+        runtime_required_output_tokens=launch.config.effective_reserved_output_tokens,
+    )
     inventory, ledger, snapshot, candidate_cost_plans = _TRUSTED_EXECUTION_PREFLIGHT(
         config=launch.config,
         explicitly_allow_synthetic_egress=launch.explicitly_allow_synthetic_egress,
@@ -921,6 +961,7 @@ async def _refresh_and_register_judge_discovery(
     judge: CandidateModel,
     evidence: OpenRouterModelDiscoveryEvidence,
     manifest: OpenRouterModelDiscoveryRunManifest,
+    expected_role: ExactRouteRole,
 ) -> None:
     """Re-observe one exact judge route before registering it for paid requests."""
 
@@ -935,6 +976,8 @@ async def _refresh_and_register_judge_discovery(
         or type(judge) is not CandidateModel
         or type(evidence) is not OpenRouterModelDiscoveryEvidence
         or type(manifest) is not OpenRouterModelDiscoveryRunManifest
+        or type(expected_role) is not ExactRouteRole
+        or expected_role is ExactRouteRole.CANDIDATE
         or client.provider_policy != expected_policy
         or evidence.exact_model_id != judge.exact_model_id
         or evidence.canonical_slug != judge.canonical_model_slug
@@ -964,30 +1007,36 @@ async def _refresh_and_register_judge_discovery(
     endpoint_payload = await client.get_model_endpoint_metadata(judge.exact_model_id)
     zdr_payload = await client.list_zdr_endpoints()
     try:
-        current_endpoint = validate_openrouter_endpoint_snapshot(
+        profile = evidence.endpoint_snapshot.route_predicate_profile
+        constraint = evidence.endpoint_snapshot.exact_route_constraint
+        selection_plan_sha256 = judge.selection_plan_sha256
+        if (
+            type(profile) is not RoutePredicateProfile
+            or type(constraint) is not ExactRouteConstraint
+            or selection_plan_sha256 is None
+            or judge.route_predicate_profile_sha256 != profile.profile_sha256
+            or judge.exact_route_constraint_sha256 != constraint.constraint_sha256
+        ):
+            raise ValueError("judge lacks constrained route custody")
+        current_model = validate_openrouter_constrained_model_discovery(
             exact_model_id=judge.exact_model_id,
+            models_payload=models_payload,
+            single_model_payload=single_model_payload,
             configured_provider_endpoints=(judge.approved_provider_endpoint,),
             provider_policy_mode="only",
             endpoint_payload=endpoint_payload,
             require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
-            reasoning_requested=False,
-            required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            route_predicate_profile=profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256=selection_plan_sha256,
+            reasoning_policy=build_reasoning_policy(config),
+            automatic_fallbacks_allowed=client.provider_policy.allow_fallbacks,
         )
+        current_endpoint = current_model.endpoint_snapshot
     except (TypeError, ValueError):
         raise AuthenticatedRunnerOpenRouterError(
             "current judge endpoint, pricing, ZDR, or output metadata differs from discovery"
-        ) from None
-    try:
-        current_model = validate_openrouter_model_discovery(
-            exact_model_id=judge.exact_model_id,
-            models_payload=models_payload,
-            single_model_payload=single_model_payload,
-            endpoint_snapshot=current_endpoint,
-        )
-    except (TypeError, ValueError):
-        raise AuthenticatedRunnerOpenRouterError(
-            "current judge model, reasoning, or output metadata differs from discovery"
         ) from None
     reasoning_control = build_reasoning_policy(config).control_for_request("model_benchmark")
     try:
@@ -1005,6 +1054,14 @@ async def _refresh_and_register_judge_discovery(
         )
     except ModelDiscoveryValidationError as exc:
         raise AuthenticatedRunnerOpenRouterError(str(exc)) from None
+    require_authenticated_runner_route_admission(
+        model=judge,
+        evidence=evidence,
+        expected_role=expected_role,
+        purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+        frozen_live_equivalent=True,
+        runtime_required_output_tokens=config.effective_reserved_output_tokens,
+    )
     client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
     registered = client.registered_model_identity_snapshot(judge.exact_model_id)
     if (

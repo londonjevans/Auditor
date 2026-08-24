@@ -23,6 +23,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
+    require_openrouter_constrained_discovery_publication,
 )
 from mmaudit.models.identifiers import EXACT_MODEL_ID_PATTERN, require_exact_openrouter_model_id
 from mmaudit.models.output_modes import StructuredOutputMode
@@ -36,7 +37,16 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
     validate_candidate_registry_discovery,
 )
-from mmaudit.models.reasoning import ReasoningEffort
+from mmaudit.models.reasoning import ReasoningEffort, ReasoningPolicyArtifact
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
+    bind_registry_route_facts,
+    evaluate_route_predicates,
+    require_route_predicates,
+)
 from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -135,6 +145,8 @@ class AuthenticatedRunnerSelection(StrictModel):
     )
     required_reasoning_effort: Literal["high"]
     required_completion_limit_source: Literal["metadata"]
+    route_predicate_profile: RoutePredicateProfile
+    route_constraints: tuple[ExactRouteConstraint, ...] = Field(min_length=3, max_length=18)
     distinct_root_lineages_verified: Literal[False]
     role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -170,6 +182,47 @@ class AuthenticatedRunnerSelection(StrictModel):
             raise ValueError(
                 "authenticated runner seed must require an explicit metadata completion limit"
             )
+        profile = RoutePredicateProfile.model_validate_json(
+            self.route_predicate_profile.model_dump_json(),
+            strict=True,
+        )
+        role_models = {
+            ExactRouteRole.CANDIDATE: self.candidate_model_id,
+            ExactRouteRole.PRIMARY_JUDGE: self.primary_judge_model_id,
+            ExactRouteRole.REPLAY_JUDGE: self.replay_judge_model_id,
+        }
+        expected_order = tuple(
+            sorted(
+                self.route_constraints,
+                key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+            )
+        )
+        if self.route_constraints != expected_order:
+            raise ValueError("authenticated runner route constraints are not canonically ordered")
+        keys = tuple(
+            (item.role, item.exact_model_id, item.provider_endpoint)
+            for item in self.route_constraints
+        )
+        if len(keys) != len(set(keys)):
+            raise ValueError("authenticated runner route constraints are not unique")
+        observed_roles = {item.role for item in self.route_constraints}
+        if observed_roles != set(role_models):
+            raise ValueError("authenticated runner route constraints do not cover every role")
+        if any(
+            item.profile_sha256 != profile.profile_sha256
+            or item.exact_model_id != role_models[item.role]
+            for item in self.route_constraints
+        ):
+            raise ValueError(
+                "authenticated runner route constraint differs from its role or profile"
+            )
+        if (
+            self.required_output_mode is not profile.required_output_mode
+            or self.required_supported_parameters != (profile.native_capability_marker,)
+            or self.required_reasoning_effort != profile.reasoning_effort
+            or self.required_completion_limit_source != profile.required_completion_limit_source
+        ):
+            raise ValueError("authenticated runner legacy requirements differ from its profile")
         expected = canonical_sha256(
             self.model_dump(mode="json", exclude={"role_assignment_sha256"})
         )
@@ -181,7 +234,7 @@ class AuthenticatedRunnerSelection(StrictModel):
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
-    schema_version: Literal["1.3"]
+    schema_version: Literal["1.4"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -239,13 +292,30 @@ class CandidateSelectionPlan(StrictModel):
         if tuple(sorted(ranks)) != tuple(range(1, len(self.entries) + 1)):
             raise ValueError("candidate selection priority ranks must be contiguous and unique")
         if self.authenticated_runner_selection is not None:
+            selection = self.authenticated_runner_selection
             selected = {
-                self.authenticated_runner_selection.candidate_model_id,
-                self.authenticated_runner_selection.primary_judge_model_id,
-                self.authenticated_runner_selection.replay_judge_model_id,
+                selection.candidate_model_id,
+                selection.primary_judge_model_id,
+                selection.replay_judge_model_id,
             }
             if not selected.issubset(set(model_ids)):
                 raise ValueError("authenticated runner seed is outside the candidate selection")
+            entries_by_id = {entry.exact_model_id: entry for entry in self.entries}
+            constraint_endpoints_by_model: dict[str, set[str]] = {
+                model_id: set() for model_id in selected
+            }
+            for constraint in selection.route_constraints:
+                constraint_endpoints_by_model[constraint.exact_model_id].add(
+                    constraint.provider_endpoint
+                )
+            if any(
+                constraint_endpoints_by_model[model_id]
+                != set(entries_by_id[model_id].allowed_provider_endpoints)
+                for model_id in selected
+            ):
+                raise ValueError(
+                    "authenticated runner route constraints differ from selected endpoint policy"
+                )
         expected = canonical_sha256(self.model_dump(mode="json", exclude={"plan_sha256"}))
         if self.plan_sha256 != expected:
             raise ValueError("candidate selection plan self-hash is inconsistent")
@@ -307,22 +377,88 @@ def seal_authenticated_runner_selection(
     candidate_model_id: str,
     primary_judge_model_id: str,
     replay_judge_model_id: str,
+    route_predicate_profile: RoutePredicateProfile,
+    route_constraints: tuple[ExactRouteConstraint, ...],
 ) -> AuthenticatedRunnerSelection:
+    profile = RoutePredicateProfile.model_validate_json(
+        route_predicate_profile.model_dump_json(),
+        strict=True,
+    )
+    ordered_constraints = tuple(
+        sorted(
+            (
+                ExactRouteConstraint.model_validate_json(item.model_dump_json(), strict=True)
+                for item in route_constraints
+            ),
+            key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+        )
+    )
     values: dict[str, object] = {
         "candidate_model_id": candidate_model_id,
         "primary_judge_model_id": primary_judge_model_id,
         "replay_judge_model_id": replay_judge_model_id,
-        "required_output_mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
-        "required_supported_parameters": ["structured_outputs"],
-        "required_reasoning_effort": "high",
-        "required_completion_limit_source": "metadata",
+        "required_output_mode": profile.required_output_mode.value,
+        "required_supported_parameters": (profile.native_capability_marker,),
+        "required_reasoning_effort": profile.reasoning_effort,
+        "required_completion_limit_source": profile.required_completion_limit_source,
+        "route_predicate_profile": profile,
+        "route_constraints": ordered_constraints,
         "distinct_root_lineages_verified": False,
     }
-    values["role_assignment_sha256"] = canonical_sha256(values)
+    values["role_assignment_sha256"] = canonical_sha256(
+        {
+            **values,
+            "required_supported_parameters": [profile.native_capability_marker],
+            "route_predicate_profile": profile.model_dump(mode="json"),
+            "route_constraints": [item.model_dump(mode="json") for item in ordered_constraints],
+        }
+    )
     try:
         return AuthenticatedRunnerSelection.model_validate(values)
     except ValueError as exc:
         raise CandidateSelectionError("authenticated runner seed assignment is invalid") from exc
+
+
+def seal_authenticated_runner_route_predicate_profile(
+    *,
+    reasoning_policy: ReasoningPolicyArtifact,
+    minimum_prompt_tokens: int,
+    required_output_tokens: int,
+    minimum_context_tokens: int,
+) -> RoutePredicateProfile:
+    """Bind the shared route profile to the exact model-benchmark reasoning policy."""
+
+    if type(reasoning_policy) is not ReasoningPolicyArtifact:
+        raise CandidateSelectionError("route predicate profile requires an exact reasoning policy")
+    try:
+        policy = ReasoningPolicyArtifact.model_validate_json(
+            reasoning_policy.model_dump_json(),
+            strict=True,
+        )
+        role_policy = policy.role_policy_for_request("model_benchmark")
+        control = role_policy.control
+        if (
+            control.mode != "effort"
+            or control.effort != "high"
+            or control.max_tokens is not None
+            or control.exclude is not False
+            or control.reserved_reasoning_tokens <= 0
+        ):
+            raise ValueError("model-benchmark reasoning control must be exact effort=high")
+        return RoutePredicateProfile.build(
+            reasoning_policy_sha256=policy.artifact_sha256,
+            reasoning_role_profile_sha256=policy.role_profile.profile_sha256,
+            reasoning_role_binding_sha256=role_policy.binding_sha256,
+            reasoning_control_profile_sha256=control.profile_sha256,
+            reserved_reasoning_tokens=control.reserved_reasoning_tokens,
+            minimum_prompt_tokens=minimum_prompt_tokens,
+            required_output_tokens=required_output_tokens,
+            minimum_context_tokens=minimum_context_tokens,
+        )
+    except ValueError as exc:
+        raise CandidateSelectionError(
+            "authenticated runner route predicate profile is invalid"
+        ) from exc
 
 
 def seal_candidate_selection_plan(
@@ -335,17 +471,13 @@ def seal_candidate_selection_plan(
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
     values: dict[str, object] = {
-        "schema_version": "1.3",
+        "schema_version": "1.4",
         "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
         "status": "NONAUTHORIZING",
         "objective_sha256": OBJECTIVE_SHA256,
         "source_bindings": [item.model_dump(mode="json") for item in ordered_sources],
         "entries": [item.model_dump(mode="json") for item in ordered_entries],
-        "authenticated_runner_selection": (
-            None
-            if authenticated_runner_selection is None
-            else authenticated_runner_selection.model_dump(mode="json")
-        ),
+        "authenticated_runner_selection": authenticated_runner_selection,
         "unresolved_requirements": list(sorted(unresolved_requirements)),
         "ranking_executed": False,
         "cached_ranking_payload_present": False,
@@ -362,7 +494,16 @@ def seal_candidate_selection_plan(
         "release_authorized": False,
         "serialized_authority": False,
     }
-    values["plan_sha256"] = canonical_sha256(values)
+    values["plan_sha256"] = canonical_sha256(
+        {
+            **values,
+            "authenticated_runner_selection": (
+                None
+                if authenticated_runner_selection is None
+                else authenticated_runner_selection.model_dump(mode="json")
+            ),
+        }
+    )
     try:
         return CandidateSelectionPlan.model_validate(values)
     except ValueError as exc:
@@ -437,7 +578,40 @@ def validate_candidate_selection_routes(
             raise CandidateSelectionError("candidate selection route is outside the plan")
         if route.approved_provider_endpoint not in entry.allowed_provider_endpoints:
             raise CandidateSelectionError("candidate selection route uses an unlisted endpoint")
+        selection = canonical.authenticated_runner_selection
+        if selection is not None and route.exact_model_id in {
+            selection.candidate_model_id,
+            selection.primary_judge_model_id,
+            selection.replay_judge_model_id,
+        }:
+            authenticated_runner_route_constraint(
+                canonical,
+                exact_model_id=route.exact_model_id,
+                provider_endpoint=route.approved_provider_endpoint,
+            )
     return canonical
+
+
+def authenticated_runner_route_constraint(
+    plan: CandidateSelectionPlan,
+    *,
+    exact_model_id: str,
+    provider_endpoint: str,
+) -> tuple[RoutePredicateProfile, ExactRouteConstraint]:
+    """Return the sole exact selected-route constraint without choosing a fallback."""
+
+    canonical = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    selection = canonical.authenticated_runner_selection
+    if selection is None:
+        raise CandidateSelectionError("candidate selection has no authenticated runner profile")
+    matching = tuple(
+        item
+        for item in selection.route_constraints
+        if item.exact_model_id == exact_model_id and item.provider_endpoint == provider_endpoint
+    )
+    if len(matching) != 1:
+        raise CandidateSelectionError("selected route lacks one exact route constraint")
+    return selection.route_predicate_profile, matching[0]
 
 
 def require_authenticated_runner_native_structured_output(
@@ -548,14 +722,16 @@ def validate_candidate_selection_discovery_capability(
         selection.replay_judge_model_id,
     }
     if evidence.exact_model_id in selected_ids:
-        require_authenticated_runner_native_structured_output(evidence)
-        require_authenticated_runner_reasoning_effort(
-            evidence,
-            required_effort=selection.required_reasoning_effort,
+        profile, constraint = authenticated_runner_route_constraint(
+            canonical,
+            exact_model_id=evidence.exact_model_id,
+            provider_endpoint=evidence.approved_provider_endpoint,
         )
-        require_authenticated_runner_metadata_completion_limit(
+        require_openrouter_constrained_discovery_publication(
             evidence,
-            required_source=selection.required_completion_limit_source,
+            route_predicate_profile=profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256=canonical.plan_sha256,
         )
     return canonical
 
@@ -613,6 +789,53 @@ def derive_pending_candidate_registry_from_selection_plan(
                 f"candidate selection plan {canonical_plan.plan_sha256}."
             ),
         )
+        route_custody: dict[str, object] = {}
+        selection = canonical_plan.authenticated_runner_selection
+        if selection is not None and item.exact_model_id in {
+            selection.candidate_model_id,
+            selection.primary_judge_model_id,
+            selection.replay_judge_model_id,
+        }:
+            profile, constraint = authenticated_runner_route_constraint(
+                canonical_plan,
+                exact_model_id=item.exact_model_id,
+                provider_endpoint=item.approved_provider_endpoint,
+            )
+            discovery_facts = item.endpoint_snapshot.normalized_route_facts
+            if discovery_facts is None:
+                raise CandidateSelectionError(
+                    "selected candidate discovery lacks normalized route facts"
+                )
+            try:
+                registry_facts = bind_registry_route_facts(
+                    discovery_facts,
+                    registry_selection_plan_sha256=canonical_plan.plan_sha256,
+                    profile=profile,
+                    constraint=constraint,
+                )
+                registry_report = evaluate_route_predicates(
+                    profile=profile,
+                    constraint=constraint,
+                    facts=registry_facts,
+                )
+                require_route_predicates(
+                    registry_report,
+                    purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
+                )
+            except ValueError as exc:
+                raise CandidateSelectionError(
+                    "selected candidate registry route custody is invalid"
+                ) from exc
+            route_custody = {
+                "selection_plan_sha256": canonical_plan.plan_sha256,
+                "route_predicate_profile_sha256": profile.profile_sha256,
+                "exact_route_constraint_sha256": constraint.constraint_sha256,
+                "route_predicate_report_sha256": registry_report.report_sha256,
+            }
+        elif item.endpoint_snapshot.route_predicate_report is not None:
+            raise CandidateSelectionError(
+                "nonselected candidate discovery carries unexpected route custody"
+            )
         candidates.append(
             CandidateModel(
                 exact_model_id=item.exact_model_id,
@@ -649,6 +872,7 @@ def derive_pending_candidate_registry_from_selection_plan(
                 benchmark_artifact_sha256=None,
                 qualification_expires_at=None,
                 approved_roles=(),
+                **route_custody,
             )
         )
     registry = seal_candidate_registry(

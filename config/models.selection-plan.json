@@ -11,7 +11,105 @@
     "required_supported_parameters": [
       "structured_outputs"
     ],
-    "role_assignment_sha256": "93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421"
+    "role_assignment_sha256": "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14",
+    "route_constraints": [
+      {
+        "constraint_sha256": "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
+        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "parasail/fp8",
+        "role": "candidate",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
+        "exact_model_id": "z-ai/glm-5.2",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "sail-research/fp8",
+        "role": "primary_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "ffc54dc13eea0d92c06a1c6f29e0ae679eac5328d05ae8899e8cd7899b1eb199",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "modal/mxfp4",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "2a820c3b85936bc24cc1b0d007415d39e8e8bfd3b4eacb072a321e904e8a5912",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "phala",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      }
+    ],
+    "route_predicate_profile": {
+      "accepted_operational_status": "0",
+      "allow_automatic_fallbacks": false,
+      "emitted_request_parameters": [
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "temperature"
+      ],
+      "empirical_schema_conformance_disposition": "UNAVAILABLE",
+      "minimum_context_tokens": 73728,
+      "minimum_prompt_tokens": 65536,
+      "native_capability_marker": "structured_outputs",
+      "predicate_ids": [
+        "EXACT_MODEL_IDENTITY",
+        "EXACT_PROVIDER_ENDPOINT",
+        "PROVIDER_DISPLAY_NAME_INJECTIVITY",
+        "OPERATIONAL_STATUS",
+        "ZDR_ELIGIBILITY",
+        "EMITS_MAX_TOKENS",
+        "EMITS_TEMPERATURE",
+        "EMITS_RESPONSE_FORMAT",
+        "EMITS_REASONING",
+        "MODEL_STRUCTURED_OUTPUT_MARKER",
+        "ENDPOINT_STRUCTURED_OUTPUT_MARKER",
+        "NATIVE_STRUCTURED_OUTPUT_MODE",
+        "SINGLETON_EXACT_ROUTE",
+        "AUTOMATIC_FALLBACK_DISABLED",
+        "REASONING_POLICY_BINDING",
+        "REASONING_CONTROL_BINDING",
+        "REASONING_CONTROL_VALUES",
+        "REASONING_EFFORT_SUPPORT",
+        "PROMPT_CAPACITY_ENVELOPE",
+        "OUTPUT_CAPACITY_ENVELOPE",
+        "CONTEXT_CAPACITY_ENVELOPE",
+        "METADATA_COMPLETION_CAPACITY",
+        "PRICE_CAP_EXPRESSIBILITY",
+        "PRICE_CAP_NO_WEAKER",
+        "FROZEN_LIVE_EQUIVALENCE",
+        "REGISTRY_SELECTION_HASH_CUSTODY",
+        "REGISTRY_CONSTRAINT_HASH_CUSTODY",
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION"
+      ],
+      "price_cap_algorithm": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+      "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+      "reasoning_control_profile_sha256": "fb13e6ce2ae85e3868ff3fbb50c565dc19f6cb13bfa629b20d315d2c9f1078df",
+      "reasoning_effort": "high",
+      "reasoning_exclude": false,
+      "reasoning_max_tokens": null,
+      "reasoning_mode": "effort",
+      "reasoning_policy_sha256": "5becbe9c9ec4a5fd6397c6d25f0e7470444b3e02aec759ae6d95a79a08d672a2",
+      "reasoning_role_binding_sha256": "e99e53b0fe39f99ed444670f1799359f65136a95f8cbd8389df012b5d88767e7",
+      "reasoning_role_profile_sha256": "b78c3b88a119c54af44663f48b30b25868da82a819e7166504d41ee8d4f8e619",
+      "require_singleton_route": true,
+      "require_zdr": true,
+      "required_completion_limit_source": "metadata",
+      "required_completion_tokens": 8192,
+      "required_output_mode": "NATIVE_JSON_SCHEMA",
+      "required_output_tokens": 4096,
+      "reserved_reasoning_tokens": 4096,
+      "schema_version": "1.0",
+      "token_detail_convention_disposition": "UNAVAILABLE"
+    }
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -201,7 +299,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f",
+  "plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -209,7 +307,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.3",
+  "schema_version": "1.4",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [

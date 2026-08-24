@@ -356,7 +356,7 @@ def build_model_lineage_review_artifact(
         discovery_manifest.model_dump(mode="json")
     )
     evidence = tuple(
-        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        OpenRouterModelDiscoveryEvidence.model_validate_json(item.model_dump_json())
         for item in discovery_evidence
     )
     source = ModelRefreshSourceEvidence.model_validate(

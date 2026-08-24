@@ -508,6 +508,19 @@
           "title": "Exact Model Id",
           "type": "string"
         },
+        "exact_route_constraint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Route Constraint Sha256"
+        },
         "lineage_review": {
           "$ref": "#/$defs/OperatorLineageReview"
         },
@@ -616,6 +629,45 @@
           ],
           "default": null,
           "title": "Root Lineage"
+        },
+        "route_predicate_profile_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Predicate Profile Sha256"
+        },
+        "route_predicate_report_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Predicate Report Sha256"
+        },
+        "selection_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selection Plan Sha256"
         },
         "structured_output_mode": {
           "anyOf": [

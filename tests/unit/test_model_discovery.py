@@ -29,6 +29,9 @@ from mmaudit.models.discovery import (
     load_model_discovery_run,
     openrouter_endpoint_query,
     openrouter_model_query,
+    require_openrouter_constrained_discovery_publication,
+    require_openrouter_live_discovery_equivalence,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -37,9 +40,23 @@ from mmaudit.models.endpoint_snapshots import (
     OpenRouterEndpointSnapshotEvidence,
     validate_openrouter_endpoint_snapshot,
 )
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterPrivacyError
+from mmaudit.models.openrouter import (
+    OpenRouterClient,
+    OpenRouterPrivacyError,
+    _detach_exact_discovery_json_object,
+    _revalidate_openrouter_discovery_payload,
+)
 from mmaudit.models.output_modes import StructuredOutputMode
-from mmaudit.models.reasoning import ReasoningControlProfile
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RoutePredicateProfile,
+)
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.privacy import (
@@ -246,6 +263,80 @@ def _discover(
     )
 
 
+def _constrained_route_bundle() -> tuple[
+    ReasoningPolicyArtifact,
+    RoutePredicateProfile,
+    ExactRouteConstraint,
+]:
+    control = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    policy = ReasoningPolicyArtifact.build(
+        controls_by_role={role: control for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+    role_policy = policy.role_policy_for_request("model_benchmark")
+    profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=policy.artifact_sha256,
+        reasoning_role_profile_sha256=policy.role_profile.profile_sha256,
+        reasoning_role_binding_sha256=role_policy.binding_sha256,
+        reasoning_control_profile_sha256=control.profile_sha256,
+        reserved_reasoning_tokens=4_096,
+        minimum_prompt_tokens=100_000,
+        required_output_tokens=4_096,
+        minimum_context_tokens=120_000,
+    )
+    constraint = ExactRouteConstraint.build(
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id="alpha/atlas-secure",
+        provider_endpoint="approved-provider/fp8",
+        profile=profile,
+    )
+    return policy, profile, constraint
+
+
+def _constrained_discover(
+    *,
+    model: dict[str, Any] | None = None,
+    endpoint: dict[str, Any] | None = None,
+    automatic_fallbacks_allowed: bool = False,
+) -> tuple[
+    OpenRouterModelDiscoveryPayload,
+    RoutePredicateProfile,
+    ExactRouteConstraint,
+]:
+    selected_model = model or _model(max_completion_tokens=20_000)
+    selected_endpoint = endpoint or _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    policy, profile, constraint = _constrained_route_bundle()
+    payload = validate_openrouter_constrained_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [selected_model]},
+        single_model_payload={"data": copy.deepcopy(selected_model)},
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [
+                    {key: value for key, value in selected_endpoint.items() if key != "model_id"}
+                ],
+            }
+        },
+        require_zdr=True,
+        zdr_payload={"data": [selected_endpoint]},
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256="1" * 64,
+        reasoning_policy=policy,
+        automatic_fallbacks_allowed=automatic_fallbacks_allowed,
+    )
+    return payload, profile, constraint
+
+
 def _real_evidence(
     payloads: tuple[OpenRouterModelDiscoveryPayload, ...] | None = None,
 ) -> tuple[OpenRouterModelDiscoveryEvidence, ...]:
@@ -346,6 +437,210 @@ def test_current_like_null_limits_are_derived_and_exact_endpoint_is_bound() -> N
     assert evidence.provenance.execution_evidence.value == "real"
     assert evidence.provenance.authenticated_metadata is True
     assert evidence.provenance.retrieved_at.microsecond == 0
+
+
+def test_constrained_discovery_custodies_and_rechecks_complete_route_report() -> None:
+    payload, profile, constraint = _constrained_discover()
+
+    report = require_openrouter_constrained_discovery_publication(
+        payload,
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256="1" * 64,
+    )
+
+    snapshot = payload.endpoint_snapshot
+    assert snapshot.route_predicate_profile == profile
+    assert snapshot.exact_route_constraint == constraint
+    assert snapshot.normalized_route_facts is not None
+    assert snapshot.route_predicate_report == report
+    assert report.facts_sha256 == snapshot.normalized_route_facts.facts_sha256
+    assert OpenRouterModelDiscoveryPayload.model_validate_json(payload.model_dump_json()) == payload
+
+
+def test_constrained_discovery_observation_replay_preserves_route_custody() -> None:
+    model = _model(max_completion_tokens=20_000)
+    endpoint = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    policy, profile, constraint = _constrained_route_bundle()
+    models_payload = {"data": [model]}
+    single_model_payload = {"data": copy.deepcopy(model)}
+    endpoint_payload = {
+        "data": {
+            "id": "alpha/atlas-secure",
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+    zdr_payload = {"data": [endpoint]}
+    supplied = validate_openrouter_constrained_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=True,
+        zdr_payload=zdr_payload,
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256="1" * 64,
+        reasoning_policy=policy,
+        automatic_fallbacks_allowed=False,
+    )
+
+    observed = _revalidate_openrouter_discovery_payload(
+        supplied_discovery=supplied,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+        endpoint_payload=endpoint_payload,
+        zdr_payload=zdr_payload,
+        route=DiscoveryCandidateRoute(
+            exact_model_id="alpha/atlas-secure",
+            approved_provider_endpoint="approved-provider/fp8",
+        ),
+        reasoning_policy=policy,
+        automatic_fallbacks_allowed=False,
+        effective_privacy_policy=None,
+    )
+
+    assert observed == supplied
+    assert observed.endpoint_snapshot.route_predicate_report is not None
+
+
+def test_generic_discovery_observation_replay_remains_custody_free() -> None:
+    model = _model()
+    endpoint = _endpoint()
+    models_payload = {"data": [model]}
+    single_model_payload = {"data": copy.deepcopy(model)}
+    endpoint_payload = {
+        "data": {
+            "id": "alpha/atlas-secure",
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+    zdr_payload = {"data": [endpoint]}
+    supplied = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(),
+    )
+
+    observed = _revalidate_openrouter_discovery_payload(
+        supplied_discovery=supplied,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+        endpoint_payload=endpoint_payload,
+        zdr_payload=zdr_payload,
+        route=DiscoveryCandidateRoute(
+            exact_model_id="alpha/atlas-secure",
+            approved_provider_endpoint="approved-provider/fp8",
+        ),
+        reasoning_policy=None,
+        automatic_fallbacks_allowed=False,
+        effective_privacy_policy=None,
+    )
+
+    assert observed == supplied
+    assert observed.endpoint_snapshot.route_predicate_report is None
+
+
+def test_constrained_discovery_live_equivalence_reconstructs_strict_embedded_models() -> None:
+    payload, _, _ = _constrained_discover()
+    evidence = _real_evidence((payload,))[0]
+
+    require_openrouter_live_discovery_equivalence(
+        canonical_slug=payload.canonical_slug,
+        current_endpoint=payload.endpoint_snapshot,
+        current_model=payload,
+        frozen_evidence=evidence,
+    )
+
+
+def test_generic_discovery_cannot_satisfy_selected_plan_publication_post_hoc() -> None:
+    payload = _discover()
+    _, profile, constraint = _constrained_route_bundle()
+
+    with pytest.raises(
+        ModelDiscoveryValidationError,
+        match="lacks complete route predicate evidence",
+    ):
+        require_openrouter_constrained_discovery_publication(
+            payload,
+            route_predicate_profile=profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256="1" * 64,
+        )
+
+
+def test_constrained_discovery_rejects_fallback_and_wrong_plan_custody() -> None:
+    with pytest.raises(EndpointSnapshotValidationError, match="AUTOMATIC_FALLBACK_ENABLED"):
+        _constrained_discover(automatic_fallbacks_allowed=True)
+
+    payload, profile, constraint = _constrained_discover()
+    with pytest.raises(ModelDiscoveryValidationError, match="selected-plan custody"):
+        require_openrouter_constrained_discovery_publication(
+            payload,
+            route_predicate_profile=profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256="2" * 64,
+        )
+
+
+def test_constrained_discovery_applies_model_reasoning_facts_before_publication() -> None:
+    model = _model(max_completion_tokens=20_000)
+    model["reasoning"]["supported_efforts"] = ["high"]
+    endpoint = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+        supported_reasoning_efforts=None,
+    )
+    payload, _, _ = _constrained_discover(model=model, endpoint=endpoint)
+    assert payload.endpoint_snapshot.normalized_route_facts is not None
+    assert payload.endpoint_snapshot.normalized_route_facts.model_supported_reasoning_efforts == (
+        "high",
+    )
+
+    endpoint_without_reasoning = copy.deepcopy(endpoint)
+    endpoint_without_reasoning["supported_parameters"].remove("reasoning")
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="EMITTED_PARAMETER_SUPPORT_MISMATCH",
+    ):
+        _constrained_discover(model=model, endpoint=endpoint_without_reasoning)
+
+    model_without_reasoning = copy.deepcopy(model)
+    model_without_reasoning["supported_parameters"].remove("reasoning")
+    model_without_reasoning.pop("reasoning")
+    endpoint_with_reasoning = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+        supported_reasoning_efforts=("high",),
+    )
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="EMITTED_PARAMETER_SUPPORT_MISMATCH",
+    ):
+        _constrained_discover(
+            model=model_without_reasoning,
+            endpoint=endpoint_with_reasoning,
+        )
+
+    endpoint["reasoning"] = {"supported_efforts": ["high", "xhigh"]}
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="REASONING_EFFORT_INVENTORY_CONTRADICTORY",
+    ):
+        _constrained_discover(model=model, endpoint=endpoint)
+
+
+def test_constrained_discovery_rejects_partial_route_custody_during_final_validation() -> None:
+    payload, _, _ = _constrained_discover()
+    serialized = payload.model_dump(mode="json")
+    del serialized["endpoint_snapshot"]["route_predicate_report"]
+
+    with pytest.raises(ValidationError, match="all present or absent"):
+        OpenRouterModelDiscoveryPayload.model_validate_json(json.dumps(serialized))
 
 
 def test_catalog_discovery_does_not_pre_filter_privacy_or_output_capability() -> None:
@@ -1318,6 +1613,34 @@ def test_real_provenance_requires_the_trusted_issuer_and_whole_second_utc() -> N
             },
             issuer=_TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
         )
+
+
+def test_real_discovery_replay_rejects_mutating_mapping_subclasses_before_hashing() -> None:
+    class Flip(dict[str, Any]):
+        items_called = False
+
+        def items(self):  # type: ignore[no-untyped-def]
+            self.items_called = True
+            original = tuple(super().items())
+            self["data"] = {"changed": True}
+            return iter(original)
+
+    payload = Flip({"data": {"id": "alpha/atlas-secure"}})
+    with pytest.raises(OpenRouterPrivacyError, match="exact decoded JSON object"):
+        _detach_exact_discovery_json_object(
+            payload,
+            label="synthetic discovery payload",
+        )
+    assert payload.items_called is False
+    assert payload == {"data": {"id": "alpha/atlas-secure"}}
+
+    nested = {"data": Flip({"id": "alpha/atlas-secure"})}
+    with pytest.raises(OpenRouterPrivacyError, match="exact finite decoded JSON object"):
+        _detach_exact_discovery_json_object(
+            nested,
+            label="synthetic discovery payload",
+        )
+    assert nested["data"].items_called is False
 
 
 @pytest.mark.asyncio

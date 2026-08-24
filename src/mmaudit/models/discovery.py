@@ -14,12 +14,12 @@ import re
 import shutil
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
 from pydantic import (
@@ -32,9 +32,11 @@ from pydantic import (
 )
 
 from mmaudit.models.endpoint_snapshots import (
+    OpenRouterConstrainedRouteContext,
     OpenRouterEndpointSnapshotEvidence,
     OpenRouterReasoningCapabilityEvidence,
     ReasoningParameterSupport,
+    validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
@@ -56,6 +58,17 @@ from mmaudit.models.reasoning import (
     REASONING_EFFORT_ORDER,
     ReasoningControlProfile,
     ReasoningEffort,
+    ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    RouteConstraintError,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
+    RoutePredicateReport,
+    RoutePredicateRequirementError,
+    evaluate_route_predicates,
+    require_route_predicates,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.privacy import (
@@ -96,6 +109,22 @@ class _NormalizedCatalogReasoning:
     supports_max_tokens: bool | None
     supported_efforts: tuple[ReasoningEffort, ...] | None
     max_reasoning_tokens: int | None
+
+
+@dataclass(frozen=True)
+class _NormalizedOpenRouterModelMetadata:
+    """One exact catalog/single-model projection parsed before endpoint publication."""
+
+    canonical_slug: str
+    catalog_identity_binding_sha256: str
+    catalog_context_size: int
+    catalog_provider_context_size: int
+    catalog_provider_context_size_source: Literal["metadata", "catalog_context"]
+    catalog_output_limit: int
+    catalog_output_limit_source: Literal["metadata", "provider_context"]
+    model_supported_parameters: tuple[str, ...]
+    catalog_reasoning: _NormalizedCatalogReasoning
+    model_metadata_snapshot_sha256: str
 
 
 class ModelDiscoveryValidationError(ValueError):
@@ -490,7 +519,15 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
         )
         if not non_output_required.issubset(self.model_supported_parameters):
             raise ValueError("catalog metadata omits a parameter required by the exact endpoint")
-        if REASONING_REQUEST_PARAMETER in endpoint.required_request_parameters:
+        constrained_route_evidence = (
+            self.endpoint_snapshot.route_predicate_profile,
+            self.endpoint_snapshot.exact_route_constraint,
+            self.endpoint_snapshot.normalized_route_facts,
+            self.endpoint_snapshot.route_predicate_report,
+        )
+        if REASONING_REQUEST_PARAMETER in endpoint.required_request_parameters and any(
+            value is None for value in constrained_route_evidence
+        ):
             raise ValueError("discovery endpoint request profile must remain capability-oriented")
         if (
             endpoint.supported_reasoning_efforts is not None
@@ -541,6 +578,7 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
             raise ValueError(
                 "reasoning capability effort inventory is not bound to the exact endpoint"
             )
+        _validate_discovery_route_predicate_evidence(self)
         if self.output_capability_sha256 != _discovery_output_capability_sha256(self):
             raise ValueError("discovery output-capability hash is inconsistent")
         return self
@@ -699,11 +737,111 @@ def validate_openrouter_model_discovery(
 ) -> OpenRouterModelDiscoveryPayload:
     """Validate untrusted metadata without claiming provider execution provenance."""
 
+    metadata = _normalize_openrouter_model_metadata(
+        exact_model_id=exact_model_id,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+    )
+    return _seal_openrouter_model_discovery(
+        exact_model_id=exact_model_id,
+        metadata=metadata,
+        endpoint_snapshot=endpoint_snapshot,
+        effective_privacy_policy=effective_privacy_policy,
+    )
+
+
+def validate_openrouter_constrained_model_discovery(
+    *,
+    exact_model_id: str,
+    models_payload: Any,
+    single_model_payload: Any,
+    configured_provider_endpoints: Sequence[str],
+    provider_policy_mode: Literal["only", "order"],
+    endpoint_payload: Any,
+    require_zdr: bool,
+    zdr_payload: Any | None,
+    route_predicate_profile: RoutePredicateProfile,
+    exact_route_constraint: ExactRouteConstraint,
+    expected_selection_plan_sha256: str,
+    reasoning_policy: ReasoningPolicyArtifact,
+    automatic_fallbacks_allowed: bool,
+    reasoning_request_role: str = "model_benchmark",
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+) -> OpenRouterModelDiscoveryPayload:
+    """Build and publish one route-constrained discovery payload in a single path."""
+
+    metadata = _normalize_openrouter_model_metadata(
+        exact_model_id=exact_model_id,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+    )
+    if require_zdr is not route_predicate_profile.require_zdr:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery ZDR policy differs from its route profile"
+        )
+    try:
+        context = OpenRouterConstrainedRouteContext(
+            route_predicate_profile=route_predicate_profile,
+            exact_route_constraint=exact_route_constraint,
+            expected_selection_plan_sha256=expected_selection_plan_sha256,
+            reasoning_policy=reasoning_policy,
+            reasoning_request_role=reasoning_request_role,
+            model_supported_parameters=metadata.model_supported_parameters,
+            model_supported_reasoning_efforts=(metadata.catalog_reasoning.supported_efforts),
+            automatic_fallbacks_allowed=automatic_fallbacks_allowed,
+        )
+    except ValueError as exc:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery route context is invalid"
+        ) from exc
+    endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id=exact_model_id,
+        configured_provider_endpoints=configured_provider_endpoints,
+        provider_policy_mode=provider_policy_mode,
+        endpoint_payload=endpoint_payload,
+        require_zdr=require_zdr,
+        zdr_payload=zdr_payload,
+        reasoning_requested=(
+            context.reasoning_policy.role_policy_for_request(
+                context.reasoning_request_role
+            ).control.mode
+            != "disabled"
+        ),
+        structured_output_required=True,
+        required_output_mode=route_predicate_profile.required_output_mode,
+        route_constraint_context=context,
+    )
+    payload = _seal_openrouter_model_discovery(
+        exact_model_id=exact_model_id,
+        metadata=metadata,
+        endpoint_snapshot=endpoint_snapshot,
+        effective_privacy_policy=effective_privacy_policy,
+    )
+    report = require_openrouter_constrained_discovery_publication(
+        payload,
+        route_predicate_profile=route_predicate_profile,
+        exact_route_constraint=exact_route_constraint,
+        expected_selection_plan_sha256=expected_selection_plan_sha256,
+    )
+    if report != endpoint_snapshot.route_predicate_report:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery report changed after final payload validation"
+        )
+    return payload
+
+
+def _normalize_openrouter_model_metadata(
+    *,
+    exact_model_id: str,
+    models_payload: Any,
+    single_model_payload: Any,
+) -> _NormalizedOpenRouterModelMetadata:
+    """Parse the exact catalog and single-model facts once before endpoint sealing."""
+
     selected = _select_catalog_model(
         exact_model_id=exact_model_id,
         models_payload=models_payload,
     )
-
     canonical_slug = _required_model_id(selected.get("canonical_slug"), "canonical model slug")
     _validate_catalog_identity(
         exact_model_id=exact_model_id,
@@ -748,6 +886,57 @@ def validate_openrouter_model_discovery(
         catalog_reasoning=catalog_reasoning,
         single_model_payload=single_model_payload,
     )
+    model_metadata_snapshot_sha256 = _canonical_sha256(
+        _model_metadata_projection_values(
+            canonical_slug=canonical_slug,
+            context_size=catalog_context_size,
+            exact_model_id=exact_model_id,
+            supported_parameters=model_supported_parameters,
+            provider_context_size=catalog_provider_context_size,
+            provider_context_size_source=provider_context_source,
+            output_limit=catalog_output_limit,
+            output_limit_source=output_limit_source,
+            reasoning=catalog_reasoning,
+        )
+    )
+    return _NormalizedOpenRouterModelMetadata(
+        canonical_slug=canonical_slug,
+        catalog_identity_binding_sha256=catalog_identity_binding_sha256,
+        catalog_context_size=catalog_context_size,
+        catalog_provider_context_size=catalog_provider_context_size,
+        catalog_provider_context_size_source=cast(
+            Literal["metadata", "catalog_context"],
+            provider_context_source,
+        ),
+        catalog_output_limit=catalog_output_limit,
+        catalog_output_limit_source=cast(
+            Literal["metadata", "provider_context"],
+            output_limit_source,
+        ),
+        model_supported_parameters=model_supported_parameters,
+        catalog_reasoning=catalog_reasoning,
+        model_metadata_snapshot_sha256=model_metadata_snapshot_sha256,
+    )
+
+
+def _seal_openrouter_model_discovery(
+    *,
+    exact_model_id: str,
+    metadata: _NormalizedOpenRouterModelMetadata,
+    endpoint_snapshot: OpenRouterEndpointSnapshotEvidence,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+) -> OpenRouterModelDiscoveryPayload:
+    """Join one prevalidated model projection to one exact endpoint snapshot."""
+
+    canonical_slug = metadata.canonical_slug
+    catalog_identity_binding_sha256 = metadata.catalog_identity_binding_sha256
+    catalog_context_size = metadata.catalog_context_size
+    catalog_provider_context_size = metadata.catalog_provider_context_size
+    provider_context_source = metadata.catalog_provider_context_size_source
+    catalog_output_limit = metadata.catalog_output_limit
+    output_limit_source = metadata.catalog_output_limit_source
+    model_supported_parameters = metadata.model_supported_parameters
+    catalog_reasoning = metadata.catalog_reasoning
 
     if len(endpoint_snapshot.endpoints) != 1:
         raise ModelDiscoveryValidationError(
@@ -797,19 +986,7 @@ def validate_openrouter_model_discovery(
         deny_evidence_sha256 = None
         deny_evidence_expires_at = None
 
-    model_metadata_snapshot_sha256 = _canonical_sha256(
-        _model_metadata_projection_values(
-            canonical_slug=canonical_slug,
-            context_size=catalog_context_size,
-            exact_model_id=exact_model_id,
-            supported_parameters=model_supported_parameters,
-            provider_context_size=catalog_provider_context_size,
-            provider_context_size_source=provider_context_source,
-            output_limit=catalog_output_limit,
-            output_limit_source=output_limit_source,
-            reasoning=catalog_reasoning,
-        )
-    )
+    model_metadata_snapshot_sha256 = metadata.model_metadata_snapshot_sha256
     parameter_support: ReasoningParameterSupport = (
         "supported" if reasoning_supported else "unsupported"
     )
@@ -882,6 +1059,116 @@ def validate_openrouter_model_discovery(
     return OpenRouterModelDiscoveryPayload.model_validate(metadata_values)
 
 
+def require_openrouter_constrained_discovery_publication(
+    payload: OpenRouterModelDiscoveryPayload,
+    *,
+    route_predicate_profile: RoutePredicateProfile,
+    exact_route_constraint: ExactRouteConstraint,
+    expected_selection_plan_sha256: str,
+) -> RoutePredicateReport:
+    """Require final payload custody of the exact selection-bound discovery report."""
+
+    if type(payload) not in {
+        OpenRouterModelDiscoveryPayload,
+        OpenRouterModelDiscoveryEvidence,
+    }:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery publication requires exact canonical evidence"
+        )
+    try:
+        canonical = type(payload).model_validate_json(payload.model_dump_json())
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery publication failed detached validation"
+        ) from exc
+    snapshot = canonical.endpoint_snapshot
+    embedded = (
+        snapshot.route_predicate_profile,
+        snapshot.exact_route_constraint,
+        snapshot.normalized_route_facts,
+        snapshot.route_predicate_report,
+    )
+    if any(value is None for value in embedded):
+        raise ModelDiscoveryValidationError(
+            "constrained discovery publication lacks complete route predicate evidence"
+        )
+    profile = snapshot.route_predicate_profile
+    constraint = snapshot.exact_route_constraint
+    facts = snapshot.normalized_route_facts
+    report = snapshot.route_predicate_report
+    assert profile is not None
+    assert constraint is not None
+    assert facts is not None
+    assert report is not None
+    if (
+        type(route_predicate_profile) is not RoutePredicateProfile
+        or type(exact_route_constraint) is not ExactRouteConstraint
+        or profile != route_predicate_profile
+        or constraint != exact_route_constraint
+        or facts.expected_selection_plan_sha256 != expected_selection_plan_sha256
+    ):
+        raise ModelDiscoveryValidationError(
+            "constrained discovery publication differs from its selected-plan custody"
+        )
+    expected_report = _validate_discovery_route_predicate_evidence(canonical)
+    if expected_report is None or report != expected_report:
+        raise ModelDiscoveryValidationError(
+            "constrained discovery publication route report is inconsistent"
+        )
+    return report
+
+
+def _validate_discovery_route_predicate_evidence(
+    payload: OpenRouterModelDiscoveryPayload,
+) -> RoutePredicateReport | None:
+    snapshot = payload.endpoint_snapshot
+    embedded = (
+        snapshot.route_predicate_profile,
+        snapshot.exact_route_constraint,
+        snapshot.normalized_route_facts,
+        snapshot.route_predicate_report,
+    )
+    if all(value is None for value in embedded):
+        return None
+    if any(value is None for value in embedded):
+        raise ValueError("constrained discovery route evidence must be all present or absent")
+    profile = snapshot.route_predicate_profile
+    constraint = snapshot.exact_route_constraint
+    facts = snapshot.normalized_route_facts
+    report = snapshot.route_predicate_report
+    assert profile is not None
+    assert constraint is not None
+    assert facts is not None
+    assert report is not None
+    if (
+        facts.model_supported_parameters != payload.model_supported_parameters
+        or facts.model_supported_reasoning_efforts != payload.model_supported_reasoning_efforts
+        or facts.observed_model_id != payload.exact_model_id
+        or facts.observed_provider_endpoint != payload.approved_provider_endpoint
+        or facts.structured_output_mode is not payload.structured_output_mode
+        or constraint.exact_model_id != payload.exact_model_id
+        or constraint.provider_endpoint != payload.approved_provider_endpoint
+    ):
+        raise ValueError(
+            "constrained discovery route facts differ from final model discovery metadata"
+        )
+    try:
+        expected_report = evaluate_route_predicates(
+            profile=profile,
+            constraint=constraint,
+            facts=facts,
+        )
+        require_route_predicates(
+            expected_report,
+            purpose=RouteConstraintPurpose.DISCOVERY_PUBLICATION,
+        )
+    except (RouteConstraintError, RoutePredicateRequirementError) as exc:
+        raise ValueError("constrained discovery route report is not publication eligible") from exc
+    if report != expected_report:
+        raise ValueError("constrained discovery route report changed after model validation")
+    return expected_report
+
+
 def require_openrouter_live_discovery_equivalence(
     *,
     canonical_slug: str,
@@ -909,11 +1196,8 @@ def require_openrouter_live_discovery_equivalence(
         )
     frozen_endpoint = frozen_evidence.endpoint_snapshot
     try:
-        frozen_model = OpenRouterModelDiscoveryPayload.model_validate(
-            frozen_evidence.model_dump(
-                mode="json",
-                exclude={"provenance", "discovery_evidence_sha256"},
-            )
+        frozen_model = OpenRouterModelDiscoveryPayload.model_validate_json(
+            frozen_evidence.model_dump_json(exclude={"provenance", "discovery_evidence_sha256"})
         )
     except ValueError:
         raise ModelDiscoveryValidationError(
@@ -1082,7 +1366,8 @@ def _seal_real_model_discovery_evidence(
     }
     return OpenRouterModelDiscoveryEvidence.model_validate(
         {
-            **serialized,
+            **payload.model_dump(mode="python"),
+            "provenance": provenance,
             "discovery_evidence_sha256": _canonical_sha256(serialized),
         }
     )

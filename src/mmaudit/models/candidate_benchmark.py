@@ -29,6 +29,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
     require_openrouter_live_discovery_equivalence,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
@@ -42,7 +43,6 @@ from mmaudit.models.openrouter import (
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
 )
-from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateModel,
     CandidateRegistry,
@@ -57,6 +57,13 @@ from mmaudit.models.reasoning import (
     reasoning_policy_roles_for_qualified_role,
     reasoning_qualification_benchmark_role,
     resolve_reasoning_request_role,
+)
+from mmaudit.models.route_admission import require_authenticated_runner_route_admission
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+    RoutePredicateProfile,
 )
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
@@ -599,10 +606,10 @@ async def run_candidate_reasoning_profile_benchmarks(
         discovery_manifest.model_dump(mode="json")
     )
     discovery_evidence = tuple(
-        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        OpenRouterModelDiscoveryEvidence.model_validate_json(item.model_dump_json())
         for item in discovery_evidence
     )
-    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    registry = CandidateRegistry.model_validate_json(candidate_registry.model_dump_json())
     suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
     plan = CandidateReasoningProfileBenchmarkPlan.model_validate(plan.model_dump(mode="json"))
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
@@ -740,12 +747,10 @@ async def run_candidate_registry_benchmarks(
         discovery_manifest.model_dump(mode="json")
     )
     discovery_evidence = tuple(
-        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        OpenRouterModelDiscoveryEvidence.model_validate_json(item.model_dump_json())
         for item in discovery_evidence
     )
-    candidate_registry = CandidateRegistry.model_validate(
-        candidate_registry.model_dump(mode="json")
-    )
+    candidate_registry = CandidateRegistry.model_validate_json(candidate_registry.model_dump_json())
     benchmark_suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
         raise ValueError("candidate benchmarks require a shared durable atomic cost ledger")
@@ -1063,26 +1068,52 @@ async def _execute_candidate(
             single_model_payload = await client.get_model_metadata(candidate.exact_model_id)
             endpoint_payload = await client.get_model_endpoint_metadata(candidate.exact_model_id)
             zdr_payload = await client.list_zdr_endpoints()
-            current_endpoint_evidence = validate_openrouter_endpoint_snapshot(
-                exact_model_id=candidate.exact_model_id,
-                configured_provider_endpoints=(candidate.approved_provider_endpoint,),
-                provider_policy_mode="only",
-                endpoint_payload=endpoint_payload,
-                require_zdr=config.privacy.require_zdr,
-                zdr_payload=zdr_payload,
-                reasoning_requested=False,
-                required_output_mode=(
-                    StructuredOutputMode.NATIVE_JSON_SCHEMA
-                    if authenticated_runner_run_kind is not None
-                    else None
-                ),
-            )
-            current_model_evidence = validate_openrouter_model_discovery(
-                exact_model_id=candidate.exact_model_id,
-                models_payload=models_payload,
-                single_model_payload=single_model_payload,
-                endpoint_snapshot=current_endpoint_evidence,
-            )
+            if authenticated_runner_run_kind is None:
+                current_endpoint_evidence = validate_openrouter_endpoint_snapshot(
+                    exact_model_id=candidate.exact_model_id,
+                    configured_provider_endpoints=(candidate.approved_provider_endpoint,),
+                    provider_policy_mode="only",
+                    endpoint_payload=endpoint_payload,
+                    require_zdr=config.privacy.require_zdr,
+                    zdr_payload=zdr_payload,
+                    reasoning_requested=False,
+                )
+                current_model_evidence = validate_openrouter_model_discovery(
+                    exact_model_id=candidate.exact_model_id,
+                    models_payload=models_payload,
+                    single_model_payload=single_model_payload,
+                    endpoint_snapshot=current_endpoint_evidence,
+                )
+            else:
+                profile = endpoint_evidence.endpoint_snapshot.route_predicate_profile
+                constraint = endpoint_evidence.endpoint_snapshot.exact_route_constraint
+                selection_plan_sha256 = candidate.selection_plan_sha256
+                if (
+                    type(profile) is not RoutePredicateProfile
+                    or type(constraint) is not ExactRouteConstraint
+                    or selection_plan_sha256 is None
+                    or candidate.route_predicate_profile_sha256 != profile.profile_sha256
+                    or candidate.exact_route_constraint_sha256 != constraint.constraint_sha256
+                ):
+                    raise ModelDiscoveryValidationError(
+                        "authenticated candidate lacks constrained route custody"
+                    )
+                current_model_evidence = validate_openrouter_constrained_model_discovery(
+                    exact_model_id=candidate.exact_model_id,
+                    models_payload=models_payload,
+                    single_model_payload=single_model_payload,
+                    configured_provider_endpoints=(candidate.approved_provider_endpoint,),
+                    provider_policy_mode="only",
+                    endpoint_payload=endpoint_payload,
+                    require_zdr=config.privacy.require_zdr,
+                    zdr_payload=zdr_payload,
+                    route_predicate_profile=profile,
+                    exact_route_constraint=constraint,
+                    expected_selection_plan_sha256=selection_plan_sha256,
+                    reasoning_policy=reasoning_policy,
+                    automatic_fallbacks_allowed=provider_policy.allow_fallbacks,
+                )
+                current_endpoint_evidence = current_model_evidence.endpoint_snapshot
             require_openrouter_live_discovery_equivalence(
                 canonical_slug=canonical_slug,
                 current_endpoint=current_endpoint_evidence,
@@ -1091,6 +1122,15 @@ async def _execute_candidate(
             )
             benchmark_reasoning_profile = reasoning_policy.control_for_request(target.request_role)
             current_model_evidence.require_compatible_reasoning_profile(benchmark_reasoning_profile)
+            if authenticated_runner_run_kind is not None:
+                require_authenticated_runner_route_admission(
+                    model=candidate,
+                    evidence=endpoint_evidence,
+                    expected_role=ExactRouteRole.CANDIDATE,
+                    purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+                    frozen_live_equivalent=True,
+                    runtime_required_output_tokens=config.effective_reserved_output_tokens,
+                )
             client.register_certification_model_discovery(
                 evidence=endpoint_evidence,
                 manifest=discovery_manifest,
