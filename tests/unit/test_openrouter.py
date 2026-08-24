@@ -1198,6 +1198,19 @@ async def _assert_v3_smoke_receipt_cutoff(
         }
     )
     assert authrunner_noncrediting_unknown_token_smoke_scope(generic_request) is None
+    for outside_smoke_scope in (release_request, generic_request):
+        invalid_outside_smoke_scope = outside_smoke_scope.model_copy(
+            update={
+                "routing": {
+                    **outside_smoke_scope.routing,
+                    "structured_output_capability_sha256": "0" * 64,
+                }
+            }
+        )
+        assert noncrediting_unknown_token_smoke_usage_diagnostics(
+            invalid_outside_smoke_scope,
+            require_runtime_attestation=False,
+        ) == ("SMOKE_SCOPE",)
     assert (
         noncrediting_unknown_token_smoke_usage_diagnostics(
             provisional,
@@ -1205,6 +1218,25 @@ async def _assert_v3_smoke_receipt_cutoff(
         )
         == ()
     )
+    diagnostic_canary = "must-not-leak-from-structured-output-evidence"
+    canary_structured_output = {
+        **provisional.routing["structured_output"],
+        "truncated": diagnostic_canary,
+    }
+    canary_record = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "structured_output": canary_structured_output,
+            }
+        }
+    )
+    canary_diagnostics = noncrediting_unknown_token_smoke_usage_diagnostics(
+        canary_record,
+        require_runtime_attestation=False,
+    )
+    assert canary_diagnostics == ("STRUCTURED_OUTPUT_ROUTING:TRUNCATED",)
+    assert diagnostic_canary not in repr(canary_diagnostics)
     diagnostic_mutations = (
         ("STATUS", provisional.model_copy(update={"status": "failed"})),
         ("REQUIRED_FIELDS", provisional.model_copy(update={"provider": ""})),
@@ -1241,7 +1273,7 @@ async def _assert_v3_smoke_receipt_cutoff(
             ),
         ),
         (
-            "STRUCTURED_OUTPUT_ROUTING",
+            "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256",
             provisional.model_copy(
                 update={
                     "routing": {
@@ -1314,7 +1346,7 @@ async def _assert_v3_smoke_receipt_cutoff(
         assert noncrediting_unknown_token_smoke_usage_diagnostics(
             provisional,
             require_runtime_attestation=True,
-        ) == ("STRUCTURED_OUTPUT_ROUTING",)
+        ) == ("STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256",)
     else:
         assert structurally_noncrediting_unknown_token_smoke_usage_error(provisional) is None
     assert noncrediting_unknown_token_smoke_usage_error(provisional) == "UsageOriginError"
@@ -1419,9 +1451,29 @@ async def _assert_v3_smoke_receipt_cutoff(
             ) as raised_initial_cutoff:
                 await client._bind_real_completion_identity(completion)
             if intrinsic_invalid:
-                assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(
-                    raised_initial_cutoff.value
+                assert (
+                    "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256"
+                ) in str(raised_initial_cutoff.value)
+            attested_canary_record = _attest_owned_real_usage_record(canary_record)
+            usage._records[0] = attested_canary_record
+            try:
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match="lacks exact completion receipts",
+                ) as raised_canary_cutoff:
+                    await client._bind_real_completion_identity(
+                        StructuredCompletion(
+                            value=mock_completion.value,
+                            usage_record=attested_canary_record,
+                        )
+                    )
+                raised_canary_text = str(raised_canary_cutoff.value)
+                assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:TRUNCATED" in (
+                    raised_canary_text
                 )
+                assert diagnostic_canary not in raised_canary_text
+            finally:
+                usage._records[0] = provisional
             usage._records[0] = unhashable_proof
             try:
                 with pytest.raises(
@@ -1462,7 +1514,9 @@ async def _assert_v3_smoke_receipt_cutoff(
                             ),
                             require_bound=True,
                         )
-                    assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(raised_cutoff.value)
+                    assert (
+                        "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256"
+                    ) in str(raised_cutoff.value)
             request = GenerationVerificationRequest(
                 benchmark_report_sha256="b" * 64,
                 case_id=case_id,
@@ -1488,9 +1542,9 @@ async def _assert_v3_smoke_receipt_cutoff(
             ) as raised_verification:
                 await client.create_trusted_generation_verification((request,))
             if intrinsic_invalid:
-                assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(
-                    raised_verification.value
-                )
+                assert (
+                    "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256"
+                ) in str(raised_verification.value)
             with pytest.raises(
                 OpenRouterPrivacyError,
                 match="generation refetch rejects mixed or invalid",

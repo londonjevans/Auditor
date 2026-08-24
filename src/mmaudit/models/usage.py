@@ -639,29 +639,107 @@ def structurally_noncrediting_unknown_token_smoke_usage_error(
     return None
 
 
-StrictUsageFailureCode = Literal[
-    "RECOVERY_SCOPE",
-    "EXECUTION",
-    "RUNTIME_ATTESTATION",
-    "STATUS",
-    "REQUIRED_FIELDS",
-    "TIMING",
-    "HASHES",
-    "TOKEN_ALGEBRA",
-    "COST",
-    "ENDPOINT",
-    "ROUTER_IDENTITY",
-    "PRIVACY_ROUTING",
-    "STRUCTURED_OUTPUT_ROUTING",
-    "TOKEN_PLAN_ROUTING",
-    "REPAIR_TEMPORAL_ROUTING",
-    "ALIAS",
-    "CERTIFICATION",
-    "BOUND_IDENTITY",
-    "CERTIFICATION_ROUTE",
-    "SMOKE_SCOPE",
-    "UNEXPECTED_GENERAL_CREDITABILITY",
+StructuredOutputRoutingFailureCode = Literal[
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_TYPE",
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_SCHEMA",
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_CANONICAL",
+    "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED",
+    "STRUCTURED_OUTPUT_ROUTING:TRUNCATED",
+    "STRUCTURED_OUTPUT_ROUTING:REQUESTED_MODE_MISMATCH",
+    "STRUCTURED_OUTPUT_ROUTING:CONFIGURED_PROVIDER_ENDPOINTS",
+    "STRUCTURED_OUTPUT_ROUTING:SELECTED_PROVIDER_ENDPOINT",
+    "STRUCTURED_OUTPUT_ROUTING:PROMPT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_BODY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:SCHEMA_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:ORIGINAL_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:VALIDATED_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:PROVIDER_POLICY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:ENDPOINT_SNAPSHOT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:OUTPUT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED_ROUTING",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_MODE",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRE_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRED_PROVIDER_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REASONING_REQUEST_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_RESPONSE_FORMAT",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_PROTOCOL_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_SUPPORTED_MODES",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_REQUEST_BODY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_ORIGINAL_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_VALIDATED_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_ENDPOINT_SNAPSHOT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_OUTPUT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_MODE",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_PARAMETER_SUBSET",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRE_PARAMETERS",
 ]
+
+STRUCTURED_OUTPUT_ROUTING_FAILURE_CODES: tuple[StructuredOutputRoutingFailureCode, ...] = (
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_TYPE",
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_SCHEMA",
+    "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_CANONICAL",
+    "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED",
+    "STRUCTURED_OUTPUT_ROUTING:TRUNCATED",
+    "STRUCTURED_OUTPUT_ROUTING:REQUESTED_MODE_MISMATCH",
+    "STRUCTURED_OUTPUT_ROUTING:CONFIGURED_PROVIDER_ENDPOINTS",
+    "STRUCTURED_OUTPUT_ROUTING:SELECTED_PROVIDER_ENDPOINT",
+    "STRUCTURED_OUTPUT_ROUTING:PROMPT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_BODY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:SCHEMA_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:ORIGINAL_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:VALIDATED_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:PROVIDER_POLICY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:ENDPOINT_SNAPSHOT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:OUTPUT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED_ROUTING",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_MODE",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRE_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRED_PROVIDER_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REASONING_REQUEST_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_RESPONSE_FORMAT",
+    "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_PROTOCOL_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_SUPPORTED_MODES",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_REQUEST_BODY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_ORIGINAL_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_VALIDATED_RESPONSE_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_ENDPOINT_SNAPSHOT_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_OUTPUT_CAPABILITY_SHA256",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_MODE",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_PARAMETER_SUBSET",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS",
+    "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRE_PARAMETERS",
+)
+
+StrictUsageFailureCode = (
+    Literal[
+        "RECOVERY_SCOPE",
+        "EXECUTION",
+        "RUNTIME_ATTESTATION",
+        "STATUS",
+        "REQUIRED_FIELDS",
+        "TIMING",
+        "HASHES",
+        "TOKEN_ALGEBRA",
+        "COST",
+        "ENDPOINT",
+        "ROUTER_IDENTITY",
+        "PRIVACY_ROUTING",
+        "TOKEN_PLAN_ROUTING",
+        "REPAIR_TEMPORAL_ROUTING",
+        "ALIAS",
+        "CERTIFICATION",
+        "BOUND_IDENTITY",
+        "CERTIFICATION_ROUTE",
+        "SMOKE_SCOPE",
+        "UNEXPECTED_GENERAL_CREDITABILITY",
+    ]
+    | StructuredOutputRoutingFailureCode
+)
 
 STRICT_USAGE_FAILURE_CODES: tuple[StrictUsageFailureCode, ...] = (
     "RECOVERY_SCOPE",
@@ -676,7 +754,7 @@ STRICT_USAGE_FAILURE_CODES: tuple[StrictUsageFailureCode, ...] = (
     "ENDPOINT",
     "ROUTER_IDENTITY",
     "PRIVACY_ROUTING",
-    "STRUCTURED_OUTPUT_ROUTING",
+    *STRUCTURED_OUTPUT_ROUTING_FAILURE_CODES,
     "TOKEN_PLAN_ROUTING",
     "REPAIR_TEMPORAL_ROUTING",
     "ALIAS",
@@ -701,7 +779,9 @@ def _strict_usage_record_failure_code(
     validate_recovery_coordinates: Callable[..., None],
     has_owned_real_attestation: Callable[[UsageRecord], bool],
     has_valid_privacy_routing: Callable[[UsageRecord], bool],
-    has_valid_structured_output_routing: Callable[[UsageRecord], bool],
+    structured_output_routing_failure_code: Callable[
+        [UsageRecord], StructuredOutputRoutingFailureCode | None
+    ],
     has_valid_token_plan_routing: Callable[..., bool],
     is_sha256: Callable[[Any], bool],
     has_valid_bound_identity: Callable[[UsageRecord], bool],
@@ -840,8 +920,9 @@ def _strict_usage_record_failure_code(
         return "ROUTER_IDENTITY"
     if not has_valid_privacy_routing(record):
         return "PRIVACY_ROUTING"
-    if not has_valid_structured_output_routing(record):
-        return "STRUCTURED_OUTPUT_ROUTING"
+    structured_output_failure = structured_output_routing_failure_code(record)
+    if structured_output_failure is not None:
+        return structured_output_failure
     if not has_valid_token_plan_routing(
         record,
         recovery_request_limit_scope=recovery_request_limit_scope,
@@ -929,6 +1010,7 @@ def _build_strict_usage_record_validators() -> tuple[
     owned_attestation_predicate = _has_owned_real_usage_attestation
     privacy_routing_predicate = _has_valid_privacy_routing
     structured_output_routing_predicate = _has_valid_structured_output_routing
+    structured_output_routing_failure = _structured_output_routing_failure_code
     token_plan_routing_predicate = _has_valid_token_plan_routing
     sha256_predicate = _is_sha256
     bound_identity_predicate = _has_valid_bound_identity
@@ -940,6 +1022,10 @@ def _build_strict_usage_record_validators() -> tuple[
         ("_has_owned_real_usage_attestation", owned_attestation_predicate),
         ("_has_valid_privacy_routing", privacy_routing_predicate),
         ("_has_valid_structured_output_routing", structured_output_routing_predicate),
+        (
+            "_structured_output_routing_failure_code",
+            structured_output_routing_failure,
+        ),
         ("_has_valid_token_plan_routing", token_plan_routing_predicate),
         ("_is_sha256", sha256_predicate),
         ("_has_valid_bound_identity", bound_identity_predicate),
@@ -1022,7 +1108,7 @@ def _build_strict_usage_record_validators() -> tuple[
             validate_recovery_coordinates=validate_recovery_coordinates,
             has_owned_real_attestation=owned_attestation_predicate,
             has_valid_privacy_routing=privacy_routing_predicate,
-            has_valid_structured_output_routing=structured_output_routing_predicate,
+            structured_output_routing_failure_code=structured_output_routing_failure,
             has_valid_token_plan_routing=token_plan_routing_predicate,
             is_sha256=sha256_predicate,
             has_valid_bound_identity=bound_identity_predicate,
@@ -1645,33 +1731,63 @@ def _has_valid_noncrediting_unknown_token_plan_routing(
     )
 
 
-def _has_valid_structured_output_routing(record: UsageRecord) -> bool:
+def _structured_output_routing_failure_code(
+    record: UsageRecord,
+) -> StructuredOutputRoutingFailureCode | None:
+    """Return one closed, value-free structured-output routing failure clause."""
+
     raw_evidence = record.routing.get("structured_output")
     if not isinstance(raw_evidence, dict):
-        return False
+        return "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_TYPE"
     try:
         evidence = StructuredOutputEvidence.model_validate(raw_evidence)
     except ValidationError:
-        return False
+        if dict.get(raw_evidence, "repair_evidence") is not None:
+            return "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED"
+        if dict.__contains__(raw_evidence, "truncated") and (
+            dict.get(raw_evidence, "truncated") is not False
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:TRUNCATED"
+        requested_mode = dict.get(raw_evidence, "requested_mode")
+        achieved_mode = dict.get(raw_evidence, "achieved_mode")
+        if (
+            type(requested_mode) is str
+            and type(achieved_mode) is str
+            and requested_mode != achieved_mode
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUESTED_MODE_MISMATCH"
+        return "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_SCHEMA"
     if evidence.model_dump(mode="json") != raw_evidence:
-        return False
-    if (
-        evidence.repair_used
-        or evidence.truncated
-        or evidence.requested_mode is not evidence.achieved_mode
-        or tuple(record.configured_provider_endpoints) != evidence.configured_provider_endpoints
-        or record.actual_provider_endpoint != evidence.selected_provider_endpoint
-        or record.prompt_sha256 != evidence.prompt_sha256
-        or record.request_body_sha256 != evidence.request_body_sha256
-        or record.schema_sha256 != evidence.schema_sha256
-        or record.response_sha256 != evidence.original_response_sha256
-        or record.validated_response_sha256 != evidence.validated_response_sha256
-        or record.routing.get("provider_policy_sha256") != evidence.provider_policy_sha256
-        or record.routing.get("endpoint_snapshot_sha256") != evidence.endpoint_snapshot_sha256
-        or record.routing.get("output_capability_sha256") != evidence.output_capability_sha256
-        or record.routing.get("repair_used") is not evidence.repair_used
-    ):
-        return False
+        return "STRUCTURED_OUTPUT_ROUTING:EVIDENCE_CANONICAL"
+    if evidence.repair_used:
+        return "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED"
+    if evidence.truncated:
+        return "STRUCTURED_OUTPUT_ROUTING:TRUNCATED"
+    if evidence.requested_mode is not evidence.achieved_mode:
+        return "STRUCTURED_OUTPUT_ROUTING:REQUESTED_MODE_MISMATCH"
+    if tuple(record.configured_provider_endpoints) != evidence.configured_provider_endpoints:
+        return "STRUCTURED_OUTPUT_ROUTING:CONFIGURED_PROVIDER_ENDPOINTS"
+    if record.actual_provider_endpoint != evidence.selected_provider_endpoint:
+        return "STRUCTURED_OUTPUT_ROUTING:SELECTED_PROVIDER_ENDPOINT"
+    if record.prompt_sha256 != evidence.prompt_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:PROMPT_SHA256"
+    if record.request_body_sha256 != evidence.request_body_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:REQUEST_BODY_SHA256"
+    if record.schema_sha256 != evidence.schema_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:SCHEMA_SHA256"
+    if record.response_sha256 != evidence.original_response_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:ORIGINAL_RESPONSE_SHA256"
+    if record.validated_response_sha256 != evidence.validated_response_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:VALIDATED_RESPONSE_SHA256"
+    if record.routing.get("provider_policy_sha256") != evidence.provider_policy_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:PROVIDER_POLICY_SHA256"
+    if record.routing.get("endpoint_snapshot_sha256") != evidence.endpoint_snapshot_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:ENDPOINT_SNAPSHOT_SHA256"
+    if record.routing.get("output_capability_sha256") != evidence.output_capability_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:OUTPUT_CAPABILITY_SHA256"
+    if record.routing.get("repair_used") is not evidence.repair_used:
+        return "STRUCTURED_OUTPUT_ROUTING:REPAIR_USED_ROUTING"
+
     request_shape_routing = {
         "structured_output_mode": evidence.requested_mode.value,
         "structured_output_request_shape_sha256": evidence.request_shape_sha256,
@@ -1687,10 +1803,40 @@ def _has_valid_structured_output_routing(record: UsageRecord) -> bool:
         ),
         "structured_output_protocol_sha256": evidence.strict_protocol_sha256,
     }
-    if any(key in record.routing for key in request_shape_routing) and any(
-        record.routing.get(key) != value for key, value in request_shape_routing.items()
-    ):
-        return False
+    if any(key in record.routing for key in request_shape_routing):
+        if record.routing.get("structured_output_mode") != evidence.requested_mode.value:
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_MODE"
+        if (
+            record.routing.get("structured_output_request_shape_sha256")
+            != evidence.request_shape_sha256
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_SHA256"
+        if (
+            record.routing.get("structured_output_require_parameters")
+            != evidence.provider_require_parameters
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRE_PARAMETERS"
+        if record.routing.get("structured_output_required_provider_parameters") != list(
+            evidence.required_provider_parameters
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REQUIRED_PROVIDER_PARAMETERS"
+        if (
+            record.routing.get("structured_output_reasoning_request_sha256")
+            != evidence.reasoning_request_sha256
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_REASONING_REQUEST_SHA256"
+        expected_response_format = (
+            None
+            if evidence.response_format is StructuredOutputResponseFormat.OMITTED
+            else evidence.response_format.value
+        )
+        if record.routing.get("structured_output_response_format") != expected_response_format:
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_RESPONSE_FORMAT"
+        if (
+            record.routing.get("structured_output_protocol_sha256")
+            != evidence.strict_protocol_sha256
+        ):
+            return "STRUCTURED_OUTPUT_ROUTING:REQUEST_SHAPE_PROTOCOL_SHA256"
 
     redundant_routing = {
         "structured_output_supported_modes": [
@@ -1702,31 +1848,67 @@ def _has_valid_structured_output_routing(record: UsageRecord) -> bool:
         "structured_output_original_response_sha256": (evidence.original_response_sha256),
         "structured_output_validated_response_sha256": (evidence.validated_response_sha256),
     }
-    if any(
-        key in record.routing and record.routing.get(key) != value
-        for key, value in redundant_routing.items()
+    if (
+        "structured_output_supported_modes" in record.routing
+        and record.routing.get("structured_output_supported_modes")
+        != redundant_routing["structured_output_supported_modes"]
     ):
-        return False
+        return "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_SUPPORTED_MODES"
+    if (
+        "structured_output_capability_sha256" in record.routing
+        and record.routing.get("structured_output_capability_sha256")
+        != evidence.output_capability_sha256
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256"
+    if (
+        "structured_output_request_body_sha256" in record.routing
+        and record.routing.get("structured_output_request_body_sha256")
+        != evidence.request_body_sha256
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_REQUEST_BODY_SHA256"
+    if (
+        "structured_output_original_response_sha256" in record.routing
+        and record.routing.get("structured_output_original_response_sha256")
+        != evidence.original_response_sha256
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_ORIGINAL_RESPONSE_SHA256"
+    if (
+        "structured_output_validated_response_sha256" in record.routing
+        and record.routing.get("structured_output_validated_response_sha256")
+        != evidence.validated_response_sha256
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:REDUNDANT_VALIDATED_RESPONSE_SHA256"
 
     binding = _validated_identity_binding(record)
     if binding is None:
-        return True
+        return None
     capabilities = binding.snapshot.endpoint_capabilities
     required_special_parameters = set(capabilities.required_parameters) - {
         "max_tokens",
         "temperature",
     }
-    return (
-        binding.snapshot.endpoint_snapshot_sha256 == evidence.endpoint_snapshot_sha256
-        and capabilities.output_capability_sha256 == evidence.output_capability_sha256
-        and capabilities.structured_output_mode is evidence.requested_mode
-        and set(evidence.endpoint_structured_output_parameters).issubset(
-            capabilities.structured_output_parameters
-        )
-        and set(evidence.required_provider_parameters) == required_special_parameters
-        and binding.snapshot.provider_policy.require_parameters
-        is evidence.provider_require_parameters
-    )
+    if binding.snapshot.endpoint_snapshot_sha256 != evidence.endpoint_snapshot_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_ENDPOINT_SNAPSHOT_SHA256"
+    if capabilities.output_capability_sha256 != evidence.output_capability_sha256:
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_OUTPUT_CAPABILITY_SHA256"
+    if capabilities.structured_output_mode is not evidence.requested_mode:
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_MODE"
+    if not set(evidence.endpoint_structured_output_parameters).issubset(
+        capabilities.structured_output_parameters
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_PARAMETER_SUBSET"
+    if set(evidence.required_provider_parameters) != required_special_parameters:
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+    if (
+        binding.snapshot.provider_policy.require_parameters
+        is not evidence.provider_require_parameters
+    ):
+        return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRE_PARAMETERS"
+    return None
+
+
+def _has_valid_structured_output_routing(record: UsageRecord) -> bool:
+    return _structured_output_routing_failure_code(record) is None
 
 
 def _has_valid_privacy_routing(record: UsageRecord) -> bool:

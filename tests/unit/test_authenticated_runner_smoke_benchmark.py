@@ -634,7 +634,8 @@ def test_smoke_execute_rejects_provider_graph_subset_and_default_retarget_before
             False,
             True,
             False,
-            "usage_error=UsageValidationError, usage_diagnostics=STRUCTURED_OUTPUT_ROUTING",
+            "usage_error=UsageValidationError, "
+            "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:REDUNDANT_CAPABILITY_SHA256",
         ),
         (
             "UsageValidationError",
