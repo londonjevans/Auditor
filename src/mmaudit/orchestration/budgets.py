@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 import weakref
@@ -23,8 +24,13 @@ from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostBudgetExceededError,
     CostEntryStatus,
+    CostPortfolioReservation,
     CostReservation,
     CostReservationOverrunError,
+    CostReservationStateError,
+    PortfolioAttemptSlot,
+    PortfolioHoldStatus,
+    PortfolioSlotStatus,
     ReleaseReason,
     cost_entry_sha256,
 )
@@ -60,10 +66,12 @@ _MAX_PRICE_INTEGER_DIGITS: Final = 12
 _MAX_METERED_UNITS: Final = 2**63 - 1
 _REQUEST_LIMIT_SCOPE_AUTHORITY: Final = object()
 _ACTIVE_REQUEST_COST_CEILING_AUTHORITY: Final = object()
+_PORTFOLIO_TASK_SCOPE_AUTHORITY: Final = object()
 _EXACT_MONEY_PRECISION: Final = 160
 _MAX_SHARED_RECOVERY_ROOTS: Final = 16
 _MAX_SHARED_RECOVERY_RECORDS: Final = 48
 _MAX_SHARED_RECOVERY_REQUESTS_PER_ROOT: Final = 33
+_MAX_PORTFOLIO_ATTEMPT_SLOTS: Final = 1024
 _TRUSTED_PATH_TYPE: Final = type(Path("/"))
 _TRUSTED_ATOMIC_COST_LEDGER_TYPE: Final = AtomicCostLedger
 _TRUSTED_ATOMIC_LEDGER_SNAPSHOT: Final = AtomicCostLedger.snapshot
@@ -71,6 +79,10 @@ _TRUSTED_ATOMIC_LEDGER_RESERVE: Final = AtomicCostLedger.reserve
 _TRUSTED_ATOMIC_LEDGER_RECONCILE: Final = AtomicCostLedger.reconcile
 _TRUSTED_ATOMIC_LEDGER_RELEASE: Final = AtomicCostLedger.release
 _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION: Final = AtomicCostLedger.active_reservation
+_TRUSTED_ATOMIC_LEDGER_RESERVE_PORTFOLIO: Final = AtomicCostLedger.reserve_portfolio
+_TRUSTED_ATOMIC_LEDGER_RECOVER_PORTFOLIO: Final = AtomicCostLedger.recover_portfolio
+_TRUSTED_ATOMIC_LEDGER_CLAIM_PORTFOLIO_SLOT: Final = AtomicCostLedger.claim_portfolio_slot
+_TRUSTED_ATOMIC_LEDGER_RELEASE_PORTFOLIO: Final = AtomicCostLedger.release_portfolio
 _TRUSTED_ATOMIC_LEDGER_LOCKED: Final = AtomicCostLedger._locked
 _TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE: Final = AtomicCostLedger._required_state
 _TRUSTED_ATOMIC_LEDGER_READ_STATE: Final = AtomicCostLedger._read_state
@@ -134,6 +146,10 @@ def _require_pristine_atomic_cost_ledger(ledger: AtomicCostLedger) -> None:
                 "reconcile",
                 "release",
                 "active_reservation",
+                "reserve_portfolio",
+                "recover_portfolio",
+                "claim_portfolio_slot",
+                "release_portfolio",
                 "_locked",
                 "_required_state",
                 "_read_state",
@@ -145,6 +161,12 @@ def _require_pristine_atomic_cost_ledger(ledger: AtomicCostLedger) -> None:
         or AtomicCostLedger.reconcile is not _TRUSTED_ATOMIC_LEDGER_RECONCILE
         or AtomicCostLedger.release is not _TRUSTED_ATOMIC_LEDGER_RELEASE
         or (AtomicCostLedger.active_reservation is not _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION)
+        or AtomicCostLedger.reserve_portfolio is not _TRUSTED_ATOMIC_LEDGER_RESERVE_PORTFOLIO
+        or AtomicCostLedger.recover_portfolio is not _TRUSTED_ATOMIC_LEDGER_RECOVER_PORTFOLIO
+        or (
+            AtomicCostLedger.claim_portfolio_slot is not _TRUSTED_ATOMIC_LEDGER_CLAIM_PORTFOLIO_SLOT
+        )
+        or AtomicCostLedger.release_portfolio is not _TRUSTED_ATOMIC_LEDGER_RELEASE_PORTFOLIO
         or AtomicCostLedger._locked is not _TRUSTED_ATOMIC_LEDGER_LOCKED
         or AtomicCostLedger._required_state is not _TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE
         or AtomicCostLedger._read_state is not _TRUSTED_ATOMIC_LEDGER_READ_STATE
@@ -196,6 +218,66 @@ _ACTIVE_REQUEST_COST_CEILING_SCOPE: Final[ContextVar[_ActiveRequestCostCeilingSc
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PortfolioTaskSlot:
+    """Exact preflight envelope for one possible provider attempt."""
+
+    task_id: str
+    logical_request_id: str
+    attempt_ordinal: int
+    request_id: str
+    role: str
+    exact_model_id: str
+    provider_endpoint: str
+    endpoint_policy_snapshot_sha256: str
+    endpoint_policy_pricing_sha256: str
+    endpoint_pricing_snapshot_sha256: str
+    envelope_recipe_sha256: str
+    planned_prompt_tokens: int
+    planned_visible_output_tokens: int
+    planned_reasoning_tokens: int
+    planned_completion_tokens: int
+    maximum_cost_usd: Decimal
+
+    def __post_init__(self) -> None:
+        _validate_portfolio_task_slot(self)
+
+    def as_cost_slot(self) -> PortfolioAttemptSlot:
+        return PortfolioAttemptSlot(
+            request_id=self.request_id,
+            maximum_cost_usd=self.maximum_cost_usd,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetPortfolioReservation:
+    """Exact process-local installation of one durable all-attempt hold."""
+
+    plan_sha256: str
+    slots: tuple[PortfolioTaskSlot, ...]
+    persistent: CostPortfolioReservation
+
+
+@dataclass(slots=True)
+class _ActivePortfolioTaskScope:
+    """Opaque one-shot authority for one manager-bound task callback."""
+
+    manager: BudgetManager = field(repr=False)
+    process_id: int
+    event_loop: asyncio.AbstractEventLoop = field(repr=False)
+    task: asyncio.Task[Any] = field(repr=False)
+    portfolio: BudgetPortfolioReservation = field(repr=False)
+    task_id: str
+    slot: PortfolioTaskSlot
+    _authority: object = field(repr=False)
+
+
+_ACTIVE_PORTFOLIO_TASK_SCOPE: Final[ContextVar[_ActivePortfolioTaskScope | None]] = ContextVar(
+    "mmaudit_active_portfolio_task_scope",
+    default=None,
+)
+
+
 class _TrustedBudgetRecoveryScope:
     """Opaque one-shot authority for exact journal-recovered usage."""
 
@@ -213,6 +295,7 @@ class RecoveredSchedulerCostAttempt:
     role: str
     status: Literal[
         "adopted_proven_pre_send",
+        "released_proven_pre_send",
         "uncertain_accounted_after_dispatch",
     ]
     reserved_cost_usd_exact: Decimal
@@ -300,6 +383,12 @@ def _normalize_recovered_scheduler_attempt(value: Any) -> RecoveredSchedulerCost
         or _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(attempt.task_id) is None
         or _MODEL_ID_PATTERN.fullmatch(attempt.requested_model) is None
         or _ROLE_ID_PATTERN.fullmatch(attempt.role) is None
+        or attempt.status
+        not in {
+            "adopted_proven_pre_send",
+            "released_proven_pre_send",
+            "uncertain_accounted_after_dispatch",
+        }
         or attempt.reserved_cost_usd_exact <= 0
         or attempt.accounted_cost_usd_exact < 0
     ):
@@ -324,7 +413,24 @@ def _normalize_recovered_scheduler_attempt(value: Any) -> RecoveredSchedulerCost
         raise BudgetReservationStateError(
             "scheduler cost-recovery request-limit coordinates are invalid"
         )
+    _recovered_scheduler_attempt_ordinal(attempt)
     return attempt
+
+
+def _recovered_scheduler_attempt_ordinal(attempt: RecoveredSchedulerCostAttempt) -> int:
+    """Return the canonical one-based ordinal encoded by a scheduler attempt ID."""
+
+    if attempt.request_id == attempt.logical_request_id:
+        return 1
+    prefix = f"{attempt.logical_request_id}:attempt:"
+    if not attempt.request_id.startswith(prefix):
+        raise BudgetReservationStateError(
+            "scheduler cost-recovery attempt differs from its logical request"
+        )
+    raw_ordinal = attempt.request_id.removeprefix(prefix)
+    if not raw_ordinal.isdigit() or int(raw_ordinal) < 2 or str(int(raw_ordinal)) != raw_ordinal:
+        raise BudgetReservationStateError("scheduler cost-recovery attempt ordinal is invalid")
+    return int(raw_ordinal)
 
 
 def _recovered_attempt_hash(attempt: RecoveredSchedulerCostAttempt) -> str:
@@ -461,6 +567,25 @@ def _build_budget_recovery_authority() -> tuple[
             request_ids
         ):
             raise BudgetReservationStateError("budget recovery provider-attempt identities repeat")
+        if not canonical_roots and not records:
+            scoped_starts: dict[str, int] = {}
+            for attempt in recovered_attempts:
+                if (
+                    attempt.request_limit_scope is None
+                    or attempt.request_limit_count_before is None
+                ):
+                    continue
+                previous = scoped_starts.get(attempt.request_limit_scope)
+                scoped_starts[attempt.request_limit_scope] = (
+                    attempt.request_limit_count_before
+                    if previous is None
+                    else min(previous, attempt.request_limit_count_before)
+                )
+            canonical_roots = tuple(sorted(scoped_starts.items()))
+            if len(canonical_roots) > _MAX_SHARED_RECOVERY_ROOTS:
+                raise BudgetReservationStateError(
+                    "shared recovery request-limit root coordinates exceed bounds"
+                )
         recovered_hashes = tuple(_recovered_attempt_hash(item) for item in recovered_attempts)
         recovered_baseline = _normalize_recovered_cost_baseline(cost_ledger_baseline)
         scope = object.__new__(_TrustedBudgetRecoveryScope)
@@ -1216,7 +1341,18 @@ class BudgetManager:
         self._reserved_role_usd: dict[str, Decimal] = {}
         self._spent_role_usd: dict[str, Decimal] = {}
         self._active_request_cost_ceiling_scope: _ActiveRequestCostCeilingScope | None = None
+        self._active_portfolio: BudgetPortfolioReservation | None = None
+        self._portfolio_remaining: dict[str, PortfolioTaskSlot] = {}
+        self._portfolio_pending_claims: dict[str, PortfolioTaskSlot] = {}
+        self._portfolio_pending_claim_costs: dict[str, Decimal] = {}
+        self._portfolio_claimed_request_ids: set[str] = set()
+        self._active_portfolio_scopes: dict[str, _ActivePortfolioTaskScope] = {}
+        self._closed_portfolio_plan_sha256s: set[str] = set()
         self._recovery_required = bool(snapshot is not None and snapshot.entries)
+        self._portfolio_recovery_required = bool(
+            snapshot is not None
+            and any(hold.status is PortfolioHoldStatus.ACTIVE for hold in snapshot.portfolio_holds)
+        )
         self._lock = asyncio.Lock()
         _initialize_trusted_budget_accounting_state(self)
 
@@ -1260,7 +1396,15 @@ class BudgetManager:
 
     @property
     def reserved_usd(self) -> float:
-        return float(_exact_decimal_sum(self._reserved.values()))
+        return float(
+            _exact_decimal_sum(
+                (
+                    *self._reserved.values(),
+                    *(slot.maximum_cost_usd for slot in self._portfolio_remaining.values()),
+                    *self._portfolio_pending_claim_costs.values(),
+                )
+            )
+        )
 
     @property
     def remaining_usd(self) -> float:
@@ -1322,7 +1466,13 @@ class BudgetManager:
     def recovery_required(self) -> bool:
         """Return whether durable spend exists without restored scoped counters."""
 
-        return self._recovery_required
+        return self._recovery_required or self._portfolio_recovery_required
+
+    def _portfolio_accounted_slots(self) -> tuple[PortfolioTaskSlot, ...]:
+        return (
+            *self._portfolio_remaining.values(),
+            *self._portfolio_pending_claims.values(),
+        )
 
     @asynccontextmanager
     async def active_request_cost_ceiling(
@@ -1368,6 +1518,305 @@ class BudgetManager:
             finally:
                 _ACTIVE_REQUEST_COST_CEILING_SCOPE.reset(context_token)
 
+    async def reserve_portfolio(
+        self,
+        plan_sha256: str,
+        slots: tuple[PortfolioTaskSlot, ...],
+    ) -> BudgetPortfolioReservation:
+        """Atomically install one durable all-attempt budget portfolio."""
+
+        exact_slots = _validate_budget_portfolio_slots(
+            plan_sha256,
+            slots,
+            maximum_attempts=self.max_requests_per_agent,
+        )
+        ledger = self._current_atomic_ledger()
+        if ledger is None:
+            raise BudgetReservationStateError(
+                "budget portfolio reservation requires a durable atomic ledger"
+            )
+        async with self._lock:
+            _require_trusted_budget_accounting_state(self)
+            if self.recovery_required:
+                raise BudgetReservationStateError(
+                    "persistent budget counters require exact recovery before portfolio reservation"
+                )
+            if self._active_portfolio is not None:
+                raise BudgetReservationStateError("a budget portfolio is already active")
+            if plan_sha256 in self._closed_portfolio_plan_sha256s:
+                raise BudgetReservationStateError("budget portfolio plan was already finalized")
+            if self._reserved or self._pending_adoptions:
+                raise BudgetReservationStateError(
+                    "budget portfolio requires no active ordinary reservations"
+                )
+            self._require_portfolio_capacity(exact_slots)
+            try:
+                persistent = _TRUSTED_ATOMIC_LEDGER_RESERVE_PORTFOLIO(
+                    ledger,
+                    plan_sha256,
+                    tuple(slot.as_cost_slot() for slot in exact_slots),
+                )
+            except CostBudgetExceededError:
+                raise BudgetExhaustedError(
+                    "portfolio exceeds the persistent model-cost budget"
+                ) from None
+            except CostReservationStateError as exc:
+                raise BudgetReservationStateError(str(exc)) from None
+            portfolio = BudgetPortfolioReservation(
+                plan_sha256=plan_sha256,
+                slots=exact_slots,
+                persistent=persistent,
+            )
+            self._active_portfolio = portfolio
+            self._portfolio_remaining = {slot.request_id: slot for slot in exact_slots}
+            for slot in exact_slots:
+                self._add_portfolio_slot_accounting(slot)
+            _refresh_trusted_budget_accounting_state(self)
+            return portfolio
+
+    async def recover_portfolio(
+        self,
+        plan_sha256: str,
+        slots: tuple[PortfolioTaskSlot, ...],
+    ) -> BudgetPortfolioReservation:
+        """Reinstall one exact active durable portfolio after process restart."""
+
+        exact_slots = _validate_budget_portfolio_slots(
+            plan_sha256,
+            slots,
+            maximum_attempts=self.max_requests_per_agent,
+        )
+        ledger = self._current_atomic_ledger()
+        if ledger is None:
+            raise BudgetReservationStateError(
+                "budget portfolio recovery requires a durable atomic ledger"
+            )
+        async with self._lock:
+            _require_trusted_budget_accounting_state(self)
+            current = self._active_portfolio
+            if current is not None:
+                if current.plan_sha256 == plan_sha256 and current.slots == exact_slots:
+                    return current
+                raise BudgetReservationStateError("a different budget portfolio is active")
+            if (
+                self._portfolio_remaining
+                or self._portfolio_pending_claims
+                or self._portfolio_pending_claim_costs
+                or self._portfolio_claimed_request_ids
+                or self._active_portfolio_scopes
+                or self._reserved
+                or self._issued
+                or self._reconciled
+                or self._released
+                or self._transport_committed
+                or self._pending_adoptions
+            ):
+                raise BudgetReservationStateError(
+                    "budget portfolio recovery requires a fresh manager"
+                )
+            try:
+                persistent = _TRUSTED_ATOMIC_LEDGER_RECOVER_PORTFOLIO(
+                    ledger,
+                    plan_sha256,
+                    tuple(slot.as_cost_slot() for slot in exact_slots),
+                )
+            except CostReservationStateError as exc:
+                raise BudgetReservationStateError(str(exc)) from None
+            snapshot = _TRUSTED_ATOMIC_LEDGER_SNAPSHOT(ledger)
+            holds = tuple(
+                hold
+                for hold in snapshot.portfolio_holds
+                if hold.plan_sha256 == plan_sha256
+                and hold.reservation_id == persistent.reservation_id
+            )
+            if len(holds) != 1 or holds[0].status is not PortfolioHoldStatus.ACTIVE:
+                raise BudgetReservationStateError(
+                    "durable budget portfolio is missing or no longer active"
+                )
+            hold = holds[0]
+            status_by_id = {slot.request_id: slot.status for slot in hold.slots}
+            entries_by_id = {entry.request_id: entry for entry in snapshot.entries}
+            remaining: dict[str, PortfolioTaskSlot] = {}
+            pending_claims: dict[str, PortfolioTaskSlot] = {}
+            pending_claim_costs: dict[str, Decimal] = {}
+            for slot in exact_slots:
+                status = status_by_id.get(slot.request_id)
+                if status is PortfolioSlotStatus.HELD:
+                    remaining[slot.request_id] = slot
+                elif status is PortfolioSlotStatus.CLAIMED:
+                    entry = entries_by_id.get(slot.request_id)
+                    if entry is None or entry.reserved_usd > slot.maximum_cost_usd:
+                        raise BudgetReservationStateError(
+                            "claimed budget portfolio slot differs from its ordinary entry"
+                        )
+                    if entry.status is CostEntryStatus.RESERVED:
+                        pending_claims[slot.request_id] = slot
+                        pending_claim_costs[slot.request_id] = entry.reserved_usd
+                else:
+                    raise BudgetReservationStateError(
+                        "active budget portfolio contains a released request slot"
+                    )
+            self._require_portfolio_absolute_limits(exact_slots)
+            if snapshot.spent_usd + snapshot.active_reserved_usd > Decimal(str(self.total_usd)):
+                raise BudgetReservationStateError(
+                    "durable portfolio exceeds the manager global USD budget"
+                )
+            portfolio = BudgetPortfolioReservation(
+                plan_sha256=plan_sha256,
+                slots=exact_slots,
+                persistent=persistent,
+            )
+            self._active_portfolio = portfolio
+            self._portfolio_remaining = remaining
+            self._portfolio_pending_claims = pending_claims
+            self._portfolio_pending_claim_costs = pending_claim_costs
+            self._portfolio_claimed_request_ids = {
+                slot.request_id
+                for slot in exact_slots
+                if status_by_id.get(slot.request_id) is PortfolioSlotStatus.CLAIMED
+            }
+            for slot in remaining.values():
+                self._add_portfolio_slot_accounting(slot)
+            for request_id, slot in pending_claims.items():
+                self._add_portfolio_slot_accounting(
+                    slot,
+                    maximum_cost_usd=pending_claim_costs[request_id],
+                )
+            self._portfolio_recovery_required = False
+            _refresh_trusted_budget_accounting_state(self)
+            return portfolio
+
+    @asynccontextmanager
+    async def portfolio_task_scope(
+        self,
+        portfolio: BudgetPortfolioReservation,
+        task_id: str,
+    ) -> AsyncIterator[PortfolioTaskSlot]:
+        """Expose one opaque, task-bound scope for the next exact portfolio attempt."""
+
+        _validate_scope_key(task_id, _REQUEST_LIMIT_SCOPE_PATTERN, scope="portfolio task")
+        inherited = _ACTIVE_PORTFOLIO_TASK_SCOPE.get()
+        if inherited is not None:
+            raise BudgetReservationStateError("a portfolio task scope is already inherited")
+        event_loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        if task is None:
+            raise BudgetReservationStateError("portfolio task scope requires an asyncio task")
+        async with self._lock:
+            _require_trusted_budget_accounting_state(self)
+            if self.recovery_required:
+                raise BudgetReservationStateError(
+                    "persistent budget counters require exact recovery before dispatch"
+                )
+            if self._active_portfolio is not portfolio:
+                raise BudgetReservationStateError("budget portfolio handle is unknown or stale")
+            candidates = tuple(
+                sorted(
+                    (slot for slot in self._portfolio_accounted_slots() if slot.task_id == task_id),
+                    key=lambda item: item.attempt_ordinal,
+                )
+            )
+            if not candidates:
+                raise BudgetReservationStateError(
+                    f"portfolio task {task_id} has no remaining attempt"
+                )
+            slot = candidates[0]
+            count = self._request_limit_counts.get(
+                ("scheduled_task", slot.logical_request_id),
+                0,
+            )
+            if count != slot.attempt_ordinal - 1:
+                raise BudgetReservationStateError(
+                    "portfolio task attempt differs from its actual request count"
+                )
+            if task_id in self._active_portfolio_scopes:
+                raise BudgetReservationStateError(
+                    "portfolio task already has an active callback scope"
+                )
+            scope = _ActivePortfolioTaskScope(
+                manager=self,
+                process_id=os.getpid(),
+                event_loop=event_loop,
+                task=task,
+                portfolio=portfolio,
+                task_id=task_id,
+                slot=slot,
+                _authority=_PORTFOLIO_TASK_SCOPE_AUTHORITY,
+            )
+            self._active_portfolio_scopes[task_id] = scope
+            _refresh_trusted_budget_accounting_state(self)
+            context_token = _ACTIVE_PORTFOLIO_TASK_SCOPE.set(scope)
+        try:
+            yield slot
+        finally:
+            try:
+                async with self._lock:
+                    _require_trusted_budget_accounting_state(self)
+                    if (
+                        self._active_portfolio_scopes.get(task_id) is not scope
+                        or _ACTIVE_PORTFOLIO_TASK_SCOPE.get() is not scope
+                    ):
+                        raise BudgetReservationStateError(
+                            "portfolio task scope changed before cleanup"
+                        )
+                    self._active_portfolio_scopes.pop(task_id)
+                    _refresh_trusted_budget_accounting_state(self)
+            finally:
+                _ACTIVE_PORTFOLIO_TASK_SCOPE.reset(context_token)
+
+    async def release_portfolio(
+        self,
+        portfolio: BudgetPortfolioReservation,
+    ) -> None:
+        """Release the exact unclaimed suffix once and close local portfolio custody."""
+
+        async with self._lock:
+            _require_trusted_budget_accounting_state(self)
+            if self._active_portfolio is not portfolio:
+                if portfolio.plan_sha256 in self._closed_portfolio_plan_sha256s:
+                    raise BudgetReservationStateError("budget portfolio was already finalized")
+                raise BudgetReservationStateError("budget portfolio handle is unknown or stale")
+            if self._active_portfolio_scopes:
+                raise BudgetReservationStateError(
+                    "budget portfolio cannot close with active task scopes"
+                )
+            if self._portfolio_pending_claims:
+                raise BudgetReservationStateError(
+                    "budget portfolio cannot close before claimed reservations are adopted"
+                )
+            expected = tuple(
+                slot.as_cost_slot()
+                for slot in portfolio.slots
+                if slot.request_id in self._portfolio_remaining
+            )
+            ledger = self._current_atomic_ledger()
+            if ledger is None:
+                raise BudgetReservationStateError(
+                    "budget portfolio release requires its durable atomic ledger"
+                )
+            try:
+                released = _TRUSTED_ATOMIC_LEDGER_RELEASE_PORTFOLIO(
+                    ledger,
+                    portfolio.persistent,
+                    expected_remaining_slots=expected,
+                )
+            except CostReservationStateError as exc:
+                raise BudgetReservationStateError(str(exc)) from None
+            if (
+                released.status is not PortfolioHoldStatus.RELEASED
+                or released.remaining_slots
+                or released.released_slots != expected
+            ):
+                raise BudgetReservationStateError(
+                    "durable budget portfolio release is inconsistent"
+                )
+            for slot in tuple(self._portfolio_remaining.values()):
+                self._remove_portfolio_slot_accounting(slot)
+            self._portfolio_remaining.clear()
+            self._active_portfolio = None
+            self._closed_portfolio_plan_sha256s.add(portfolio.plan_sha256)
+            _refresh_trusted_budget_accounting_state(self)
+
     async def restore_recovered_usage(
         self,
         records: tuple[Any, ...],
@@ -1398,6 +1847,10 @@ class BudgetManager:
             _require_trusted_budget_accounting_state(self)
             if not self._recovery_required:
                 raise BudgetReservationStateError("budget recovery is not required or already ran")
+            if self._portfolio_recovery_required:
+                raise BudgetReservationStateError(
+                    "durable portfolio recovery must run before usage recovery"
+                )
             if (
                 self._issued
                 or self._reserved
@@ -1413,6 +1866,12 @@ class BudgetManager:
                 raise BudgetReservationStateError("atomic cost-ledger identity changed")
             snapshot = _TRUSTED_ATOMIC_LEDGER_SNAPSHOT(ledger)
             entries_by_id = {entry.request_id: entry for entry in snapshot.entries}
+            active_portfolio_slots = (
+                {}
+                if self._active_portfolio is None
+                else {slot.request_id: slot for slot in self._active_portfolio.slots}
+            )
+            recovered_portfolio_request_ids: set[str] = set()
             expected_entry_ids: set[str] = set()
             spent_input_tokens = 0
             spent_output_tokens = 0
@@ -1427,6 +1886,7 @@ class BudgetManager:
             recovered_attempts = recovery_claims.attempts
             uncertain_dispatched_attempt = False
             recovered_uncertain_scopes: set[tuple[str, str]] = set()
+            recovered_no_usage_ordinals: dict[tuple[str, str], set[int]] = {}
             pending_adoptions: dict[str, RecoveredSchedulerCostAttempt] = {}
             baseline = recovery_claims.baseline
             if baseline is not None:
@@ -1465,6 +1925,26 @@ class BudgetManager:
                     recovery_only_records[record.request_id] = record
 
             shared_positions: dict[str, tuple[str, int]] = {}
+            shared_consumed_attempt_ids: set[str] = set()
+            usage_attempt_ids: set[str] = set()
+            for record in normalized_records:
+                try:
+                    usage_attempt_ids.update(
+                        item.request_id for item in atomic_token_reservations_from_usage(record)
+                    )
+                except (TypeError, ValueError):
+                    usage_attempt_ids.add(record.request_id)
+            remaining_shared_attempts = {
+                attempt.request_id: attempt
+                for attempt in recovered_attempts
+                if attempt.request_limit_scope is not None
+            }
+            if len(remaining_shared_attempts) != sum(
+                attempt.request_limit_scope is not None for attempt in recovered_attempts
+            ) or set(remaining_shared_attempts).intersection(usage_attempt_ids):
+                raise BudgetReservationStateError(
+                    "shared recovery request-limit transitions repeat usage custody"
+                )
             shared_final_counts: dict[str, int] = {}
             for shared_scope, shared_count_before in shared_roots:
                 ordinary_candidates = {
@@ -1505,10 +1985,56 @@ class BudgetManager:
                         except (TypeError, ValueError):
                             continue
                         matches.append((candidate, candidate_evidence))
-                    if len(matches) > 1:
+                    attempt_matches = tuple(
+                        attempt
+                        for attempt in remaining_shared_attempts.values()
+                        if attempt.request_limit_scope == shared_scope
+                        and attempt.request_limit_count_before == next_count
+                    )
+                    if len(matches) + len(attempt_matches) > 1:
                         raise BudgetReservationStateError(
                             "shared recovery request-limit chain is noncontiguous or ambiguous"
                         )
+                    if attempt_matches:
+                        matched_attempt = attempt_matches[0]
+                        exact_after = matched_attempt.request_limit_count_after
+                        exact_maximum = matched_attempt.request_limit_maximum
+                        if (
+                            exact_after is None
+                            or exact_maximum != self.max_requests_per_agent
+                            or (shared_maximum is not None and exact_maximum != shared_maximum)
+                            or (
+                                matched_attempt.status != "adopted_proven_pre_send"
+                                and exact_after != next_count + 1
+                            )
+                        ):
+                            raise BudgetReservationStateError(
+                                "shared recovered attempt differs from its exact transition"
+                            )
+                        shared_maximum = exact_maximum
+                        remaining_shared_attempts.pop(matched_attempt.request_id)
+                        matched_for_root += 1
+                        if matched_attempt.status == "adopted_proven_pre_send":
+                            if ordinary_candidates or any(
+                                attempt.request_limit_scope == shared_scope
+                                for attempt in remaining_shared_attempts.values()
+                            ):
+                                raise BudgetReservationStateError(
+                                    "shared recovery has usage after an adopted frontier"
+                                )
+                            break
+                        shared_consumed_attempt_ids.add(matched_attempt.request_id)
+                        next_count = exact_after
+                        shared_attempts += 1
+                        if (
+                            shared_attempts > _MAX_SHARED_RECOVERY_REQUESTS_PER_ROOT
+                            or len(shared_positions) + len(shared_consumed_attempt_ids)
+                            > _MAX_SHARED_RECOVERY_RECORDS
+                        ):
+                            raise BudgetReservationStateError(
+                                "shared recovery request-limit inventory exceeds its compiled bound"
+                            )
+                        continue
                     if not matches:
                         break
                     matched_record, matched_evidence = matches[0]
@@ -1545,7 +2071,18 @@ class BudgetManager:
                     raise BudgetReservationStateError(
                         "shared recovery request-limit chain is noncontiguous or ambiguous"
                     )
+                if any(
+                    attempt.request_limit_scope == shared_scope
+                    for attempt in remaining_shared_attempts.values()
+                ):
+                    raise BudgetReservationStateError(
+                        "shared recovery request-limit attempt is unbound or noncontiguous"
+                    )
                 shared_final_counts[shared_scope] = next_count
+            if remaining_shared_attempts:
+                raise BudgetReservationStateError(
+                    "shared recovery request-limit attempt has no trusted root"
+                )
             if shared_roots and recovery_only_records:
                 raise BudgetReservationStateError(
                     "shared recovery request-limit usage is unbound or noncontiguous"
@@ -1629,10 +2166,45 @@ class BudgetManager:
                         "persistent model-cost ledger omits a recovered provider attempt"
                     )
                 exact_entries = tuple(entry for entry in attempt_entries if entry is not None)
+                for token_item, request_item, entry in zip(
+                    token_evidence,
+                    request_evidence,
+                    exact_entries,
+                    strict=True,
+                ):
+                    portfolio_slot = active_portfolio_slots.get(token_item.request_id)
+                    if portfolio_slot is None:
+                        continue
+                    if (
+                        record.requested_model != portfolio_slot.exact_model_id
+                        or record.role != portfolio_slot.role
+                        or entry.reserved_usd > portfolio_slot.maximum_cost_usd
+                        or token_item.planned_prompt_tokens > portfolio_slot.planned_prompt_tokens
+                        or token_item.planned_visible_output_tokens
+                        > portfolio_slot.planned_visible_output_tokens
+                        or token_item.planned_reasoning_tokens
+                        > portfolio_slot.planned_reasoning_tokens
+                        or token_item.planned_completion_tokens
+                        > portfolio_slot.planned_completion_tokens
+                        or request_item.request_limit_scope != portfolio_slot.logical_request_id
+                        or request_item.request_limit_count_before
+                        != portfolio_slot.attempt_ordinal - 1
+                        or request_item.request_limit_maximum != self.max_requests_per_agent
+                    ):
+                        raise BudgetReservationStateError(
+                            "recovered usage differs from its exact portfolio attempt slot"
+                        )
+                    recovered_portfolio_request_ids.add(portfolio_slot.request_id)
+                released_attempt_indexes = tuple(
+                    index
+                    for index, entry in enumerate(exact_entries)
+                    if entry.status is CostEntryStatus.RELEASED
+                )
                 if any(
                     entry.status
                     not in {
                         CostEntryStatus.RECONCILED,
+                        CostEntryStatus.RELEASED,
                         CostEntryStatus.UNCERTAIN_ACCOUNTED,
                     }
                     for entry in exact_entries
@@ -1640,6 +2212,34 @@ class BudgetManager:
                     raise BudgetReservationStateError(
                         "persistent model-cost ledger has an invalid attempt state"
                     )
+                final_attempt_released = bool(released_attempt_indexes)
+                if released_attempt_indexes and released_attempt_indexes != (
+                    len(exact_entries) - 1,
+                ):
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger has a nonfinal released attempt"
+                    )
+                if final_attempt_released:
+                    released_entry = exact_entries[-1]
+                    if (
+                        released_entry.release_reason
+                        not in {
+                            ReleaseReason.CANCELLED_BEFORE_SEND,
+                            ReleaseReason.FAILED_BEFORE_SEND,
+                        }
+                        or released_entry.actual_cost_usd is not None
+                        or released_entry.accounted_cost_usd != 0
+                        or record.reported_cost_usd_exact is not None
+                        or record.prompt_tokens != 0
+                        or record.completion_tokens != 0
+                        or record.total_tokens != 0
+                        or record.cached_tokens != 0
+                        or record.reasoning_tokens not in {None, 0}
+                        or record.token_detail_accounting_evidence is not None
+                    ):
+                        raise BudgetReservationStateError(
+                            "released recovered usage lacks exact pre-send custody"
+                        )
                 if record.accounted_cost_usd_exact is None or (
                     creditable and record.reported_cost_usd_exact is None
                 ):
@@ -1666,21 +2266,29 @@ class BudgetManager:
                 expected_spent_usd = _exact_decimal_add(expected_spent_usd, record_cost)
                 token_detail = record.token_detail_accounting_evidence
                 final_accounted_prompt_tokens = (
-                    token_detail.accounted_prompt_tokens
-                    if token_detail is not None
+                    0
+                    if final_attempt_released
                     else (
-                        record.prompt_tokens
-                        if creditable or record.prompt_tokens > 0
-                        else token_evidence[-1].planned_prompt_tokens
+                        token_detail.accounted_prompt_tokens
+                        if token_detail is not None
+                        else (
+                            record.prompt_tokens
+                            if creditable or record.prompt_tokens > 0
+                            else token_evidence[-1].planned_prompt_tokens
+                        )
                     )
                 )
                 final_accounted_completion_tokens = (
-                    token_detail.accounted_completion_tokens
-                    if token_detail is not None
+                    0
+                    if final_attempt_released
                     else (
-                        record.completion_tokens
-                        if creditable or record.completion_tokens > 0
-                        else token_evidence[-1].planned_completion_tokens
+                        token_detail.accounted_completion_tokens
+                        if token_detail is not None
+                        else (
+                            record.completion_tokens
+                            if creditable or record.completion_tokens > 0
+                            else token_evidence[-1].planned_completion_tokens
+                        )
                     )
                 )
                 spent_input_tokens += (
@@ -1726,6 +2334,23 @@ class BudgetManager:
                         "persistent model-cost ledger omits a recovered provider attempt"
                     )
                 expected_entry_ids.add(attempt.request_id)
+                portfolio_slot = active_portfolio_slots.get(attempt.request_id)
+                if portfolio_slot is not None:
+                    if (
+                        attempt.logical_request_id != portfolio_slot.logical_request_id
+                        or attempt.task_id != portfolio_slot.task_id
+                        or attempt.requested_model != portfolio_slot.exact_model_id
+                        or attempt.role != portfolio_slot.role
+                        or attempt.reserved_cost_usd_exact != entry.reserved_usd
+                        or entry.reserved_usd > portfolio_slot.maximum_cost_usd
+                        or attempt.request_limit_scope != portfolio_slot.logical_request_id
+                        or attempt.request_limit_count_before != portfolio_slot.attempt_ordinal - 1
+                        or attempt.request_limit_maximum != self.max_requests_per_agent
+                    ):
+                        raise BudgetReservationStateError(
+                            "recovered scheduler attempt differs from its portfolio slot"
+                        )
+                    recovered_portfolio_request_ids.add(portfolio_slot.request_id)
                 recovery_request_key = (
                     ("scheduled_task", attempt.request_limit_scope)
                     if attempt.request_limit_scope is not None
@@ -1735,8 +2360,11 @@ class BudgetManager:
                     attempt.request_limit_count_before is None
                     or attempt.request_limit_count_after is None
                     or attempt.request_limit_maximum != self.max_requests_per_agent
-                    or request_limit_counts.get(recovery_request_key, 0)
-                    != attempt.request_limit_count_before
+                    or (
+                        attempt.request_id not in shared_consumed_attempt_ids
+                        and request_limit_counts.get(recovery_request_key, 0)
+                        != attempt.request_limit_count_before
+                    )
                 ):
                     raise BudgetReservationStateError(
                         "recovered scheduler attempt differs from its shared request limit"
@@ -1755,22 +2383,47 @@ class BudgetManager:
                     pending_adoptions[attempt.request_id] = attempt
                     continue
                 if attempt.request_limit_scope is not None:
-                    if attempt.request_limit_count_after is None:
-                        raise BudgetReservationStateError(
-                            "recovered scheduler attempt lacks its request-limit terminal count"
+                    if attempt.request_id not in shared_consumed_attempt_ids:
+                        if attempt.request_limit_count_after is None:
+                            raise BudgetReservationStateError(
+                                "recovered scheduler attempt lacks its request-limit terminal count"
+                            )
+                        request_limit_counts[recovery_request_key] = (
+                            attempt.request_limit_count_after
                         )
-                    request_limit_counts[recovery_request_key] = attempt.request_limit_count_after
                 else:
-                    if (
+                    ordinals = recovered_no_usage_ordinals.setdefault(
+                        recovery_request_key,
+                        set(),
+                    )
+                    attempt_ordinal = _recovered_scheduler_attempt_ordinal(attempt)
+                    if attempt_ordinal in ordinals or (
                         recovery_request_key in request_limit_counts
                         and recovery_request_key not in recovered_uncertain_scopes
                     ):
                         raise BudgetReservationStateError(
                             "budget recovery repeats a scheduled request-limit scope"
                         )
-                    if recovery_request_key not in recovered_uncertain_scopes:
-                        request_limit_counts[recovery_request_key] = 1
-                        recovered_uncertain_scopes.add(recovery_request_key)
+                    ordinals.add(attempt_ordinal)
+                    request_limit_counts[recovery_request_key] = max(ordinals)
+                    recovered_uncertain_scopes.add(recovery_request_key)
+                if attempt.status == "released_proven_pre_send":
+                    if (
+                        entry.status is not CostEntryStatus.RELEASED
+                        or entry.actual_cost_usd is not None
+                        or entry.accounted_cost_usd != 0
+                        or entry.reserved_usd != attempt.reserved_cost_usd_exact
+                        or attempt.accounted_cost_usd_exact != 0
+                        or entry.release_reason
+                        not in {
+                            ReleaseReason.CANCELLED_BEFORE_SEND,
+                            ReleaseReason.FAILED_BEFORE_SEND,
+                        }
+                    ):
+                        raise BudgetReservationStateError(
+                            "released pre-send recovery differs from the persistent ledger"
+                        )
+                    continue
                 if (
                     entry.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED
                     or entry.actual_cost_usd is not None
@@ -1796,6 +2449,75 @@ class BudgetManager:
                     attempt.accounted_cost_usd_exact,
                 )
 
+            if any(
+                ordinals != set(range(1, max(ordinals) + 1))
+                or max(ordinals) > self.max_requests_per_agent
+                for ordinals in recovered_no_usage_ordinals.values()
+            ):
+                raise BudgetReservationStateError(
+                    "recovered scheduler attempt ordinals are not contiguous"
+                )
+
+            if self._active_portfolio is not None:
+                slots_by_task: dict[str, list[PortfolioTaskSlot]] = {}
+                for slot in self._active_portfolio.slots:
+                    slots_by_task.setdefault(slot.task_id, []).append(slot)
+                for task_slots in slots_by_task.values():
+                    claimed_prefix_open = True
+                    released_ordinals: list[int] = []
+                    for slot in task_slots:
+                        claimed = slot.request_id in self._portfolio_claimed_request_ids
+                        if not claimed:
+                            claimed_prefix_open = False
+                            continue
+                        if not claimed_prefix_open:
+                            raise BudgetReservationStateError(
+                                "recovered portfolio claims are not an exact attempt prefix"
+                            )
+                        entry = entries_by_id.get(slot.request_id)
+                        if entry is None:
+                            raise BudgetReservationStateError(
+                                "claimed portfolio slot lacks its ordinary ledger entry"
+                            )
+                        if entry.status is not CostEntryStatus.RELEASED:
+                            continue
+                        if slot.request_id in expected_entry_ids:
+                            if slot.request_id not in recovered_portfolio_request_ids:
+                                raise BudgetReservationStateError(
+                                    "released portfolio attempt lacks retained usage custody"
+                                )
+                            continue
+                        if (
+                            entry.actual_cost_usd is not None
+                            or entry.accounted_cost_usd != 0
+                            or entry.release_reason
+                            not in {
+                                ReleaseReason.CANCELLED_BEFORE_SEND,
+                                ReleaseReason.FAILED_BEFORE_SEND,
+                            }
+                            or entry.reserved_usd > slot.maximum_cost_usd
+                        ):
+                            raise BudgetReservationStateError(
+                                "released portfolio attempt lacks exact pre-send custody"
+                            )
+                        expected_entry_ids.add(slot.request_id)
+                        recovered_portfolio_request_ids.add(slot.request_id)
+                        released_ordinals.append(slot.attempt_ordinal)
+                    if released_ordinals:
+                        logical_request_id = task_slots[0].logical_request_id
+                        request_key = ("scheduled_task", logical_request_id)
+                        count = request_limit_counts.get(request_key, 0)
+                        for ordinal in released_ordinals:
+                            if ordinal <= count:
+                                continue
+                            if ordinal != count + 1:
+                                raise BudgetReservationStateError(
+                                    "released portfolio attempts are not contiguous with "
+                                    "recovered request usage"
+                                )
+                            count = ordinal
+                        request_limit_counts[request_key] = count
+
             if uncertain_dispatched_attempt:
                 if self.global_input_token_budget is not None:
                     spent_input_tokens = self.global_input_token_budget
@@ -1816,6 +2538,56 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "recovered token usage exceeds the configured global budget"
                 )
+            if not set(self._portfolio_pending_claims).issubset(pending_adoptions):
+                raise BudgetReservationStateError(
+                    "claimed portfolio reservations are missing exact recovery adoption"
+                )
+            if self._active_portfolio is not None and (
+                recovered_portfolio_request_ids != self._portfolio_claimed_request_ids
+            ):
+                raise BudgetReservationStateError(
+                    "claimed portfolio entries are missing exact recovered attempt evidence"
+                )
+            if self._active_portfolio is not None:
+                if (
+                    self.global_input_token_budget is not None
+                    and spent_input_tokens + self._reserved_input_tokens
+                    > self.global_input_token_budget
+                ) or (
+                    self.global_output_token_budget is not None
+                    and spent_output_tokens + self._reserved_output_tokens
+                    > self.global_output_token_budget
+                ):
+                    raise BudgetReservationStateError(
+                        "recovered usage plus held portfolio tokens exceed the global budget"
+                    )
+                for scope, spent_values, reserved_values, caps in (
+                    (
+                        "model",
+                        spent_model_usd,
+                        self._reserved_model_usd,
+                        self.per_model_usd_caps,
+                    ),
+                    (
+                        "role",
+                        spent_role_usd,
+                        self._reserved_role_usd,
+                        self.per_role_usd_caps,
+                    ),
+                ):
+                    for key in set(spent_values).union(reserved_values):
+                        cap = caps.get(key)
+                        if (
+                            cap is not None
+                            and _exact_decimal_add(
+                                spent_values.get(key, Decimal(0)),
+                                reserved_values.get(key, Decimal(0)),
+                            )
+                            > cap
+                        ):
+                            raise BudgetReservationStateError(
+                                f"recovered usage plus held portfolio exceeds the {scope} USD budget"
+                            )
 
             _consume_trusted_budget_recovery_scope(normalized_records, recovery_scope)
             self._spent_input_tokens = spent_input_tokens
@@ -1846,12 +2618,11 @@ class BudgetManager:
     ) -> Reservation:
         """Reserve before send, requiring exact endpoint pricing in certification mode."""
 
-        if self._recovery_required:
+        if self.recovery_required:
             raise BudgetReservationStateError(
                 "persistent budget counters require exact usage recovery before dispatch"
             )
         maximum_cost = self._maximum_request_cost(prompt, endpoint_cost_bound)
-        estimated = float(maximum_cost)
         (
             resolved_model_id,
             resolved_prompt_tokens,
@@ -1885,7 +2656,7 @@ class BudgetManager:
         )
         async with self._lock:
             _require_trusted_budget_accounting_state(self)
-            if self._recovery_required:
+            if self.recovery_required:
                 raise BudgetReservationStateError(
                     "persistent budget counters require exact usage recovery before dispatch"
                 )
@@ -1901,7 +2672,6 @@ class BudgetManager:
             if pending_adoption is not None and (
                 pending_adoption.role != role
                 or pending_adoption.requested_model != resolved_model_id
-                or pending_adoption.reserved_cost_usd_exact != maximum_cost
             ):
                 raise BudgetReservationStateError(
                     "resumed request differs from its durable pre-send reservation"
@@ -1927,7 +2697,127 @@ class BudgetManager:
                 raise BudgetExhaustedError(
                     f"request for {role} exceeds the active per-request cost ceiling"
                 )
+            active_portfolio = self._active_portfolio
+            inherited_portfolio_scope = _ACTIVE_PORTFOLIO_TASK_SCOPE.get()
+            portfolio_slot: PortfolioTaskSlot | None = None
+            if active_portfolio is None:
+                if inherited_portfolio_scope is not None:
+                    raise BudgetReservationStateError(
+                        "request inherited an inactive portfolio task scope"
+                    )
+            else:
+                if (
+                    inherited_portfolio_scope is None
+                    or inherited_portfolio_scope.manager is not self
+                    or inherited_portfolio_scope.portfolio is not active_portfolio
+                    or inherited_portfolio_scope.process_id != os.getpid()
+                    or inherited_portfolio_scope.event_loop is not asyncio.get_running_loop()
+                    or inherited_portfolio_scope.task is not asyncio.current_task()
+                    or inherited_portfolio_scope._authority is not _PORTFOLIO_TASK_SCOPE_AUTHORITY
+                    or self._active_portfolio_scopes.get(inherited_portfolio_scope.task_id)
+                    is not inherited_portfolio_scope
+                ):
+                    raise BudgetReservationStateError(
+                        "request is outside an active portfolio task scope"
+                    )
+                candidates = tuple(
+                    sorted(
+                        (
+                            slot
+                            for slot in self._portfolio_accounted_slots()
+                            if slot.task_id == inherited_portfolio_scope.task_id
+                        ),
+                        key=lambda item: item.attempt_ordinal,
+                    )
+                )
+                if not candidates:
+                    raise BudgetReservationStateError(
+                        "portfolio task has no remaining exact attempt slot"
+                    )
+                portfolio_slot = candidates[0]
+                if any(
+                    slot.task_id == inherited_portfolio_scope.task_id
+                    and slot.request_id in self._reserved
+                    for slot in active_portfolio.slots
+                ):
+                    raise BudgetReservationStateError(
+                        "portfolio task previous attempt is still active"
+                    )
+                if (
+                    identifier != portfolio_slot.request_id
+                    or role != portfolio_slot.role
+                    or resolved_model_id != portfolio_slot.exact_model_id
+                ):
+                    raise BudgetReservationStateError(
+                        "request identity, role, or model differs from its portfolio slot"
+                    )
+                if (
+                    endpoint_cost_bound is None
+                    or endpoint_cost_bound.exact_model_id != portfolio_slot.exact_model_id
+                    or endpoint_cost_bound.provider_endpoint != portfolio_slot.provider_endpoint
+                    or endpoint_cost_bound.pricing_snapshot_sha256
+                    != portfolio_slot.endpoint_pricing_snapshot_sha256
+                ):
+                    raise BudgetReservationStateError(
+                        "request endpoint cost bound differs from its portfolio slot"
+                    )
+                if (
+                    resolved_plan_sha256 is None
+                    or resolved_prompt_tokens is None
+                    or resolved_visible_output_tokens is None
+                    or resolved_reasoning_tokens is None
+                    or resolved_completion_tokens is None
+                    or resolved_prompt_tokens > portfolio_slot.planned_prompt_tokens
+                    or resolved_visible_output_tokens > portfolio_slot.planned_visible_output_tokens
+                    or resolved_reasoning_tokens > portfolio_slot.planned_reasoning_tokens
+                    or resolved_completion_tokens > portfolio_slot.planned_completion_tokens
+                    or _trusted_endpoint_request_maximum_units_for(
+                        endpoint_cost_bound,
+                        "prompt",
+                    )
+                    > portfolio_slot.planned_prompt_tokens
+                    or _trusted_endpoint_request_maximum_units_for(
+                        endpoint_cost_bound,
+                        "completion",
+                    )
+                    > portfolio_slot.planned_completion_tokens
+                ):
+                    raise BudgetReservationStateError(
+                        "request token ceilings differ from its portfolio envelope"
+                    )
+                if maximum_cost > portfolio_slot.maximum_cost_usd:
+                    raise BudgetExhaustedError("request cost ceiling exceeds its portfolio slot")
+                if (
+                    request_limit_scope is None
+                    or request_limit_scope.identifier != portfolio_slot.logical_request_id
+                ):
+                    raise BudgetReservationStateError(
+                        "request limit scope differs from its portfolio task"
+                    )
+                if (pending_adoption is None) is (identifier in self._portfolio_pending_claims) or (
+                    pending_adoption is not None
+                    and (
+                        self._portfolio_pending_claim_costs.get(identifier)
+                        != pending_adoption.reserved_cost_usd_exact
+                        or maximum_cost != pending_adoption.reserved_cost_usd_exact
+                    )
+                ):
+                    raise BudgetReservationStateError(
+                        "resumed request differs from its durable portfolio claim"
+                    )
+            if (
+                portfolio_slot is None
+                and pending_adoption is not None
+                and pending_adoption.reserved_cost_usd_exact != maximum_cost
+            ):
+                raise BudgetReservationStateError(
+                    "resumed request differs from its durable pre-send reservation"
+                )
             count = self._request_limit_counts.get(request_limit_key, 0)
+            if portfolio_slot is not None and count != portfolio_slot.attempt_ordinal - 1:
+                raise BudgetReservationStateError(
+                    "portfolio attempt ordinal differs from its actual request count"
+                )
             if count >= self.max_requests_per_agent:
                 scope_label = (
                     f"role {role}"
@@ -1935,23 +2825,31 @@ class BudgetManager:
                     else f"scheduled task {request_limit_key[1]}"
                 )
                 raise BudgetExhaustedError(f"request limit reached for {scope_label}")
-            remaining_usd = _exact_decimal_subtract(
-                Decimal(str(self.total_usd)),
-                self._spent_exact,
-                _exact_decimal_sum(self._reserved.values()),
-            )
-            if maximum_cost > remaining_usd:
-                raise BudgetExhaustedError(
-                    f"request for {role} could cost ${estimated:.4f}, "
-                    f"but only ${self.remaining_usd:.4f} remains"
+            accounted_maximum_cost = maximum_cost
+            estimated = float(accounted_maximum_cost)
+            if portfolio_slot is None:
+                remaining_usd = _exact_decimal_subtract(
+                    Decimal(str(self.total_usd)),
+                    self._spent_exact,
+                    _exact_decimal_sum(self._reserved.values()),
                 )
-            self._require_scoped_capacity(
-                role=role,
-                exact_model_id=resolved_model_id,
-                maximum_cost=maximum_cost,
-                planned_prompt_tokens=resolved_prompt_tokens,
-                planned_completion_tokens=resolved_completion_tokens,
-            )
+                if maximum_cost > remaining_usd:
+                    raise BudgetExhaustedError(
+                        f"request for {role} could cost ${estimated:.4f}, "
+                        f"but only ${self.remaining_usd:.4f} remains"
+                    )
+                self._require_scoped_capacity(
+                    role=role,
+                    exact_model_id=resolved_model_id,
+                    maximum_cost=maximum_cost,
+                    planned_prompt_tokens=resolved_prompt_tokens,
+                    planned_completion_tokens=resolved_completion_tokens,
+                )
+            reserved_input_before = self._reserved_input_tokens
+            reserved_output_before = self._reserved_output_tokens
+            if portfolio_slot is not None:
+                reserved_input_before -= portfolio_slot.planned_prompt_tokens
+                reserved_output_before -= portfolio_slot.planned_completion_tokens
             token_evidence = (
                 AtomicTokenReservationEvidence.build(
                     request_id=identifier,
@@ -1965,9 +2863,9 @@ class BudgetManager:
                     global_input_token_limit=self.global_input_token_budget,
                     global_output_token_limit=self.global_output_token_budget,
                     spent_input_tokens_before=self._spent_input_tokens,
-                    reserved_input_tokens_before=self._reserved_input_tokens,
+                    reserved_input_tokens_before=reserved_input_before,
                     spent_output_tokens_before=self._spent_output_tokens,
-                    reserved_output_tokens_before=self._reserved_output_tokens,
+                    reserved_output_tokens_before=reserved_output_before,
                 )
                 if (
                     resolved_plan_sha256 is not None
@@ -2027,6 +2925,19 @@ class BudgetManager:
                         raise BudgetReservationStateError(
                             "durable pre-send reservation is no longer active"
                         )
+                elif portfolio_slot is not None:
+                    ledger = self._current_atomic_ledger()
+                    assert active_portfolio is not None
+                    if ledger is None:
+                        raise BudgetReservationStateError(
+                            "portfolio claim requires its persistent ledger"
+                        )
+                    persistent = _TRUSTED_ATOMIC_LEDGER_CLAIM_PORTFOLIO_SLOT(
+                        ledger,
+                        active_portfolio.persistent,
+                        identifier,
+                        maximum_cost,
+                    )
                 else:
                     ledger = self._current_atomic_ledger()
                     persistent = (
@@ -2038,11 +2949,41 @@ class BudgetManager:
                 raise BudgetExhaustedError(
                     f"request for {role} exceeds the persistent model-cost budget"
                 ) from None
-            self._reserved[identifier] = maximum_cost
+            except CostReservationStateError as exc:
+                raise BudgetReservationStateError(str(exc)) from None
+            if portfolio_slot is not None:
+                if pending_adoption is not None:
+                    adopted = self._portfolio_pending_claims.pop(identifier, None)
+                    if adopted != portfolio_slot:
+                        raise BudgetReservationStateError(
+                            "recovered portfolio claim is not pending exact adoption"
+                        )
+                    claimed_cost = self._portfolio_pending_claim_costs.pop(
+                        identifier,
+                        None,
+                    )
+                    if claimed_cost != accounted_maximum_cost:
+                        raise BudgetReservationStateError(
+                            "recovered portfolio claim cost is inconsistent"
+                        )
+                else:
+                    claimed = self._portfolio_remaining.pop(identifier, None)
+                    if claimed != portfolio_slot:
+                        raise BudgetReservationStateError(
+                            "portfolio slot changed before durable claim"
+                        )
+                    claimed_cost = portfolio_slot.maximum_cost_usd
+                self._remove_portfolio_slot_accounting(
+                    portfolio_slot,
+                    maximum_cost_usd=claimed_cost,
+                )
+            self._reserved[identifier] = accounted_maximum_cost
+            if portfolio_slot is not None:
+                self._portfolio_claimed_request_ids.add(identifier)
             self._request_limit_counts[request_limit_key] = count + 1
             reservation = replace(reservation_without_persistence, persistent=persistent)
             self._issued[identifier] = reservation
-            self._reserve_scoped(reservation, maximum_cost)
+            self._reserve_scoped(reservation, accounted_maximum_cost)
             if pending_adoption is not None:
                 self._pending_adoptions.pop(identifier)
             _refresh_trusted_budget_accounting_state(self)
@@ -2207,6 +3148,137 @@ class BudgetManager:
             caps=self.per_role_usd_caps,
             spent=self._spent_role_usd,
             reserved=self._reserved_role_usd,
+        )
+
+    def _require_portfolio_capacity(
+        self,
+        slots: tuple[PortfolioTaskSlot, ...],
+    ) -> None:
+        self._require_portfolio_absolute_limits(slots)
+        maximum_cost = _exact_decimal_sum(slot.maximum_cost_usd for slot in slots)
+        remaining_usd = _exact_decimal_subtract(
+            Decimal(str(self.total_usd)),
+            self._spent_exact,
+            _exact_decimal_sum(self._reserved.values()),
+        )
+        if maximum_cost > remaining_usd:
+            raise BudgetExhaustedError("portfolio exceeds the remaining global USD budget")
+        prompt_tokens = sum(slot.planned_prompt_tokens for slot in slots)
+        completion_tokens = sum(slot.planned_completion_tokens for slot in slots)
+        if (
+            self.global_input_token_budget is not None
+            and prompt_tokens
+            > self.global_input_token_budget
+            - self._spent_input_tokens
+            - self._reserved_input_tokens
+        ):
+            raise BudgetExhaustedError("portfolio exceeds the global input-token budget")
+        if (
+            self.global_output_token_budget is not None
+            and completion_tokens
+            > self.global_output_token_budget
+            - self._spent_output_tokens
+            - self._reserved_output_tokens
+        ):
+            raise BudgetExhaustedError("portfolio exceeds the global output-token budget")
+        model_costs, role_costs = _portfolio_scoped_costs(slots)
+        for exact_model_id, scoped_cost in model_costs.items():
+            self._require_usd_scope_capacity(
+                scope="model",
+                key=exact_model_id,
+                maximum_cost=scoped_cost,
+                caps=self.per_model_usd_caps,
+                spent=self._spent_model_usd,
+                reserved=self._reserved_model_usd,
+            )
+        for role, scoped_cost in role_costs.items():
+            self._require_usd_scope_capacity(
+                scope="role",
+                key=role,
+                maximum_cost=scoped_cost,
+                caps=self.per_role_usd_caps,
+                spent=self._spent_role_usd,
+                reserved=self._reserved_role_usd,
+            )
+
+    def _require_portfolio_absolute_limits(
+        self,
+        slots: tuple[PortfolioTaskSlot, ...],
+    ) -> None:
+        prompt_tokens = sum(slot.planned_prompt_tokens for slot in slots)
+        completion_tokens = sum(slot.planned_completion_tokens for slot in slots)
+        if prompt_tokens > _MAX_METERED_UNITS or completion_tokens > _MAX_METERED_UNITS:
+            raise BudgetExhaustedError("portfolio token inventory exceeds its compiled bound")
+        if (
+            self.global_input_token_budget is not None
+            and prompt_tokens > self.global_input_token_budget
+        ):
+            raise BudgetExhaustedError("portfolio exceeds the configured input-token budget")
+        if (
+            self.global_output_token_budget is not None
+            and completion_tokens > self.global_output_token_budget
+        ):
+            raise BudgetExhaustedError("portfolio exceeds the configured output-token budget")
+        model_costs, role_costs = _portfolio_scoped_costs(slots)
+        for scope, costs, caps in (
+            ("model", model_costs, self.per_model_usd_caps),
+            ("role", role_costs, self.per_role_usd_caps),
+        ):
+            for key, maximum_cost in costs.items():
+                cap = caps.get(key)
+                if cap is None:
+                    if caps:
+                        raise BudgetExhaustedError(
+                            f"portfolio has no configured {scope} USD budget for {key}"
+                        )
+                elif maximum_cost > cap:
+                    raise BudgetExhaustedError(
+                        f"portfolio exceeds the configured {scope} USD budget for {key}"
+                    )
+
+    def _add_portfolio_slot_accounting(
+        self,
+        slot: PortfolioTaskSlot,
+        *,
+        maximum_cost_usd: Decimal | None = None,
+    ) -> None:
+        accounted_cost = slot.maximum_cost_usd if maximum_cost_usd is None else maximum_cost_usd
+        self._reserved_input_tokens += slot.planned_prompt_tokens
+        self._reserved_output_tokens += slot.planned_completion_tokens
+        _increment_decimal(
+            self._reserved_model_usd,
+            slot.exact_model_id,
+            accounted_cost,
+        )
+        _increment_decimal(
+            self._reserved_role_usd,
+            slot.role,
+            accounted_cost,
+        )
+
+    def _remove_portfolio_slot_accounting(
+        self,
+        slot: PortfolioTaskSlot,
+        *,
+        maximum_cost_usd: Decimal | None = None,
+    ) -> None:
+        accounted_cost = slot.maximum_cost_usd if maximum_cost_usd is None else maximum_cost_usd
+        if (
+            self._reserved_input_tokens < slot.planned_prompt_tokens
+            or self._reserved_output_tokens < slot.planned_completion_tokens
+        ):
+            raise BudgetReservationStateError("portfolio token accounting is inconsistent")
+        self._reserved_input_tokens -= slot.planned_prompt_tokens
+        self._reserved_output_tokens -= slot.planned_completion_tokens
+        _decrement_decimal(
+            self._reserved_model_usd,
+            slot.exact_model_id,
+            accounted_cost,
+        )
+        _decrement_decimal(
+            self._reserved_role_usd,
+            slot.role,
+            accounted_cost,
         )
 
     @staticmethod
@@ -2521,7 +3593,16 @@ class BudgetManager:
             if (
                 reserved_cost is None
                 or bound is None
-                or reserved_cost != _trusted_endpoint_request_maximum_cost_usd(bound)
+                or (
+                    (
+                        reservation.identifier not in self._portfolio_claimed_request_ids
+                        and reserved_cost != _trusted_endpoint_request_maximum_cost_usd(bound)
+                    )
+                    or (
+                        reservation.identifier in self._portfolio_claimed_request_ids
+                        and _trusted_endpoint_request_maximum_cost_usd(bound) > reserved_cost
+                    )
+                )
             ):
                 raise BudgetReservationStateError(
                     "active transport reservation differs from its exact endpoint cost bound"
@@ -2700,6 +3781,12 @@ _BUDGET_ACCOUNTING_CONTAINER_FIELDS: Final = (
     "_spent_model_usd",
     "_reserved_role_usd",
     "_spent_role_usd",
+    "_portfolio_remaining",
+    "_portfolio_pending_claims",
+    "_portfolio_pending_claim_costs",
+    "_portfolio_claimed_request_ids",
+    "_active_portfolio_scopes",
+    "_closed_portfolio_plan_sha256s",
 )
 
 
@@ -2746,6 +3833,105 @@ def _accounting_active_request_cost_scope_material(
             "budget accounting active per-request cost ceiling is invalid"
         )
     return (id(value), id(value.event_loop), id(value._authority), ceiling)
+
+
+def _accounting_portfolio_slot_material(value: object) -> tuple[object, ...]:
+    if type(value) is not PortfolioTaskSlot:
+        raise BudgetReservationStateError("budget accounting portfolio slot type is invalid")
+    try:
+        _validate_portfolio_task_slot(value)
+    except (BudgetReservationStateError, ValueError) as exc:
+        raise BudgetReservationStateError("budget accounting portfolio slot is invalid") from exc
+    return (
+        id(value),
+        value.task_id,
+        value.logical_request_id,
+        value.attempt_ordinal,
+        value.request_id,
+        value.role,
+        value.exact_model_id,
+        value.provider_endpoint,
+        value.endpoint_policy_snapshot_sha256,
+        value.endpoint_policy_pricing_sha256,
+        value.endpoint_pricing_snapshot_sha256,
+        value.envelope_recipe_sha256,
+        value.planned_prompt_tokens,
+        value.planned_visible_output_tokens,
+        value.planned_reasoning_tokens,
+        value.planned_completion_tokens,
+        value.maximum_cost_usd,
+    )
+
+
+def _accounting_cost_portfolio_material(value: object) -> tuple[object, ...]:
+    if type(value) is not CostPortfolioReservation:
+        raise BudgetReservationStateError("budget accounting persistent portfolio type is invalid")
+    return (
+        id(value),
+        _accounting_string(value.plan_sha256, field="persistent portfolio plan hash"),
+        _accounting_string(value.reservation_id, field="persistent portfolio reservation ID"),
+        tuple(
+            (
+                _accounting_string(slot.request_id, field="persistent portfolio request ID"),
+                _accounting_decimal(
+                    slot.maximum_cost_usd,
+                    field="persistent portfolio slot cost",
+                ),
+            )
+            for slot in value.slots
+        ),
+    )
+
+
+def _accounting_budget_portfolio_material(value: object) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    if type(value) is not BudgetPortfolioReservation:
+        raise BudgetReservationStateError("budget accounting active portfolio type is invalid")
+    if (
+        type(value.plan_sha256) is not str
+        or _SHA256_PATTERN.fullmatch(value.plan_sha256) is None
+        or type(value.slots) is not tuple
+        or not value.slots
+        or value.persistent.plan_sha256 != value.plan_sha256
+        or value.persistent.slots != tuple(slot.as_cost_slot() for slot in value.slots)
+    ):
+        raise BudgetReservationStateError("budget accounting active portfolio is invalid")
+    return (
+        id(value),
+        value.plan_sha256,
+        tuple(_accounting_portfolio_slot_material(slot) for slot in value.slots),
+        _accounting_cost_portfolio_material(value.persistent),
+    )
+
+
+def _accounting_portfolio_scope_material(
+    value: object,
+    *,
+    manager: BudgetManager,
+) -> tuple[object, ...]:
+    if (
+        type(value) is not _ActivePortfolioTaskScope
+        or value.manager is not manager
+        or type(value.process_id) is not int
+        or value.process_id != os.getpid()
+        or not isinstance(value.event_loop, asyncio.AbstractEventLoop)
+        or not isinstance(value.task, asyncio.Task)
+        or type(value.task_id) is not str
+        or value.slot.task_id != value.task_id
+        or value._authority is not _PORTFOLIO_TASK_SCOPE_AUTHORITY
+    ):
+        raise BudgetReservationStateError("budget accounting portfolio task scope is invalid")
+    return (
+        id(value),
+        value.process_id,
+        id(value.event_loop),
+        id(value.task),
+        _accounting_budget_portfolio_material(value.portfolio),
+        value.task_id,
+        _accounting_portfolio_slot_material(value.slot),
+        id(value._authority),
+    )
 
 
 def _accounting_float(value: object, *, field: str) -> float:
@@ -2927,7 +4113,11 @@ def _accounting_recovered_attempt_material(value: object) -> tuple[object, ...]:
     if type(value) is not RecoveredSchedulerCostAttempt:
         raise BudgetReservationStateError("budget accounting recovery attempt type is invalid")
     status = _accounting_string(value.status, field="recovery attempt status")
-    if status not in {"adopted_proven_pre_send", "uncertain_accounted_after_dispatch"}:
+    if status not in {
+        "adopted_proven_pre_send",
+        "released_proven_pre_send",
+        "uncertain_accounted_after_dispatch",
+    }:
         raise BudgetReservationStateError("budget accounting recovery attempt status is invalid")
     return (
         id(value),
@@ -2958,10 +4148,28 @@ def _project_trusted_budget_accounting_state(
         request_limit_counts = object.__getattribute__(manager, "_request_limit_counts")
     except (AttributeError, TypeError) as exc:
         raise BudgetReservationStateError("budget accounting state is incomplete") from exc
-    if (
-        any(type(value) is not dict for value in containers[:3])
-        or any(type(value) is not set for value in containers[3:5])
-        or any(type(value) is not dict for value in containers[5:])
+    expected_container_types = (
+        dict,
+        dict,
+        dict,
+        set,
+        set,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        dict,
+        set,
+        dict,
+        set,
+    )
+    if len(containers) != len(expected_container_types) or any(
+        type(value) is not expected
+        for value, expected in zip(containers, expected_container_types, strict=True)
     ):
         raise BudgetReservationStateError("budget accounting container type is invalid")
 
@@ -3016,6 +4224,80 @@ def _project_trusted_budget_accounting_state(
             )
         )
 
+    portfolio_remaining = object.__getattribute__(manager, "_portfolio_remaining")
+    portfolio_pending_claims = object.__getattribute__(manager, "_portfolio_pending_claims")
+    portfolio_pending_claim_costs = object.__getattribute__(
+        manager,
+        "_portfolio_pending_claim_costs",
+    )
+    portfolio_claimed_request_ids = object.__getattribute__(
+        manager,
+        "_portfolio_claimed_request_ids",
+    )
+    active_portfolio_scopes = object.__getattribute__(manager, "_active_portfolio_scopes")
+    closed_portfolio_plan_sha256s = object.__getattribute__(
+        manager,
+        "_closed_portfolio_plan_sha256s",
+    )
+    portfolio_remaining_material = tuple(
+        sorted(
+            (
+                _accounting_string(key, field="portfolio remaining request ID"),
+                _accounting_portfolio_slot_material(value),
+            )
+            for key, value in portfolio_remaining.items()
+        )
+    )
+    portfolio_pending_material = tuple(
+        sorted(
+            (
+                _accounting_string(key, field="portfolio pending request ID"),
+                _accounting_portfolio_slot_material(value),
+            )
+            for key, value in portfolio_pending_claims.items()
+        )
+    )
+    portfolio_pending_cost_material = _accounting_decimal_map(
+        portfolio_pending_claim_costs,
+        field="portfolio pending claim cost",
+    )
+    if any(
+        key != value.request_id
+        for inventory in (portfolio_remaining, portfolio_pending_claims)
+        for key, value in inventory.items()
+    ):
+        raise BudgetReservationStateError("budget accounting portfolio slot key is invalid")
+    if set(portfolio_pending_claim_costs) != set(portfolio_pending_claims) or any(
+        portfolio_pending_claim_costs[key] > slot.maximum_cost_usd
+        for key, slot in portfolio_pending_claims.items()
+    ):
+        raise BudgetReservationStateError(
+            "budget accounting pending portfolio claim cost is invalid"
+        )
+    portfolio_claimed_material = tuple(
+        sorted(
+            _accounting_string(value, field="portfolio claimed request ID")
+            for value in portfolio_claimed_request_ids
+        )
+    )
+    portfolio_scope_material = tuple(
+        sorted(
+            (
+                _accounting_string(key, field="portfolio active-scope task ID"),
+                _accounting_portfolio_scope_material(value, manager=manager),
+            )
+            for key, value in active_portfolio_scopes.items()
+        )
+    )
+    if any(key != value.task_id for key, value in active_portfolio_scopes.items()):
+        raise BudgetReservationStateError("budget accounting portfolio scope key is invalid")
+    closed_portfolio_material = tuple(
+        sorted(
+            _accounting_string(value, field="closed portfolio plan hash")
+            for value in closed_portfolio_plan_sha256s
+        )
+    )
+
     scalar_spent = _accounting_float(
         object.__getattribute__(manager, "_spent"),
         field="spent float USD",
@@ -3029,6 +4311,12 @@ def _project_trusted_budget_accounting_state(
     recovery_required = object.__getattribute__(manager, "_recovery_required")
     if type(recovery_required) is not bool:
         raise BudgetReservationStateError("budget accounting recovery flag is invalid")
+    portfolio_recovery_required = object.__getattribute__(
+        manager,
+        "_portfolio_recovery_required",
+    )
+    if type(portfolio_recovery_required) is not bool:
+        raise BudgetReservationStateError("budget accounting portfolio recovery flag is invalid")
     material: tuple[object, ...] = (
         scalar_spent,
         exact_spent,
@@ -3075,7 +4363,17 @@ def _project_trusted_budget_accounting_state(
             object.__getattribute__(manager, "_active_request_cost_ceiling_scope"),
             manager=manager,
         ),
+        _accounting_budget_portfolio_material(
+            object.__getattribute__(manager, "_active_portfolio")
+        ),
+        portfolio_remaining_material,
+        portfolio_pending_material,
+        portfolio_pending_cost_material,
+        portfolio_claimed_material,
+        portfolio_scope_material,
+        closed_portfolio_material,
         recovery_required,
+        portfolio_recovery_required,
     )
     return _TrustedBudgetAccountingState(containers=containers, material=material)
 
@@ -3316,6 +4614,141 @@ def _validate_active_request_cost_ceiling(value: Decimal) -> Decimal:
     return ceiling
 
 
+def _validate_portfolio_task_slot(slot: PortfolioTaskSlot) -> None:
+    if type(slot) is not PortfolioTaskSlot:
+        raise ValueError("portfolio attempt slot type is invalid")
+    _validate_scope_key(slot.task_id, _REQUEST_LIMIT_SCOPE_PATTERN, scope="portfolio task")
+    _validate_scope_key(
+        slot.logical_request_id,
+        _REQUEST_LIMIT_SCOPE_PATTERN,
+        scope="portfolio logical request",
+    )
+    _validate_scope_key(
+        slot.request_id,
+        _REQUEST_LIMIT_SCOPE_PATTERN,
+        scope="portfolio request",
+    )
+    _validate_scope_key(slot.role, _ROLE_ID_PATTERN, scope="portfolio role")
+    _validate_scope_key(slot.exact_model_id, _MODEL_ID_PATTERN, scope="portfolio model")
+    _validate_scope_key(
+        slot.provider_endpoint,
+        _ENDPOINT_ID_PATTERN,
+        scope="portfolio provider endpoint",
+    )
+    for label, value in (
+        ("endpoint policy snapshot", slot.endpoint_policy_snapshot_sha256),
+        ("endpoint policy pricing", slot.endpoint_policy_pricing_sha256),
+        ("endpoint pricing snapshot", slot.endpoint_pricing_snapshot_sha256),
+        ("envelope recipe", slot.envelope_recipe_sha256),
+    ):
+        if type(value) is not str or _SHA256_PATTERN.fullmatch(value) is None:
+            raise ValueError(f"portfolio {label} SHA-256 is invalid")
+    if type(slot.attempt_ordinal) is not int or not 1 <= slot.attempt_ordinal <= _MAX_METERED_UNITS:
+        raise ValueError("portfolio attempt ordinal is invalid")
+    expected_request_id = (
+        slot.logical_request_id
+        if slot.attempt_ordinal == 1
+        else f"{slot.logical_request_id}:attempt:{slot.attempt_ordinal}"
+    )
+    if slot.request_id != expected_request_id:
+        raise ValueError("portfolio request ID differs from its exact attempt ordinal")
+    prompt_tokens = _validate_token_count(
+        slot.planned_prompt_tokens,
+        field="portfolio planned prompt tokens",
+    )
+    visible_tokens = _validate_token_count(
+        slot.planned_visible_output_tokens,
+        field="portfolio planned visible-output tokens",
+    )
+    reasoning_tokens = _validate_token_count(
+        slot.planned_reasoning_tokens,
+        field="portfolio planned reasoning tokens",
+    )
+    completion_tokens = _validate_token_count(
+        slot.planned_completion_tokens,
+        field="portfolio planned completion tokens",
+    )
+    if visible_tokens + reasoning_tokens != completion_tokens:
+        raise ValueError("portfolio output token ceilings do not conserve completion tokens")
+    _validate_active_request_cost_ceiling(slot.maximum_cost_usd)
+    if prompt_tokens + completion_tokens > _MAX_METERED_UNITS:
+        raise ValueError("portfolio attempt token ceiling exceeds its compiled bound")
+
+
+def _validate_budget_portfolio_slots(
+    plan_sha256: str,
+    slots: tuple[PortfolioTaskSlot, ...],
+    *,
+    maximum_attempts: int,
+) -> tuple[PortfolioTaskSlot, ...]:
+    if type(plan_sha256) is not str or _SHA256_PATTERN.fullmatch(plan_sha256) is None:
+        raise ValueError("budget portfolio plan SHA-256 is invalid")
+    if type(slots) is not tuple or not slots or len(slots) > _MAX_PORTFOLIO_ATTEMPT_SLOTS:
+        raise ValueError("budget portfolio slots are absent or exceed their compiled bound")
+    if any(type(slot) is not PortfolioTaskSlot for slot in slots):
+        raise ValueError("budget portfolio slots must use exact slot records")
+    if type(maximum_attempts) is not int or maximum_attempts < 1:
+        raise ValueError("budget portfolio request maximum is invalid")
+    request_ids = tuple(slot.request_id for slot in slots)
+    if len(request_ids) != len(set(request_ids)):
+        raise ValueError("budget portfolio request IDs must be unique")
+    grouped: dict[str, list[PortfolioTaskSlot]] = {}
+    for slot in slots:
+        _validate_portfolio_task_slot(slot)
+        grouped.setdefault(slot.task_id, []).append(slot)
+    logical_request_ids: set[str] = set()
+    for task_id, attempts in grouped.items():
+        ordinals = tuple(slot.attempt_ordinal for slot in attempts)
+        if ordinals != tuple(range(1, len(attempts) + 1)):
+            raise ValueError(
+                f"budget portfolio task {task_id} attempts must be consecutive and ordered"
+            )
+        if len(attempts) > maximum_attempts:
+            raise BudgetExhaustedError(
+                f"budget portfolio task {task_id} exceeds its request maximum"
+            )
+        first = attempts[0]
+        task_coordinates = (
+            first.logical_request_id,
+            first.role,
+            first.exact_model_id,
+            first.provider_endpoint,
+            first.endpoint_policy_snapshot_sha256,
+            first.endpoint_policy_pricing_sha256,
+            first.endpoint_pricing_snapshot_sha256,
+            first.envelope_recipe_sha256,
+            first.planned_prompt_tokens,
+            first.planned_visible_output_tokens,
+            first.planned_reasoning_tokens,
+            first.planned_completion_tokens,
+            first.maximum_cost_usd,
+        )
+        if any(
+            (
+                slot.logical_request_id,
+                slot.role,
+                slot.exact_model_id,
+                slot.provider_endpoint,
+                slot.endpoint_policy_snapshot_sha256,
+                slot.endpoint_policy_pricing_sha256,
+                slot.endpoint_pricing_snapshot_sha256,
+                slot.envelope_recipe_sha256,
+                slot.planned_prompt_tokens,
+                slot.planned_visible_output_tokens,
+                slot.planned_reasoning_tokens,
+                slot.planned_completion_tokens,
+                slot.maximum_cost_usd,
+            )
+            != task_coordinates
+            for slot in attempts[1:]
+        ):
+            raise ValueError(f"budget portfolio task {task_id} attempt envelopes are inconsistent")
+        if first.logical_request_id in logical_request_ids:
+            raise ValueError("budget portfolio logical request IDs must be unique per task")
+        logical_request_ids.add(first.logical_request_id)
+    return slots
+
+
 def _canonical_budget_float(value: float, *, field: str, positive: bool) -> float:
     if type(value) not in {int, float}:
         raise ValueError(f"{field} must be an exact int or float")
@@ -3328,6 +4761,17 @@ def _canonical_budget_float(value: float, *, field: str, positive: bool) -> floa
 
 def _increment_decimal(values: dict[str, Decimal], key: str, amount: Decimal) -> None:
     values[key] = _exact_decimal_add(values.get(key, Decimal(0)), amount)
+
+
+def _portfolio_scoped_costs(
+    slots: tuple[PortfolioTaskSlot, ...],
+) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
+    model_costs: dict[str, Decimal] = {}
+    role_costs: dict[str, Decimal] = {}
+    for slot in slots:
+        _increment_decimal(model_costs, slot.exact_model_id, slot.maximum_cost_usd)
+        _increment_decimal(role_costs, slot.role, slot.maximum_cost_usd)
+    return model_costs, role_costs
 
 
 def _decrement_decimal(values: dict[str, Decimal], key: str, amount: Decimal) -> None:

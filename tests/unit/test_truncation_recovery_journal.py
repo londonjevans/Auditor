@@ -16,15 +16,20 @@ import pytest
 from mmaudit.models.candidate_review_stamping import stamp_candidate_review_findings
 from mmaudit.models.scheduler import (
     SchedulerCampaignManifest,
+    SchedulerCampaignSummary,
     SchedulerJournalEvidence,
     SchedulerModelRequestEvidence,
     SchedulerPassKind,
     SchedulerPassPlan,
     SchedulerProviderAttemptEvidence,
+    SchedulerTaskActivation,
+    SchedulerTaskEvent,
+    SchedulerTaskEventKind,
     SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
     SchedulerTruncationRecoveryPromotionDisposition,
+    build_scheduler_model_request_evidence,
     build_scheduler_truncation_recovery_model_request_evidence,
     scheduler_canonical_sha256,
 )
@@ -93,7 +98,10 @@ from mmaudit.orchestration import scheduler as scheduler_module
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence, BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.scheduler import SchedulerJournal
-from mmaudit.orchestration.scheduler_runtime import scheduler_response_normalizer_sha256
+from mmaudit.orchestration.scheduler_runtime import (
+    build_scheduler_cost_ledger_baseline,
+    scheduler_response_normalizer_sha256,
+)
 from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
@@ -108,6 +116,7 @@ from tests.scheduler_support import (
 from tests.unit.test_scheduler_journal import (
     _bindings,
     _inventory,
+    _journal_private_file_snapshot,
     _plan,
     create_scheduler_journal,
     open_scheduler_journal_for_verification,
@@ -223,6 +232,7 @@ def _placeholder_channels(
 def _resources(
     *,
     recovery_requests_consumed: int,
+    campaign_cap_usd_exact: str = "250",
     accounted_before: str = "0",
     attempts_before: int = 0,
     tokens_before: int = 0,
@@ -231,7 +241,7 @@ def _resources(
     parent_cost: str = "0",
 ) -> TruncationRecoveryResourceBudget:
     return TruncationRecoveryResourceBudget.build(
-        campaign_cap_usd_exact="250",
+        campaign_cap_usd_exact=campaign_cap_usd_exact,
         accounted_usd_before_parent_exact=accounted_before,
         parent_accounted_cost_usd_exact=parent_cost,
         child_reserved_usd_exact="0.1",
@@ -347,6 +357,11 @@ def _root_plan(
         parent=parent,
         resources=_resources(
             recovery_requests_consumed=0,
+            campaign_cap_usd_exact=(
+                journal.manifest.cost_ledger_baseline.cap_usd_exact
+                if journal.manifest.cost_ledger_baseline is not None
+                else "250"
+            ),
             accounted_before=format(
                 sum(
                     (Decimal(record.accounted_cost_usd_exact or "0") for record in prior_usage),
@@ -373,6 +388,7 @@ def _journal_with_truncated_parent(
     wrong_truncation_status: bool = False,
     parent_cost_usd_exact: str = "0",
     parent_role: str | None = None,
+    atomic_ledger: AtomicCostLedger | None = None,
 ) -> tuple[
     SchedulerJournal,
     TruncationRecoveryPlan,
@@ -380,11 +396,17 @@ def _journal_with_truncated_parent(
     tuple[ModelSurfaceReviewRecord, ...],
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
 ]:
-    bindings = _bindings()
+    baseline = (
+        build_scheduler_cost_ledger_baseline(atomic_ledger) if atomic_ledger is not None else None
+    )
+    bindings = _bindings(
+        cost_ledger_baseline_sha256=(baseline.baseline_sha256 if baseline is not None else None)
+    )
     journal = create_scheduler_journal(
         path,
         bindings=bindings,
         shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
     )
     _complete_recovery_orientation(journal)
     surface_manifest, surfaces = _requested_surfaces()
@@ -595,6 +617,74 @@ def _journal_with_truncated_parent(
         surface_manifest=surface_manifest,
     )
     return journal, recovery_plan, projection, surfaces, surface_manifest
+
+
+def _leave_typed_parent_attempt_ahead_of_checkpoint(
+    journal: SchedulerJournal,
+    path: Path,
+) -> tuple[
+    SchedulerJournalEvidence,
+    SchedulerPassPlan,
+    SchedulerTaskPlan,
+    SchedulerTaskActivation,
+    SchedulerProviderAttemptEvidence,
+    SchedulerTaskEvent,
+]:
+    """Rewrite the synthetic terminal tail to the exact post-attempt crash prefix."""
+
+    attempt = next(item for item in journal.provider_attempts if item.schema_version == "1.1")
+    task, pass_plan = journal._task_and_plan(attempt.task_id)
+    activation = journal._activation_for_task(task.task_id)
+    terminal_result = next(
+        item for item in journal.result_observations if item.task_id == task.task_id
+    )
+    terminal_event = journal.events[-1]
+    assert terminal_event.kind is SchedulerTaskEventKind.TERMINAL
+    assert terminal_event.task_id == task.task_id
+    predecessor_events = journal.events[:-1]
+    predecessor_results = tuple(
+        item for item in journal.task_results if item.task_id != task.task_id
+    )
+    predecessor_observations = tuple(
+        item for item in journal.result_observations if item.task_id != task.task_id
+    )
+    predecessor_attempts = tuple(
+        item for item in journal.provider_attempts if item.task_id != task.task_id
+    )
+    predecessor = SchedulerJournalEvidence.build(
+        manifest=journal.manifest,
+        analysis_input_inventory=journal.analysis_input_inventory,
+        summary=SchedulerCampaignSummary.build(
+            manifest=journal.manifest,
+            pass_results=journal.pass_results,
+        ),
+        plans=journal.plans,
+        model_requests=build_scheduler_model_request_evidence(
+            plans=journal.plans,
+            activations=journal.activations,
+            task_results=predecessor_results,
+        ),
+        activations=journal.activations,
+        outputs=journal.outputs,
+        provider_attempts=predecessor_attempts,
+        task_results=predecessor_results,
+        result_observations=predecessor_observations,
+        events=predecessor_events,
+        truncation_recovery_entries=journal.truncation_recovery_entries,
+        terminal_report_authority=journal.terminal_report_authority,
+    )
+    prior_event = predecessor_events[-1]
+    journal.close()
+
+    (path / scheduler_module._task_result_path(terminal_result)).unlink()
+    (path / scheduler_module._event_path(terminal_event.event_index)).unlink()
+    checkpoint_path = path / scheduler_module._JOURNAL_HEAD_CHECKPOINT_FILENAME
+    checkpoint_path.write_bytes(stable_json(predecessor).encode("utf-8"))
+    checkpoint_path.chmod(0o600)
+    transition_path = path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME
+    transition_path.write_bytes(stable_json(predecessor).encode("utf-8"))
+    transition_path.chmod(0o600)
+    return predecessor, pass_plan, task, activation, attempt, prior_event
 
 
 def _activate_child(
@@ -1306,6 +1396,7 @@ def _open_dispatched_child(
     *,
     parent_cost_usd_exact: str = "0",
     parent_role: str | None = None,
+    atomic_ledger: AtomicCostLedger | None = None,
 ) -> tuple[
     SchedulerJournal,
     TruncationRecoveryChildPlan,
@@ -1318,6 +1409,7 @@ def _open_dispatched_child(
         path,
         parent_cost_usd_exact=parent_cost_usd_exact,
         parent_role=parent_role,
+        atomic_ledger=atomic_ledger,
     )
     journal.open_truncation_recovery_family(
         recovery_plan=plan,
@@ -1584,6 +1676,199 @@ def test_activation_only_replays_but_dispatched_child_becomes_uncertain(
     replayed.close()
 
 
+def test_uncheckpointed_child_dispatch_survives_derived_result_process_death(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "child-dispatch-double-crash"
+    journal, plan, projection, _surfaces, surface_manifest = _journal_with_truncated_parent(path)
+    journal.open_truncation_recovery_family(
+        recovery_plan=plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    child = plan.children[0]
+    _activate_child(journal, child.child_task_id)
+    predecessor = journal.journal_evidence
+
+    def crash_before_dispatch_checkpoint() -> SchedulerJournalEvidence:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        journal,
+        "_refresh_journal_head_checkpoint",
+        crash_before_dispatch_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+    journal.close()
+    monkeypatch.undo()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_after_child_result_publication(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (
+            leaf.endswith(".json")
+            and json.loads(content).get("entry_kind")
+            == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_after_child_result_publication,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    recovered = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert recovered.uncertain_truncation_recovery_child_ids == (child.child_task_id,)
+    evidence = recovered.journal_evidence
+    entries = recovered.truncation_recovery_entries
+    recovered.close()
+
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=evidence,
+    )
+    assert replayed.truncation_recovery_entries == entries
+    assert replayed.journal_evidence == evidence
+    replayed.close()
+
+
+@pytest.mark.parametrize("second_crash", ["result-publication", "checkpoint-pending"])
+def test_uncheckpointed_typed_attempt_survives_derived_result_process_death(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second_crash: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"typed-attempt-double-crash-{second_crash}"
+    journal, _plan_value, projection, _surfaces, _surface_manifest = _journal_with_truncated_parent(
+        path, typed_parent_attempt=True
+    )
+    predecessor, _pass_plan, task, _activation, _attempt, _prior_event = (
+        _leave_typed_parent_attempt_ahead_of_checkpoint(journal, path)
+    )
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovered_terminal(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (second_crash == "result-publication" and leaf.startswith(f"{task.task_id}-")) or (
+            second_crash == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+            and SchedulerJournalEvidence.model_validate_json(content).truncated_count == 1
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovered_terminal,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    recovered_result = next(item for item in resumed.task_results if item.task_id == task.task_id)
+    assert recovered_result.terminal_status is SchedulerTerminalStatus.TRUNCATED
+    assert recovered_result.terminal_evidence_sha256 == projection.evidence_sha256
+    evidence = resumed.journal_evidence
+    resumed.close()
+
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=evidence,
+    )
+    assert replayed.journal_evidence == evidence
+    replayed.close()
+
+
+def test_uncheckpointed_typed_attempt_rejects_an_arbitrary_terminal_bundle(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "typed-attempt-arbitrary-terminal"
+    journal, _plan_value, _projection_value, _surfaces, _surface_manifest = (
+        _journal_with_truncated_parent(path, typed_parent_attempt=True)
+    )
+    predecessor, pass_plan, task, activation, _attempt, prior_event = (
+        _leave_typed_parent_attempt_ahead_of_checkpoint(journal, path)
+    )
+    arbitrary = SchedulerTaskResult.build(
+        plan=pass_plan,
+        task=task,
+        activation=activation,
+        terminal_status=SchedulerTerminalStatus.FAILED,
+        terminal_evidence_sha256=_digest("arbitrary-typed-terminal"),
+    )
+    arbitrary_event = SchedulerTaskEvent.build(
+        plan=pass_plan,
+        task=task,
+        kind=SchedulerTaskEventKind.TERMINAL,
+        event_index=prior_event.event_index + 1,
+        previous_event=prior_event,
+        prior_task_event=prior_event,
+        request_id=task.logical_request_id,
+        activation=activation,
+        result=arbitrary,
+    )
+    result_path = path / scheduler_module._task_result_path(arbitrary)
+    result_path.write_bytes(stable_json(arbitrary).encode("utf-8"))
+    result_path.chmod(0o600)
+    event_path = path / scheduler_module._event_path(arbitrary_event.event_index)
+    event_path.write_bytes(stable_json(arbitrary_event).encode("utf-8"))
+    event_path.chmod(0o600)
+
+    before = _journal_private_file_snapshot(path)
+    with pytest.raises(ValueError, match="checkpoint does not match durable journal evidence"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    assert _journal_private_file_snapshot(path) == before
+
+
 @pytest.mark.parametrize("suffix_kind", ("preflight", "dispatch", "runtime_result", "closure"))
 def test_local_head_checkpoint_rejects_each_deleted_recovery_suffix_before_recovery(
     tmp_path: Path,
@@ -1653,7 +1938,7 @@ def test_local_head_checkpoint_rejects_each_deleted_recovery_suffix_before_recov
     assert len(tuple((path / "truncation-recovery").iterdir())) == expected_remaining_count
 
 
-def test_artifact_checkpoint_gap_fails_closed_instead_of_recovering(
+def test_child_dispatch_checkpoint_gap_recovers_exact_uncertain_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1682,13 +1967,15 @@ def test_artifact_checkpoint_gap_fails_closed_instead_of_recovering(
     with pytest.raises(ValueError, match="synthetic checkpoint replacement interruption"):
         journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
     journal.close()
+    monkeypatch.undo()
 
-    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
-        resume_scheduler_journal(
-            path,
-            expected_bindings=_bindings(),
-            expected_shard_inventory=_inventory(),
-        )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert resumed.uncertain_truncation_recovery_child_ids == (child.child_task_id,)
+    resumed.close()
 
 
 def test_family_root_rejects_success_usage_paired_with_a_truncated_result(

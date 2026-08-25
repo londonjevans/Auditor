@@ -11,6 +11,8 @@ from pydantic import BaseModel, ValidationError
 from mmaudit.models.coverage_planning import (
     MAX_COVERAGE_REVIEWERS,
     MAX_SURFACES_PER_GAP_TASK,
+    ModelPortfolioTaskKind,
+    ModelPortfolioTaskResourceEnvelope,
     ModelSurfaceAssignmentPurpose,
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourceFailureCode,
@@ -18,6 +20,7 @@ from mmaudit.models.coverage_planning import (
     ModelSurfaceRiskTier,
     ModelSurfaceTaskResourcePreview,
     _canonical_sha256,
+    build_model_portfolio_resource_preflight,
     build_model_surface_coverage_plan,
     build_model_surface_coverage_policy,
     build_model_surface_resource_preflight,
@@ -118,6 +121,46 @@ def _preview(
         maximum_prompt_tokens_per_attempt=prompt_tokens,
         maximum_completion_tokens_per_attempt=completion_tokens,
         maximum_cost_usd_per_attempt_exact=cost,
+    )
+
+
+def _portfolio_envelope(
+    plan: ModelSurfaceCoveragePlan,
+    *,
+    index: int,
+    task_kind: ModelPortfolioTaskKind,
+    role: str,
+    model: str,
+    attempts: int = 2,
+    cost: str = "0.25",
+) -> ModelPortfolioTaskResourceEnvelope:
+    logical_request_id = f"scheduler-request-{index:064x}"
+    return ModelPortfolioTaskResourceEnvelope.build(
+        task_kind=task_kind,
+        scheduler_task_id=f"scheduler-task-{index:064x}",
+        scheduler_task_plan_sha256=f"{index + 100:064x}",
+        scheduler_logical_request_id=logical_request_id,
+        campaign_manifest_sha256=f"{999:064x}",
+        request_role=role,
+        requested_model=model,
+        request_envelope_recipe_sha256=f"{index + 200:064x}",
+        endpoint_policy_snapshot_sha256=f"{index + 300:064x}",
+        endpoint_policy_pricing_sha256=f"{index + 400:064x}",
+        provider_endpoint="synthetic-provider",
+        endpoint_pricing_snapshot_sha256=f"{index + 500:064x}",
+        maximum_attempts=attempts,
+        attempt_request_ids=(
+            logical_request_id,
+            *(f"{logical_request_id}:attempt:{ordinal}" for ordinal in range(2, attempts + 1)),
+        ),
+        maximum_prompt_tokens_per_attempt=100,
+        maximum_visible_output_tokens_per_attempt=30,
+        maximum_reasoning_tokens_per_attempt=20,
+        maximum_completion_tokens_per_attempt=50,
+        maximum_cost_usd_per_attempt_exact=cost,
+        coverage_task=plan.tasks[0]
+        if task_kind is ModelPortfolioTaskKind.COMPACT_COVERAGE
+        else None,
     )
 
 
@@ -497,6 +540,125 @@ def test_preview_and_aggregate_preflight_pass_exact_equalities() -> None:
     assert preflight.planned_maximum_cost_usd_exact == "0.5"
     assert preflight.planned_costs_by_role[0].maximum_cost_usd_exact == "0.5"
     assert preflight.planned_costs_by_model[0].maximum_cost_usd_exact == "0.5"
+
+
+def test_preorientation_portfolio_joins_compact_and_supplemental_tasks() -> None:
+    request = _request(1)
+    binding = _binding(1, role="specialist:false_negative_hunter")
+    plan = build_model_surface_coverage_plan(
+        [request],
+        [binding],
+        surface_scope_by_id=_scopes([request]),
+        mandatory_reviewer_roles=(binding.review_role,),
+    )
+    envelopes = (
+        _portfolio_envelope(
+            plan,
+            index=4,
+            task_kind=ModelPortfolioTaskKind.WHOLE_PROTOCOL,
+            role="whole_protocol",
+            model=binding.requested_model,
+        ),
+        _portfolio_envelope(
+            plan,
+            index=2,
+            task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+            role=binding.review_role,
+            model=binding.requested_model,
+        ),
+        _portfolio_envelope(
+            plan,
+            index=1,
+            task_kind=ModelPortfolioTaskKind.ORIENTATION,
+            role="orientation",
+            model=binding.requested_model,
+        ),
+        _portfolio_envelope(
+            plan,
+            index=3,
+            task_kind=ModelPortfolioTaskKind.SOURCE_AUDIT,
+            role="source_audit",
+            model=binding.requested_model,
+        ),
+    )
+
+    preflight = build_model_portfolio_resource_preflight(
+        plan,
+        envelopes,
+        campaign_manifest_sha256=f"{999:064x}",
+        maximum_requests_per_task=2,
+        maximum_input_tokens=800,
+        maximum_output_tokens=400,
+        maximum_cost_usd_exact="2",
+    )
+
+    assert preflight.feasible
+    assert preflight.failure_codes == ()
+    assert preflight.planned_maximum_request_count == 8
+    assert preflight.planned_maximum_input_tokens == 800
+    assert preflight.planned_maximum_output_tokens == 400
+    assert preflight.planned_maximum_cost_usd_exact == "2"
+    assert preflight.candidate_independent_request_roles == ("specialist:false_negative_hunter",)
+    assert tuple(item.task_kind for item in preflight.task_envelopes) == (
+        ModelPortfolioTaskKind.ORIENTATION,
+        ModelPortfolioTaskKind.COMPACT_COVERAGE,
+        ModelPortfolioTaskKind.SOURCE_AUDIT,
+        ModelPortfolioTaskKind.WHOLE_PROTOCOL,
+    )
+    assert not preflight.authorizes_dispatch
+
+
+def test_portfolio_fails_before_dispatch_when_one_task_exceeds_attempt_cap() -> None:
+    plan = _single_task_plan()
+    envelope = _portfolio_envelope(
+        plan,
+        index=1,
+        task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+        role=plan.tasks[0].review_role,
+        model=plan.tasks[0].requested_model,
+        attempts=3,
+    )
+
+    preflight = build_model_portfolio_resource_preflight(
+        plan,
+        [envelope],
+        campaign_manifest_sha256=f"{999:064x}",
+        maximum_requests_per_task=2,
+        maximum_input_tokens=300,
+        maximum_output_tokens=150,
+        maximum_cost_usd_exact="0.75",
+    )
+
+    assert not preflight.feasible
+    assert preflight.failure_codes == (ModelSurfaceResourceFailureCode.REQUEST_CAP_EXCEEDED,)
+
+
+def test_portfolio_rejects_self_hashed_compact_role_drift() -> None:
+    plan = _single_task_plan()
+    envelope = _portfolio_envelope(
+        plan,
+        index=1,
+        task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+        role=plan.tasks[0].review_role,
+        model=plan.tasks[0].requested_model,
+    )
+    tampered = envelope.model_dump(mode="python")
+    tampered["request_role"] = "specialist:unrelated"
+    tampered["envelope_sha256"] = _canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "envelope_sha256"}
+    )
+    resealed = ModelPortfolioTaskResourceEnvelope.model_validate(tampered)
+
+    with pytest.raises(ValidationError, match="compact tasks do not exactly cover"):
+        build_model_portfolio_resource_preflight(
+            plan,
+            [resealed],
+            campaign_manifest_sha256=f"{999:064x}",
+            maximum_requests_per_task=2,
+            maximum_input_tokens=200,
+            maximum_output_tokens=100,
+            maximum_cost_usd_exact="0.5",
+        )
 
 
 @pytest.mark.parametrize(

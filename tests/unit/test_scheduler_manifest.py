@@ -1110,7 +1110,7 @@ def test_current_custody_closes_failed_usage_against_retained_provider_attempt(
         )
 
 
-def test_scheduler_retains_crash_output_as_uncertain_without_provider_credit(
+def test_scheduler_recovers_crash_output_as_success_without_review_credit(
     tmp_path: Path,
     config_factory,
 ) -> None:
@@ -1153,23 +1153,24 @@ def test_scheduler_retains_crash_output_as_uncertain_without_provider_credit(
         expected_analysis_input_inventory=_analysis_inventory(),
         expected_shard_inventory=planned_artifact.summary.manifest.shard_inventory,
     )
+    recovered.seal_pass_result(plan.pass_kind)
     artifact = recovered.artifact()
     assert artifact.journal_evidence.task_output_artifact_sha256s == (
         retained.output_artifact_sha256,
     )
     assert artifact.journal_evidence.task_output_count == 1
-    assert artifact.journal_evidence.succeeded_count == 0
-    assert artifact.journal_evidence.uncertain_count == 1
+    assert artifact.journal_evidence.succeeded_count == 1
+    assert artifact.journal_evidence.uncertain_count == 0
     assert len(recovered.restorable_usage_records) == 1
     assert recovered.restorable_review_usage_records == ()
-    assert artifact.model_requests[0].terminal_status is SchedulerTerminalStatus.UNCERTAIN
-    assert artifact.model_requests[0].output_artifact_sha256 is None
+    assert artifact.model_requests[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    assert artifact.model_requests[0].output_artifact_sha256 == retained.output_artifact_sha256
     recovered.close()
 
     binding = SchedulerReportBinding.from_artifact(artifact)
     assert binding.task_output_count == 1
-    assert binding.succeeded_count == 0
-    assert binding.uncertain_count == 1
+    assert binding.succeeded_count == 1
+    assert binding.uncertain_count == 0
     report = _with_scheduler(base_report.model_copy(update={"usage": [usage]}), artifact)
     run_dir = tmp_path / "run"
     _write_required_artifacts(run_dir, report, legacy_model_execution=True)

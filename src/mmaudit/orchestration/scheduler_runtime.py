@@ -2106,6 +2106,7 @@ class PipelineScheduler:
         error: BaseException,
         *,
         usage_records: Iterable[UsageRecord] = (),
+        atomic_ledger: AtomicCostLedger | None = None,
     ) -> SchedulerTaskResult:
         self._require_active_task(task)
         truncation_projection_sha256: str | None = None
@@ -2140,6 +2141,13 @@ class PipelineScheduler:
                 "exception_type": f"{type(error).__module__}.{type(error).__qualname__}",
             }
         )
+        exact_usage_records: list[UsageRecord] = []
+        for record in usage_records:
+            if record.request_id != task.logical_request_id:
+                continue
+            exact_usage_records.append(record)
+            if len(exact_usage_records) > 1:
+                break
         if task.task_id not in self._activations:
             result = SchedulerTaskResult.build_preflight_failure(
                 plan=self.active_plan,
@@ -2149,6 +2157,14 @@ class PipelineScheduler:
             )
             self.journal.record_preflight_failure(result)
             return result
+        if atomic_ledger is not None:
+            released = self.journal.record_released_provider_failure(
+                task.task_id,
+                usage_records=exact_usage_records,
+                atomic_ledger=atomic_ledger,
+            )
+            if released is not None:
+                return released
         if task.task_id in self.journal.dispatchable_task_ids:
             result = SchedulerTaskResult.build(
                 plan=self.active_plan,
@@ -2159,13 +2175,6 @@ class PipelineScheduler:
             )
             self.journal.record_activated_preflight_failure(result)
             return result
-        exact_usage_records: list[UsageRecord] = []
-        for record in usage_records:
-            if record.request_id != task.logical_request_id:
-                continue
-            exact_usage_records.append(record)
-            if len(exact_usage_records) > 1:
-                break
         if truncation_projection is not None and truncation_failed_usage is not None:
             if (
                 len(exact_usage_records) == 1

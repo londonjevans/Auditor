@@ -3286,6 +3286,16 @@
       "title": "SchedulerTerminalStatus",
       "type": "string"
     },
+    "SchedulerTruncationRecoveryCostDisposition": {
+      "description": "How one child result conservatively accounts provider resources.",
+      "enum": [
+        "ACTUAL_ACCOUNTED",
+        "RELEASED_PRE_SEND_TAIL",
+        "RESERVED_MAX_ACCOUNTED"
+      ],
+      "title": "SchedulerTruncationRecoveryCostDisposition",
+      "type": "string"
+    },
     "SchedulerTruncationRecoveryModelRequestEvidence": {
       "additionalProperties": false,
       "allOf": [
@@ -3359,43 +3369,55 @@
         },
         {
           "else": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "promotion_disposition"
-                  ]
-                },
-                {
-                  "required": [
-                    "global_request_ordinal"
-                  ]
-                },
-                {
-                  "required": [
-                    "recovery_family_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "family_root_sha256"
-                  ]
-                },
-                {
-                  "required": [
-                    "recovery_plan_sha256"
-                  ]
-                },
-                {
-                  "required": [
-                    "family_closure_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "family_closure_sha256"
-                  ]
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "promotion_disposition"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "global_request_ordinal"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "recovery_family_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "family_root_sha256"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "recovery_plan_sha256"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "family_closure_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "family_closure_sha256"
+                    ]
+                  }
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "const": "1.3"
                 }
+              },
+              "required": [
+                "schema_version"
               ]
             }
           },
@@ -3461,6 +3483,243 @@
               "recovery_plan_sha256",
               "family_closure_id",
               "family_closure_sha256"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "child_plan_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "dispatch_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "dispatch_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "result_origin"
+                  ]
+                },
+                {
+                  "required": [
+                    "released_cost_entry_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "pre_send_release_reason"
+                  ]
+                },
+                {
+                  "required": [
+                    "provider_attempt_evidence_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "accounted_provider_attempts"
+                  ]
+                },
+                {
+                  "required": [
+                    "accounted_completion_tokens"
+                  ]
+                },
+                {
+                  "required": [
+                    "accounted_cost_usd_exact"
+                  ]
+                },
+                {
+                  "required": [
+                    "cost_disposition"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "terminal_status": {
+                "enum": [
+                  "SUCCEEDED",
+                  "TRUNCATED"
+                ]
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.3"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "dependentRequired": {
+              "dispatch_id": [
+                "dispatch_sha256"
+              ],
+              "dispatch_sha256": [
+                "dispatch_id"
+              ]
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "promotion_entry_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "promotion_disposition"
+                  ]
+                },
+                {
+                  "required": [
+                    "family_closure_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "family_closure_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "runtime_completion_evidence_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "provider_response_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "validated_response_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "normalization_evidence_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "output_artifact_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "specialist_accepted_outcome_sha256"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "accounted_completion_tokens": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "accounted_cost_usd_exact": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "accounted_provider_attempts": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "child_plan_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "cost_disposition": {
+                "const": "RELEASED_PRE_SEND_TAIL"
+              },
+              "dispatch_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "dispatch_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "family_root_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "global_request_ordinal": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "pre_send_release_reason": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "provider_attempt_evidence_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "recovery_family_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "recovery_plan_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "released_cost_entry_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "result_origin": {
+                "const": "RUNTIME"
+              },
+              "terminal_status": {
+                "const": "FAILED"
+              }
+            },
+            "required": [
+              "global_request_ordinal",
+              "recovery_family_id",
+              "family_root_sha256",
+              "recovery_plan_sha256",
+              "child_plan_sha256",
+              "result_origin",
+              "released_cost_entry_sha256",
+              "pre_send_release_reason",
+              "provider_attempt_evidence_sha256",
+              "accounted_provider_attempts",
+              "accounted_completion_tokens",
+              "accounted_cost_usd_exact",
+              "cost_disposition",
+              "terminal_status"
             ]
           }
         },
@@ -3546,6 +3805,47 @@
       ],
       "description": "Public hash-only projection of one typed recovery child usage.",
       "properties": {
+        "accounted_completion_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Completion Tokens"
+        },
+        "accounted_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Cost Usd Exact"
+        },
+        "accounted_provider_attempts": {
+          "anyOf": [
+            {
+              "maximum": 6,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Provider Attempts"
+        },
         "activation_entry_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Activation Entry Sha256",
@@ -3676,6 +3976,19 @@
           "title": "Campaign Id",
           "type": "string"
         },
+        "child_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Child Plan Sha256"
+        },
         "child_result_entry_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Child Result Entry Sha256",
@@ -3697,6 +4010,17 @@
           "title": "Context Request Evidence Sha256",
           "type": "string"
         },
+        "cost_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerTruncationRecoveryCostDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "coverage_credit_authorized": {
           "const": false,
           "default": false,
@@ -3707,6 +4031,32 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Delivered Source Inventory Sha256",
           "type": "string"
+        },
+        "dispatch_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-recovery-dispatch-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Id"
+        },
+        "dispatch_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Sha256"
         },
         "evidence_authority": {
           "const": "comparison_required",
@@ -3803,6 +4153,22 @@
           "title": "Parent Task Id",
           "type": "string"
         },
+        "pre_send_release_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "cancelled_before_send",
+                "failed_before_send"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pre Send Release Reason"
+        },
         "promotion_disposition": {
           "anyOf": [
             {
@@ -3827,6 +4193,19 @@
           "default": null,
           "title": "Promotion Entry Sha256"
         },
+        "provider_attempt_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Attempt Evidence Sha256"
+        },
         "provider_dispatch_authorized": {
           "const": false,
           "default": false,
@@ -3839,9 +4218,17 @@
           "type": "string"
         },
         "provider_response_sha256": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Provider Response Sha256",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Response Sha256"
         },
         "recovery_family_id": {
           "anyOf": [
@@ -3874,6 +4261,19 @@
           "default": false,
           "title": "Release Authorized",
           "type": "boolean"
+        },
+        "released_cost_entry_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Released Cost Entry Sha256"
         },
         "request_evidence_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -3918,6 +4318,17 @@
           "title": "Response Schema Sha256",
           "type": "string"
         },
+        "result_origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerTruncationRecoveryResultOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "review_credit_authorized": {
           "const": false,
           "default": false,
@@ -3952,7 +4363,8 @@
           "enum": [
             "1.0",
             "1.1",
-            "1.2"
+            "1.2",
+            "1.3"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -3983,7 +4395,8 @@
         "terminal_status": {
           "enum": [
             "SUCCEEDED",
-            "TRUNCATED"
+            "TRUNCATED",
+            "FAILED"
           ],
           "title": "Terminal Status",
           "type": "string"
@@ -4038,7 +4451,6 @@
         "terminal_evidence_sha256",
         "usage_record_sha256",
         "context_request_evidence_sha256",
-        "provider_response_sha256",
         "request_evidence_sha256"
       ],
       "title": "SchedulerTruncationRecoveryModelRequestEvidence",
@@ -4406,6 +4818,16 @@
         "SUPERSEDED_TRUNCATED_BRIDGE"
       ],
       "title": "SchedulerTruncationRecoveryPromotionDisposition",
+      "type": "string"
+    },
+    "SchedulerTruncationRecoveryResultOrigin": {
+      "description": "Whether terminal evidence came from runtime or conservative crash recovery.",
+      "enum": [
+        "RUNTIME",
+        "PREFLIGHT",
+        "CRASH_RECOVERY"
+      ],
+      "title": "SchedulerTruncationRecoveryResultOrigin",
       "type": "string"
     }
   },

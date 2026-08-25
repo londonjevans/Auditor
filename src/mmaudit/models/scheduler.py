@@ -77,6 +77,8 @@ from mmaudit.models.truncation import (
     candidate_review_protocol_implementation_is_pristine,
 )
 from mmaudit.models.truncation_recovery import (
+    TRUNCATION_RECOVERY_MAX_CHILD_COMPLETION_TOKENS,
+    TRUNCATION_RECOVERY_MAX_CHILD_PROVIDER_ATTEMPTS,
     TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
     TruncationRecoveryChildPlan,
 )
@@ -88,6 +90,7 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryChildPreflightResult,
     SchedulerTruncationRecoveryChildResult,
     SchedulerTruncationRecoveryClosureStatus,
+    SchedulerTruncationRecoveryCostDisposition,
     SchedulerTruncationRecoveryEntry,
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
@@ -101,7 +104,9 @@ from mmaudit.models.truncation_recovery_journal import (
 )
 from mmaudit.models.usage import (
     atomic_request_limit_reservations_from_usage,
+    atomic_token_reservations_from_usage,
     is_structurally_accountable_usage_record,
+    is_structurally_creditable_usage_record,
     usage_requires_audit_policy_evidence,
 )
 
@@ -6629,7 +6634,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     provider_dispatch_authorized: Literal[False] = False
     review_credit_authorized: Literal[False] = False
@@ -6680,11 +6685,26 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
     )
     child_task_id: str = Field(pattern=r"^scheduler-recovery-task-[0-9a-f]{64}$")
     logical_request_id: str = Field(pattern=r"^scheduler-recovery-request-[0-9a-f]{64}$")
+    child_plan_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     child_result_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
     activation_id: str = Field(pattern=r"^scheduler-recovery-activation-[0-9a-f]{64}$")
     activation_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
     activation_status: Literal[SchedulerActivationStatus.ACTIVATED] = (
         SchedulerActivationStatus.ACTIVATED
+    )
+    dispatch_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-recovery-dispatch-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    dispatch_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
     )
     role: str = Field(pattern=_ROLE_PATTERN)
     requested_model: str = Field(pattern=_MODEL_ID_PATTERN)
@@ -6703,8 +6723,51 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
     terminal_status: Literal[
         SchedulerTerminalStatus.SUCCEEDED,
         SchedulerTerminalStatus.TRUNCATED,
+        SchedulerTerminalStatus.FAILED,
     ]
     terminal_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    result_origin: SchedulerTruncationRecoveryResultOrigin | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    released_cost_entry_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    pre_send_release_reason: (
+        Literal[
+            "cancelled_before_send",
+            "failed_before_send",
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+    provider_attempt_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_provider_attempts: int | None = Field(
+        default=None,
+        ge=1,
+        le=TRUNCATION_RECOVERY_MAX_CHILD_PROVIDER_ATTEMPTS,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_completion_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        le=TRUNCATION_RECOVERY_MAX_CHILD_COMPLETION_TOKENS,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_cost_usd_exact: str | None = Field(
+        default=None,
+        pattern=_USD_EXACT_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    cost_disposition: SchedulerTruncationRecoveryCostDisposition | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     runtime_completion_evidence_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -6712,7 +6775,11 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
     )
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
-    provider_response_sha256: str = Field(pattern=_SHA256_PATTERN)
+    provider_response_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     validated_response_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -6977,6 +7044,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         requires_specialist_outcome = (
             succeeded and exact_parent.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
         )
+        released_pre_send = exact_result.schema_version == "1.3"
         recursive_promotion = (
             exact_promotion is not None and exact_promotion.schema_version == "1.1"
         )
@@ -6992,7 +7060,34 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             and exact_result.entry_sha256 in exact_promotion.promoted_leaf_result_sha256s
             else None
         )
-        if (
+        if released_pre_send and (
+            exact_result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or exact_result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.FAILED
+            or exact_result.runtime_activation != exact_activation
+            or exact_result.activation_sha256 != exact_activation.entry_sha256
+            or usage is None
+            or reservation is None
+            or exact_result.runtime_usage_record_sha256 is None
+            or exact_result.provider_attempt_evidence_sha256 is None
+            or exact_result.released_cost_entry_sha256 != exact_result.terminal_evidence_sha256
+            or exact_result.pre_send_release_reason
+            not in {"cancelled_before_send", "failed_before_send"}
+            or exact_result.cost_disposition
+            is not SchedulerTruncationRecoveryCostDisposition.RELEASED_PRE_SEND_TAIL
+            or exact_result.accounted_provider_attempts != usage.attempts
+            or normalization is not None
+            or output_artifact is not None
+            or exact_result.runtime_completion_evidence_sha256 is not None
+            or exact_result.runtime_output_artifact_sha256 is not None
+            or exact_result.runtime_specialist_accepted_outcome is not None
+            or exact_result.runtime_specialist_accepted_outcome_sha256 is not None
+            or exact_result.truncation_projection is not None
+            or exact_result.completed_surface_ids
+            or exact_result.retained_surface_ids
+            or exact_promotion is not None
+        ):
+            raise ValueError("released recovery public request lacks one exact failed usage")
+        if not released_pre_send and (
             exact_result.schema_version != ("1.2" if requires_specialist_outcome else "1.1")
             or exact_result.terminal_status
             not in {
@@ -7054,6 +7149,8 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             )
         ):
             raise ValueError("recovery public request lacks one typed runtime usage")
+        assert usage is not None
+        assert reservation is not None
         binding = (
             SchedulerTruncationRecoveryPromotionBinding.from_promotion(exact_promotion)
             if exact_promotion is not None
@@ -7110,16 +7207,20 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             if len(activation_matches) != 1:
                 return False
             activation_item = activation_matches[0]
-            dispatch_matches = tuple(
+            activation_dispatches = tuple(
                 item
                 for item in chain_dispatches
+                if item.activation_id == activation_item.activation_id
+                and item.activation_sha256 == activation_item.entry_sha256
+                and item.child_task_id == child.child_task_id
+            )
+            dispatch_matches = tuple(
+                item
+                for item in activation_dispatches
                 if item.entry_sha256 == result_item.dispatch_sha256
                 and item.dispatch_id == result_item.dispatch_id
-                and item.activation_id == activation_item.activation_id
-                and item.activation_sha256 == activation_item.entry_sha256
                 and item.family_id == family_item.family_id
                 and item.family_root_sha256 == family_item.entry_sha256
-                and item.child_task_id == child.child_task_id
                 and item.child_logical_request_id == child.child_logical_request_id
                 and item.child_plan_sha256 == child.child_plan_sha256
                 and item.global_request_ordinal == activation_item.global_request_ordinal
@@ -7132,12 +7233,22 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 == activation_item.request_limit_count_after_child
                 and item.request_limit_maximum == activation_item.request_limit_maximum
             )
-            return (
-                len(dispatch_matches) == 1
-                and family_item.entry_index
-                < activation_item.entry_index
+            dispatchless_release = (
+                result_item.schema_version == "1.3"
+                and result_item.dispatch_id is None
+                and result_item.dispatch_sha256 is None
+                and not activation_dispatches
+            )
+            dispatched_lifecycle_is_exact = (
+                len(activation_dispatches) == 1
+                and len(dispatch_matches) == 1
+                and activation_item.entry_index
                 < dispatch_matches[0].entry_index
                 < result_item.entry_index
+            )
+            return (
+                (dispatchless_release or dispatched_lifecycle_is_exact)
+                and family_item.entry_index < activation_item.entry_index < result_item.entry_index
                 and result_item.family_id == family_item.family_id
                 and result_item.family_root_sha256 == family_item.entry_sha256
                 and result_item.child_task_id == child.child_task_id
@@ -7808,13 +7919,28 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or context.request_role != exact_activation.request_role
             or context.rendered_sha256 != exact_activation.user_prompt_sha256
             or usage.routing.get("context_request_evidence_sha256") != context.evidence_sha256
-            or usage.response_sha256 is None
+            or (not released_pre_send and usage.response_sha256 is None)
             or (routed_lineage is not None and routed_lineage != exact_parent.root_lineage)
             or reservation.request_limit_scope != exact_activation.request_limit_id
             or reservation.request_limit_count_before
             != exact_activation.request_limit_count_before_child
-            or reservation.request_limit_count_after
-            != exact_activation.request_limit_count_after_child
+            or (
+                released_pre_send
+                and (
+                    reservation.request_limit_count_after
+                    != reservation.request_limit_count_before + usage.attempts
+                    or reservation.request_limit_count_after
+                    != reservation.request_limit_count_before
+                    + exact_result.accounted_provider_attempts
+                    or reservation.request_limit_count_after
+                    > exact_activation.request_limit_count_after_child
+                )
+            )
+            or (
+                not released_pre_send
+                and reservation.request_limit_count_after
+                != exact_activation.request_limit_count_after_child
+            )
             or reservation.request_limit_maximum != exact_activation.request_limit_maximum
             or (
                 specialist_outcome is not None
@@ -7872,7 +7998,13 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             raise ValueError("recursive recovery public request lacks its family closure")
         values: dict[str, Any] = {
             "schema_version": (
-                "1.2" if recursive_promotion else "1.1" if specialist_outcome is not None else "1.0"
+                "1.3"
+                if released_pre_send
+                else "1.2"
+                if recursive_promotion
+                else "1.1"
+                if specialist_outcome is not None
+                else "1.0"
             ),
             "evidence_authority": "comparison_required",
             "provider_dispatch_authorized": False,
@@ -7902,12 +8034,35 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 and projected_family_closure is not None
                 else {}
             ),
+            **(
+                {
+                    "global_request_ordinal": exact_activation.global_request_ordinal,
+                    "recovery_family_id": exact_family.family_id,
+                    "family_root_sha256": exact_family.entry_sha256,
+                    "recovery_plan_sha256": exact_family.recovery_plan.plan_sha256,
+                }
+                if released_pre_send
+                else {}
+            ),
             "child_task_id": exact_activation.child_task_id,
             "logical_request_id": exact_activation.child_logical_request_id,
+            **(
+                {"child_plan_sha256": exact_activation.child_plan_sha256}
+                if released_pre_send
+                else {}
+            ),
             "child_result_entry_sha256": exact_result.entry_sha256,
             "activation_id": exact_activation.activation_id,
             "activation_entry_sha256": exact_activation.entry_sha256,
             "activation_status": SchedulerActivationStatus.ACTIVATED,
+            **(
+                {
+                    "dispatch_id": exact_result.dispatch_id,
+                    "dispatch_sha256": exact_result.dispatch_sha256,
+                }
+                if released_pre_send and exact_result.dispatch_id is not None
+                else {}
+            ),
             "role": exact_activation.request_role,
             "requested_model": exact_activation.requested_model,
             "root_lineage": exact_parent.root_lineage,
@@ -7925,12 +8080,32 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             "terminal_status": (
                 SchedulerTerminalStatus.SUCCEEDED
                 if succeeded
+                else SchedulerTerminalStatus.FAILED
+                if released_pre_send
                 else SchedulerTerminalStatus.TRUNCATED
             ),
             "terminal_evidence_sha256": exact_result.terminal_evidence_sha256,
+            **(
+                {
+                    "result_origin": exact_result.result_origin,
+                    "released_cost_entry_sha256": exact_result.released_cost_entry_sha256,
+                    "pre_send_release_reason": exact_result.pre_send_release_reason,
+                    "provider_attempt_evidence_sha256": (
+                        exact_result.provider_attempt_evidence_sha256
+                    ),
+                    "accounted_provider_attempts": exact_result.accounted_provider_attempts,
+                    "accounted_completion_tokens": exact_result.accounted_completion_tokens,
+                    "accounted_cost_usd_exact": exact_result.accounted_cost_usd_exact,
+                    "cost_disposition": exact_result.cost_disposition,
+                }
+                if released_pre_send
+                else {}
+            ),
             "usage_record_sha256": exact_result.runtime_usage_record_sha256,
             "context_request_evidence_sha256": context.evidence_sha256,
-            "provider_response_sha256": usage.response_sha256,
+            **(
+                {"provider_response_sha256": usage.response_sha256} if not released_pre_send else {}
+            ),
             **(
                 {
                     "runtime_completion_evidence_sha256": (
@@ -7985,6 +8160,77 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             self.normalization_evidence_sha256,
             self.output_artifact_sha256,
         )
+        released_fields = (
+            self.global_request_ordinal,
+            self.recovery_family_id,
+            self.family_root_sha256,
+            self.recovery_plan_sha256,
+            self.child_plan_sha256,
+            self.result_origin,
+            self.released_cost_entry_sha256,
+            self.pre_send_release_reason,
+            self.provider_attempt_evidence_sha256,
+            self.accounted_provider_attempts,
+            self.accounted_completion_tokens,
+            self.accounted_cost_usd_exact,
+            self.cost_disposition,
+        )
+        audit_fields_are_partial = any(item is None for item in audit_fields) and any(
+            item is not None for item in audit_fields
+        )
+        if self.schema_version == "1.3":
+            accounted_cost = (
+                Decimal(self.accounted_cost_usd_exact)
+                if self.accounted_cost_usd_exact is not None
+                else None
+            )
+            canonical_accounted_cost = (
+                format(accounted_cost, "f") if accounted_cost is not None else None
+            )
+            if canonical_accounted_cost is not None and "." in canonical_accounted_cost:
+                canonical_accounted_cost = canonical_accounted_cost.rstrip("0").rstrip(".")
+            if canonical_accounted_cost in {"", "-0"}:
+                canonical_accounted_cost = "0"
+            if (
+                self.terminal_status is not SchedulerTerminalStatus.FAILED
+                or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or self.request_limit_count_after <= self.request_limit_count_before
+                or self.request_limit_count_after > self.request_limit_maximum
+                or self.accounted_provider_attempts is None
+                or self.accounted_completion_tokens is None
+                or accounted_cost is None
+                or self.accounted_cost_usd_exact != canonical_accounted_cost
+                or self.request_limit_count_after
+                != self.request_limit_count_before + self.accounted_provider_attempts
+                or (
+                    self.accounted_provider_attempts == 1
+                    and (self.accounted_completion_tokens != 0 or accounted_cost != 0)
+                )
+                or (
+                    self.accounted_provider_attempts > 1
+                    and (self.accounted_completion_tokens == 0 or accounted_cost <= 0)
+                )
+                or any(item is None for item in released_fields)
+                or self.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+                or self.released_cost_entry_sha256 != self.terminal_evidence_sha256
+                or self.pre_send_release_reason
+                not in {"cancelled_before_send", "failed_before_send"}
+                or self.cost_disposition
+                is not SchedulerTruncationRecoveryCostDisposition.RELEASED_PRE_SEND_TAIL
+                or (self.dispatch_id is None) != (self.dispatch_sha256 is None)
+                or self.promotion_entry_sha256 is not None
+                or self.promotion_disposition is not None
+                or self.family_closure_id is not None
+                or self.family_closure_sha256 is not None
+                or any(item is not None for item in completion_fields)
+                or self.provider_response_sha256 is not None
+                or self.specialist_accepted_outcome_sha256 is not None
+                or audit_fields_are_partial
+                or self.request_evidence_sha256
+                != _model_sha256(self, exclude={"request_evidence_sha256"})
+            ):
+                raise ValueError("scheduler released recovery request is inconsistent")
+            return self
         succeeded = self.terminal_status is SchedulerTerminalStatus.SUCCEEDED
         requires_specialist_outcome = (
             succeeded and self.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
@@ -8004,9 +8250,15 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
         )
         if (
-            self.request_limit_count_after <= self.request_limit_count_before
+            self.terminal_status is SchedulerTerminalStatus.FAILED
+            or self.request_limit_count_after <= self.request_limit_count_before
             or self.request_limit_count_after > self.request_limit_maximum
             or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or self.provider_response_sha256 is None
+            or self.child_plan_sha256 is not None
+            or self.dispatch_id is not None
+            or self.dispatch_sha256 is not None
+            or any(item is not None for item in released_fields[5:])
             or succeeded != all(item is not None for item in completion_fields)
             or (not succeeded and any(item is not None for item in completion_fields))
             or (
@@ -8027,10 +8279,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or (self.schema_version == "1.1")
             != (self.specialist_accepted_outcome_sha256 is not None)
             or requires_specialist_outcome != (self.specialist_accepted_outcome_sha256 is not None)
-            or (
-                any(item is None for item in audit_fields)
-                and any(item is not None for item in audit_fields)
-            )
+            or audit_fields_are_partial
             or self.request_evidence_sha256
             != _model_sha256(self, exclude={"request_evidence_sha256"})
         ):
@@ -8250,7 +8499,25 @@ def build_scheduler_truncation_recovery_model_request_evidence(
             promotion_by_result_sha256[result_sha256] = promotion
     recovered: list[SchedulerTruncationRecoveryModelRequestEvidence] = []
     for result in results_by_sha.values():
-        if result.schema_version not in {"1.1", "1.2"} or result.runtime_usage_record is None:
+        if result.schema_version == "1.3":
+            if result.result_origin is SchedulerTruncationRecoveryResultOrigin.CRASH_RECOVERY:
+                if (
+                    result.runtime_usage_record is not None
+                    or result.runtime_usage_record_sha256 is not None
+                    or result.runtime_request_limit_reservation is not None
+                    or result.provider_attempt_evidence_sha256 is not None
+                ):
+                    raise ValueError("crash-recovered release cannot enter public usage custody")
+                continue
+            if (
+                result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+                or result.runtime_usage_record is None
+                or result.runtime_usage_record_sha256 is None
+                or result.runtime_request_limit_reservation is None
+                or result.provider_attempt_evidence_sha256 is None
+            ):
+                raise ValueError("released recovery result lacks one public failed usage")
+        elif result.schema_version not in {"1.1", "1.2"} or (result.runtime_usage_record is None):
             continue
         family = families_by_id.get(result.family_id)
         activation = activations_by_sha.get(result.activation_sha256)
@@ -9725,11 +9992,20 @@ class SchedulerArtifact(StrictModel):
                 or item.activation_entry_sha256 not in recovery_chain_sha256s
                 or item.child_result_entry_sha256 not in recovery_chain_sha256s
                 or (
+                    item.schema_version in {"1.2", "1.3"}
+                    and item.family_root_sha256 not in recovery_chain_sha256s
+                )
+                or (
                     item.schema_version == "1.2"
-                    and (
-                        item.family_root_sha256 not in recovery_chain_sha256s
-                        or item.family_closure_sha256 not in recovery_chain_sha256s
-                    )
+                    and item.family_closure_sha256 not in recovery_chain_sha256s
+                )
+                or (
+                    item.dispatch_sha256 is not None
+                    and item.dispatch_sha256 not in recovery_chain_sha256s
+                )
+                or (
+                    item.schema_version == "1.3"
+                    and item.terminal_status is not SchedulerTerminalStatus.FAILED
                 )
                 for item in self.recovery_model_requests
             )
@@ -9941,6 +10217,10 @@ class SchedulerArtifact(StrictModel):
             if audit_selection is None:
                 if any(item is not None for item in audit_fields):
                     raise ValueError("scheduler recovery request claims an audit selection")
+                continue
+            if recovery_request.schema_version == "1.3" and not any(
+                item is not None for item in audit_fields
+            ):
                 continue
             selected_route = audit_selection.route_for(recovery_request.requested_model)
             if (
@@ -10492,6 +10772,80 @@ class SchedulerTaskEvent(StrictModel):
         return self
 
 
+def _is_exact_activated_pre_send_release_attempt(
+    *,
+    provider_attempt: SchedulerProviderAttemptEvidence,
+    lifecycle: tuple[SchedulerTaskEventKind, ...],
+    credited_result: SchedulerTaskResult | None,
+) -> bool:
+    """Recognize the sole noncrediting attempt allowed before durable dispatch."""
+
+    is_live_prefix = lifecycle == (
+        SchedulerTaskEventKind.PLANNED,
+        SchedulerTaskEventKind.ACTIVATED,
+    )
+    is_failed_terminal = lifecycle == (
+        SchedulerTaskEventKind.PLANNED,
+        SchedulerTaskEventKind.ACTIVATED,
+        SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL,
+    )
+    if not (is_live_prefix or is_failed_terminal) or is_live_prefix != (credited_result is None):
+        return False
+    if is_failed_terminal and (
+        credited_result is None
+        or credited_result.terminal_status is not SchedulerTerminalStatus.FAILED
+    ):
+        return False
+
+    usage = provider_attempt.usage_record
+    try:
+        token_attempts = atomic_token_reservations_from_usage(usage)
+        request_attempts = atomic_request_limit_reservations_from_usage(usage)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        provider_attempt.schema_version == "1.0"
+        and provider_attempt.truncated_envelope_evidence is None
+        and provider_attempt.truncation_projection is None
+        and provider_attempt.provider_response_sha256 is None
+        and provider_attempt.validated_response_sha256 is None
+        and is_structurally_accountable_usage_record(usage)
+        and not is_structurally_creditable_usage_record(usage)
+        and usage.request_id == provider_attempt.logical_request_id
+        and usage.validation_status is not ModelRequestValidationStatus.VALID
+        and usage.status != "success"
+        and bool(usage.provider_error_classification)
+        and usage.identity_strength is ModelIdentityStrength.UNBOUND
+        and usage.actual_model is None
+        and usage.returned_model is None
+        and usage.provider is None
+        and usage.openrouter_generation_id is None
+        and usage.actual_provider_endpoint is None
+        and usage.finish_reason is None
+        and usage.response_sha256 is None
+        and usage.validated_response_sha256 is None
+        and usage.reported_cost_usd is None
+        and usage.reported_cost_usd_exact is None
+        and usage.accounted_cost_usd == 0
+        and usage.accounted_cost_usd_exact == "0"
+        and usage.prompt_tokens == 0
+        and usage.completion_tokens == 0
+        and usage.total_tokens == 0
+        and usage.cached_tokens == 0
+        and usage.reasoning_tokens in {None, 0}
+        and usage.reasoning_evidence is None
+        and usage.token_detail_accounting_evidence is None
+        and not usage.fallback_used
+        and not usage.substitution_detected
+        and usage.attempts == 1
+        and usage.retry_count == 0
+        and tuple(item.request_id for item in token_attempts)
+        == (provider_attempt.logical_request_id,)
+        and tuple(item.request_id for item in request_attempts)
+        == (provider_attempt.logical_request_id,)
+    )
+
+
 def _validate_scheduler_journal_evidence(
     *,
     manifest: SchedulerCampaignManifest,
@@ -10792,8 +11146,17 @@ def _validate_scheduler_journal_evidence(
             raise ValueError("scheduler task result lacks its durable terminal event")
         provider_attempt = provider_attempt_by_task.get(task_id)
         if provider_attempt is not None:
-            if SchedulerTaskEventKind.DISPATCHED not in kinds:
-                raise ValueError("scheduler provider attempt lacks durable dispatch evidence")
+            if SchedulerTaskEventKind.DISPATCHED not in kinds and not (
+                _is_exact_activated_pre_send_release_attempt(
+                    provider_attempt=provider_attempt,
+                    lifecycle=kinds,
+                    credited_result=credited_result,
+                )
+            ):
+                raise ValueError(
+                    "scheduler provider attempt lacks durable dispatch or exact pre-send release "
+                    "evidence"
+                )
             if credited_result is not None and credited_result.terminal_status in {
                 SchedulerTerminalStatus.SUCCEEDED,
                 SchedulerTerminalStatus.EXPLICIT_EMPTY,

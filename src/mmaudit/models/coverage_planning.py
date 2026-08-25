@@ -20,6 +20,7 @@ from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mmaudit.constants import CANDIDATE_INDEPENDENT_SPECIALIST_ROLES
 from mmaudit.models.identifiers import EXACT_MODEL_ID_PATTERN, require_exact_openrouter_model_id
 from mmaudit.models.schemas import (
     ModelReviewSurfaceKind,
@@ -42,6 +43,8 @@ _SURFACE_ID_PATTERN = r"^model-surface:[0-9a-f]{64}$"
 _SAFE_ROLE_PATTERN = r"^[a-z][a-z0-9_:.-]{0,127}$"
 _SAFE_SCOPE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
 _SCHEDULER_TASK_ID_PATTERN = r"^scheduler-task-[0-9a-f]{64}$"
+_SCHEDULER_REQUEST_ID_PATTERN = r"^scheduler-request-[0-9a-f]{64}$"
+_ATTEMPT_REQUEST_ID_PATTERN = r"^scheduler-request-[0-9a-f]{64}(?::attempt:[1-9][0-9]{0,2})?$"
 _COVERAGE_TASK_ID_PATTERN = r"^model-surface-gap-task-[0-9a-f]{64}$"
 _PROVIDER_ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,255}$"
 _CANONICAL_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,30})?$")
@@ -239,6 +242,17 @@ class ModelSurfaceResourceScopeKind(StrEnum):
 
     ROLE = "role"
     MODEL = "model"
+
+
+class ModelPortfolioTaskKind(StrEnum):
+    """Closed task classes covered by the pre-orientation spend reservation."""
+
+    ORIENTATION = "orientation"
+    COMPACT_COVERAGE = "compact_coverage"
+    SOURCE_AUDIT = "source_audit"
+    WHOLE_PROTOCOL = "whole_protocol"
+    INVARIANT_REVIEW = "invariant_review"
+    REPORT_QUALITY = "report_quality"
 
 
 def classify_model_surface_risk(
@@ -1296,6 +1310,203 @@ class ModelSurfaceTaskResourcePreview(_FrozenNonAuthorizingModel):
         return self
 
 
+class ModelPortfolioTaskResourceEnvelope(_FrozenNonAuthorizingModel):
+    """Conservative pre-orientation ceiling for every attempt of one scheduled task.
+
+    Unlike :class:`ModelSurfaceTaskResourcePreview`, this evidence intentionally does
+    not predict the later rendered context or request hash.  It binds an immutable
+    route/pricing/envelope recipe and a ceiling which the exact request must fit.
+    """
+
+    artifact_kind: Literal["model_portfolio_task_resource_envelope"] = (
+        "model_portfolio_task_resource_envelope"
+    )
+    schema_version: Literal["1.0"] = "1.0"
+    task_kind: ModelPortfolioTaskKind
+    scheduler_task_id: str = Field(pattern=_SCHEDULER_TASK_ID_PATTERN)
+    scheduler_task_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    scheduler_logical_request_id: str = Field(pattern=_SCHEDULER_REQUEST_ID_PATTERN)
+    campaign_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+    request_role: str = Field(pattern=_SAFE_ROLE_PATTERN)
+    requested_model: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    coverage_task_id: str | None = Field(default=None, pattern=_COVERAGE_TASK_ID_PATTERN)
+    coverage_task_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    request_envelope_recipe_sha256: str = Field(pattern=_SHA256_PATTERN)
+    endpoint_policy_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    endpoint_policy_pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
+    provider_endpoint: str = Field(pattern=_PROVIDER_ENDPOINT_PATTERN)
+    endpoint_pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    maximum_attempts: int = Field(ge=1, le=MAX_RESOURCE_ATTEMPTS)
+    attempt_request_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_RESOURCE_ATTEMPTS)
+    maximum_prompt_tokens_per_attempt: int = Field(gt=0, le=2**63 - 1)
+    maximum_visible_output_tokens_per_attempt: int = Field(ge=0, le=2**63 - 1)
+    maximum_reasoning_tokens_per_attempt: int = Field(ge=0, le=2**63 - 1)
+    maximum_completion_tokens_per_attempt: int = Field(gt=0, le=2**63 - 1)
+    maximum_cost_usd_per_attempt_exact: str
+    maximum_request_count: int = Field(ge=1, le=MAX_RESOURCE_ATTEMPTS)
+    maximum_input_tokens: int = Field(gt=0, le=2**63 - 1)
+    maximum_output_tokens: int = Field(gt=0, le=2**63 - 1)
+    maximum_cost_usd_exact: str
+    envelope_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        task_kind: ModelPortfolioTaskKind,
+        scheduler_task_id: str,
+        scheduler_task_plan_sha256: str,
+        scheduler_logical_request_id: str,
+        campaign_manifest_sha256: str,
+        request_role: str,
+        requested_model: str,
+        request_envelope_recipe_sha256: str,
+        endpoint_policy_snapshot_sha256: str,
+        endpoint_policy_pricing_sha256: str,
+        provider_endpoint: str,
+        endpoint_pricing_snapshot_sha256: str,
+        maximum_attempts: int,
+        attempt_request_ids: Iterable[str],
+        maximum_prompt_tokens_per_attempt: int,
+        maximum_visible_output_tokens_per_attempt: int,
+        maximum_reasoning_tokens_per_attempt: int,
+        maximum_completion_tokens_per_attempt: int,
+        maximum_cost_usd_per_attempt_exact: str,
+        coverage_task: ModelSurfaceGapTask | None = None,
+    ) -> ModelPortfolioTaskResourceEnvelope:
+        if not isinstance(task_kind, ModelPortfolioTaskKind):
+            raise ValueError("portfolio task kind is invalid")
+        if any(
+            type(value) is not int
+            for value in (
+                maximum_attempts,
+                maximum_prompt_tokens_per_attempt,
+                maximum_visible_output_tokens_per_attempt,
+                maximum_reasoning_tokens_per_attempt,
+                maximum_completion_tokens_per_attempt,
+            )
+        ):
+            raise ValueError("portfolio resource envelope counts must be exact integers")
+        attempts = _bounded_tuple(
+            attempt_request_ids,
+            maximum=MAX_RESOURCE_ATTEMPTS,
+            label="portfolio attempt request IDs",
+        )
+        if (
+            len(attempts) != maximum_attempts
+            or len(set(attempts)) != len(attempts)
+            or any(
+                type(request_id) is not str
+                or re.fullmatch(_ATTEMPT_REQUEST_ID_PATTERN, request_id) is None
+                for request_id in attempts
+            )
+        ):
+            raise ValueError("portfolio attempt request IDs are incomplete or invalid")
+        expected_attempts = (
+            scheduler_logical_request_id,
+            *(
+                f"{scheduler_logical_request_id}:attempt:{ordinal}"
+                for ordinal in range(2, maximum_attempts + 1)
+            ),
+        )
+        if attempts != expected_attempts:
+            raise ValueError("portfolio attempt request IDs are not the canonical retry sequence")
+        compact = task_kind is ModelPortfolioTaskKind.COMPACT_COVERAGE
+        if compact is not (coverage_task is not None):
+            raise ValueError("only compact portfolio tasks may bind a coverage task")
+        if coverage_task is not None and (
+            coverage_task.review_role != request_role
+            or coverage_task.requested_model != requested_model
+        ):
+            raise ValueError("compact portfolio task differs from its coverage assignment")
+        cost = _canonical_decimal_text(
+            maximum_cost_usd_per_attempt_exact,
+            label="portfolio maximum per-attempt cost",
+        )
+        values = {
+            "artifact_kind": "model_portfolio_task_resource_envelope",
+            "schema_version": "1.0",
+            "task_kind": task_kind,
+            "scheduler_task_id": scheduler_task_id,
+            "scheduler_task_plan_sha256": scheduler_task_plan_sha256,
+            "scheduler_logical_request_id": scheduler_logical_request_id,
+            "campaign_manifest_sha256": campaign_manifest_sha256,
+            "request_role": request_role,
+            "requested_model": requested_model,
+            "coverage_task_id": coverage_task.task_id if coverage_task is not None else None,
+            "coverage_task_sha256": coverage_task.task_sha256
+            if coverage_task is not None
+            else None,
+            "request_envelope_recipe_sha256": request_envelope_recipe_sha256,
+            "endpoint_policy_snapshot_sha256": endpoint_policy_snapshot_sha256,
+            "endpoint_policy_pricing_sha256": endpoint_policy_pricing_sha256,
+            "provider_endpoint": provider_endpoint,
+            "endpoint_pricing_snapshot_sha256": endpoint_pricing_snapshot_sha256,
+            "maximum_attempts": maximum_attempts,
+            "attempt_request_ids": attempts,
+            "maximum_prompt_tokens_per_attempt": maximum_prompt_tokens_per_attempt,
+            "maximum_visible_output_tokens_per_attempt": (
+                maximum_visible_output_tokens_per_attempt
+            ),
+            "maximum_reasoning_tokens_per_attempt": maximum_reasoning_tokens_per_attempt,
+            "maximum_completion_tokens_per_attempt": maximum_completion_tokens_per_attempt,
+            "maximum_cost_usd_per_attempt_exact": cost,
+            "maximum_request_count": maximum_attempts,
+            "maximum_input_tokens": maximum_prompt_tokens_per_attempt * maximum_attempts,
+            "maximum_output_tokens": maximum_completion_tokens_per_attempt * maximum_attempts,
+            "maximum_cost_usd_exact": _multiply_decimal_text(cost, maximum_attempts),
+            "authorizes_dispatch": False,
+            "grants_review_credit": False,
+            "grants_completion_credit": False,
+        }
+        return cls.model_validate({**values, "envelope_sha256": _canonical_sha256(values)})
+
+    @field_validator("requested_model")
+    @classmethod
+    def requested_model_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value, label="portfolio requested model")
+
+    @field_validator("maximum_cost_usd_per_attempt_exact", "maximum_cost_usd_exact")
+    @classmethod
+    def costs_are_canonical(cls, value: str) -> str:
+        return _canonical_decimal_text(value, label="portfolio resource cost")
+
+    @model_validator(mode="after")
+    def envelope_is_exact_and_self_hashed(self) -> Self:
+        if (
+            self.maximum_request_count != self.maximum_attempts
+            or len(self.attempt_request_ids) != self.maximum_attempts
+            or self.attempt_request_ids
+            != (
+                self.scheduler_logical_request_id,
+                *(
+                    f"{self.scheduler_logical_request_id}:attempt:{ordinal}"
+                    for ordinal in range(2, self.maximum_attempts + 1)
+                ),
+            )
+            or self.maximum_visible_output_tokens_per_attempt
+            + self.maximum_reasoning_tokens_per_attempt
+            != self.maximum_completion_tokens_per_attempt
+            or self.maximum_input_tokens
+            != self.maximum_prompt_tokens_per_attempt * self.maximum_attempts
+            or self.maximum_output_tokens
+            != self.maximum_completion_tokens_per_attempt * self.maximum_attempts
+            or self.maximum_cost_usd_exact
+            != _multiply_decimal_text(
+                self.maximum_cost_usd_per_attempt_exact,
+                self.maximum_attempts,
+            )
+        ):
+            raise ValueError("portfolio resource envelope totals or attempts are inconsistent")
+        compact = self.task_kind is ModelPortfolioTaskKind.COMPACT_COVERAGE
+        if compact is not (
+            self.coverage_task_id is not None and self.coverage_task_sha256 is not None
+        ) or ((self.coverage_task_id is None) is not (self.coverage_task_sha256 is None)):
+            raise ValueError("portfolio coverage-task custody differs from its task kind")
+        _require_self_hash(self, "envelope_sha256")
+        return self
+
+
 class ModelSurfaceResourceScopeCost(_FrozenNonAuthorizingModel):
     """Derived maximum coverage cost for one exact role or model."""
 
@@ -1724,6 +1935,247 @@ def build_model_surface_resource_preflight(
     )
 
 
+class ModelPortfolioResourcePreflight(_FrozenNonAuthorizingModel):
+    """Complete conservative spend reservation intent frozen before orientation."""
+
+    artifact_kind: Literal["model_portfolio_resource_preflight"] = (
+        "model_portfolio_resource_preflight"
+    )
+    schema_version: Literal["1.0"] = "1.0"
+    coverage_plan: ModelSurfaceCoveragePlan
+    coverage_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    campaign_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+    task_envelopes: tuple[ModelPortfolioTaskResourceEnvelope, ...] = Field(
+        min_length=1,
+        max_length=MAX_COVERAGE_TASKS,
+    )
+    candidate_independent_request_roles: tuple[str, ...] = Field(max_length=24)
+    planned_maximum_request_count: int = Field(ge=1, le=2**63 - 1)
+    planned_maximum_input_tokens: int = Field(gt=0, le=2**63 - 1)
+    planned_maximum_output_tokens: int = Field(gt=0, le=2**63 - 1)
+    planned_maximum_cost_usd_exact: str
+    planned_costs_by_role: tuple[ModelSurfaceResourceScopeCost, ...] = Field(
+        max_length=MAX_COVERAGE_REVIEWERS,
+    )
+    planned_costs_by_model: tuple[ModelSurfaceResourceScopeCost, ...] = Field(
+        max_length=MAX_COVERAGE_REVIEWERS,
+    )
+    maximum_requests_per_task: int = Field(ge=1, le=MAX_RESOURCE_ATTEMPTS)
+    maximum_input_tokens: int = Field(ge=0, le=2**63 - 1)
+    maximum_output_tokens: int = Field(ge=0, le=2**63 - 1)
+    maximum_cost_usd_exact: str
+    remaining_cost_caps_by_role: tuple[ModelSurfaceResourceScopeCap, ...] = Field(
+        max_length=MAX_COVERAGE_REVIEWERS,
+    )
+    remaining_cost_caps_by_model: tuple[ModelSurfaceResourceScopeCap, ...] = Field(
+        max_length=MAX_COVERAGE_REVIEWERS,
+    )
+    scoped_failures: tuple[ModelSurfaceResourceScopeFailure, ...] = Field(
+        max_length=MAX_COVERAGE_REVIEWERS * 2,
+    )
+    failure_codes: tuple[ModelSurfaceResourceFailureCode, ...] = Field(max_length=9)
+    feasible: bool
+    preflight_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("planned_maximum_cost_usd_exact", "maximum_cost_usd_exact")
+    @classmethod
+    def costs_are_canonical(cls, value: str) -> str:
+        return _canonical_decimal_text(value, label="portfolio preflight cost")
+
+    @model_validator(mode="after")
+    def portfolio_is_exact_joined_and_self_hashed(self) -> Self:
+        if self.coverage_plan_sha256 != self.coverage_plan.plan_sha256:
+            raise ValueError("portfolio preflight coverage-plan hash is inconsistent")
+        expected_envelopes = tuple(
+            sorted(self.task_envelopes, key=lambda item: item.scheduler_task_id)
+        )
+        if self.task_envelopes != expected_envelopes:
+            raise ValueError("portfolio task envelopes must be sorted by scheduler task ID")
+        if len({item.scheduler_task_id for item in self.task_envelopes}) != len(
+            self.task_envelopes
+        ) or len({item.scheduler_logical_request_id for item in self.task_envelopes}) != len(
+            self.task_envelopes
+        ):
+            raise ValueError("portfolio task envelopes repeat scheduler custody")
+        attempt_ids = tuple(
+            request_id
+            for envelope in self.task_envelopes
+            for request_id in envelope.attempt_request_ids
+        )
+        if len(attempt_ids) != len(set(attempt_ids)):
+            raise ValueError("portfolio task envelopes repeat a provider attempt identity")
+        if any(
+            item.campaign_manifest_sha256 != self.campaign_manifest_sha256
+            for item in self.task_envelopes
+        ):
+            raise ValueError("portfolio task envelope differs from the campaign manifest")
+        compact_by_id = {
+            item.coverage_task_id: item
+            for item in self.task_envelopes
+            if item.task_kind is ModelPortfolioTaskKind.COMPACT_COVERAGE
+            and item.coverage_task_id is not None
+        }
+        plan_by_id = {task.task_id: task for task in self.coverage_plan.tasks}
+        if set(compact_by_id) != set(plan_by_id) or any(
+            compact_by_id[task_id].coverage_task_sha256 != task.task_sha256
+            or compact_by_id[task_id].request_role != task.review_role
+            or compact_by_id[task_id].requested_model != task.requested_model
+            for task_id, task in plan_by_id.items()
+        ):
+            raise ValueError("portfolio compact tasks do not exactly cover the coverage plan")
+        expected_roles = _portfolio_candidate_independent_roles(self.task_envelopes)
+        if self.candidate_independent_request_roles != expected_roles:
+            raise ValueError("portfolio candidate-independent role inventory is inconsistent")
+        totals = _portfolio_resource_totals(self.task_envelopes)
+        if (
+            self.planned_maximum_request_count,
+            self.planned_maximum_input_tokens,
+            self.planned_maximum_output_tokens,
+            self.planned_maximum_cost_usd_exact,
+        ) != totals:
+            raise ValueError("portfolio preflight totals differ from its task envelopes")
+        role_costs, model_costs = _portfolio_resource_scoped_costs(self.task_envelopes)
+        if self.planned_costs_by_role != role_costs or self.planned_costs_by_model != model_costs:
+            raise ValueError("portfolio scoped costs differ from its task envelopes")
+        _validate_scope_caps(
+            self.remaining_cost_caps_by_role,
+            scope_kind=ModelSurfaceResourceScopeKind.ROLE,
+        )
+        _validate_scope_caps(
+            self.remaining_cost_caps_by_model,
+            scope_kind=ModelSurfaceResourceScopeKind.MODEL,
+        )
+        expected_scoped_failures = _resource_scope_failures(
+            role_costs=role_costs,
+            model_costs=model_costs,
+            role_caps=self.remaining_cost_caps_by_role,
+            model_caps=self.remaining_cost_caps_by_model,
+        )
+        if self.scoped_failures != expected_scoped_failures:
+            raise ValueError("portfolio scoped resource failures are inconsistent")
+        expected_failures = _portfolio_resource_failure_codes(
+            coverage_plan=self.coverage_plan,
+            envelopes=self.task_envelopes,
+            totals=totals,
+            maximum_requests_per_task=self.maximum_requests_per_task,
+            maximum_input_tokens=self.maximum_input_tokens,
+            maximum_output_tokens=self.maximum_output_tokens,
+            maximum_cost_usd_exact=self.maximum_cost_usd_exact,
+            scoped_failures=expected_scoped_failures,
+        )
+        if self.failure_codes != expected_failures or self.feasible is not (not expected_failures):
+            raise ValueError("portfolio preflight feasibility differs from its exact limits")
+        _require_self_hash(self, "preflight_sha256")
+        return self
+
+
+def build_model_portfolio_resource_preflight(
+    coverage_plan: ModelSurfaceCoveragePlan,
+    task_envelopes: Iterable[ModelPortfolioTaskResourceEnvelope],
+    *,
+    campaign_manifest_sha256: str,
+    maximum_requests_per_task: int,
+    maximum_input_tokens: int,
+    maximum_output_tokens: int,
+    maximum_cost_usd_exact: str,
+    remaining_cost_usd_by_role: Mapping[str, str] | None = None,
+    remaining_cost_usd_by_model: Mapping[str, str] | None = None,
+) -> ModelPortfolioResourcePreflight:
+    """Build one exact, nonauthorizing all-task reservation intent."""
+
+    validated_plan = ModelSurfaceCoveragePlan.model_validate(
+        coverage_plan.model_dump(mode="python")
+    )
+    if any(
+        type(value) is not int
+        for value in (
+            maximum_requests_per_task,
+            maximum_input_tokens,
+            maximum_output_tokens,
+        )
+    ):
+        raise ValueError("portfolio preflight limits must be exact integers")
+    envelopes = tuple(
+        sorted(
+            (
+                ModelPortfolioTaskResourceEnvelope.model_validate(
+                    envelope.model_dump(mode="python")
+                )
+                for envelope in _bounded_tuple(
+                    task_envelopes,
+                    maximum=MAX_COVERAGE_TASKS,
+                    label="portfolio task envelopes",
+                )
+            ),
+            key=lambda item: item.scheduler_task_id,
+        )
+    )
+    if not envelopes:
+        raise ValueError("portfolio preflight requires at least one task envelope")
+    if any(item.campaign_manifest_sha256 != campaign_manifest_sha256 for item in envelopes):
+        raise ValueError("portfolio task envelope differs from the campaign manifest")
+    totals = _portfolio_resource_totals(envelopes)
+    role_costs, model_costs = _portfolio_resource_scoped_costs(envelopes)
+    role_caps = _normalize_scope_caps(
+        remaining_cost_usd_by_role,
+        scope_kind=ModelSurfaceResourceScopeKind.ROLE,
+    )
+    model_caps = _normalize_scope_caps(
+        remaining_cost_usd_by_model,
+        scope_kind=ModelSurfaceResourceScopeKind.MODEL,
+    )
+    scoped_failures = _resource_scope_failures(
+        role_costs=role_costs,
+        model_costs=model_costs,
+        role_caps=role_caps,
+        model_caps=model_caps,
+    )
+    cost_cap = _canonical_decimal_text(
+        maximum_cost_usd_exact,
+        label="portfolio maximum cost",
+    )
+    failures = _portfolio_resource_failure_codes(
+        coverage_plan=validated_plan,
+        envelopes=envelopes,
+        totals=totals,
+        maximum_requests_per_task=maximum_requests_per_task,
+        maximum_input_tokens=maximum_input_tokens,
+        maximum_output_tokens=maximum_output_tokens,
+        maximum_cost_usd_exact=cost_cap,
+        scoped_failures=scoped_failures,
+    )
+    values = {
+        "artifact_kind": "model_portfolio_resource_preflight",
+        "schema_version": "1.0",
+        "coverage_plan": validated_plan,
+        "coverage_plan_sha256": validated_plan.plan_sha256,
+        "campaign_manifest_sha256": campaign_manifest_sha256,
+        "task_envelopes": envelopes,
+        "candidate_independent_request_roles": (_portfolio_candidate_independent_roles(envelopes)),
+        "planned_maximum_request_count": totals[0],
+        "planned_maximum_input_tokens": totals[1],
+        "planned_maximum_output_tokens": totals[2],
+        "planned_maximum_cost_usd_exact": totals[3],
+        "planned_costs_by_role": role_costs,
+        "planned_costs_by_model": model_costs,
+        "maximum_requests_per_task": maximum_requests_per_task,
+        "maximum_input_tokens": maximum_input_tokens,
+        "maximum_output_tokens": maximum_output_tokens,
+        "maximum_cost_usd_exact": cost_cap,
+        "remaining_cost_caps_by_role": role_caps,
+        "remaining_cost_caps_by_model": model_caps,
+        "scoped_failures": scoped_failures,
+        "failure_codes": failures,
+        "feasible": not failures,
+        "authorizes_dispatch": False,
+        "grants_review_credit": False,
+        "grants_completion_credit": False,
+    }
+    return ModelPortfolioResourcePreflight.model_validate(
+        {**values, "preflight_sha256": _canonical_sha256(values)}
+    )
+
+
 def _resource_totals(
     previews: tuple[ModelSurfaceTaskResourcePreview, ...],
 ) -> tuple[int, int, int, str]:
@@ -1733,6 +2185,89 @@ def _resource_totals(
         sum(preview.maximum_output_tokens for preview in previews),
         _sum_decimal_text(preview.maximum_cost_usd_exact for preview in previews),
     )
+
+
+def _portfolio_candidate_independent_roles(
+    envelopes: tuple[ModelPortfolioTaskResourceEnvelope, ...],
+) -> tuple[str, ...]:
+    """Return the canonical candidate-independent specialist roles actually held."""
+
+    planned_roles = {envelope.request_role for envelope in envelopes}
+    return tuple(
+        request_role
+        for role in CANDIDATE_INDEPENDENT_SPECIALIST_ROLES
+        if (request_role := f"specialist:{role}") in planned_roles
+    )
+
+
+def _portfolio_resource_totals(
+    envelopes: tuple[ModelPortfolioTaskResourceEnvelope, ...],
+) -> tuple[int, int, int, str]:
+    return (
+        sum(envelope.maximum_request_count for envelope in envelopes),
+        sum(envelope.maximum_input_tokens for envelope in envelopes),
+        sum(envelope.maximum_output_tokens for envelope in envelopes),
+        _sum_decimal_text(envelope.maximum_cost_usd_exact for envelope in envelopes),
+    )
+
+
+def _portfolio_resource_scoped_costs(
+    envelopes: tuple[ModelPortfolioTaskResourceEnvelope, ...],
+) -> tuple[
+    tuple[ModelSurfaceResourceScopeCost, ...],
+    tuple[ModelSurfaceResourceScopeCost, ...],
+]:
+    role_cost_parts: dict[str, list[str]] = defaultdict(list)
+    model_cost_parts: dict[str, list[str]] = defaultdict(list)
+    for envelope in envelopes:
+        role_cost_parts[envelope.request_role].append(envelope.maximum_cost_usd_exact)
+        model_cost_parts[envelope.requested_model].append(envelope.maximum_cost_usd_exact)
+    role_costs = tuple(
+        ModelSurfaceResourceScopeCost.build(
+            scope_kind=ModelSurfaceResourceScopeKind.ROLE,
+            scope_key=role,
+            maximum_cost_usd_exact=_sum_decimal_text(role_cost_parts[role]),
+        )
+        for role in sorted(role_cost_parts)
+    )
+    model_costs = tuple(
+        ModelSurfaceResourceScopeCost.build(
+            scope_kind=ModelSurfaceResourceScopeKind.MODEL,
+            scope_key=model,
+            maximum_cost_usd_exact=_sum_decimal_text(model_cost_parts[model]),
+        )
+        for model in sorted(model_cost_parts)
+    )
+    return role_costs, model_costs
+
+
+def _portfolio_resource_failure_codes(
+    *,
+    coverage_plan: ModelSurfaceCoveragePlan,
+    envelopes: tuple[ModelPortfolioTaskResourceEnvelope, ...],
+    totals: tuple[int, int, int, str],
+    maximum_requests_per_task: int,
+    maximum_input_tokens: int,
+    maximum_output_tokens: int,
+    maximum_cost_usd_exact: str,
+    scoped_failures: tuple[ModelSurfaceResourceScopeFailure, ...],
+) -> tuple[ModelSurfaceResourceFailureCode, ...]:
+    _, input_tokens, output_tokens, cost_usd_exact = totals
+    failures: list[ModelSurfaceResourceFailureCode] = []
+    if not coverage_plan.feasible:
+        failures.append(ModelSurfaceResourceFailureCode.COVERAGE_PLAN_INFEASIBLE)
+    if any(envelope.maximum_attempts > maximum_requests_per_task for envelope in envelopes):
+        failures.append(ModelSurfaceResourceFailureCode.REQUEST_CAP_EXCEEDED)
+    if input_tokens > maximum_input_tokens:
+        failures.append(ModelSurfaceResourceFailureCode.INPUT_TOKEN_CAP_EXCEEDED)
+    if output_tokens > maximum_output_tokens:
+        failures.append(ModelSurfaceResourceFailureCode.OUTPUT_TOKEN_CAP_EXCEEDED)
+    with localcontext(_decimal_context()):
+        if Decimal(cost_usd_exact) > Decimal(maximum_cost_usd_exact):
+            failures.append(ModelSurfaceResourceFailureCode.USD_CAP_EXCEEDED)
+    scoped_codes = {failure.failure_code for failure in scoped_failures}
+    failures.extend(code for code in ModelSurfaceResourceFailureCode if code in scoped_codes)
+    return tuple(failures)
 
 
 def _resource_scoped_costs(
@@ -1878,6 +2413,9 @@ __all__ = [
     "MAX_RESOURCE_ATTEMPTS",
     "MAX_ROOT_LINEAGES_PER_SURFACE",
     "MAX_SURFACES_PER_GAP_TASK",
+    "ModelPortfolioResourcePreflight",
+    "ModelPortfolioTaskKind",
+    "ModelPortfolioTaskResourceEnvelope",
     "ModelSurfaceAssignmentPurpose",
     "ModelSurfaceCoverageDeficit",
     "ModelSurfaceCoveragePlan",
@@ -1895,6 +2433,7 @@ __all__ = [
     "ModelSurfaceRiskTier",
     "ModelSurfaceTaskResourcePreview",
     "ModelSurfaceTierRequirement",
+    "build_model_portfolio_resource_preflight",
     "build_model_surface_coverage_plan",
     "build_model_surface_coverage_policy",
     "build_model_surface_resource_preflight",

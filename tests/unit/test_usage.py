@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import copy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -1049,6 +1050,135 @@ def test_usage_recovery_scope_rejects_gap_root_swap_and_coordinate_drift() -> No
             recovery_request_limit_coordinates=(
                 (records[2].request_id, root_scope, 3),
                 (records[1].request_id, root_scope, 1),
+            ),
+        )
+
+
+def test_usage_recovery_scope_interleaves_exact_no_usage_transition() -> None:
+    root_scope = "family-root-request"
+    root = _owned_request_limit_record(
+        root_scope,
+        request_limit_scope=root_scope,
+        request_limit_count_before=0,
+    )
+    later = _owned_request_limit_record(
+        "family-root-request.child-b",
+        request_limit_scope=root_scope,
+        request_limit_count_before=2,
+    )
+    serialized = tuple(
+        UsageRecord.model_validate(record.model_dump(mode="json")) for record in (root, later)
+    )
+    maximum = atomic_request_limit_reservations_from_usage(root)[0].request_limit_maximum
+    transition = ("family-root-request.child-release", root_scope, 1, 2, maximum)
+    scope = _issue_trusted_usage_recovery_scope(
+        serialized,
+        recovery_request_limit_coordinates=((later.request_id, root_scope, 2),),
+        non_usage_request_limit_transitions=(transition,),
+    )
+
+    recovered = _recover_trusted_usage_records(serialized, scope)
+
+    assert is_creditable_usage_record(recovered[0], require_real=True)
+    assert is_recovery_creditable_usage_record(
+        recovered[1],
+        request_limit_scope=root_scope,
+        request_limit_count_before=2,
+        require_real=True,
+    )
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        _recover_trusted_usage_records(serialized, scope)
+    copied = copy(scope)
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        _recover_trusted_usage_records(serialized, copied)
+
+
+@pytest.mark.parametrize(
+    "variant, error",
+    [
+        ("unknown-root", "unknown root scope"),
+        ("overlap", "chain is inconsistent"),
+        ("atomic-id-collision", "not exact and sorted"),
+        ("wrong-maximum", "chain is inconsistent"),
+    ],
+)
+def test_usage_recovery_scope_rejects_invalid_no_usage_transition(
+    variant: str,
+    error: str,
+) -> None:
+    root_scope = "family-root-request"
+    root = _owned_request_limit_record(
+        root_scope,
+        request_limit_scope=root_scope,
+        request_limit_count_before=0,
+    )
+    later = _owned_request_limit_record(
+        "family-root-request.child-b",
+        request_limit_scope=root_scope,
+        request_limit_count_before=2,
+    )
+    serialized = tuple(
+        UsageRecord.model_validate(record.model_dump(mode="json")) for record in (root, later)
+    )
+    maximum = atomic_request_limit_reservations_from_usage(root)[0].request_limit_maximum
+    transitions = {
+        "unknown-root": (
+            "family-root-request.child-release",
+            "unknown-root-request",
+            1,
+            2,
+            maximum,
+        ),
+        "overlap": (
+            "family-root-request.child-release",
+            root_scope,
+            2,
+            3,
+            maximum,
+        ),
+        "atomic-id-collision": (root.request_id, root_scope, 1, 2, maximum),
+        "wrong-maximum": (
+            "family-root-request.child-release",
+            root_scope,
+            1,
+            2,
+            maximum - 1,
+        ),
+    }
+
+    with pytest.raises(ValueError, match=error):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=((later.request_id, root_scope, 2),),
+            non_usage_request_limit_transitions=(transitions[variant],),
+        )
+
+
+def test_usage_recovery_scope_rejects_duplicate_no_usage_transition_identity() -> None:
+    root_scope = "family-root-request"
+    root = _owned_request_limit_record(
+        root_scope,
+        request_limit_scope=root_scope,
+        request_limit_count_before=0,
+    )
+    later = _owned_request_limit_record(
+        "family-root-request.child-c",
+        request_limit_scope=root_scope,
+        request_limit_count_before=3,
+    )
+    serialized = tuple(
+        UsageRecord.model_validate(record.model_dump(mode="json")) for record in (root, later)
+    )
+    maximum = atomic_request_limit_reservations_from_usage(root)[0].request_limit_maximum
+    duplicate_id = "family-root-request.child-release"
+
+    with pytest.raises(ValueError, match="not exact and sorted"):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=((later.request_id, root_scope, 3),),
+            non_usage_request_limit_transitions=(
+                (duplicate_id, root_scope, 1, 2, maximum),
+                (duplicate_id, root_scope, 2, 3, maximum),
             ),
         )
 

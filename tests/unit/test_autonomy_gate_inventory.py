@@ -43,8 +43,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3667
-    assert inventory.source_occurrence_count == 3670
+    assert inventory.source_count == 3685
+    assert inventory.source_occurrence_count == 3688
     assert inventory.audit_config_leaf_locator_count == 505
     assert inventory.audit_config_leaf_occurrence_count == 508
     assert inventory.audit_config_shared_locator_count == 3
@@ -64,14 +64,14 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "PIPELINE_INIT_PARAMETER": 25,
         "PIPELINE_RUN_PARAMETER": 15,
         "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-        "DIRECT_ENVIRONMENT_INPUT": 491,
-        "ENTROPY_INPUT": 17,
+        "DIRECT_ENVIRONMENT_INPUT": 494,
+        "ENTROPY_INPUT": 19,
         "AUDITED_MODULE_UNIVERSE": 232,
-        "EXPLICIT_NON_FIELD_GATE": 1932,
+        "EXPLICIT_NON_FIELD_GATE": 1945,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3624,
+        SourceCoverageClassification.GATE: 3642,
         SourceCoverageClassification.NON_GATING_CONTROL: 43,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -84,25 +84,25 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 111
     )
     assert (
-        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 80
+        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 83
     )
     assert (
         sum(
             source.source_kind is CompletionInputSourceKind.ENTROPY_INPUT
             for source in inventory.source_coverage
         )
-        == 17
+        == 19
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 272
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 273
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
-        == 71
+        == 79
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1574
+        == 1578
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -159,6 +159,34 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         managed_toolchain.implementation_detail
     )
     sources = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "direct-env-ast:orchestration.budgets:_accounting_portfolio_scope_material:"
+        "process-identity:1",
+        "direct-env-ast:orchestration.budgets:budgetmanager.portfolio_task_scope:"
+        "process-identity:1",
+        "direct-env-ast:orchestration.budgets:budgetmanager.reserve:process-identity:1",
+        "entropy-ast:orchestration.cost_ledger:atomiccostledger.claim_portfolio_slot:uuid-uuid4:1",
+        "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve_portfolio:uuid-uuid4:1",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-cost-ledger-provisioning"
+    scheduler_filesystem_sources = tuple(
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:orchestration.scheduler:")
+    )
+    assert len(scheduler_filesystem_sources) == 51
+    assert all(
+        source.logical_gate_id == "gate-managed-output-provisioning"
+        for source in scheduler_filesystem_sources
+    )
+    assert {
+        "filesystem-input:orchestration.scheduler:_adopt_pending_private_file:1",
+        "filesystem-input:orchestration.scheduler:_cleanup_orphan_immutable_writes:1",
+        "filesystem-input:orchestration.scheduler:_durable_directory_names:1",
+        "filesystem-input:orchestration.scheduler:_inspect_orphan_immutable_writes:1",
+        "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:1",
+        "filesystem-input:orchestration.scheduler:_write_model:1",
+    } <= set(sources)
     smoke_run_index = sources[
         "completion-entrypoint:models_authenticated_runner_smoke:smoke_run_index"
     ]
@@ -478,6 +506,18 @@ def test_new_aliased_wall_clock_read_fails_closed(tmp_path: Path) -> None:
     assert all("custom" not in expression for *_, expression in occurrences)
     with pytest.raises(AutonomyInventoryError, match="direct environment and PATH-resolution"):
         _discover_direct_environment_sources(source_root)
+
+
+def test_budget_portfolio_scope_process_identity_is_a_cost_ledger_gate() -> None:
+    assert (
+        inventory_module._direct_environment_gate(
+            "orchestration/budgets.py",
+            "BudgetManager.portfolio_task_scope",
+            "process-identity",
+            "os.getpid()",
+        )
+        == "gate-cost-ledger-provisioning"
+    )
 
 
 def test_filesystem_privacy_provenance_has_exact_nonfallback_gate() -> None:

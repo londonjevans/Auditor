@@ -7,19 +7,36 @@ from typing import Any, cast
 
 import pytest
 
+from mmaudit.agents.specialists import completed_specialist_roles
 from mmaudit.config import AuditConfig
-from mmaudit.models.coverage_planning import ModelSurfaceCoveragePlan
+from mmaudit.constants import (
+    CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
+    CANDIDATE_INDEPENDENT_SPECIALIST_ROLES,
+    SPECIALIST_INVESTIGATOR_ROLES,
+)
+from mmaudit.models.coverage_planning import (
+    ModelPortfolioResourcePreflight,
+    ModelPortfolioTaskKind,
+    ModelSurfaceCoveragePlan,
+)
 from mmaudit.models.openrouter import trusted_openrouter_execution_evidence
-from mmaudit.models.scheduler import SchedulerArtifact
+from mmaudit.models.scheduler import SchedulerArtifact, SchedulerPassKind, SchedulerTaskOutput
 from mmaudit.models.schemas import (
     AnalysisState,
     ExecutionEvidenceKind,
     LanguageCapabilityProfile,
     QualityGateResult,
+    SpecialistExecutionRecord,
 )
 from mmaudit.orchestration import pipeline as pipeline_runtime
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    PortfolioHoldStatus,
+    PortfolioSlotStatus,
+)
 from mmaudit.orchestration.model_coverage import build_model_surface_requests
+from tests.conftest import model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter
 from tests.integration import test_pipeline as pipeline_test_support
 from tests.integration.test_pipeline import StaticScannerRunner, _foundry_repo, _run
@@ -46,6 +63,35 @@ def _compact_solidity_config(
             reproduction={"required_for_solidity": False},
             models={"specialists": {}},
             token_budgets=token_budgets,
+        ).effective(),
+    )
+
+
+def _candidate_independent_specialist_config(config_factory: Any) -> AuditConfig:
+    specialists = {
+        role: {
+            "primary": f"clean-specialist/security-model-{index}",
+            "fallbacks": [],
+            "quality_tier": "high",
+            "capabilities": ["structured_json", "security_reasoning", "solidity"],
+        }
+        for index, role in enumerate(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    }
+    base_registry = [entry.model_dump(mode="json") for entry in config_factory().models.registry]
+    specialist_registry = [model_registry_entry(slot["primary"]) for slot in specialists.values()]
+    registry = [*base_registry, *specialist_registry]
+    return cast(
+        AuditConfig,
+        config_factory(
+            profile="deep",
+            language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+            privacy={
+                "fail_on_detected_secret": False,
+                "approved_model_lineages": [entry["root_lineage"] for entry in registry],
+            },
+            smart_contracts={"compile": False},
+            reproduction={"required_for_solidity": False},
+            models={"specialists": specialists, "registry": registry},
         ).effective(),
     )
 
@@ -77,20 +123,7 @@ def _coverage_request_surfaces(
     return observed
 
 
-@pytest.mark.asyncio
-async def test_compact_surface_tasks_conserve_exact_requests_and_resume_without_transport(
-    config_factory: Any,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository = _foundry_repo(tmp_path, patched=True)
-    config = _compact_solidity_config(config_factory)
-    control = tmp_path / "coverage-control"
-    control.mkdir(mode=0o700)
-    ledger = AtomicCostLedger.initialize(
-        (control / "model-cost-ledger.json").resolve(),
-        cap_usd=Decimal(str(config.execution.budget_usd)),
-    )
+def _install_bounded_compact_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     original_build_requests = build_model_surface_requests
 
     def one_authoritative_surface(**kwargs: Any) -> list[Any]:
@@ -121,12 +154,29 @@ async def test_compact_surface_tasks_conserve_exact_requests_and_resume_without_
         "mmaudit.orchestration.pipeline._whole_protocol_review_models",
         lambda *_args, **_kwargs: (),
     )
-    # This test exercises scheduler replay and provider-call conservation, not the
+    # These tests exercise scheduler replay and provider-call conservation, not the
     # expensive truncation-schema self-check already covered by its focused suite.
     monkeypatch.setattr(
         "mmaudit.models.scheduler.candidate_review_protocol_implementation_is_pristine",
         lambda: True,
     )
+
+
+@pytest.mark.asyncio
+async def test_compact_surface_tasks_conserve_exact_requests_and_resume_without_transport(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    control = tmp_path / "coverage-control"
+    control.mkdir(mode=0o700)
+    ledger = AtomicCostLedger.initialize(
+        (control / "model-cost-ledger.json").resolve(),
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    _install_bounded_compact_fixture(monkeypatch)
     first_fake = FakeOpenRouter(mode="maximum_assurance")
     first = await _run(
         config,
@@ -175,6 +225,447 @@ async def test_compact_surface_tasks_conserve_exact_requests_and_resume_without_
 
 
 @pytest.mark.asyncio
+async def test_resume_after_portfolio_release_before_blind_pass_seal_reuses_initial_transport(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    _install_bounded_compact_fixture(monkeypatch)
+    control = tmp_path / "release-crash-control"
+    control.mkdir(mode=0o700)
+    ledger_path = (control / "model-cost-ledger.json").resolve()
+    ledger = AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    original_seal_pass_result = pipeline_runtime.PipelineScheduler.seal_pass_result
+    blind_seal_interruptions = 0
+
+    def crash_before_blind_pass_seal(scheduler: Any) -> Any:
+        nonlocal blind_seal_interruptions
+        if scheduler.active_plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
+            blind_seal_interruptions += 1
+            raise RuntimeError("synthetic crash after durable portfolio release")
+        return original_seal_pass_result(scheduler)
+
+    monkeypatch.setattr(
+        pipeline_runtime.PipelineScheduler,
+        "seal_pass_result",
+        crash_before_blind_pass_seal,
+    )
+    output = tmp_path / "release-crash-output"
+    first_fake = FakeOpenRouter(mode="clean_no_candidates")
+    with pytest.raises(RuntimeError, match="synthetic crash after durable portfolio release"):
+        await _run(
+            config,
+            repository,
+            tmp_path,
+            first_fake,
+            scanner_runner=StaticScannerRunner(emit_finding=False),
+            cost_ledger=ledger,
+            output=output,
+        )
+
+    assert blind_seal_interruptions == 1
+    interrupted_runs = tuple(path for path in (output / "runs").iterdir() if path.is_dir())
+    assert len(interrupted_runs) == 1
+    interrupted_run = interrupted_runs[0]
+    assert not (
+        interrupted_run / "private" / "scheduler-journal" / "pass-results" / "pass-02-result.json"
+    ).exists()
+    first_request_ids = {
+        metadata["mmaudit_request_id"]
+        for body in first_fake.requests
+        if isinstance((metadata := body.get("metadata")), dict)
+        and isinstance(metadata.get("mmaudit_request_id"), str)
+    }
+    assert first_request_ids
+    interrupted_preflight = ModelPortfolioResourcePreflight.model_validate_json(
+        (interrupted_run / "private" / "model-portfolio-resource-preflight.json").read_bytes()
+    )
+    interrupted_ledger = ledger.snapshot()
+    assert len(interrupted_ledger.portfolio_holds) == 1
+    interrupted_hold = interrupted_ledger.portfolio_holds[0]
+    assert interrupted_hold.plan_sha256 == interrupted_preflight.preflight_sha256
+    assert interrupted_hold.status is PortfolioHoldStatus.RELEASED
+    assert {slot.request_id for slot in interrupted_hold.claimed_slots} == first_request_ids
+    assert interrupted_hold.remaining_slots == ()
+    interrupted_ledger_bytes = ledger_path.read_bytes()
+
+    monkeypatch.setattr(
+        pipeline_runtime.PipelineScheduler,
+        "seal_pass_result",
+        original_seal_pass_result,
+    )
+    resumed_fake = FakeOpenRouter(mode="clean_no_candidates")
+    resumed = await _run(
+        config,
+        repository,
+        tmp_path,
+        resumed_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+        resume_run_dir=interrupted_run,
+        output=output,
+    )
+
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.requests == []
+    assert {usage.request_id for usage in resumed.report.usage} == first_request_ids
+    assert all(
+        "lacks its exact active durable hold" not in reason
+        for reason in resumed.report.incomplete_reasons
+    )
+    assert ledger.snapshot() == interrupted_ledger
+    assert ledger_path.read_bytes() == interrupted_ledger_bytes
+    assert (
+        interrupted_run / "private" / "scheduler-journal" / "pass-results" / "pass-02-result.json"
+    ).is_file()
+
+
+@pytest.mark.asyncio
+async def test_threat_model_timeout_releases_unused_portfolio_and_resumes_without_transport(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    _install_bounded_compact_fixture(monkeypatch)
+    control = tmp_path / "orientation-timeout-control"
+    control.mkdir(mode=0o700)
+    ledger_path = (control / "model-cost-ledger.json").resolve()
+    ledger = AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    first_fake = FakeOpenRouter(mode="timeout", role="threat_model")
+    first = await _run(
+        config,
+        repository,
+        tmp_path,
+        first_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+    )
+
+    assert first_fake.chat_calls == 1
+    assert len(first_fake.requests) == 1
+    first_metadata = first_fake.requests[0].get("metadata")
+    assert isinstance(first_metadata, dict)
+    assert first_metadata["mmaudit_role"] == "threat_model"
+    first_request_id = first_metadata["mmaudit_request_id"]
+    assert isinstance(first_request_id, str)
+    portfolio_preflight_path = first.run_dir / "private" / "model-portfolio-resource-preflight.json"
+    portfolio_preflight_bytes = portfolio_preflight_path.read_bytes()
+    portfolio_preflight = ModelPortfolioResourcePreflight.model_validate_json(
+        portfolio_preflight_bytes
+    )
+    orientation_request_ids = {
+        request_id
+        for envelope in portfolio_preflight.task_envelopes
+        if envelope.task_kind is ModelPortfolioTaskKind.ORIENTATION
+        for request_id in envelope.attempt_request_ids
+    }
+    all_portfolio_request_ids = {
+        request_id
+        for envelope in portfolio_preflight.task_envelopes
+        for request_id in envelope.attempt_request_ids
+    }
+    assert orientation_request_ids == {first_request_id}
+
+    terminal_ledger = ledger.snapshot()
+    assert terminal_ledger.active_reserved_usd == 0
+    assert terminal_ledger.held_portfolio_usd == 0
+    assert len(terminal_ledger.portfolio_holds) == 1
+    portfolio_hold = terminal_ledger.portfolio_holds[0]
+    assert portfolio_hold.plan_sha256 == portfolio_preflight.preflight_sha256
+    assert portfolio_hold.status is PortfolioHoldStatus.RELEASED
+    assert {slot.request_id for slot in portfolio_hold.claimed_slots} == {first_request_id}
+    assert {slot.request_id for slot in portfolio_hold.released_slots} == (
+        all_portfolio_request_ids - {first_request_id}
+    )
+    assert portfolio_hold.remaining_slots == ()
+    assert len(portfolio_hold.claimed_slots) == 1
+    assert len(portfolio_hold.released_slots) == len(portfolio_hold.initial_slots) - 1
+    public_coverage_bytes = (first.run_dir / "model-review-coverage.json").read_bytes()
+    public_coverage = json.loads(public_coverage_bytes)
+    assert (
+        public_coverage["portfolio_resource_preflight_sha256"]
+        == portfolio_preflight.preflight_sha256
+    )
+    assert public_coverage["portfolio_reservation_durable"] is True
+    assert public_coverage["portfolio_hold_status"] == "released"
+    assert public_coverage["portfolio_claimed_slot_count"] == 1
+    assert public_coverage["portfolio_released_slot_count"] == len(portfolio_hold.released_slots)
+    assert public_coverage["portfolio_held_slot_count"] == 0
+    terminal_ledger_bytes = ledger_path.read_bytes()
+
+    resumed_fake = FakeOpenRouter(mode="timeout", role="threat_model")
+    resumed = await _run(
+        config,
+        repository,
+        tmp_path,
+        resumed_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+        resume_run_dir=first.run_dir,
+    )
+
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.requests == []
+    assert ledger.snapshot() == terminal_ledger
+    assert ledger_path.read_bytes() == terminal_ledger_bytes
+    assert (
+        resumed.run_dir / "private" / "model-portfolio-resource-preflight.json"
+    ).read_bytes() == portfolio_preflight_bytes
+    assert (resumed.run_dir / "model-review-coverage.json").read_bytes() == public_coverage_bytes
+
+
+@pytest.mark.asyncio
+async def test_clean_solidity_runtime_executes_exact_candidate_independent_specialist_portfolio(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _candidate_independent_specialist_config(config_factory)
+    assert config.execution.max_model_retries == 0
+    control = tmp_path / "clean-coverage-control"
+    control.mkdir(mode=0o700)
+    ledger_path = (control / "model-cost-ledger.json").resolve()
+    ledger = AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    specialist_model_ids = [slot.primary for slot in config.models.specialists.values()]
+    first_fake = FakeOpenRouter(
+        mode="clean_no_candidates",
+        extra_model_ids=specialist_model_ids,
+    )
+
+    first = await _run(
+        config,
+        repository,
+        tmp_path,
+        first_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+    )
+
+    assert first.report.findings == []
+    assert first.report.rejected_findings == []
+    assert first.report.filtered_findings == []
+    assert first.report.verification_decisions == []
+    assert first.report.usage
+    request_roles = tuple(
+        metadata["mmaudit_role"]
+        for body in first_fake.requests
+        if isinstance((metadata := body.get("metadata")), dict)
+        and isinstance(metadata.get("mmaudit_role"), str)
+    )
+    specialist_request_roles = {
+        role.removeprefix("specialist:") for role in request_roles if role.startswith("specialist:")
+    }
+    expected_independent_roles = set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    expected_dependent_roles = set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES)
+    assert specialist_request_roles == expected_independent_roles
+    assert len(specialist_request_roles) == len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES) == 24
+    assert specialist_request_roles.isdisjoint(expected_dependent_roles)
+    assert {"verifier", "judge"}.isdisjoint(request_roles)
+
+    scheduler = SchedulerArtifact.model_validate_json(
+        (first.run_dir / "scheduler-state.json").read_bytes()
+    )
+    scheduled_roles = {request.role for request in scheduler.model_requests}
+    assert {
+        role.removeprefix("specialist:")
+        for role in scheduled_roles
+        if role.startswith("specialist:")
+    } == expected_independent_roles
+    assert (
+        not {f"specialist:{role}" for role in CANDIDATE_DEPENDENT_SPECIALIST_ROLES}
+        & scheduled_roles
+    )
+    assert {"verifier", "judge"}.isdisjoint(scheduled_roles)
+
+    specialist_payload = json.loads(
+        (first.run_dir / "specialist-execution.json").read_text(encoding="utf-8")
+    )
+    specialist_records = [
+        SpecialistExecutionRecord.model_validate(record) for record in specialist_payload["records"]
+    ]
+    records_by_role = {record.role: record for record in specialist_records}
+    configured_roles = {record.role for record in specialist_records if record.configured}
+    assert configured_roles == expected_independent_roles
+    assert len(
+        {records_by_role[role].schema_name for role in CANDIDATE_INDEPENDENT_SPECIALIST_ROLES}
+    ) == len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    for role in CANDIDATE_INDEPENDENT_SPECIALIST_ROLES:
+        record = records_by_role[role]
+        assert record.status.value == "completed"
+        assert record.execution_evidence is ExecutionEvidenceKind.MOCK
+        assert record.successful_requests > 0
+        assert record.failed_requests == 0
+        assert set(record.successful_request_ids) == {
+            outcome.request_id for outcome in record.accepted_outcomes
+        }
+    for role in CANDIDATE_DEPENDENT_SPECIALIST_ROLES:
+        record = records_by_role[role]
+        assert not record.configured
+        assert record.status.value == "not_configured"
+        assert record.successful_requests == record.failed_requests == 0
+        assert record.accepted_outcomes == ()
+    assert completed_specialist_roles(specialist_records) == set()
+
+    coverage = first.report.model_review_coverage
+    assert coverage is not None
+    assert coverage.overall.numerator == 0
+    assert all(not surface.reviewed for surface in coverage.surfaces)
+    assert all(
+        usage.execution_evidence is ExecutionEvidenceKind.MOCK
+        and usage.attempts == 1
+        and usage.retry_count == 0
+        and usage.reported_cost_usd_exact is not None
+        and Decimal(usage.reported_cost_usd_exact) == Decimal("0.001")
+        and usage.accounted_cost_usd_exact is not None
+        and Decimal(usage.accounted_cost_usd_exact) == Decimal("0.001")
+        for usage in first.report.usage
+    )
+
+    output_paths = sorted(
+        (first.run_dir / "private" / "scheduler-journal" / "task-outputs").glob("*.json")
+    )
+    scheduler_outputs = tuple(
+        SchedulerTaskOutput.model_validate_json(path.read_bytes()) for path in output_paths
+    )
+    retained_usage = {
+        output.model_completion_evidence.usage_record.request_id: (
+            output.model_completion_evidence.usage_record
+        )
+        for output in scheduler_outputs
+        if output.model_completion_evidence is not None
+    }
+    report_usage = {usage.request_id: usage for usage in first.report.usage}
+    assert retained_usage == report_usage
+    assert {request.logical_request_id for request in scheduler.model_requests} == set(report_usage)
+    request_ids = {
+        metadata["mmaudit_request_id"]
+        for body in first_fake.requests
+        if isinstance((metadata := body.get("metadata")), dict)
+        and isinstance(metadata.get("mmaudit_request_id"), str)
+    }
+    assert request_ids == set(report_usage)
+    assert first_fake.chat_calls == len(first_fake.requests) == len(report_usage)
+
+    portfolio_preflight_path = first.run_dir / "private" / "model-portfolio-resource-preflight.json"
+    portfolio_preflight = ModelPortfolioResourcePreflight.model_validate_json(
+        portfolio_preflight_path.read_bytes()
+    )
+    assert portfolio_preflight.feasible is True
+    assert portfolio_preflight.candidate_independent_request_roles == tuple(
+        f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
+    )
+    assert all(
+        len(envelope.attempt_request_ids) == 1 for envelope in portfolio_preflight.task_envelopes
+    )
+    portfolio_request_ids = {
+        request_id
+        for envelope in portfolio_preflight.task_envelopes
+        for request_id in envelope.attempt_request_ids
+    }
+    public_coverage = json.loads(
+        (first.run_dir / "model-review-coverage.json").read_text(encoding="utf-8")
+    )
+    assert (
+        public_coverage["portfolio_resource_preflight_sha256"]
+        == portfolio_preflight.preflight_sha256
+    )
+    assert (
+        public_coverage["portfolio_resource_preflight_scope"]
+        == "orientation_compact_source_audit_whole_protocol_all_attempts"
+    )
+    assert public_coverage["portfolio_resource_preflight_position"] == "before_paid_orientation"
+    assert public_coverage["portfolio_reservation_durable"] is True
+
+    terminal_ledger = ledger.snapshot()
+    assert terminal_ledger.active_reserved_usd == 0
+    assert terminal_ledger.held_portfolio_usd == 0
+    assert len(terminal_ledger.entries) == len(report_usage)
+    assert {entry.request_id for entry in terminal_ledger.entries} == set(report_usage)
+    assert all(
+        entry.status is CostEntryStatus.RECONCILED
+        and entry.actual_cost_usd == Decimal("0.001")
+        and entry.accounted_cost_usd == Decimal("0.001")
+        for entry in terminal_ledger.entries
+    )
+    assert terminal_ledger.spent_usd == Decimal("0.001") * len(report_usage)
+    assert len(terminal_ledger.portfolio_holds) == 1
+    portfolio_hold = terminal_ledger.portfolio_holds[0]
+    assert portfolio_hold.plan_sha256 == portfolio_preflight.preflight_sha256
+    assert portfolio_hold.status is PortfolioHoldStatus.RELEASED
+    assert portfolio_hold.remaining_slots == ()
+    assert portfolio_hold.released_slots == ()
+    assert all(slot.status is PortfolioSlotStatus.CLAIMED for slot in portfolio_hold.slots)
+    hold_request_ids = {slot.request_id for slot in portfolio_hold.initial_slots}
+    post_portfolio_usage_ids = {
+        request_id
+        for request_id, usage in report_usage.items()
+        if usage.role in {"specialist:invariant_review", "specialist:report_quality"}
+    }
+    assert hold_request_ids == portfolio_request_ids
+    assert portfolio_request_ids | post_portfolio_usage_ids == set(report_usage)
+    assert portfolio_request_ids.isdisjoint(post_portfolio_usage_ids)
+    assert {report_usage[request_id].role for request_id in post_portfolio_usage_ids} == {
+        "specialist:invariant_review",
+        "specialist:report_quality",
+    }
+    assert (
+        len(portfolio_hold.claimed_slots)
+        == len(portfolio_hold.initial_slots)
+        == len(portfolio_request_ids)
+    )
+    assert public_coverage["portfolio_hold_status"] == "released"
+    assert public_coverage["portfolio_initial_slot_count"] == len(portfolio_request_ids)
+    assert public_coverage["portfolio_claimed_slot_count"] == len(portfolio_request_ids)
+    assert public_coverage["portfolio_released_slot_count"] == 0
+    assert public_coverage["portfolio_held_slot_count"] == 0
+    terminal_ledger_bytes = ledger_path.read_bytes()
+
+    stable_artifact_names = (
+        "candidate-findings.json",
+        "model-review-coverage.json",
+        "private/model-portfolio-resource-preflight.json",
+        "scheduler-state.json",
+        "specialist-execution.json",
+    )
+    stable_artifacts = {name: (first.run_dir / name).read_bytes() for name in stable_artifact_names}
+    resumed_fake = FakeOpenRouter(
+        mode="clean_no_candidates",
+        extra_model_ids=specialist_model_ids,
+    )
+    resumed = await _run(
+        config,
+        repository,
+        tmp_path,
+        resumed_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+        resume_run_dir=first.run_dir,
+    )
+
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.requests == []
+    assert ledger.snapshot() == terminal_ledger
+    assert ledger_path.read_bytes() == terminal_ledger_bytes
+    assert resumed.report.usage == first.report.usage
+    assert {
+        name: (resumed.run_dir / name).read_bytes() for name in stable_artifact_names
+    } == stable_artifacts
+
+
+@pytest.mark.asyncio
 async def test_infeasible_compact_resource_preflight_blocks_every_blind_transport(
     config_factory: Any,
     tmp_path: Path,
@@ -193,13 +684,26 @@ async def test_infeasible_compact_resource_preflight_blocks_every_blind_transpor
         scanner_runner=StaticScannerRunner(),
     )
 
-    assert fake.chat_calls == 1
+    assert fake.chat_calls == 0
+    assert fake.requests == []
     assert result.report.incomplete_reasons
+    portfolio_preflight = ModelPortfolioResourcePreflight.model_validate_json(
+        (result.run_dir / "private" / "model-portfolio-resource-preflight.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert portfolio_preflight.feasible is False
+    assert "INPUT_TOKEN_CAP_EXCEEDED" in {code.value for code in portfolio_preflight.failure_codes}
     public_coverage = json.loads(
         (result.run_dir / "model-review-coverage.json").read_text(encoding="utf-8")
     )
-    assert public_coverage["resource_preflight_scope"] == "compact_surface_gap_tasks_only"
-    assert public_coverage["supplemental_blind_spend_included"] is False
+    assert (
+        public_coverage["portfolio_resource_preflight_sha256"]
+        == portfolio_preflight.preflight_sha256
+    )
+    assert public_coverage["portfolio_resource_preflight_position"] == "before_paid_orientation"
+    assert public_coverage["portfolio_reservation_durable"] is False
+    assert not (result.run_dir / "private" / "model-surface-resource-preflight.json").exists()
 
 
 @pytest.mark.asyncio
@@ -294,6 +798,89 @@ async def test_pipeline_preview_wrapper_shadow_is_rejected_before_blind_transpor
 
 
 @pytest.mark.asyncio
+async def test_portfolio_preflight_persistence_failure_blocks_orientation_transport(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    fake = FakeOpenRouter()
+    original_persist = pipeline_runtime._persist_private_coverage_evidence
+
+    def fail_portfolio_persistence(path: Path, evidence: Any) -> None:
+        if path.name == "model-portfolio-resource-preflight.json":
+            raise OSError("synthetic portfolio persistence failure")
+        original_persist(path, evidence)
+
+    monkeypatch.setattr(
+        pipeline_runtime,
+        "_persist_private_coverage_evidence",
+        fail_portfolio_persistence,
+    )
+
+    result = await _run(
+        config,
+        repository,
+        tmp_path,
+        fake,
+        scanner_runner=StaticScannerRunner(),
+    )
+
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    assert any(
+        "seven-pass scheduler preflight failed: OSError: "
+        "synthetic portfolio persistence failure" in reason
+        for reason in result.report.incomplete_reasons
+    )
+    assert not (result.run_dir / "private" / "model-portfolio-resource-preflight.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_observer_bind_failure_precedes_portfolio_reservation_and_transport(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    fake = FakeOpenRouter()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "observer-bind-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = pipeline_test_support._provider(
+        config,
+        fake,
+        atomic_ledger=ledger,
+    )
+    client.bind_request_lifecycle_observer(cast(Any, object()))
+    pipeline = pipeline_runtime.AuditPipeline(
+        config,
+        repo=repository,
+        output=tmp_path / "observer-bind-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),
+        cost_ledger=ledger,
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    snapshot = ledger.snapshot()
+    assert snapshot.entries == ()
+    assert snapshot.portfolio_holds == ()
+    assert snapshot.held_portfolio_usd == 0
+    assert any(
+        "provider request lifecycle observer is already bound" in reason
+        for reason in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
 async def test_missing_scoped_role_cap_blocks_every_blind_transport(
     config_factory: Any,
     tmp_path: Path,
@@ -313,10 +900,22 @@ async def test_missing_scoped_role_cap_blocks_every_blind_transport(
         scanner_runner=StaticScannerRunner(),
     )
 
-    assert fake.chat_calls == 1
-    preflight = json.loads(
-        (result.run_dir / "private" / "model-surface-resource-preflight.json").read_text(
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    portfolio_preflight = ModelPortfolioResourcePreflight.model_validate_json(
+        (result.run_dir / "private" / "model-portfolio-resource-preflight.json").read_text(
             encoding="utf-8"
         )
     )
-    assert "ROLE_USD_CAP_MISSING" in preflight["failure_codes"]
+    assert portfolio_preflight.feasible is False
+    assert "ROLE_USD_CAP_MISSING" in {code.value for code in portfolio_preflight.failure_codes}
+    public_coverage = json.loads(
+        (result.run_dir / "model-review-coverage.json").read_text(encoding="utf-8")
+    )
+    assert (
+        public_coverage["portfolio_resource_preflight_sha256"]
+        == portfolio_preflight.preflight_sha256
+    )
+    assert public_coverage["portfolio_resource_preflight_position"] == "before_paid_orientation"
+    assert public_coverage["portfolio_reservation_durable"] is False
+    assert not (result.run_dir / "private" / "model-surface-resource-preflight.json").exists()

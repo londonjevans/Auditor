@@ -10,7 +10,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from mmaudit.models.schemas import ContextRequestEvidence, UsageRecord
+from mmaudit.models.schemas import (
+    ContextRequestEvidence,
+    ModelRequestValidationStatus,
+    UsageRecord,
+)
 from mmaudit.models.usage import is_recovery_accountable_usage_record
 from mmaudit.orchestration.budgets import (
     AtomicRequestLimitReservationEvidence,
@@ -19,6 +23,7 @@ from mmaudit.orchestration.budgets import (
     BudgetManager,
     BudgetReservationStateError,
     EndpointRequestCostBound,
+    PortfolioTaskSlot,
     Reservation,
     TokenReservationOverrunError,
     UnprovenCostBoundError,
@@ -28,8 +33,13 @@ from mmaudit.orchestration.budgets import (
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostReservationOverrunError,
+    ReleaseReason,
 )
-from tests.unit.test_usage import _creditable_record, _token_plan_for_record
+from tests.unit.test_usage import (
+    _creditable_record,
+    _retry_token_bound_creditable_record,
+    _token_plan_for_record,
+)
 
 
 def _manager(tmp_path, *, cap: str) -> tuple[BudgetManager, AtomicCostLedger]:
@@ -71,6 +81,63 @@ def _endpoint_bound(
             ),
             "request": 1,
         },
+    )
+
+
+def _portfolio_slot(
+    bound: EndpointRequestCostBound,
+    *,
+    task_id: str = "task-a",
+    logical_request_id: str = "request-a",
+    attempt_ordinal: int = 1,
+    maximum_cost_usd: str = "0.2",
+) -> PortfolioTaskSlot:
+    request_id = (
+        logical_request_id
+        if attempt_ordinal == 1
+        else f"{logical_request_id}:attempt:{attempt_ordinal}"
+    )
+    return PortfolioTaskSlot(
+        task_id=task_id,
+        logical_request_id=logical_request_id,
+        attempt_ordinal=attempt_ordinal,
+        request_id=request_id,
+        role="review",
+        exact_model_id=bound.exact_model_id,
+        provider_endpoint=bound.provider_endpoint,
+        endpoint_policy_snapshot_sha256="a" * 64,
+        endpoint_policy_pricing_sha256="b" * 64,
+        endpoint_pricing_snapshot_sha256=bound.pricing_snapshot_sha256,
+        envelope_recipe_sha256="c" * 64,
+        planned_prompt_tokens=bound.maximum_units_for("prompt"),
+        planned_visible_output_tokens=8,
+        planned_reasoning_tokens=2,
+        planned_completion_tokens=10,
+        maximum_cost_usd=Decimal(maximum_cost_usd),
+    )
+
+
+def _portfolio_manager(
+    tmp_path, *, input_tokens: int = 20
+) -> tuple[BudgetManager, AtomicCostLedger]:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "portfolio-cost-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    return (
+        BudgetManager(
+            total_usd=1,
+            max_output_tokens=10,
+            conservative_usd_per_million_tokens=1,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+            global_input_token_budget=input_tokens,
+            global_output_token_budget=40,
+            per_model_usd_caps={"alpha/atlas-secure": "1"},
+            per_role_usd_caps={"review": "1"},
+        ),
+        ledger,
     )
 
 
@@ -144,6 +211,48 @@ def _shared_recovery_usage(
     return recovered
 
 
+def _released_recovery_usage(
+    request_id: str,
+    *,
+    root_scope: str,
+    count_before: int,
+    maximum: int,
+) -> UsageRecord:
+    """Build exact failed pre-send usage retaining request and token custody."""
+
+    base = _shared_recovery_usage(
+        request_id,
+        root_scope=root_scope,
+        count_before=count_before,
+        maximum=maximum,
+        cost_usd_exact="0",
+    )
+    released = UsageRecord.model_validate(
+        base.model_copy(
+            update={
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cached_tokens": 0,
+                "reasoning_tokens": 0,
+                "reasoning_evidence": None,
+                "token_detail_accounting_evidence": None,
+                "reported_cost_usd": None,
+                "reported_cost_usd_exact": None,
+                "provider_error_classification": "timeout",
+                "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+                "status": "provider_error",
+            }
+        ).model_dump(mode="python")
+    )
+    assert is_recovery_accountable_usage_record(
+        released,
+        request_limit_scope=root_scope,
+        request_limit_count_before=count_before,
+    )
+    return released
+
+
 def _recovery_manager(
     tmp_path,
     records: tuple[UsageRecord, ...],
@@ -156,17 +265,45 @@ def _recovery_manager(
         reservation = ledger.reserve(record.request_id, Decimal("0.10"))
         assert record.reported_cost_usd_exact is not None
         ledger.reconcile(reservation, Decimal(record.reported_cost_usd_exact))
-    return (
-        BudgetManager(
-            total_usd=1,
-            max_output_tokens=10,
-            conservative_usd_per_million_tokens=1,
-            max_requests_per_agent=10,
-            atomic_ledger=ledger,
-            global_input_token_budget=100_000,
-            global_output_token_budget=10_000,
-        ),
-        ledger,
+    return (_budget_manager_for_recovery_ledger(ledger), ledger)
+
+
+def _recovered_no_usage_attempt(
+    request_id: str,
+    *,
+    logical_request_id: str,
+    status: str = "released_proven_pre_send",
+    request_limit_scope: str | None,
+    count_before: int | None,
+    count_after: int | None,
+    maximum: int | None,
+    reserved_cost_usd_exact: Decimal = Decimal("0.10"),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        request_id=request_id,
+        logical_request_id=logical_request_id,
+        task_id=f"task-{request_id}",
+        requested_model="author/exact-model",
+        role="source_audit",
+        status=SimpleNamespace(value=status),
+        reserved_cost_usd_exact=reserved_cost_usd_exact,
+        accounted_cost_usd_exact=Decimal(0),
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=count_before,
+        request_limit_count_after=count_after,
+        request_limit_maximum=maximum,
+    )
+
+
+def _budget_manager_for_recovery_ledger(ledger: AtomicCostLedger) -> BudgetManager:
+    return BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=100_000,
+        global_output_token_budget=10_000,
     )
 
 
@@ -496,6 +633,465 @@ async def test_active_request_cost_ceiling_is_trusted_accounting_state(tmp_path)
             await manager.reserve("tamper-request", "review", "prompt")
 
     assert ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_claims_conserve_durable_and_scoped_accounting_concurrently(
+    tmp_path,
+) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path)
+    slots = (
+        _portfolio_slot(bound),
+        _portfolio_slot(
+            bound,
+            task_id="task-b",
+            logical_request_id="request-b",
+        ),
+    )
+    portfolio = await manager.reserve_portfolio("d" * 64, slots)
+
+    assert manager.reserved_usd == 0.4
+    assert manager.reserved_input_tokens == 6
+    assert manager.reserved_output_tokens == 20
+    assert manager.reserved_model_usd(bound.exact_model_id) == Decimal("0.4")
+    assert manager.reserved_role_usd("review") == Decimal("0.4")
+    assert ledger.snapshot().entries == ()
+    assert ledger.snapshot().active_reserved_usd == Decimal("0.4")
+
+    with pytest.raises(BudgetReservationStateError, match="outside an active portfolio"):
+        await manager.reserve(
+            "request-a",
+            "review",
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=bound.exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="e" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope("request-a"),
+        )
+
+    async def claim(slot: PortfolioTaskSlot, plan_hash: str) -> Reservation:
+        async with manager.portfolio_task_scope(portfolio, slot.task_id) as scoped:
+            assert scoped == slot
+            return await manager.reserve(
+                slot.request_id,
+                slot.role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256=plan_hash,
+                request_limit_scope=_issue_trusted_request_limit_scope(slot.logical_request_id),
+            )
+
+    reservations = await asyncio.gather(
+        claim(slots[0], "e" * 64),
+        claim(slots[1], "f" * 64),
+    )
+
+    assert manager.reserved_usd == float(bound.maximum_cost_usd * 2)
+    assert manager.reserved_input_tokens == 6
+    assert manager.reserved_output_tokens == 20
+    assert manager.reserved_model_usd(bound.exact_model_id) == bound.maximum_cost_usd * 2
+    assert manager.reserved_role_usd("review") == bound.maximum_cost_usd * 2
+    assert ledger.snapshot().held_portfolio_usd == 0
+    assert ledger.snapshot().active_reserved_usd == bound.maximum_cost_usd * 2
+    assert {entry.request_id for entry in ledger.snapshot().entries} == {
+        "request-a",
+        "request-b",
+    }
+
+    await manager.release_portfolio(portfolio)
+    with pytest.raises(BudgetReservationStateError, match="already finalized"):
+        await manager.release_portfolio(portfolio)
+    await asyncio.gather(*(manager.release(reservation) for reservation in reservations))
+    assert manager.reserved_usd == 0
+    assert ledger.snapshot().active_reserved_usd == 0
+
+
+@pytest.mark.asyncio
+async def test_portfolio_task_scope_allows_ordered_retries_and_failed_validation_is_atomic(
+    tmp_path,
+) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path)
+    first_slot = _portfolio_slot(bound)
+    second_slot = _portfolio_slot(bound, attempt_ordinal=2)
+    portfolio = await manager.reserve_portfolio("e" * 64, (first_slot, second_slot))
+    held_bytes = ledger.path.read_bytes()
+
+    async with manager.portfolio_task_scope(portfolio, first_slot.task_id):
+        with pytest.raises(BudgetReservationStateError, match="identity, role, or model"):
+            await manager.reserve(
+                first_slot.request_id,
+                "wrong-role",
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=first_slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="f" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(
+                    first_slot.logical_request_id
+                ),
+            )
+        assert ledger.path.read_bytes() == held_bytes
+        first = await manager.reserve(
+            first_slot.request_id,
+            first_slot.role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=first_slot.exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="f" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(first_slot.logical_request_id),
+        )
+        first_claim_bytes = ledger.path.read_bytes()
+        with pytest.raises(BudgetReservationStateError, match="previous attempt is still active"):
+            await manager.reserve(
+                second_slot.request_id,
+                second_slot.role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=second_slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="1" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(
+                    second_slot.logical_request_id
+                ),
+            )
+        assert ledger.path.read_bytes() == first_claim_bytes
+        await manager.release(first)
+        with pytest.raises(BudgetReservationStateError, match="token ceilings"):
+            await manager.reserve(
+                second_slot.request_id,
+                second_slot.role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=second_slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=9,
+                planned_reasoning_tokens=1,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="f" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(
+                    second_slot.logical_request_id
+                ),
+            )
+        second = await manager.reserve(
+            second_slot.request_id,
+            second_slot.role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=second_slot.exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="1" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(second_slot.logical_request_id),
+        )
+        with pytest.raises(BudgetReservationStateError, match="no remaining exact attempt"):
+            await manager.reserve(
+                "request-a:attempt:3",
+                second_slot.role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=second_slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="2" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(
+                    second_slot.logical_request_id
+                ),
+            )
+    assert second.persistent is not None
+    assert ledger.snapshot().portfolio_holds[0].claimed_slots == tuple(
+        slot.as_cost_slot() for slot in (first_slot, second_slot)
+    )
+    await manager.release(second)
+    await manager.release_portfolio(portfolio)
+
+
+@pytest.mark.asyncio
+async def test_portfolio_cost_and_aggregate_cap_failures_are_atomic(tmp_path) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path, input_tokens=5)
+    slots = (
+        _portfolio_slot(bound),
+        _portfolio_slot(
+            bound,
+            task_id="task-b",
+            logical_request_id="request-b",
+        ),
+    )
+    legacy_bytes = ledger.path.read_bytes()
+
+    with pytest.raises(BudgetExhaustedError, match="input-token"):
+        await manager.reserve_portfolio("f" * 64, slots)
+    assert ledger.path.read_bytes() == legacy_bytes
+    assert manager.reserved_usd == 0
+
+    cost_root = tmp_path / "cost"
+    cost_root.mkdir(mode=0o700)
+    manager, ledger = _portfolio_manager(cost_root)
+    costly_slot = _portfolio_slot(bound, maximum_cost_usd="0.12")
+    portfolio = await manager.reserve_portfolio("f" * 64, (costly_slot,))
+    held_bytes = ledger.path.read_bytes()
+    async with manager.portfolio_task_scope(portfolio, costly_slot.task_id):
+        with pytest.raises(BudgetExhaustedError, match="cost ceiling"):
+            await manager.reserve(
+                costly_slot.request_id,
+                costly_slot.role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=costly_slot.exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="1" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(
+                    costly_slot.logical_request_id
+                ),
+            )
+    assert ledger.path.read_bytes() == held_bytes
+    assert ledger.snapshot().held_portfolio_usd == Decimal("0.12")
+
+
+@pytest.mark.asyncio
+async def test_portfolio_claim_shrinks_to_the_durable_endpoint_ceiling(tmp_path) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path)
+    slots = (
+        _portfolio_slot(bound),
+        _portfolio_slot(bound, attempt_ordinal=2),
+    )
+    portfolio = await manager.reserve_portfolio("0" * 64, slots)
+
+    async with manager.portfolio_task_scope(portfolio, slots[0].task_id):
+        first = await manager.reserve(
+            slots[0].request_id,
+            slots[0].role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=slots[0].exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="1" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(slots[0].logical_request_id),
+        )
+        assert first.persistent is not None
+        assert first.persistent.reserved_usd == bound.maximum_cost_usd
+        assert ledger.snapshot().active_reserved_usd == (
+            slots[1].maximum_cost_usd + bound.maximum_cost_usd
+        )
+        with pytest.raises(CostReservationOverrunError):
+            await manager.reconcile(first, Decimal("0.15"))
+        held_after_overrun = ledger.path.read_bytes()
+        with pytest.raises(BudgetExhaustedError, match="persistent model-cost budget"):
+            await manager.reserve(
+                slots[1].request_id,
+                slots[1].role,
+                request_material,
+                endpoint_cost_bound=bound,
+                exact_model_id=slots[1].exact_model_id,
+                planned_prompt_tokens=3,
+                planned_visible_output_tokens=8,
+                planned_reasoning_tokens=2,
+                planned_completion_tokens=10,
+                request_token_plan_sha256="2" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(slots[1].logical_request_id),
+            )
+        assert ledger.path.read_bytes() == held_after_overrun
+    assert ledger.snapshot().has_reservation_overrun
+
+
+@pytest.mark.asyncio
+async def test_portfolio_recovery_reinstalls_exact_held_and_pending_attempts(tmp_path) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path)
+    slots = (
+        _portfolio_slot(bound),
+        _portfolio_slot(
+            bound,
+            task_id="task-b",
+            logical_request_id="request-b",
+        ),
+    )
+    portfolio = await manager.reserve_portfolio("1" * 64, slots)
+    ledger.claim_portfolio_slot(
+        portfolio.persistent,
+        slots[0].request_id,
+        bound.maximum_cost_usd,
+    )
+
+    reopened = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        global_input_token_budget=20,
+        global_output_token_budget=40,
+        per_model_usd_caps={"alpha/atlas-secure": "1"},
+        per_role_usd_caps={"review": "1"},
+    )
+    assert reopened.recovery_required
+    recovered = await reopened.recover_portfolio("1" * 64, slots)
+
+    assert await reopened.recover_portfolio("1" * 64, slots) is recovered
+    assert reopened.reserved_usd == float(slots[1].maximum_cost_usd + bound.maximum_cost_usd)
+    assert reopened.reserved_input_tokens == 6
+    assert reopened.reserved_output_tokens == 20
+    assert reopened.recovery_required
+    with pytest.raises(BudgetReservationStateError, match="exact recovery"):
+        async with reopened.portfolio_task_scope(recovered, slots[1].task_id):
+            pass
+    recovered_attempt = SimpleNamespace(
+        request_id=slots[0].request_id,
+        logical_request_id=slots[0].logical_request_id,
+        task_id=slots[0].task_id,
+        requested_model=slots[0].exact_model_id,
+        role=slots[0].role,
+        status=SimpleNamespace(value="adopted_proven_pre_send"),
+        reserved_cost_usd_exact=bound.maximum_cost_usd,
+        accounted_cost_usd_exact=Decimal(0),
+        request_limit_scope=slots[0].logical_request_id,
+        request_limit_count_before=0,
+        request_limit_count_after=1,
+        request_limit_maximum=2,
+    )
+    recovery_scope = _issue_trusted_budget_recovery_scope(
+        (),
+        non_usage_attempts=(recovered_attempt,),
+    )
+    await reopened.restore_recovered_usage((), recovery_scope=recovery_scope)
+    assert not reopened.recovery_required
+
+    async with reopened.portfolio_task_scope(recovered, slots[0].task_id):
+        adopted = await reopened.reserve(
+            slots[0].request_id,
+            slots[0].role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=slots[0].exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="2" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(slots[0].logical_request_id),
+        )
+    assert adopted.persistent is not None
+    assert adopted.persistent.request_id == slots[0].request_id
+    await reopened.release(adopted)
+
+    wrong = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        global_input_token_budget=20,
+        global_output_token_budget=40,
+        per_model_usd_caps={"alpha/atlas-secure": "1"},
+        per_role_usd_caps={"review": "1"},
+    )
+    changed_slots = (replace(slots[0], maximum_cost_usd=Decimal("0.21")), slots[1])
+    with pytest.raises(BudgetReservationStateError, match="durable initial slots"):
+        await wrong.recover_portfolio("1" * 64, changed_slots)
+    assert wrong.reserved_usd == 0
+    await reopened.release_portfolio(recovered)
+    assert reopened.reserved_usd == 0
+
+
+@pytest.mark.asyncio
+async def test_portfolio_recovery_restores_a_released_retry_prefix(tmp_path) -> None:
+    request_material = "abc"
+    bound = _endpoint_bound(request_material)
+    manager, ledger = _portfolio_manager(tmp_path)
+    slots = (
+        _portfolio_slot(bound),
+        _portfolio_slot(bound, attempt_ordinal=2),
+    )
+    portfolio = await manager.reserve_portfolio("2" * 64, slots)
+    async with manager.portfolio_task_scope(portfolio, slots[0].task_id):
+        first = await manager.reserve(
+            slots[0].request_id,
+            slots[0].role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=slots[0].exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="3" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(slots[0].logical_request_id),
+        )
+        await manager.release(first)
+
+    reopened = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        global_input_token_budget=20,
+        global_output_token_budget=40,
+        per_model_usd_caps={"alpha/atlas-secure": "1"},
+        per_role_usd_caps={"review": "1"},
+    )
+    recovered = await reopened.recover_portfolio("2" * 64, slots)
+    recovery_scope = _issue_trusted_budget_recovery_scope(())
+    await reopened.restore_recovered_usage((), recovery_scope=recovery_scope)
+
+    async with reopened.portfolio_task_scope(recovered, slots[1].task_id) as next_slot:
+        assert next_slot == slots[1]
+        second = await reopened.reserve(
+            slots[1].request_id,
+            slots[1].role,
+            request_material,
+            endpoint_cost_bound=bound,
+            exact_model_id=slots[1].exact_model_id,
+            planned_prompt_tokens=3,
+            planned_visible_output_tokens=8,
+            planned_reasoning_tokens=2,
+            planned_completion_tokens=10,
+            request_token_plan_sha256="4" * 64,
+            request_limit_scope=_issue_trusted_request_limit_scope(slots[1].logical_request_id),
+        )
+    await reopened.release(second)
+    await reopened.release_portfolio(recovered)
+    assert reopened.reserved_usd == 0
 
 
 @pytest.mark.asyncio
@@ -1621,6 +2217,227 @@ async def test_budget_recovery_aggregates_parent_and_children_under_one_root_sco
     assert evidence.request_limit_count_before == 3
     assert evidence.request_limit_count_after == 4
     await manager.release(next_request)
+
+
+@pytest.mark.asyncio
+async def test_budget_recovery_interleaves_typed_release_bridge_and_later_usage(
+    tmp_path,
+) -> None:
+    root_scope = "family-root-request"
+    release_request_id = f"{root_scope}.child-release"
+    records = tuple(
+        sorted(
+            (
+                _shared_recovery_usage(
+                    root_scope,
+                    root_scope=root_scope,
+                    count_before=0,
+                ),
+                _shared_recovery_usage(
+                    f"{root_scope}.child-later",
+                    root_scope=root_scope,
+                    count_before=2,
+                ),
+            ),
+            key=lambda item: item.request_id,
+        )
+    )
+    manager, ledger = _recovery_manager(tmp_path, records)
+    released = ledger.reserve(release_request_id, Decimal("0.10"))
+    ledger.release(released, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    recovered_attempt = _recovered_no_usage_attempt(
+        release_request_id,
+        logical_request_id=release_request_id,
+        request_limit_scope=root_scope,
+        count_before=1,
+        count_after=2,
+        maximum=10,
+    )
+    before = ledger.snapshot()
+
+    for recovered_manager in (manager, _budget_manager_for_recovery_ledger(ledger)):
+        recovery_scope = _issue_trusted_budget_recovery_scope(
+            records,
+            non_usage_attempts=(recovered_attempt,),
+            shared_request_limit_roots=((root_scope, 0),),
+        )
+        await recovered_manager.restore_recovered_usage(
+            records,
+            recovery_scope=recovery_scope,
+        )
+        assert recovered_manager.spent_usd_exact == Decimal("0.02")
+        assert ledger.snapshot() == before
+
+    next_request = await recovered_manager.reserve(
+        f"{root_scope}.child-next",
+        "source_audit",
+        "x",
+        exact_model_id="author/exact-model",
+        planned_prompt_tokens=1,
+        planned_visible_output_tokens=1,
+        planned_reasoning_tokens=0,
+        planned_completion_tokens=1,
+        request_token_plan_sha256="a" * 64,
+        request_limit_scope=_issue_trusted_request_limit_scope(root_scope),
+    )
+    assert next_request.request_limit_reservation_evidence is not None
+    assert next_request.request_limit_reservation_evidence.request_limit_count_before == 3
+    await recovered_manager.release(next_request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ("gap", "overlap", "orphan-root", "wrong-maximum", "adopted-before-usage"),
+)
+async def test_budget_recovery_rejects_invalid_no_usage_shared_bridge(
+    tmp_path,
+    case: str,
+) -> None:
+    root_scope = "family-root-request"
+    later_count = 2
+    attempt_scope = root_scope
+    count_before = 1
+    count_after = 2
+    maximum = 10
+    status = "released_proven_pre_send"
+    if case == "gap":
+        later_count = 3
+        count_before = 2
+        count_after = 3
+    elif case == "overlap":
+        count_before = 0
+        count_after = 1
+    elif case == "orphan-root":
+        attempt_scope = "orphan-root-request"
+    elif case == "wrong-maximum":
+        maximum = 9
+    elif case == "adopted-before-usage":
+        status = "adopted_proven_pre_send"
+    records = tuple(
+        sorted(
+            (
+                _shared_recovery_usage(
+                    root_scope,
+                    root_scope=root_scope,
+                    count_before=0,
+                ),
+                _shared_recovery_usage(
+                    f"{root_scope}.child-later",
+                    root_scope=root_scope,
+                    count_before=later_count,
+                ),
+            ),
+            key=lambda item: item.request_id,
+        )
+    )
+    manager, ledger = _recovery_manager(tmp_path, records)
+    request_id = f"{root_scope}.child-bridge"
+    persistent = ledger.reserve(request_id, Decimal("0.10"))
+    if status == "released_proven_pre_send":
+        ledger.release(persistent, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    recovered_attempt = _recovered_no_usage_attempt(
+        request_id,
+        logical_request_id=request_id,
+        status=status,
+        request_limit_scope=attempt_scope,
+        count_before=count_before,
+        count_after=count_after,
+        maximum=maximum,
+    )
+    before = ledger.snapshot()
+    spent_before = manager.spent_usd_exact
+    recovery_scope = _issue_trusted_budget_recovery_scope(
+        records,
+        non_usage_attempts=(recovered_attempt,),
+        shared_request_limit_roots=((root_scope, 0),),
+    )
+
+    with pytest.raises(BudgetReservationStateError, match="shared recover"):
+        await manager.restore_recovered_usage(records, recovery_scope=recovery_scope)
+
+    assert manager.recovery_required
+    assert manager.spent_usd_exact == spent_before
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_budget_recovery_rejects_no_usage_id_colliding_with_atomic_attempt(
+    tmp_path,
+) -> None:
+    record = _retry_token_bound_creditable_record()
+    collision_id = f"{record.request_id}:attempt:2"
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "atomic-attempt-collision-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    first = ledger.reserve(record.request_id, Decimal("0.10"))
+    ledger.reconcile(first, Decimal(record.reported_cost_usd_exact or "0"))
+    collision = ledger.reserve(collision_id, Decimal("0.10"))
+    ledger.release(collision, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    manager = _budget_manager_for_recovery_ledger(ledger)
+    recovered_attempt = _recovered_no_usage_attempt(
+        collision_id,
+        logical_request_id=record.request_id,
+        request_limit_scope=record.request_id,
+        count_before=1,
+        count_after=2,
+        maximum=10,
+    )
+    before = ledger.snapshot()
+    recovery_scope = _issue_trusted_budget_recovery_scope(
+        (record,),
+        non_usage_attempts=(recovered_attempt,),
+        shared_request_limit_roots=((record.request_id, 0),),
+    )
+
+    with pytest.raises(BudgetReservationStateError, match="repeat usage custody"):
+        await manager.restore_recovered_usage((record,), recovery_scope=recovery_scope)
+
+    assert manager.recovery_required
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_budget_recovery_rejects_nonshared_attempt_ordinal_above_limit(
+    tmp_path,
+) -> None:
+    logical_request_id = "ordinary-release-request"
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "over-limit-no-usage-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    attempts = []
+    for ordinal in range(1, 12):
+        request_id = (
+            logical_request_id if ordinal == 1 else f"{logical_request_id}:attempt:{ordinal}"
+        )
+        reservation = ledger.reserve(request_id, Decimal("0.01"))
+        ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+        attempts.append(
+            _recovered_no_usage_attempt(
+                request_id,
+                logical_request_id=logical_request_id,
+                request_limit_scope=None,
+                count_before=None,
+                count_after=None,
+                maximum=None,
+                reserved_cost_usd_exact=Decimal("0.01"),
+            )
+        )
+    manager = _budget_manager_for_recovery_ledger(ledger)
+    before = ledger.snapshot()
+    recovery_scope = _issue_trusted_budget_recovery_scope(
+        (),
+        non_usage_attempts=tuple(attempts),
+    )
+
+    with pytest.raises(BudgetReservationStateError, match="ordinals are not contiguous"):
+        await manager.restore_recovered_usage((), recovery_scope=recovery_scope)
+
+    assert manager.recovery_required
+    assert manager.spent_usd_exact == 0
+    assert ledger.snapshot() == before
 
 
 @pytest.mark.asyncio

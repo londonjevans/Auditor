@@ -136,6 +136,8 @@ from mmaudit.models.route_constraints import (
 
 if TYPE_CHECKING:
     from mmaudit.models.coverage_planning import (
+        ModelPortfolioTaskKind,
+        ModelPortfolioTaskResourceEnvelope,
         ModelSurfaceGapTask,
         ModelSurfaceTaskResourcePreview,
     )
@@ -14246,6 +14248,238 @@ class OpenRouterClient:
             maximum_cost_usd_per_attempt_exact=maximum_cost_text or "0",
         )
 
+    def preview_model_portfolio_task_resources(
+        self,
+        *,
+        task_kind: ModelPortfolioTaskKind,
+        scheduler_task: SchedulerTaskPlan,
+        campaign_manifest: SchedulerCampaignManifest,
+        coverage_task: ModelSurfaceGapTask | None = None,
+    ) -> ModelPortfolioTaskResourceEnvelope:
+        """Freeze a conservative route-bound ceiling before orientation transport.
+
+        This preview deliberately does not predict the later rendered context.  The
+        durable budget portfolio must still compare the exact request token and cost
+        bounds against this ceiling before it can adopt a slot.
+        """
+
+        from mmaudit.models.coverage_planning import (
+            ModelPortfolioTaskKind,
+            ModelPortfolioTaskResourceEnvelope,
+            ModelSurfaceGapTask,
+        )
+        from mmaudit.models.scheduler import (
+            SchedulerCampaignManifest,
+            SchedulerPassKind,
+            SchedulerTaskKind,
+            SchedulerTaskPlan,
+        )
+
+        if (
+            type(task_kind) is not ModelPortfolioTaskKind
+            or type(scheduler_task) is not SchedulerTaskPlan
+            or type(campaign_manifest) is not SchedulerCampaignManifest
+            or (coverage_task is not None and type(coverage_task) is not ModelSurfaceGapTask)
+        ):
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio resource preview requires exact typed scheduler evidence"
+            )
+        try:
+            sealed_task = SchedulerTaskPlan.model_validate_json(
+                scheduler_task.model_dump_json(),
+                strict=True,
+            )
+            sealed_manifest = SchedulerCampaignManifest.model_validate_json(
+                campaign_manifest.model_dump_json(),
+                strict=True,
+            )
+            sealed_coverage_task = (
+                ModelSurfaceGapTask.model_validate_json(
+                    coverage_task.model_dump_json(),
+                    strict=True,
+                )
+                if coverage_task is not None
+                else None
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio resource preview evidence failed detached validation"
+            ) from exc
+        expected_pass = (
+            SchedulerPassKind.ORIENTATION
+            if task_kind is ModelPortfolioTaskKind.ORIENTATION
+            else SchedulerPassKind.BLIND_SHARD_REVIEW
+        )
+        if (
+            sealed_task != scheduler_task
+            or sealed_manifest != campaign_manifest
+            or sealed_coverage_task != coverage_task
+            or sealed_task.campaign_id != sealed_manifest.campaign_id
+            or sealed_task.manifest_sha256 != sealed_manifest.manifest_sha256
+            or sealed_task.pass_kind is not expected_pass
+            or sealed_task.pass_id != sealed_manifest.pass_id(expected_pass)
+            or sealed_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or sealed_task.candidate_ids != ()
+        ):
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio resource preview differs from its scheduler task"
+            )
+        if task_kind is ModelPortfolioTaskKind.ORIENTATION and sealed_task.role != "threat_model":
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio orientation slot differs from the threat-model task"
+            )
+        if task_kind is ModelPortfolioTaskKind.COMPACT_COVERAGE:
+            if sealed_coverage_task is None or (
+                sealed_coverage_task.review_role != sealed_task.role
+                or sealed_coverage_task.requested_model != sealed_task.requested_model
+                or sealed_coverage_task.task_id != sealed_task.task_key
+            ):
+                raise OpenRouterRequestCostPreviewError(
+                    "portfolio compact slot differs from its coverage task"
+                )
+        elif sealed_coverage_task is not None:
+            raise OpenRouterRequestCostPreviewError(
+                "only a compact portfolio slot may bind a coverage task"
+            )
+
+        execution_evidence = trusted_openrouter_execution_evidence(self)
+        if execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
+            raise OpenRouterPrivacyError(
+                "network-capable injected provider clients are not permitted"
+            )
+        model = sealed_task.requested_model
+        if model is None:
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio resource preview scheduler task lacks an exact model"
+            )
+        maximum_attempts = self.execution.max_model_retries + 1
+        if self.budget.max_requests_per_agent < maximum_attempts:
+            raise OpenRouterRequestLimitError(
+                "portfolio retry attempts exceed the configured request limit"
+            )
+        required_output_tokens = self._required_output_tokens()
+        reserved_reasoning_tokens = self._reserved_reasoning_tokens(
+            required_output_tokens,
+            role=sealed_task.role,
+        )
+        requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
+        qualification_binding = self._qualification_routing.get(model)
+        provider_policy = (
+            qualification_binding.request_provider_policy()
+            if qualification_binding is not None and self.provider_policy.certification
+            else self.provider_policy
+        )
+        provider_policy = _canonical_provider_policy(provider_policy)
+        route = self._route_token_intersection(
+            model=model,
+            provider_policy=provider_policy,
+            requested_completion_tokens=requested_completion_tokens,
+        )
+        if len(route.provider_endpoints) != 1:
+            raise OpenRouterRequestCostPreviewError(
+                "portfolio resource preview requires one exact provider endpoint"
+            )
+        hard_prompt_tokens = min(
+            route.max_prompt_tokens,
+            route.context_tokens - requested_completion_tokens,
+        )
+        utilization = Decimal(
+            str(
+                self.token_budgets.usable_input_fraction if self.token_budgets is not None else 0.70
+            )
+        )
+        maximum_prompt_tokens = int(Decimal(hard_prompt_tokens) * utilization)
+        if maximum_prompt_tokens <= 0:
+            raise OpenRouterRequestLimitError(
+                "portfolio resource preview leaves no conservative prompt capacity"
+            )
+        registered_policy = self._endpoint_pricing.get(model)
+        if registered_policy is None:
+            raise OpenRouterCostControlError(
+                "portfolio resource preview lacks validated endpoint pricing"
+            )
+        provider_endpoint = route.provider_endpoints[0]
+        registered_endpoint = registered_policy.endpoint(provider_endpoint)
+        if registered_endpoint is None:
+            raise OpenRouterCostControlError(
+                "portfolio resource preview endpoint differs from pricing custody"
+            )
+        bounded_pricing = dict(
+            _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                registered_endpoint,
+                dict(registered_policy.routing_max_price),
+            )
+        )
+        prompt_pricing_units = max(
+            self.execution.max_request_bytes,
+            maximum_prompt_tokens,
+        )
+        maximum_units = {
+            "completion": requested_completion_tokens,
+            "image": 0,
+            "input_cache_read": prompt_pricing_units,
+            "input_cache_write": prompt_pricing_units,
+            "internal_reasoning": reserved_reasoning_tokens,
+            "prompt": prompt_pricing_units,
+            "request": 1,
+            "web_search": 0,
+        }
+        cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
+            exact_model_id=model,
+            provider_endpoint=provider_endpoint,
+            request_material="mmaudit-preorientation-portfolio-envelope",
+            pricing=bounded_pricing,
+            maximum_units={field: maximum_units[field] for field in bounded_pricing},
+        )
+        maximum_cost = _format_cost_decimal(_trusted_endpoint_request_maximum_cost_usd(cost_bound))
+        envelope_recipe_sha256 = _canonical_sha256(
+            {
+                "domain": "mmaudit.model-portfolio-resource-envelope.v1",
+                "task_kind": task_kind,
+                "scheduler_task_plan_sha256": sealed_task.task_plan_sha256,
+                "campaign_manifest_sha256": sealed_manifest.manifest_sha256,
+                "route_intersection_sha256": route.intersection_sha256,
+                "endpoint_policy_snapshot_sha256": registered_policy.snapshot_sha256,
+                "endpoint_policy_pricing_sha256": registered_policy.policy_pricing_sha256,
+                "endpoint_pricing_snapshot_sha256": cost_bound.pricing_snapshot_sha256,
+                "maximum_prompt_tokens_per_attempt": maximum_prompt_tokens,
+                "maximum_visible_output_tokens_per_attempt": required_output_tokens,
+                "maximum_reasoning_tokens_per_attempt": reserved_reasoning_tokens,
+                "maximum_completion_tokens_per_attempt": requested_completion_tokens,
+                "maximum_priced_prompt_units": prompt_pricing_units,
+                "maximum_attempts": maximum_attempts,
+            }
+        )
+        attempt_request_ids = (
+            sealed_task.logical_request_id,
+            *(
+                f"{sealed_task.logical_request_id}:attempt:{ordinal}"
+                for ordinal in range(2, maximum_attempts + 1)
+            ),
+        )
+        return ModelPortfolioTaskResourceEnvelope.build(
+            task_kind=task_kind,
+            scheduler_task_id=sealed_task.task_id,
+            scheduler_task_plan_sha256=sealed_task.task_plan_sha256,
+            scheduler_logical_request_id=sealed_task.logical_request_id,
+            campaign_manifest_sha256=sealed_manifest.manifest_sha256,
+            request_role=sealed_task.role,
+            requested_model=model,
+            request_envelope_recipe_sha256=envelope_recipe_sha256,
+            endpoint_policy_snapshot_sha256=registered_policy.snapshot_sha256,
+            endpoint_policy_pricing_sha256=registered_policy.policy_pricing_sha256,
+            provider_endpoint=provider_endpoint,
+            endpoint_pricing_snapshot_sha256=cost_bound.pricing_snapshot_sha256,
+            maximum_attempts=maximum_attempts,
+            attempt_request_ids=attempt_request_ids,
+            maximum_prompt_tokens_per_attempt=maximum_prompt_tokens,
+            maximum_visible_output_tokens_per_attempt=required_output_tokens,
+            maximum_reasoning_tokens_per_attempt=reserved_reasoning_tokens,
+            maximum_completion_tokens_per_attempt=requested_completion_tokens,
+            maximum_cost_usd_per_attempt_exact=maximum_cost,
+            coverage_task=sealed_coverage_task,
+        )
+
     def preview_structured_request_hashes(
         self,
         *,
@@ -16492,6 +16726,30 @@ class OpenRouterClient:
 
         try:
             while True:
+                # Every reservation is a distinct provider-attempt state machine.
+                # Reset transport/commit and observed accounting state before any
+                # per-attempt host check so a retry that fails before transport is
+                # released instead of inheriting an earlier attempt's uncertainty.
+                active_network_attempted = False
+                active_reservation_committed = False
+                active_actual_cost = None
+                active_actual_prompt_tokens = None
+                active_actual_completion_tokens = None
+                active_actual_reasoning_tokens = None
+                active_token_detail_accounting_evidence = None
+                # Response and identity material belongs to exactly one transport
+                # attempt.  A later retry may reserve successfully and then fail a
+                # host-side check before transport; retaining an earlier response in
+                # that released-tail UsageRecord would falsely imply provider I/O.
+                initial_usage = {}
+                initial_cost = None
+                response_hash = None
+                validated_response_hash = None
+                decoded_output = None
+                preserved_unbound_response = None
+                validated_envelope = None
+                raw_payload = None
+                response_headers = {}
                 next_attempt = attempts + 1
                 reservation_id = _attempt_request_id(request_id, next_attempt)
                 reservation_pricing_checked_at: datetime | None = None
@@ -16579,6 +16837,21 @@ class OpenRouterClient:
                         request_token_plan_sha256=request_token_plan.plan_sha256,
                         request_limit_scope=request_limit_scope,
                     )
+                    # Retain exact attempt custody immediately after the durable
+                    # reservation.  Host-side policy/selection/refresh checks below
+                    # can still fail before transport and release this entry; the
+                    # resulting zero-cost UsageRecord must nevertheless own it.
+                    attempt_reservations.append(active_reservation)
+                    attempts = next_attempt
+                    if reservation_pricing_route is not None:
+                        if reservation_pricing_checked_at is None:
+                            raise OpenRouterModelRefreshPricingError(
+                                "reserved refreshed price lacks its pre-reserve check"
+                            )
+                        refresh_pricing_reservation_checks[reservation_id] = (
+                            reservation_pricing_checked_at
+                        )
+                        refresh_pricing_attempt_routes[reservation_id] = reservation_pricing_route
                 except Exception as exc:
                     self._record_context_preflight(
                         request_id=(request_id if attempts == 0 else f"{reservation_id}:preflight"),
@@ -16610,13 +16883,6 @@ class OpenRouterClient:
                         ),
                     )
                     raise
-                active_network_attempted = False
-                active_reservation_committed = False
-                active_actual_cost = None
-                active_actual_prompt_tokens = None
-                active_actual_completion_tokens = None
-                active_actual_reasoning_tokens = None
-                active_token_detail_accounting_evidence = None
                 self.logger.info(
                     "Sending bounded structured model request",
                     extra={
@@ -16797,17 +17063,6 @@ class OpenRouterClient:
                             raise
                         last_dispatched_refresh_routing_evidence = current_refresh_routing_evidence
                     require_current_refresh_pricing(phase="after budget reservation")
-                    attempt_reservations.append(active_reservation)
-                    if reservation_pricing_route is not None:
-                        if reservation_pricing_checked_at is None:
-                            raise OpenRouterModelRefreshPricingError(
-                                "reserved refreshed price lacks its pre-reserve check"
-                            )
-                        refresh_pricing_reservation_checks[reservation_id] = (
-                            reservation_pricing_checked_at
-                        )
-                        refresh_pricing_attempt_routes[reservation_id] = reservation_pricing_route
-                    attempts = next_attempt
                     if observer is not None and attempts == 1:
                         observer.request_dispatched(logical_request_id=request_id)
                     if paid_controls_required:
@@ -17363,7 +17618,7 @@ class OpenRouterClient:
                         accounting_method=request_token_plan.token_detail_accounting_method,
                         token_detail_accounting_evidence=(active_token_detail_accounting_evidence),
                     )
-                    if request_token_plan.reasoning_plan is not None
+                    if request_token_plan.reasoning_plan is not None and active_network_attempted
                     else None
                 )
                 failed_usage = UsageRecord(
@@ -17409,8 +17664,12 @@ class OpenRouterClient:
                         request_token_plan=request_token_plan,
                         token_reservations=attempt_reservations,
                         context_request_evidence=context_request_evidence,
-                        audit_routing_evidence=last_dispatched_audit_routing_evidence,
-                        refresh_routing_evidence=(last_dispatched_refresh_routing_evidence),
+                        audit_routing_evidence=(
+                            last_dispatched_audit_routing_evidence or audit_routing_evidence
+                        ),
+                        refresh_routing_evidence=(
+                            last_dispatched_refresh_routing_evidence or refresh_routing_evidence
+                        ),
                         refresh_pricing_routing_evidence=(refresh_pricing_routing_evidence),
                         refresh_pricing_control=refresh_pricing_control,
                         refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
@@ -19018,6 +19277,53 @@ def trusted_preview_candidate_review_task_resources(
     )
 
 
+def trusted_preview_model_portfolio_task_resources(
+    client: OpenRouterClient,
+    *,
+    task_kind: ModelPortfolioTaskKind,
+    scheduler_task: SchedulerTaskPlan,
+    campaign_manifest: SchedulerCampaignManifest,
+    coverage_task: ModelSurfaceGapTask | None = None,
+) -> ModelPortfolioTaskResourceEnvelope:
+    """Invoke the frozen pre-orientation portfolio preview descriptor."""
+
+    try:
+        _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY(
+            client,
+            operation="resource_preview",
+        )
+    except OpenRouterCandidateReviewBoundaryError as exc:
+        raise OpenRouterRequestCostPreviewError(
+            "portfolio resource preview client boundary changed"
+        ) from exc
+    if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+        raise OpenRouterRequestCostPreviewError(
+            "portfolio resource preview requires the exact provider client"
+        )
+    try:
+        instance_state = object.__getattribute__(client, "__dict__")
+    except (AttributeError, TypeError) as exc:
+        raise OpenRouterRequestCostPreviewError(
+            "portfolio resource preview client boundary is unavailable"
+        ) from exc
+    if (
+        type(instance_state) is not dict
+        or "preview_model_portfolio_task_resources" in instance_state
+        or OpenRouterClient.preview_model_portfolio_task_resources
+        is not _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "portfolio resource preview client boundary changed"
+        )
+    return _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES(
+        client,
+        task_kind=task_kind,
+        scheduler_task=scheduler_task,
+        campaign_manifest=campaign_manifest,
+        coverage_task=coverage_task,
+    )
+
+
 async def trusted_complete_candidate_review_with_evidence(
     client: OpenRouterClient,
     *,
@@ -19297,6 +19603,7 @@ _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY = (
     _require_trusted_candidate_review_dispatch_boundary
 )
 _TRUSTED_PUBLIC_CANDIDATE_REVIEW_RESOURCE_PREVIEW = trusted_preview_candidate_review_task_resources
+_TRUSTED_PUBLIC_MODEL_PORTFOLIO_RESOURCE_PREVIEW = trusted_preview_model_portfolio_task_resources
 _TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION = trusted_complete_candidate_review_with_evidence
 _TRUSTED_REGISTER_STRUCTURED_COMPLETION_GENERATION_EVIDENCE = (
     _register_structured_completion_generation_evidence
@@ -19417,6 +19724,9 @@ _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
 _TRUSTED_BUILD_REQUEST = OpenRouterClient.build_request
 _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = (
     OpenRouterClient.preview_candidate_review_task_resources
+)
+_TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES = (
+    OpenRouterClient.preview_model_portfolio_task_resources
 )
 _TRUSTED_COMPLETE_WITH_EVIDENCE = OpenRouterClient.complete_with_evidence
 _TRUSTED_COMPLETE_ONE = OpenRouterClient._complete_one

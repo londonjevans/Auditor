@@ -13,6 +13,7 @@ import pytest
 
 import mmaudit.models.openrouter as openrouter_module
 from mmaudit.models.coverage_planning import (
+    ModelPortfolioTaskKind,
     ModelSurfaceAssignmentPurpose,
     ModelSurfaceCoverageRequirement,
     ModelSurfaceGapAssignment,
@@ -25,7 +26,9 @@ from mmaudit.models.openrouter import (
     OpenRouterCandidateReviewBoundaryError,
     OpenRouterClient,
     OpenRouterProviderPolicy,
+    OpenRouterRequestCostPreviewError,
     OpenRouterRequestLimitError,
+    trusted_preview_model_portfolio_task_resources,
 )
 from mmaudit.models.scheduler import (
     SchedulerCampaignManifest,
@@ -285,6 +288,122 @@ def _preview_client(
     )
     client.register_endpoint_snapshot(evidence=_endpoint_snapshot(pricing=pricing))
     return client, http_client, usage, budget
+
+
+@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+async def test_preorientation_portfolio_preview_is_conservative_and_nonauthorizing(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise AssertionError("portfolio preview must not dispatch provider transport")
+
+    client, http_client, usage, budget = _preview_client(
+        config_factory,
+        handler,
+        ledger_path=tmp_path / "portfolio-preview-cost-ledger.json",
+    )
+    manifest = _campaign_manifest()
+    scope_id = manifest.shard_inventory.shards[0].shard_id
+    coverage_task, request = _coverage_task(scope_id=scope_id)
+    context = _context(request)
+    scheduler_task = _scheduler_task(
+        client,
+        coverage_task=coverage_task,
+        context=context,
+        system_prompt="Review the bounded synthetic surface.",
+        schema_name="mmaudit_source_audit_findings",
+        campaign_manifest=manifest,
+    )
+    try:
+        preview = client.preview_model_portfolio_task_resources(
+            task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+            scheduler_task=scheduler_task,
+            campaign_manifest=manifest,
+            coverage_task=coverage_task,
+        )
+        repeated = client.preview_model_portfolio_task_resources(
+            task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+            scheduler_task=scheduler_task,
+            campaign_manifest=manifest,
+            coverage_task=coverage_task,
+        )
+
+        assert repeated == preview
+        assert preview.scheduler_task_id == scheduler_task.task_id
+        assert preview.scheduler_logical_request_id == scheduler_task.logical_request_id
+        assert preview.attempt_request_ids == (
+            scheduler_task.logical_request_id,
+            f"{scheduler_task.logical_request_id}:attempt:2",
+        )
+        assert preview.maximum_completion_tokens_per_attempt == (
+            preview.maximum_visible_output_tokens_per_attempt
+            + preview.maximum_reasoning_tokens_per_attempt
+        )
+        assert preview.maximum_prompt_tokens_per_attempt > 0
+        assert Decimal(preview.maximum_cost_usd_per_attempt_exact) >= 0
+        assert not preview.authorizes_dispatch
+        assert calls == []
+        assert usage.records == []
+        assert budget.spent_usd_exact == 0
+        assert budget.reserved_usd == 0
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.parametrize(
+    "shadowed_helper",
+    ("_required_output_tokens", "_reserved_reasoning_tokens", "_route_token_intersection"),
+)
+async def test_trusted_portfolio_preview_rejects_instance_helper_shadows(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+    shadowed_helper: str,
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise AssertionError("shadowed portfolio preview must not dispatch provider transport")
+
+    client, http_client, usage, budget = _preview_client(
+        config_factory,
+        handler,
+        ledger_path=tmp_path / f"portfolio-preview-shadow-{shadowed_helper}.json",
+    )
+    manifest = _campaign_manifest()
+    coverage_task, request = _coverage_task(scope_id=manifest.shard_inventory.shards[0].shard_id)
+    scheduler_task = _scheduler_task(
+        client,
+        coverage_task=coverage_task,
+        context=_context(request),
+        system_prompt="Review the bounded synthetic surface.",
+        schema_name="mmaudit_source_audit_findings",
+        campaign_manifest=manifest,
+    )
+    client.__dict__[shadowed_helper] = lambda *_args, **_kwargs: 1
+    try:
+        with pytest.raises(
+            OpenRouterRequestCostPreviewError,
+            match="client boundary changed",
+        ):
+            trusted_preview_model_portfolio_task_resources(
+                client,
+                task_kind=ModelPortfolioTaskKind.COMPACT_COVERAGE,
+                scheduler_task=scheduler_task,
+                campaign_manifest=manifest,
+                coverage_task=coverage_task,
+            )
+        assert calls == []
+        assert usage.records == []
+        assert budget.spent_usd_exact == 0
+        assert budget.reserved_usd == 0
+    finally:
+        await http_client.aclose()
 
 
 @pytest.mark.asyncio  # type: ignore[untyped-decorator]

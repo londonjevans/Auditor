@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,14 +17,26 @@ from mmaudit.models.coverage_planning import (
     build_model_surface_resource_preflight,
 )
 from mmaudit.models.scheduler import (
+    SchedulerPassKind,
+    SchedulerPassStatus,
     SchedulerShardDescriptor,
     SchedulerShardInventory,
     SchedulerSourceDescriptor,
 )
 from mmaudit.models.schemas import Location, ModelReviewSurfaceKind, ModelSurfaceReviewRequest
+from mmaudit.orchestration.cost_ledger import (
+    CostPortfolioHold,
+    CostPortfolioSlot,
+    PortfolioAttemptSlot,
+    PortfolioHoldStatus,
+    PortfolioSlotStatus,
+)
 from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
 from mmaudit.orchestration.pipeline import (
     _load_private_coverage_preflight,
+    _matching_model_portfolio_holds,
+    _model_portfolio_dispatch_is_closed,
+    _model_portfolio_tasks_are_terminal,
     _model_surface_reviewer_bindings,
     _model_surface_scheduler_scopes,
     _persist_private_coverage_evidence,
@@ -127,6 +142,114 @@ def test_reviewer_binding_inventory_contains_all_24_investigators(
     assert len(bindings) == 24
     assert {binding.review_role for binding in bindings} == expected_roles
     assert set(mandatory_roles) == expected_roles
+
+
+def test_portfolio_release_and_resume_share_one_exact_terminal_task_predicate() -> None:
+    tasks = tuple(
+        SimpleNamespace(
+            task_id=f"scheduler-task-{'a' * 63}{ordinal}",
+            pass_kind=(
+                SchedulerPassKind.ORIENTATION
+                if ordinal == 1
+                else SchedulerPassKind.BLIND_SHARD_REVIEW
+            ),
+        )
+        for ordinal in (1, 2)
+    )
+    first_result = SimpleNamespace(task_id=tasks[0].task_id)
+    second_result = SimpleNamespace(task_id=tasks[1].task_id)
+    unrelated = SimpleNamespace(task_id="scheduler-task-" + "b" * 64)
+
+    assert not _model_portfolio_tasks_are_terminal(tasks, ())  # type: ignore[arg-type]
+    assert not _model_portfolio_tasks_are_terminal(  # type: ignore[arg-type]
+        tasks,
+        (first_result,),
+    )
+    assert _model_portfolio_tasks_are_terminal(  # type: ignore[arg-type]
+        tasks,
+        (first_result, unrelated, second_result),
+    )
+    with pytest.raises(ValueError, match="terminal result inventory repeats"):
+        _model_portfolio_tasks_are_terminal(  # type: ignore[arg-type]
+            tasks,
+            (first_result, first_result, second_result),
+        )
+    with pytest.raises(ValueError, match="task inventory repeats"):
+        _model_portfolio_tasks_are_terminal(  # type: ignore[arg-type]
+            (tasks[0], tasks[0]),
+            (first_result,),
+        )
+
+    complete_orientation = SimpleNamespace(
+        plan=SimpleNamespace(
+            pass_kind=SchedulerPassKind.ORIENTATION,
+            tasks=(tasks[0],),
+        ),
+        status=SchedulerPassStatus.COMPLETE,
+    )
+    incomplete_orientation = SimpleNamespace(
+        plan=complete_orientation.plan,
+        status=SchedulerPassStatus.INCOMPLETE,
+    )
+    assert not _model_portfolio_dispatch_is_closed(  # type: ignore[arg-type]
+        tasks,
+        (first_result,),
+        orientation_result=complete_orientation,
+    )
+    assert _model_portfolio_dispatch_is_closed(  # type: ignore[arg-type]
+        tasks,
+        (first_result,),
+        orientation_result=incomplete_orientation,
+    )
+
+
+def test_released_portfolio_resume_requires_the_exact_durable_slot_set() -> None:
+    plan_sha256 = "c" * 64
+    expected_slot = PortfolioAttemptSlot(
+        request_id="scheduler-request-" + "d" * 64,
+        maximum_cost_usd=Decimal("0.2"),
+    )
+    now = datetime(2026, 8, 24, tzinfo=UTC)
+
+    def hold(maximum_cost: str, *, reservation_id: str) -> CostPortfolioHold:
+        return CostPortfolioHold(
+            plan_sha256=plan_sha256,
+            reservation_id=reservation_id,
+            status=PortfolioHoldStatus.RELEASED,
+            slots=(
+                CostPortfolioSlot(
+                    request_id=expected_slot.request_id,
+                    maximum_cost_usd=Decimal(maximum_cost),
+                    status=PortfolioSlotStatus.CLAIMED,
+                ),
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+
+    exact = hold("0.2", reservation_id="exact")
+    assert _matching_model_portfolio_holds(
+        plan_sha256=plan_sha256,
+        expected_slots=(expected_slot,),
+        holds=(exact,),
+    ) == (exact,)
+    assert not _matching_model_portfolio_holds(
+        plan_sha256=plan_sha256,
+        expected_slots=(expected_slot,),
+        holds=(),
+    )
+    with pytest.raises(ValueError, match="differs from its exact slots"):
+        _matching_model_portfolio_holds(
+            plan_sha256=plan_sha256,
+            expected_slots=(expected_slot,),
+            holds=(hold("0.3", reservation_id="tampered"),),
+        )
+    with pytest.raises(ValueError, match="ambiguous durable hold custody"):
+        _matching_model_portfolio_holds(
+            plan_sha256=plan_sha256,
+            expected_slots=(expected_slot,),
+            holds=(exact, hold("0.2", reservation_id="duplicate")),
+        )
 
 
 def test_private_plan_and_preflight_are_exactly_compared_on_resume(tmp_path: Path) -> None:

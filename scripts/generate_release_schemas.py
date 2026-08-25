@@ -33,6 +33,7 @@ from mmaudit.models.autonomous_benchmark_verdict import (
 from mmaudit.models.calibration import ModelCalibrationArtifact
 from mmaudit.models.candidate_selection import CandidateSelectionPlan
 from mmaudit.models.coverage_planning import (
+    ModelPortfolioResourcePreflight,
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourcePreflight,
 )
@@ -180,6 +181,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "evidence_seal_verdict.schema.json": EvidenceSealVerdictProjection,
     "evidence_seal_verdict_policy.schema.json": EvidenceSealVerdictPolicy,
     "model_calibration.schema.json": ModelCalibrationArtifact,
+    "model_portfolio_resource_preflight.schema.json": ModelPortfolioResourcePreflight,
     "model_surface_coverage_plan.schema.json": ModelSurfaceCoveragePlan,
     "model_surface_resource_preflight.schema.json": ModelSurfaceResourcePreflight,
     "model_lineage_authority.schema.json": ModelLineageAuthorityEnvelope,
@@ -287,6 +289,9 @@ TITLE_OVERRIDES = {
         "mmaudit frozen autonomous evidence-seal verdict policy"
     ),
     "model_calibration.schema.json": "mmaudit model calibration artifact",
+    "model_portfolio_resource_preflight.schema.json": (
+        "mmaudit non-authorizing pre-orientation model portfolio resource preflight"
+    ),
     "model_lineage_authority.schema.json": "mmaudit signed model lineage authority",
     "model_execution_artifact.schema.json": "mmaudit model execution artifact",
     "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
@@ -660,6 +665,41 @@ _SCHEDULER_RECURSIVE_REQUEST_FIELDS = (
     "family_closure_id",
     "family_closure_sha256",
 )
+_SCHEDULER_RELEASE_TREE_FIELDS = (
+    "global_request_ordinal",
+    "recovery_family_id",
+    "family_root_sha256",
+    "recovery_plan_sha256",
+    "child_plan_sha256",
+)
+_SCHEDULER_RELEASE_ACCOUNTING_FIELDS = (
+    "result_origin",
+    "released_cost_entry_sha256",
+    "pre_send_release_reason",
+    "provider_attempt_evidence_sha256",
+    "accounted_provider_attempts",
+    "accounted_completion_tokens",
+    "accounted_cost_usd_exact",
+    "cost_disposition",
+)
+_SCHEDULER_RELEASE_ONLY_FIELDS = (
+    "child_plan_sha256",
+    "dispatch_id",
+    "dispatch_sha256",
+    *_SCHEDULER_RELEASE_ACCOUNTING_FIELDS,
+)
+_SCHEDULER_RELEASE_ABSENT_FIELDS = (
+    "promotion_entry_sha256",
+    "promotion_disposition",
+    "family_closure_id",
+    "family_closure_sha256",
+    "runtime_completion_evidence_sha256",
+    "provider_response_sha256",
+    "validated_response_sha256",
+    "normalization_evidence_sha256",
+    "output_artifact_sha256",
+    "specialist_accepted_outcome_sha256",
+)
 _PUBLIC_LINEAGE_ROOT_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _PUBLIC_LINEAGE_REQUESTED_SOURCE_PATTERN = (
     r"^https://(?:huggingface\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/"
@@ -988,12 +1028,65 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
                 ],
             },
             "else": {
+                "if": {
+                    "properties": {"schema_version": {"const": "1.3"}},
+                    "required": ["schema_version"],
+                },
+                "else": {
+                    "not": {
+                        "anyOf": [
+                            {"required": [field_name]}
+                            for field_name in _SCHEDULER_RECURSIVE_REQUEST_FIELDS
+                        ]
+                    }
+                },
+            },
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.3"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "dependentRequired": {
+                    "dispatch_id": ["dispatch_sha256"],
+                    "dispatch_sha256": ["dispatch_id"],
+                },
                 "not": {
                     "anyOf": [
                         {"required": [field_name]}
-                        for field_name in _SCHEDULER_RECURSIVE_REQUEST_FIELDS
+                        for field_name in _SCHEDULER_RELEASE_ABSENT_FIELDS
                     ]
-                }
+                },
+                "properties": {
+                    **{
+                        field_name: {"not": {"type": "null"}}
+                        for field_name in (
+                            *_SCHEDULER_RELEASE_TREE_FIELDS,
+                            *_SCHEDULER_RELEASE_ACCOUNTING_FIELDS,
+                            "dispatch_id",
+                            "dispatch_sha256",
+                        )
+                    },
+                    "result_origin": {"const": "RUNTIME"},
+                    "cost_disposition": {"const": "RELEASED_PRE_SEND_TAIL"},
+                    "terminal_status": {"const": "FAILED"},
+                },
+                "required": [
+                    *_SCHEDULER_RELEASE_TREE_FIELDS,
+                    *_SCHEDULER_RELEASE_ACCOUNTING_FIELDS,
+                    "terminal_status",
+                ],
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        {"required": [field_name]} for field_name in _SCHEDULER_RELEASE_ONLY_FIELDS
+                    ]
+                },
+                "properties": {
+                    "terminal_status": {"enum": ["SUCCEEDED", "TRUNCATED"]},
+                },
             },
         },
         {

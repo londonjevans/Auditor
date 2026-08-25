@@ -53,8 +53,16 @@ from mmaudit.orchestration.budgets import (
     _TrustedRequestLimitScope,
 )
 from mmaudit.orchestration.context import render_context
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
-from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    ReleaseReason,
+    cost_entry_sha256,
+)
+from mmaudit.orchestration.scheduler_runtime import (
+    PipelineScheduler,
+    build_scheduler_cost_ledger_baseline,
+)
 from mmaudit.privacy import (
     PrivacyProfile,
     PrivacySourceClassification,
@@ -358,18 +366,39 @@ async def test_scheduler_privacy_mismatch_stops_before_budget_or_transport(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retry_before_release", (False, True))
 async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
     config_factory: Callable[..., AuditConfig],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    retry_before_release: bool,
 ) -> None:
     handler_calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal handler_calls
         handler_calls += 1
+        if retry_before_release and handler_calls == 1:
+            client.effective_privacy_policy = policy_for("f" * 64)
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={
+                    "id": "stale-generation-id",
+                    "model": "stale/returned-model",
+                    "provider": "stale-provider",
+                    "error": {"code": 429, "message": "synthetic retry"},
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cost": 0,
+                    },
+                },
+            )
         return _completion_response('{"answer":"must not execute"}')
 
-    config = config_factory()
+    config = config_factory(execution={"max_model_retries": 1})
     inventory = _inventory()
     evaluated_at = datetime.now(UTC).replace(microsecond=0)
 
@@ -397,6 +426,13 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         effective_policy_evidence_sha256=initial_policy.evidence_sha256,
         policy_source_provenance_sha256=initial_policy.source_provenance_sha256,
     )
+    control = tmp_path / "recheck-control"
+    control.mkdir(mode=0o700)
+    ledger = AtomicCostLedger.initialize(
+        (control / "cost-ledger.json").resolve(),
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
     original_bindings = _bindings()
     bindings = SchedulerBindings.build(
         source_sha256=original_bindings.source_sha256,
@@ -408,13 +444,8 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         prompt_set_sha256=original_bindings.prompt_set_sha256,
         schema_set_sha256=original_bindings.schema_set_sha256,
         tool_policy_sha256=original_bindings.tool_policy_sha256,
+        cost_ledger_baseline_sha256=baseline.baseline_sha256,
         privacy_evidence_custody_sha256=custody.custody_sha256,
-    )
-    control = tmp_path / "recheck-control"
-    control.mkdir(mode=0o700)
-    ledger = AtomicCostLedger.initialize(
-        (control / "cost-ledger.json").resolve(),
-        cap_usd=Decimal(str(config.execution.budget_usd)),
     )
     budget = BudgetManager(
         total_usd=config.execution.budget_usd,
@@ -444,10 +475,12 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         bindings=bindings,
         analysis_input_inventory=_analysis_inventory(),
         shard_inventory=inventory,
+        cost_ledger_baseline=baseline,
         privacy_evidence_custody=custody,
     )
     system_prompt = "system"
-    user_prompt = "synthetic local input"
+    context = _empty_context_package(role="threat_model")
+    user_prompt = render_context(context)
     preview = client.preview_structured_request_hashes(
         role="threat_model",
         model="alpha/atlas-secure",
@@ -471,7 +504,8 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
     class ReplacePolicyAfterSchedulerActivation:
         def request_ready(self, **values: Any) -> _TrustedRequestLimitScope | None:
             scope = scheduler.request_ready(**values)
-            client.effective_privacy_policy = policy_for("f" * 64)
+            if not retry_before_release:
+                client.effective_privacy_policy = policy_for("f" * 64)
             return scope
 
         def request_dispatched(self, *, logical_request_id: str) -> None:
@@ -479,32 +513,71 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
 
     observer = ReplacePolicyAfterSchedulerActivation()
     client.bind_request_lifecycle_observer(observer)
+
+    async def no_wait(_attempt: int, _retry_after: str | None) -> None:
+        return None
+
+    monkeypatch.setattr(client, "_backoff", no_wait)
     try:
-        with pytest.raises(OpenRouterPrivacyError, match="changed before provider transport"):
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="changed before provider transport",
+        ) as failure:
             await client.complete_with_evidence(
                 role="threat_model",
                 models=["alpha/atlas-secure"],
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                context_package=context,
                 response_model=ThreatModel,
                 schema_name="threat_model",
                 logical_request_id=task.logical_request_id,
             )
+        result = scheduler.record_failure(
+            task,
+            failure.value,
+            usage_records=usage.records,
+            atomic_ledger=ledger,
+        )
+        assert result.terminal_evidence_sha256 == cost_entry_sha256(ledger.snapshot().entries[-1])
     finally:
         client.unbind_request_lifecycle_observer(observer)
         scheduler.close()
         await http_client.aclose()
 
     ledger_snapshot = ledger.snapshot()
-    assert handler_calls == 0
-    assert usage.records == []
+    assert handler_calls == (1 if retry_before_release else 0)
+    assert len(usage.records) == 1
+    failed_usage = usage.records[0]
+    assert failed_usage.request_id == task.logical_request_id
+    assert failed_usage.response_sha256 is None
+    assert failed_usage.actual_model is None
+    assert failed_usage.returned_model is None
+    assert failed_usage.provider is None
+    assert failed_usage.attempts == (2 if retry_before_release else 1)
+    assert failed_usage.retry_count == (1 if retry_before_release else 0)
+    assert failed_usage.reported_cost_usd_exact is None
+    assert Decimal(failed_usage.accounted_cost_usd_exact) >= 0
     assert ledger_snapshot.active_reserved_usd == 0
-    assert ledger_snapshot.spent_usd == 0
-    assert len(ledger_snapshot.entries) == 1
-    assert ledger_snapshot.entries[0].status.value == "released"
+    assert ledger_snapshot.spent_usd == Decimal(failed_usage.accounted_cost_usd_exact)
+    assert len(ledger_snapshot.entries) == (2 if retry_before_release else 1)
+    assert [entry.status.value for entry in ledger_snapshot.entries] == (
+        ["uncertain_accounted", "released"] if retry_before_release else ["released"]
+    )
+    assert ledger_snapshot.entries[-1].accounted_cost_usd == 0
     assert tuple(event.kind for event in scheduler.journal.events) == (
-        SchedulerTaskEventKind.PLANNED,
-        SchedulerTaskEventKind.ACTIVATED,
+        (
+            SchedulerTaskEventKind.PLANNED,
+            SchedulerTaskEventKind.ACTIVATED,
+            SchedulerTaskEventKind.DISPATCHED,
+            SchedulerTaskEventKind.TERMINAL,
+        )
+        if retry_before_release
+        else (
+            SchedulerTaskEventKind.PLANNED,
+            SchedulerTaskEventKind.ACTIVATED,
+            SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL,
+        )
     )
 
 
@@ -761,6 +834,131 @@ async def test_scheduler_retry_ceiling_is_scoped_to_stable_task_and_evidenced(
     tampered = completion.usage_record.model_copy(update={"routing": tampered_routing})
     with pytest.raises(ValueError, match="request-limit reservation"):
         atomic_request_limit_reservations_from_usage(tampered)
+
+
+@pytest.mark.asyncio
+async def test_retry_response_cannot_leak_into_released_pre_send_tail(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "0", "X-OpenRouter-Generation-Id": "stale-generation"},
+            json={
+                "id": "stale-generation",
+                "model": "stale/model",
+                "provider": "Stale Provider",
+                "error": {"code": 429, "message": "synthetic retry"},
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "cost": 0,
+                },
+            },
+        )
+
+    config = config_factory(execution={"max_model_retries": 1, "max_requests_per_agent": 2})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "retry-release-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("synthetic-provider",)),
+        budget=budget,
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            provider="synthetic-provider",
+            provider_name="Synthetic Provider",
+        )
+    )
+    evaluated_at = datetime.now(UTC).replace(microsecond=0)
+
+    def policy_for(source_sha256: str):  # type: ignore[no-untyped-def]
+        return resolve_effective_privacy_policy(
+            profile=PrivacyProfile.STRICT_ZDR,
+            require_zdr=True,
+            consent_observation=None,
+            source_sha256=source_sha256,
+            source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+            configured_model_ids=("alpha/atlas-secure",),
+            configured_provider_endpoints=("synthetic-provider",),
+            requested_budget_usd=Decimal(str(config.execution.budget_usd)),
+            now=evaluated_at,
+        )
+
+    client.effective_privacy_policy = policy_for("a" * 64)
+    changed_policy = policy_for("f" * 64)
+
+    async def no_wait(_attempt: int, _retry_after: str | None) -> None:
+        client.effective_privacy_policy = changed_policy
+
+    monkeypatch.setattr(client, "_backoff", no_wait)
+    lifecycle = _TrustedSchedulerLifecycleRecorder()
+    client.bind_request_lifecycle_observer(lifecycle)
+    context = _empty_context_package()
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match="changed before provider transport"):
+            await client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt=render_context(context),
+                context_package=context,
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="campaign-001.retry-release",
+            )
+    finally:
+        client.unbind_request_lifecycle_observer(lifecycle)
+        await http_client.aclose()
+
+    assert calls == 1
+    assert len(usage.records) == 1
+    failed = usage.records[0]
+    assert failed.attempts == 2
+    assert failed.retry_count == 1
+    assert failed.response_sha256 is None
+    assert failed.validated_response_sha256 is None
+    assert failed.returned_model is None
+    assert failed.actual_model is None
+    assert failed.provider is None
+    assert failed.openrouter_generation_id is None
+    assert failed.actual_provider_endpoint is None
+    assert failed.finish_reason is None
+    assert failed.reasoning_evidence is None
+    assert failed.reported_cost_usd_exact is None
+    assert failed.prompt_tokens == failed.completion_tokens == failed.total_tokens == 0
+    snapshot = ledger.snapshot()
+    assert tuple(entry.status for entry in snapshot.entries) == (
+        CostEntryStatus.UNCERTAIN_ACCOUNTED,
+        CostEntryStatus.RELEASED,
+    )
+    uncertain_entry, released_entry = snapshot.entries
+    assert uncertain_entry.actual_cost_usd is None
+    assert uncertain_entry.accounted_cost_usd == uncertain_entry.reserved_usd
+    assert released_entry.actual_cost_usd is None
+    assert released_entry.accounted_cost_usd == Decimal("0")
+    assert released_entry.release_reason is ReleaseReason.FAILED_BEFORE_SEND
 
 
 @pytest.mark.asyncio

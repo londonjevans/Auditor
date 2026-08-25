@@ -11,6 +11,7 @@ import pytest
 
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.constants import ExitCode
+from mmaudit.models.openrouter import OpenRouterPrivacyError
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     SpecialistAcceptedOutcome,
@@ -21,7 +22,11 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryEntryKind,
     SchedulerTruncationRecoveryTerminalStatus,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    cost_entry_sha256,
+)
 from mmaudit.orchestration.pipeline import _canonical_recovery_usd_total
 from tests.fake_openrouter import FakeOpenRouter
 from tests.integration.test_pipeline import _run
@@ -274,6 +279,185 @@ async def test_mock_direct_recovery_is_noncrediting_and_resume_dispatches_nothin
     assert resumed_fake.truncated_parent_calls == 0
     assert resumed_fake.recovery_child_calls == 0
     assert _candidate_and_surface_inventory(resumed.run_dir) == first_inventory
+
+
+@pytest.mark.asyncio
+async def test_live_recovery_child_pre_send_release_is_retained_and_resumes_without_transport(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """A local paid child release remains durable, noncrediting, and non-dispatching."""
+
+    config = _one_whole_protocol_config(config_factory, monkeypatch)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "released-child-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    output = tmp_path / "released-child-output"
+    first_fake = FakeOpenRouter(mode="truncation_recovery")
+    client_holder: dict[str, Any] = {}
+    drifted = False
+    wrapped = False
+
+    def retain_client(client: Any) -> None:
+        client_holder["client"] = client
+
+    def install_release_after_child_activation(*_models: Any, **_values: Any) -> None:
+        nonlocal drifted, wrapped
+        client = client_holder["client"]
+        scheduler = client._request_lifecycle_observer
+        if wrapped or scheduler is None:
+            return
+        original_request_dispatched = scheduler.request_dispatched
+
+        def request_dispatched(*, logical_request_id: str) -> None:
+            nonlocal drifted
+            original_request_dispatched(logical_request_id=logical_request_id)
+            if not drifted and logical_request_id.startswith("scheduler-recovery-request-"):
+                # The child activation, reservation, and pre-transport dispatch marker are now
+                # durable. Fail this one local lifecycle observation before transport while
+                # preserving the exact privacy policy used to build failed-usage custody. The
+                # sibling calls the original observer normally.
+                drifted = True
+                raise OpenRouterPrivacyError("synthetic post-dispatch pre-transport drift")
+
+        scheduler.request_dispatched = request_dispatched
+        wrapped = True
+
+    first = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        first_fake,
+        cost_ledger=ledger,
+        output=output,
+        context_package_budget_observer=install_release_after_child_activation,
+        client_configurator=retain_client,
+    )
+
+    assert first.exit_code is ExitCode.INCOMPLETE
+    assert drifted
+    assert first_fake.truncated_parent_calls == 1
+    assert first_fake.recovery_child_calls == 1
+    recovery_transport_ids = tuple(
+        metadata["mmaudit_request_id"]
+        for request in first_fake.requests
+        if isinstance(metadata := request.get("metadata"), dict)
+        and isinstance(metadata.get("mmaudit_request_id"), str)
+        and metadata["mmaudit_request_id"].startswith("scheduler-recovery-request-")
+    )
+    assert len(recovery_transport_ids) == 1
+
+    entries = _recovery_entries(first.run_dir)
+    activations = tuple(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_ACTIVATED.value
+    )
+    assert len(activations) == 2
+    released_result = next(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+        and entry["schema_version"] == "1.3"
+    )
+    activated = next(
+        entry for entry in activations if entry["child_task_id"] == released_result["child_task_id"]
+    )
+    released_dispatch = next(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_DISPATCHED.value
+        and entry["child_task_id"] == released_result["child_task_id"]
+    )
+    assert released_result["dispatch_id"] == released_dispatch["dispatch_id"]
+    assert released_result["dispatch_sha256"] == released_dispatch["entry_sha256"]
+    successful_result = next(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL.value
+        and entry["terminal_status"] == SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED.value
+    )
+    successful_activation = next(
+        entry
+        for entry in activations
+        if entry["child_task_id"] == successful_result["child_task_id"]
+    )
+    assert successful_activation["child_task_id"] != activated["child_task_id"]
+    assert recovery_transport_ids == (successful_activation["child_logical_request_id"],)
+    closure = next(
+        entry
+        for entry in entries
+        if entry["entry_kind"] == SchedulerTruncationRecoveryEntryKind.FAMILY_CLOSED.value
+    )
+    assert closure["closure_status"] == SchedulerTruncationRecoveryClosureStatus.INCOMPLETE.value
+    usage = released_result["runtime_usage_record"]
+    assert released_result["result_origin"] == "RUNTIME"
+    assert released_result["terminal_status"] == "FAILED"
+    assert released_result["cost_disposition"] == "RELEASED_PRE_SEND_TAIL"
+    assert released_result["child_task_id"] == activated["child_task_id"]
+    assert usage["request_id"] == activated["child_logical_request_id"]
+    assert usage["attempts"] == 1
+    assert usage["retry_count"] == 0
+    assert usage["prompt_tokens"] == usage["completion_tokens"] == usage["total_tokens"] == 0
+    assert usage["accounted_cost_usd_exact"] == "0"
+    assert usage.get("response_id") is None
+    assert usage["response_sha256"] is None
+    assert usage["validated_response_sha256"] is None
+    assert usage["returned_model"] is None
+    assert usage["actual_model"] is None
+    assert usage["provider"] is None
+    assert usage["actual_provider_endpoint"] is None
+    assert usage["finish_reason"] is None
+
+    released_entry = next(
+        entry
+        for entry in ledger.snapshot().entries
+        if entry.request_id == activated["child_logical_request_id"]
+    )
+    assert released_entry.status is CostEntryStatus.RELEASED
+    assert released_entry.actual_cost_usd is None
+    assert released_entry.accounted_cost_usd == Decimal("0")
+    assert released_result["released_cost_entry_sha256"] == cost_entry_sha256(released_entry)
+
+    public_state = json.loads((first.run_dir / "scheduler-state.json").read_text(encoding="utf-8"))
+    assert [result["status"] for result in public_state["summary"]["pass_results"]] == [
+        "COMPLETE",
+        "INCOMPLETE",
+    ]
+    assert public_state["summary"]["completed_passes"] == ["01_orientation"]
+    public_recovery = public_state["recovery_model_requests"]
+    public_released = next(
+        entry for entry in public_recovery if entry["child_task_id"] == activated["child_task_id"]
+    )
+    assert public_released["schema_version"] == "1.3"
+    assert public_released["terminal_status"] == "FAILED"
+    assert public_released["accounted_cost_usd_exact"] == "0"
+    assert public_released["dispatch_id"] == released_dispatch["dispatch_id"]
+    assert public_released["dispatch_sha256"] == released_dispatch["entry_sha256"]
+    assert public_released["released_cost_entry_sha256"] == cost_entry_sha256(released_entry)
+    assert "runtime_usage_record" not in public_released
+
+    first_ledger = ledger.snapshot()
+    resumed_fake = FakeOpenRouter(mode="truncation_recovery")
+    resumed = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        resumed_fake,
+        cost_ledger=ledger,
+        resume_run_dir=first.run_dir,
+        output=output,
+    )
+
+    assert resumed.exit_code is ExitCode.INCOMPLETE
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.truncated_parent_calls == 0
+    assert resumed_fake.recovery_child_calls == 0
+    assert ledger.snapshot() == first_ledger
+    _assert_resume_retains_exact_scheduler_journal(owner=first.run_dir, consumer=resumed.run_dir)
 
 
 @pytest.mark.asyncio

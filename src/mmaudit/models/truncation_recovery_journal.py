@@ -56,6 +56,7 @@ from mmaudit.models.truncation_recovery import (
     TruncationRecoveryPolicy,
 )
 from mmaudit.models.usage import (
+    atomic_token_reservations_from_usage,
     is_recovery_accountable_usage_record,
     is_recovery_creditable_usage_record,
     is_structurally_recovery_accountable_usage_record,
@@ -139,6 +140,7 @@ class SchedulerTruncationRecoveryCostDisposition(StrEnum):
     """How one child result conservatively accounts provider resources."""
 
     ACTUAL_ACCOUNTED = "ACTUAL_ACCOUNTED"
+    RELEASED_PRE_SEND_TAIL = "RELEASED_PRE_SEND_TAIL"
     RESERVED_MAX_ACCOUNTED = "RESERVED_MAX_ACCOUNTED"
 
 
@@ -527,7 +529,7 @@ class SchedulerTruncationRecoveryRequestLimitBinding(_NonAuthorizingRecoveryJour
 class _SchedulerTruncationRecoveryEntry(_NonAuthorizingRecoveryJournalModel):
     """Shared exact chain custody for each typed private recovery entry."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     journal_version: Literal["mmaudit.scheduler.truncation-recovery-journal.v1"] = (
         SCHEDULER_TRUNCATION_RECOVERY_JOURNAL_VERSION
     )
@@ -1299,7 +1301,7 @@ def _expected_truncation_projection_routing(
 class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
     """Structural terminal custody; neither legacy nor typed results grant credit."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL] = (
         SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL
     )
@@ -1315,11 +1317,31 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
     )
     activation_id: str = Field(pattern=_RECOVERY_ACTIVATION_ID_PATTERN)
     activation_sha256: str = Field(pattern=_SHA256_PATTERN)
-    dispatch_id: str = Field(pattern=_RECOVERY_DISPATCH_ID_PATTERN)
-    dispatch_sha256: str = Field(pattern=_SHA256_PATTERN)
+    dispatch_id: str | None = Field(
+        default=None,
+        pattern=_RECOVERY_DISPATCH_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    dispatch_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     result_origin: SchedulerTruncationRecoveryResultOrigin
     terminal_status: SchedulerTruncationRecoveryTerminalStatus
     terminal_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    released_cost_entry_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    pre_send_release_reason: (
+        Literal[
+            "cancelled_before_send",
+            "failed_before_send",
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
     provider_attempt_evidence_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -1741,16 +1763,104 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         )
 
     @classmethod
+    def build_released_pre_send(
+        cls,
+        *,
+        child: TruncationRecoveryChildPlan,
+        activation: SchedulerTruncationRecoveryChildActivation,
+        dispatch: SchedulerTruncationRecoveryChildDispatch | None,
+        terminal_evidence_sha256: str,
+        release_reason: Literal["cancelled_before_send", "failed_before_send"],
+        accounted_prefix_attempts: int,
+        accounted_prefix_cost_usd_exact: str,
+        failed_usage_record: UsageRecord | None = None,
+        result_origin: SchedulerTruncationRecoveryResultOrigin = (
+            SchedulerTruncationRecoveryResultOrigin.CRASH_RECOVERY
+        ),
+        entry_index: int,
+        previous_entry_sha256: str | None,
+    ) -> SchedulerTruncationRecoveryChildResult:
+        """Build exact custody for an uncertain prefix and one pre-send release."""
+
+        frozen_activation = _freeze_exact_model(
+            SchedulerTruncationRecoveryChildActivation,
+            activation,
+            label="released activation",
+        )
+        frozen_usage: UsageRecord | None = None
+        usage_sha256: str | None = None
+        final_request_reservation: AtomicRequestLimitReservationEvidence | None = None
+        if failed_usage_record is not None:
+            if type(failed_usage_record) is not UsageRecord:
+                raise TypeError("released recovery usage has an invalid exact type")
+            frozen_usage = failed_usage_record
+            usage_sha256 = _usage_record_sha256(frozen_usage)
+            inventory = recovery_atomic_request_limit_reservations_from_usage(
+                frozen_usage,
+                request_limit_scope=frozen_activation.request_limit_id,
+                request_limit_count_before=frozen_activation.request_limit_count_before_child,
+            )
+            if not inventory:
+                raise ValueError("released recovery usage lacks request-limit custody")
+            final_request_reservation = inventory[-1]
+        consumed_attempts = accounted_prefix_attempts + 1
+
+        return cls._build(
+            schema_version="1.3",
+            child=child,
+            activation=frozen_activation,
+            dispatch=dispatch,
+            result_origin=result_origin,
+            terminal_status=SchedulerTruncationRecoveryTerminalStatus.FAILED,
+            terminal_evidence_sha256=terminal_evidence_sha256,
+            released_cost_entry_sha256=terminal_evidence_sha256,
+            pre_send_release_reason=release_reason,
+            provider_attempt_evidence_sha256=(
+                _typed_provider_attempt_sha256(
+                    activation_sha256=frozen_activation.entry_sha256,
+                    usage_record_sha256=usage_sha256,
+                )
+                if usage_sha256 is not None
+                else None
+            ),
+            accounted_provider_attempts=consumed_attempts,
+            accounted_completion_tokens=(
+                child.reserved_completion_tokens if accounted_prefix_attempts else 0
+            ),
+            accounted_cost_usd_exact=accounted_prefix_cost_usd_exact,
+            runtime_completion_evidence_sha256=None,
+            runtime_usage_record_sha256=usage_sha256,
+            runtime_output_artifact_sha256=None,
+            runtime_request_limit_reservation=final_request_reservation,
+            runtime_usage_record=frozen_usage,
+            runtime_normalization_evidence=None,
+            runtime_normalized_batch=None,
+            runtime_requested_surface_requests=None,
+            runtime_output_artifact=None,
+            runtime_truncated_envelope_evidence=None,
+            truncation_projection=None,
+            cost_disposition=(SchedulerTruncationRecoveryCostDisposition.RELEASED_PRE_SEND_TAIL),
+            entry_index=entry_index,
+            previous_entry_sha256=previous_entry_sha256,
+        )
+
+    @classmethod
     def _build(
         cls,
         *,
-        schema_version: Literal["1.0", "1.1", "1.2"],
+        schema_version: Literal["1.0", "1.1", "1.2", "1.3"],
         child: TruncationRecoveryChildPlan,
         activation: SchedulerTruncationRecoveryChildActivation | None,
-        dispatch: SchedulerTruncationRecoveryChildDispatch,
+        dispatch: SchedulerTruncationRecoveryChildDispatch | None,
         result_origin: SchedulerTruncationRecoveryResultOrigin,
         terminal_status: SchedulerTruncationRecoveryTerminalStatus,
         terminal_evidence_sha256: str,
+        released_cost_entry_sha256: str | None = None,
+        pre_send_release_reason: Literal[
+            "cancelled_before_send",
+            "failed_before_send",
+        ]
+        | None = None,
         provider_attempt_evidence_sha256: str | None,
         accounted_provider_attempts: int,
         accounted_completion_tokens: int,
@@ -1772,6 +1882,9 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         entry_index: int,
         previous_entry_sha256: str | None,
     ) -> SchedulerTruncationRecoveryChildResult:
+        lifecycle = dispatch if dispatch is not None else activation
+        if lifecycle is None:
+            raise ValueError("scheduler recovery result lacks a durable lifecycle anchor")
         projection = (
             CandidateReviewTruncationProjection.model_validate_json(
                 truncation_projection.model_dump_json(),
@@ -1792,28 +1905,34 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         )
         values: dict[str, Any] = {
             **_entry_values(
-                campaign_id=dispatch.campaign_id,
-                request_limit_id=dispatch.request_limit_id,
-                request_limit_binding_sha256=dispatch.request_limit_binding_sha256,
+                campaign_id=lifecycle.campaign_id,
+                request_limit_id=lifecycle.request_limit_id,
+                request_limit_binding_sha256=lifecycle.request_limit_binding_sha256,
                 entry_kind=SchedulerTruncationRecoveryEntryKind.CHILD_TERMINAL,
                 entry_index=entry_index,
                 previous_entry_sha256=previous_entry_sha256,
             ),
             "schema_version": schema_version,
-            "family_id": dispatch.family_id,
-            "family_root_sha256": dispatch.family_root_sha256,
-            "child_task_id": dispatch.child_task_id,
-            "child_logical_request_id": dispatch.child_logical_request_id,
-            "child_plan_sha256": dispatch.child_plan_sha256,
+            "family_id": lifecycle.family_id,
+            "family_root_sha256": lifecycle.family_root_sha256,
+            "child_task_id": lifecycle.child_task_id,
+            "child_logical_request_id": lifecycle.child_logical_request_id,
+            "child_plan_sha256": lifecycle.child_plan_sha256,
             "child_surface_ids": child.surface_ids,
-            "global_request_ordinal": dispatch.global_request_ordinal,
-            "activation_id": dispatch.activation_id,
-            "activation_sha256": dispatch.activation_sha256,
-            "dispatch_id": dispatch.dispatch_id,
-            "dispatch_sha256": dispatch.entry_sha256,
+            "global_request_ordinal": lifecycle.global_request_ordinal,
+            "activation_id": lifecycle.activation_id,
+            "activation_sha256": (
+                lifecycle.activation_sha256
+                if isinstance(lifecycle, SchedulerTruncationRecoveryChildDispatch)
+                else lifecycle.entry_sha256
+            ),
+            "dispatch_id": dispatch.dispatch_id if dispatch is not None else None,
+            "dispatch_sha256": dispatch.entry_sha256 if dispatch is not None else None,
             "result_origin": result_origin,
             "terminal_status": terminal_status,
             "terminal_evidence_sha256": terminal_evidence_sha256,
+            "released_cost_entry_sha256": released_cost_entry_sha256,
+            "pre_send_release_reason": pre_send_release_reason,
             "provider_attempt_evidence_sha256": provider_attempt_evidence_sha256,
             "runtime_completion_evidence_sha256": (runtime_completion_evidence_sha256),
             "runtime_usage_record_sha256": runtime_usage_record_sha256,
@@ -1842,6 +1961,10 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             "cost_disposition": cost_disposition,
         }
         for optional_typed_field in (
+            "dispatch_id",
+            "dispatch_sha256",
+            "released_cost_entry_sha256",
+            "pre_send_release_reason",
             "runtime_activation",
             "runtime_request_limit_reservation",
             "runtime_usage_record",
@@ -1855,20 +1978,23 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
         ):
             if values[optional_typed_field] is None:
                 del values[optional_typed_field]
-        result_id = "scheduler-recovery-result-" + _canonical_sha256(
-            {
-                "domain": (
-                    "mmaudit.scheduler.truncation-recovery-result.v1.2"
-                    if schema_version == "1.2"
-                    else "mmaudit.scheduler.truncation-recovery-result.v1.1"
-                    if schema_version == "1.1"
-                    else "mmaudit.scheduler.truncation-recovery-result.v1"
-                ),
-                "dispatch_id": dispatch.dispatch_id,
-                "terminal_status": terminal_status,
-                "terminal_evidence_sha256": terminal_evidence_sha256,
-            }
-        )
+        result_identity: dict[str, Any] = {
+            "domain": (
+                "mmaudit.scheduler.truncation-recovery-result.v1.3"
+                if schema_version == "1.3"
+                else "mmaudit.scheduler.truncation-recovery-result.v1.2"
+                if schema_version == "1.2"
+                else "mmaudit.scheduler.truncation-recovery-result.v1.1"
+                if schema_version == "1.1"
+                else "mmaudit.scheduler.truncation-recovery-result.v1"
+            ),
+            "dispatch_id": dispatch.dispatch_id if dispatch is not None else None,
+            "terminal_status": terminal_status,
+            "terminal_evidence_sha256": terminal_evidence_sha256,
+        }
+        if schema_version == "1.3":
+            result_identity["activation_id"] = lifecycle.activation_id
+        result_id = "scheduler-recovery-result-" + _canonical_sha256(result_identity)
         body = {**values, "result_id": result_id}
         return cls(**body, entry_sha256=_canonical_sha256(body))
 
@@ -1887,24 +2013,29 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             or accounted_usd > reserved_usd
         ):
             raise ValueError("scheduler truncation recovery result exceeds reserved resources")
-        if self.schema_version in {"1.1", "1.2"}:
+        if self.schema_version == "1.3":
+            self._require_exact_released_pre_send_custody()
+        elif self.schema_version in {"1.1", "1.2"}:
             self._require_exact_typed_runtime_custody()
         else:
             self._require_exact_legacy_runtime_custody()
-        expected_id = "scheduler-recovery-result-" + _canonical_sha256(
-            {
-                "domain": (
-                    "mmaudit.scheduler.truncation-recovery-result.v1.2"
-                    if self.schema_version == "1.2"
-                    else "mmaudit.scheduler.truncation-recovery-result.v1.1"
-                    if self.schema_version == "1.1"
-                    else "mmaudit.scheduler.truncation-recovery-result.v1"
-                ),
-                "dispatch_id": self.dispatch_id,
-                "terminal_status": self.terminal_status,
-                "terminal_evidence_sha256": self.terminal_evidence_sha256,
-            }
-        )
+        expected_identity: dict[str, Any] = {
+            "domain": (
+                "mmaudit.scheduler.truncation-recovery-result.v1.3"
+                if self.schema_version == "1.3"
+                else "mmaudit.scheduler.truncation-recovery-result.v1.2"
+                if self.schema_version == "1.2"
+                else "mmaudit.scheduler.truncation-recovery-result.v1.1"
+                if self.schema_version == "1.1"
+                else "mmaudit.scheduler.truncation-recovery-result.v1"
+            ),
+            "dispatch_id": self.dispatch_id,
+            "terminal_status": self.terminal_status,
+            "terminal_evidence_sha256": self.terminal_evidence_sha256,
+        }
+        if self.schema_version == "1.3":
+            expected_identity["activation_id"] = self.activation_id
+        expected_id = "scheduler-recovery-result-" + _canonical_sha256(expected_identity)
         if self.result_id != expected_id:
             raise ValueError("scheduler truncation recovery result ID is inconsistent")
         return self
@@ -1921,8 +2052,13 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             self.runtime_specialist_accepted_outcome,
             self.runtime_truncated_envelope_evidence,
         )
-        if any(item is not None for item in typed_fields) or (
-            self.runtime_specialist_accepted_outcome_sha256 is not None
+        if (
+            any(item is not None for item in typed_fields)
+            or self.runtime_specialist_accepted_outcome_sha256 is not None
+            or self.released_cost_entry_sha256 is not None
+            or self.pre_send_release_reason is not None
+            or self.dispatch_id is None
+            or self.dispatch_sha256 is None
         ):
             raise ValueError("legacy recovery child cannot carry typed v1.1 runtime custody")
         completion_fields = (
@@ -1983,6 +2119,156 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             raise ValueError(
                 "hash-only runtime recovery child is not conservatively fully accounted"
             )
+
+    def _require_exact_released_pre_send_custody(self) -> None:
+        """Validate one v1.3 noncrediting pre-transport release terminal."""
+
+        activation = self.runtime_activation
+        if activation is None:
+            raise ValueError("released recovery child omits its exact activation")
+        exact_activation = _freeze_exact_model(
+            SchedulerTruncationRecoveryChildActivation,
+            activation,
+            label="released activation",
+        )
+        prefix_attempts = self.accounted_provider_attempts - 1
+        no_completion_fields = (
+            self.runtime_completion_evidence_sha256,
+            self.runtime_output_artifact_sha256,
+            self.runtime_normalization_evidence,
+            self.runtime_normalized_batch,
+            self.runtime_requested_surface_requests,
+            self.runtime_output_artifact,
+            self.runtime_specialist_accepted_outcome_sha256,
+            self.runtime_specialist_accepted_outcome,
+            self.runtime_truncated_envelope_evidence,
+            self.truncation_projection,
+        )
+        dispatch_pair_is_exact = (self.dispatch_id is None) == (self.dispatch_sha256 is None)
+        if (
+            self.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.FAILED
+            or self.cost_disposition
+            is not SchedulerTruncationRecoveryCostDisposition.RELEASED_PRE_SEND_TAIL
+            or self.released_cost_entry_sha256 != self.terminal_evidence_sha256
+            or self.pre_send_release_reason not in {"cancelled_before_send", "failed_before_send"}
+            or not 1 <= self.accounted_provider_attempts <= self.reserved_provider_attempts
+            or not dispatch_pair_is_exact
+            or any(item is not None for item in no_completion_fields)
+            or self.completed_surface_ids
+            or self.retained_surface_ids
+            or (
+                prefix_attempts == 0
+                and (self.accounted_completion_tokens != 0 or self.accounted_cost_usd_exact != "0")
+            )
+            or (
+                prefix_attempts > 0
+                and (
+                    self.accounted_completion_tokens != self.reserved_completion_tokens
+                    or Decimal(self.accounted_cost_usd_exact) <= 0
+                )
+            )
+            or exact_activation.campaign_id != self.campaign_id
+            or exact_activation.request_limit_id != self.request_limit_id
+            or exact_activation.request_limit_binding_sha256 != self.request_limit_binding_sha256
+            or exact_activation.family_id != self.family_id
+            or exact_activation.family_root_sha256 != self.family_root_sha256
+            or exact_activation.child_task_id != self.child_task_id
+            or exact_activation.child_logical_request_id != self.child_logical_request_id
+            or exact_activation.child_plan_sha256 != self.child_plan_sha256
+            or exact_activation.child_surface_ids != self.child_surface_ids
+            or exact_activation.global_request_ordinal != self.global_request_ordinal
+            or exact_activation.activation_id != self.activation_id
+            or exact_activation.entry_sha256 != self.activation_sha256
+        ):
+            raise ValueError("released recovery child lifecycle or accounting is inconsistent")
+
+        usage = self.runtime_usage_record
+        if self.result_origin is SchedulerTruncationRecoveryResultOrigin.CRASH_RECOVERY:
+            if (
+                usage is not None
+                or self.runtime_usage_record_sha256 is not None
+                or self.runtime_request_limit_reservation is not None
+                or self.provider_attempt_evidence_sha256 is not None
+            ):
+                raise ValueError("crash-recovered release cannot claim runtime usage custody")
+            return
+        if (
+            self.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or type(usage) is not UsageRecord
+        ):
+            raise ValueError("live released recovery child lacks exact failed usage")
+        exact_usage = usage
+        assert isinstance(exact_usage, UsageRecord)
+        try:
+            token_inventory = atomic_token_reservations_from_usage(exact_usage)
+            request_inventory = recovery_atomic_request_limit_reservations_from_usage(
+                exact_usage,
+                request_limit_scope=exact_activation.request_limit_id,
+                request_limit_count_before=exact_activation.request_limit_count_before_child,
+            )
+        except (TypeError, ValueError):
+            raise ValueError("released recovery usage attempt inventory is invalid") from None
+        usage_sha256 = _usage_record_sha256(exact_usage)
+        expected_provider_attempt_sha256 = _typed_provider_attempt_sha256(
+            activation_sha256=exact_activation.entry_sha256,
+            usage_record_sha256=usage_sha256,
+        )
+        structurally_accountable = is_structurally_recovery_accountable_usage_record(
+            exact_usage,
+            request_limit_scope=exact_activation.request_limit_id,
+            request_limit_count_before=exact_activation.request_limit_count_before_child,
+        )
+        structurally_creditable = is_structurally_recovery_creditable_usage_record(
+            exact_usage,
+            request_limit_scope=exact_activation.request_limit_id,
+            request_limit_count_before=exact_activation.request_limit_count_before_child,
+        )
+        reservation = self.runtime_request_limit_reservation
+        if (
+            not structurally_accountable
+            or structurally_creditable
+            or exact_usage.request_id != self.child_logical_request_id
+            or exact_activation.request_role is None
+            or exact_activation.requested_model is None
+            or exact_usage.role != exact_activation.request_role
+            or exact_usage.requested_model != exact_activation.requested_model
+            or exact_usage.prompt_sha256 != exact_activation.provider_prompt_sha256
+            or exact_usage.user_prompt_sha256 != exact_activation.user_prompt_sha256
+            or exact_usage.schema_sha256 != exact_activation.response_schema_sha256
+            or exact_usage.attempts != self.accounted_provider_attempts
+            or exact_usage.retry_count != exact_usage.attempts - 1
+            or exact_usage.actual_model is not None
+            or exact_usage.returned_model is not None
+            or exact_usage.provider is not None
+            or exact_usage.openrouter_generation_id is not None
+            or exact_usage.actual_provider_endpoint is not None
+            or exact_usage.finish_reason is not None
+            or exact_usage.response_sha256 is not None
+            or exact_usage.validated_response_sha256 is not None
+            or exact_usage.validation_status is ModelRequestValidationStatus.VALID
+            or exact_usage.status == "success"
+            or not exact_usage.provider_error_classification
+            or exact_usage.reported_cost_usd_exact is not None
+            or exact_usage.accounted_cost_usd_exact != self.accounted_cost_usd_exact
+            or exact_usage.prompt_tokens != 0
+            or exact_usage.completion_tokens != 0
+            or exact_usage.total_tokens != 0
+            or exact_usage.cached_tokens != 0
+            or exact_usage.reasoning_tokens not in {None, 0}
+            or exact_usage.reasoning_evidence is not None
+            or exact_usage.token_detail_accounting_evidence is not None
+            or len(token_inventory) != exact_usage.attempts
+            or len(request_inventory) != exact_usage.attempts
+            or tuple(item.request_id for item in token_inventory)
+            != tuple(item.request_id for item in request_inventory)
+            or reservation != request_inventory[-1]
+            or request_inventory[-1].request_limit_count_after
+            > exact_activation.request_limit_count_after_child
+            or request_inventory[-1].request_limit_maximum != exact_activation.request_limit_maximum
+            or self.runtime_usage_record_sha256 != usage_sha256
+            or self.provider_attempt_evidence_sha256 != expected_provider_attempt_sha256
+        ):
+            raise ValueError("released recovery child failed usage custody is inconsistent")
 
     def _require_exact_typed_runtime_custody(self) -> None:
         activation = self.runtime_activation

@@ -19,7 +19,11 @@ from mmaudit.orchestration.cost_ledger import (
     CostLedgerCorruptError,
     CostReservationOverrunError,
     CostReservationStateError,
+    PortfolioAttemptSlot,
+    PortfolioHoldStatus,
+    PortfolioSlotStatus,
     ReleaseReason,
+    cost_ledger_snapshot_sha256,
 )
 
 
@@ -36,6 +40,137 @@ def test_ledger_identity_is_stable_for_exact_file_and_distinct_across_ledgers(
     assert first_path.read_bytes() == second_path.read_bytes()
     assert reopened.identity_sha256 == first.identity_sha256
     assert second.identity_sha256 != first.identity_sha256
+
+
+def test_legacy_state_bytes_and_snapshot_hash_are_unchanged_without_portfolios(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+
+    assert path.read_bytes() == b'{"cap_usd":"1","entries":{},"schema_version":1}\n'
+    assert cost_ledger_snapshot_sha256(ledger.snapshot()) == (
+        "42281f974f2fe05a1c0195156d400e06502f837d81099e033745858729003535"
+    )
+
+    reservation = ledger.reserve("legacy-request", Decimal("0.25"))
+    ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert "portfolio_holds" not in json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_portfolio_claim_conserves_capacity_and_exact_release_retains_history(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1"))
+    slots = (
+        PortfolioAttemptSlot("request-a", Decimal("0.4")),
+        PortfolioAttemptSlot("request-b", Decimal("0.3")),
+    )
+    portfolio = ledger.reserve_portfolio("a" * 64, slots)
+
+    held = ledger.snapshot()
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert held.entries == ()
+    assert held.held_portfolio_usd == Decimal("0.7")
+    assert held.active_reserved_usd == Decimal("0.7")
+    assert held.remaining_usd == Decimal("0.3")
+
+    claimed = ledger.claim_portfolio_slot(portfolio, "request-a", Decimal("0.25"))
+    after_claim = ledger.snapshot()
+    assert claimed.reserved_usd == Decimal("0.25")
+    assert after_claim.held_portfolio_usd == Decimal("0.3")
+    assert after_claim.active_reserved_usd == Decimal("0.55")
+    assert after_claim.remaining_usd == Decimal("0.45")
+    assert after_claim.portfolio_holds[0].claimed_slots == slots[:1]
+    assert after_claim.portfolio_holds[0].remaining_slots == slots[1:]
+
+    before_stale_release = path.read_bytes()
+    with pytest.raises(CostReservationStateError, match="remaining slots changed"):
+        ledger.release_portfolio(portfolio, expected_remaining_slots=slots)
+    assert path.read_bytes() == before_stale_release
+
+    released = ledger.release_portfolio(
+        portfolio,
+        expected_remaining_slots=slots[1:],
+    )
+    assert released.status is PortfolioHoldStatus.RELEASED
+    assert released.claimed_slots == slots[:1]
+    assert released.released_slots == slots[1:]
+    assert ledger.snapshot().active_reserved_usd == Decimal("0.25")
+    assert ledger.snapshot().portfolio_holds[0].slots[0].status is PortfolioSlotStatus.CLAIMED
+    with pytest.raises(CostReservationStateError, match="already finalized"):
+        ledger.release_portfolio(portfolio, expected_remaining_slots=())
+
+
+def test_portfolio_reservation_and_failed_claim_are_atomic(tmp_path: Path) -> None:
+    path = tmp_path / "atomic-portfolio-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("0.5"))
+    before = path.read_bytes()
+
+    with pytest.raises(CostBudgetExceededError, match="portfolio exceeds"):
+        ledger.reserve_portfolio(
+            "b" * 64,
+            (
+                PortfolioAttemptSlot("request-a", Decimal("0.3")),
+                PortfolioAttemptSlot("request-b", Decimal("0.3")),
+            ),
+        )
+    assert path.read_bytes() == before
+
+    slots = (PortfolioAttemptSlot("request-a", Decimal("0.3")),)
+    portfolio = ledger.reserve_portfolio("b" * 64, slots)
+    held_bytes = path.read_bytes()
+    with pytest.raises(CostBudgetExceededError, match="held portfolio ceiling"):
+        ledger.claim_portfolio_slot(portfolio, "request-a", Decimal("0.31"))
+    assert path.read_bytes() == held_bytes
+    with pytest.raises(CostReservationStateError, match="not in portfolio"):
+        ledger.claim_portfolio_slot(portfolio, "unknown-request", Decimal("0.1"))
+    assert path.read_bytes() == held_bytes
+    assert ledger.snapshot().portfolio_holds[0].remaining_slots == slots
+    with pytest.raises(CostReservationStateError, match="already recorded"):
+        ledger.reserve("request-a", Decimal("0.1"))
+
+
+def test_portfolio_recovery_requires_exact_active_plan_and_slots(tmp_path: Path) -> None:
+    path = tmp_path / "recover-portfolio-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1"))
+    slots = (
+        PortfolioAttemptSlot("request-a", Decimal("0.2")),
+        PortfolioAttemptSlot("request-b", Decimal("0.2")),
+    )
+    portfolio = ledger.reserve_portfolio("c" * 64, slots)
+    ledger.claim_portfolio_slot(portfolio, "request-a", Decimal("0.15"))
+
+    reopened = AtomicCostLedger.open_existing(path, cap_usd=Decimal("1"))
+    assert reopened.recover_portfolio("c" * 64, slots) == portfolio
+    assert reopened.recover_portfolio("c" * 64, slots) == portfolio
+    with pytest.raises(CostReservationStateError, match="durable initial slots"):
+        reopened.recover_portfolio("c" * 64, slots[:1])
+    with pytest.raises(CostReservationStateError, match="unknown portfolio"):
+        reopened.recover_portfolio("d" * 64, slots)
+
+
+def test_portfolio_claim_is_blocked_after_a_durable_reservation_overrun(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "overrun-portfolio-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1"))
+    slots = (
+        PortfolioAttemptSlot("request-a", Decimal("0.3")),
+        PortfolioAttemptSlot("request-b", Decimal("0.3")),
+    )
+    portfolio = ledger.reserve_portfolio("d" * 64, slots)
+    claimed = ledger.claim_portfolio_slot(portfolio, "request-a", Decimal("0.25"))
+    with pytest.raises(CostReservationOverrunError):
+        ledger.reconcile(claimed, Decimal("0.4"))
+
+    before_blocked_claim = path.read_bytes()
+    with pytest.raises(CostBudgetExceededError, match="prior provider cost exceeded"):
+        ledger.claim_portfolio_slot(portfolio, "request-b", Decimal("0.25"))
+    assert path.read_bytes() == before_blocked_claim
+    assert ledger.snapshot().portfolio_holds[0].remaining_slots == slots[1:]
 
 
 def test_ledger_identity_changes_when_the_persistent_lock_is_replaced(tmp_path: Path) -> None:

@@ -6,10 +6,11 @@ import os
 import shutil
 import stat
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -80,11 +81,19 @@ from mmaudit.models.usage import (
     is_structurally_accountable_usage_record,
 )
 from mmaudit.orchestration.budgets import (
+    AtomicRequestLimitReservationEvidence,
+    AtomicTokenReservationEvidence,
     BudgetExhaustedError,
     BudgetManager,
     BudgetReservationStateError,
+    _issue_trusted_request_limit_scope,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    ReleaseReason,
+    cost_entry_sha256,
+)
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
 )
@@ -127,6 +136,26 @@ SHARDS = (
     "shard-" + "1" * 24,
     "shard-" + "2" * 24,
 )
+
+
+def _journal_private_file_snapshot(
+    path: Path,
+) -> dict[str, tuple[bytes, int, int, int, int]]:
+    """Capture exact bytes and link identity for fail-before-mutation assertions."""
+
+    snapshot: dict[str, tuple[bytes, int, int, int, int]] = {}
+    for candidate in sorted(path.rglob("*")):
+        metadata = candidate.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            continue
+        snapshot[candidate.relative_to(path).as_posix()] = (
+            candidate.read_bytes(),
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_nlink,
+            stat.S_IMODE(metadata.st_mode),
+        )
+    return snapshot
 
 
 _MODEL_ROLES = {
@@ -972,6 +1001,1291 @@ def test_incremental_checkpoint_is_byte_identical_at_every_task_lifecycle_prefix
     journal.close()
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["plan", "activation", "dispatch", "output", "result", "pass-result"],
+)
+@pytest.mark.parametrize("crash_point", ["refresh-entry", "pending-fsync"])
+def test_one_public_mutator_transition_resumes_from_exact_predecessor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    crash_point: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"{stage}-{crash_point}"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan: SchedulerPassPlan | None = None
+    task: SchedulerTaskPlan | None = None
+    activation: SchedulerTaskActivation | None = None
+    operation: Any
+    if stage == "plan":
+
+        def operation() -> object:
+            return journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+
+    else:
+        plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+        task = plan.tasks[0]
+        if stage in {"activation", "dispatch", "output"}:
+            activation_values = {
+                "actual_input_sha256": task.input_sha256,
+                "system_prompt_sha256": task.system_prompt_sha256,
+                "user_prompt_sha256": "1" * 64,
+                "provider_prompt_sha256": "2" * 64,
+                "response_schema_sha256": task.response_schema_sha256,
+            }
+            if stage == "activation":
+
+                def operation() -> object:
+                    return journal.activate_task(task.task_id, **activation_values)
+
+            else:
+                activation = journal.activate_task(task.task_id, **activation_values)
+                if stage == "dispatch":
+
+                    def operation() -> object:
+                        return journal.mark_dispatched(task.task_id)
+
+                else:
+                    journal.mark_dispatched(task.task_id)
+                    payload = build_scheduler_test_model_payload(plan, task)
+                    usage = build_scheduler_test_usage(
+                        task,
+                        activation,
+                        validated_output=payload,
+                    )
+
+                    def operation() -> object:
+                        return journal.persist_output(
+                            task.task_id,
+                            payload,
+                            usage_record=usage,
+                        )
+
+        elif stage == "result":
+            result = SchedulerTaskResult.build_preflight_failure(
+                plan=plan,
+                task=task,
+                terminal_status=SchedulerTerminalStatus.FAILED,
+                terminal_evidence_sha256="d" * 64,
+            )
+
+            def operation() -> object:
+                return journal.record_preflight_failure(result)
+
+        else:
+            journal.record_preflight_failure(
+                SchedulerTaskResult.build_preflight_failure(
+                    plan=plan,
+                    task=task,
+                    terminal_status=SchedulerTerminalStatus.FAILED,
+                    terminal_evidence_sha256="d" * 64,
+                )
+            )
+
+            def operation() -> object:
+                return journal.seal_pass_result(plan.pass_kind)
+
+    predecessor = journal.journal_evidence
+    checkpoint_before = (path / "journal-head-checkpoint.json").read_bytes()
+    if crash_point == "refresh-entry":
+
+        def crash_before_refresh() -> NoReturn:
+            raise SimulatedProcessDeath
+
+        monkeypatch.setattr(journal, "_refresh_journal_head_checkpoint", crash_before_refresh)
+    else:
+        original_write = scheduler_module._write_fresh_private_file
+
+        def crash_after_pending_fsync(
+            parent_descriptor: int,
+            leaf: str,
+            content: bytes,
+        ) -> None:
+            original_write(parent_descriptor, leaf, content)
+            if leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME:
+                raise SimulatedProcessDeath
+
+        monkeypatch.setattr(
+            scheduler_module,
+            "_write_fresh_private_file",
+            crash_after_pending_fsync,
+        )
+    with pytest.raises(SimulatedProcessDeath):
+        operation()
+    journal.close()
+    monkeypatch.undo()
+
+    assert (path / "journal-head-checkpoint.json").read_bytes() == checkpoint_before
+    assert (path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME).is_file()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    assert not (path / scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME).exists()
+    assert not (path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME).exists()
+    if stage == "dispatch":
+        assert resumed.uncertain_task_ids == (task.task_id,)
+    elif stage == "output":
+        assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+        assert (
+            resumed.task_results[0].output_artifact_sha256
+            == resumed.outputs[0].output_artifact_sha256
+        )
+    elif stage == "result":
+        assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+    elif stage == "pass-result":
+        assert len(resumed.pass_results) == 1
+    resumed.close()
+
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert replayed.local_journal_head_checkpoint == replayed.journal_evidence
+    replayed.close()
+
+
+def test_host_output_publication_crash_recovers_exact_success_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "host-output-publication"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    _complete_pass(journal, SchedulerPassKind.ORIENTATION)
+    _complete_pass(journal, SchedulerPassKind.BLIND_SHARD_REVIEW)
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.FINDING_REDUCTION))
+    task = plan.tasks[0]
+    journal.activate_task(
+        task.task_id,
+        actual_input_sha256=scheduler_test_host_activation_input_sha256(
+            plan,
+            task,
+            candidate_ids=("candidate-critical",),
+        ),
+    )
+    journal.mark_dispatched(task.task_id)
+    predecessor = journal.journal_evidence
+    payload = build_scheduler_test_host_payload(
+        plan,
+        task,
+        candidate_ids=("candidate-critical",),
+    )
+
+    def crash_before_refresh() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(journal, "_refresh_journal_head_checkpoint", crash_before_refresh)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.persist_output(task.task_id, payload)
+    journal.close()
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    assert resumed.task_results[0].terminal_evidence_sha256 == scheduler_canonical_sha256(
+        {
+            "classification": "host_computation_completed",
+            "output_sha256": scheduler_canonical_sha256(payload),
+        }
+    )
+    recovered = resumed.journal_evidence
+    resumed.close()
+
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+@pytest.mark.parametrize("stage", ["plan", "activation", "result"])
+def test_multi_file_transition_resumes_between_immutable_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"between-{stage}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    if stage == "plan":
+        plan = _plan(journal, SchedulerPassKind.ORIENTATION)
+
+        def operation() -> object:
+            return journal.seal_pass_plan(plan)
+
+    else:
+        plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+        task = plan.tasks[0]
+        if stage == "activation":
+
+            def operation() -> object:
+                return journal.activate_task(
+                    task.task_id,
+                    actual_input_sha256=task.input_sha256,
+                    system_prompt_sha256=task.system_prompt_sha256,
+                    user_prompt_sha256="1" * 64,
+                    provider_prompt_sha256="2" * 64,
+                    response_schema_sha256=task.response_schema_sha256,
+                )
+
+        else:
+            result = SchedulerTaskResult.build_preflight_failure(
+                plan=plan,
+                task=task,
+                terminal_status=SchedulerTerminalStatus.FAILED,
+                terminal_evidence_sha256="d" * 64,
+            )
+
+            def operation() -> object:
+                return journal.record_preflight_failure(result)
+
+    predecessor = journal.journal_evidence
+    original_write_model = scheduler_module._write_model
+    durable_writes = 0
+
+    def crash_before_second_artifact(*args: Any, **kwargs: Any) -> None:
+        nonlocal durable_writes
+        durable_writes += 1
+        if durable_writes == 2:
+            raise SimulatedProcessDeath
+        original_write_model(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler_module, "_write_model", crash_before_second_artifact)
+    with pytest.raises(SimulatedProcessDeath):
+        operation()
+    journal.close()
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    if stage == "plan":
+        assert tuple(item.kind for item in resumed.events) == (SchedulerTaskEventKind.PLANNED,)
+    elif stage == "activation":
+        assert tuple(item.kind for item in resumed.events)[-1] is SchedulerTaskEventKind.ACTIVATED
+    else:
+        assert tuple(item.kind for item in resumed.events)[-1] is (
+            SchedulerTaskEventKind.PREFLIGHT_TERMINAL
+        )
+    resumed.close()
+
+
+def test_resume_rejects_forged_multi_transition_pending_checkpoint(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "multi-transition-pending"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    predecessor_bytes = stable_json(predecessor).encode("utf-8")
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    current_bytes = stable_json(journal.journal_evidence).encode("utf-8")
+    journal.close()
+
+    checkpoint_path = path / "journal-head-checkpoint.json"
+    predecessor_path = path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME
+    pending_path = path / scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+    checkpoint_path.write_bytes(predecessor_bytes)
+    predecessor_path.write_bytes(predecessor_bytes)
+    pending_path.write_bytes(current_bytes)
+    predecessor_path.chmod(0o600)
+    pending_path.chmod(0o600)
+
+    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    assert checkpoint_path.read_bytes() == predecessor_bytes
+    assert predecessor_path.read_bytes() == predecessor_bytes
+    assert pending_path.read_bytes() == current_bytes
+
+
+def test_immutable_publication_never_replaces_a_racing_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "no-replace-race"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    original_link = os.link
+    target_leaf = "pass-01-plan.json"
+    sentinel = b"synthetic racing target"
+
+    def create_target_before_link(source: Any, target: Any, **kwargs: Any) -> None:
+        if target == target_leaf:
+            target_descriptor = os.open(
+                target_leaf,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=kwargs["dst_dir_fd"],
+            )
+            try:
+                os.fchmod(target_descriptor, 0o600)
+                os.write(target_descriptor, sentinel)
+                os.fsync(target_descriptor)
+            finally:
+                os.close(target_descriptor)
+            os.fsync(kwargs["dst_dir_fd"])
+        original_link(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "link", create_target_before_link)
+    with pytest.raises(ValueError, match="could not be published safely"):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    monkeypatch.undo()
+
+    assert (path / "pass-plans" / target_leaf).read_bytes() == sentinel
+    assert not (
+        path / "pass-plans" / scheduler_module._immutable_write_temp_leaf(target_leaf)
+    ).exists()
+    journal.close()
+
+
+def test_published_immutable_temp_pair_is_finalized_and_recovered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "published-pair"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    target_leaf = "pass-01-plan.json"
+    temporary_leaf = scheduler_module._immutable_write_temp_leaf(target_leaf)
+    original_unlink = os.unlink
+
+    def crash_before_temp_unlink(candidate: Any, **kwargs: Any) -> None:
+        if candidate == temporary_leaf:
+            raise SimulatedProcessDeath
+        original_unlink(candidate, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", crash_before_temp_unlink)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+    monkeypatch.undo()
+
+    target_path = path / "pass-plans" / target_leaf
+    temporary_path = path / "pass-plans" / temporary_leaf
+    assert target_path.stat().st_ino == temporary_path.stat().st_ino
+    assert target_path.stat().st_nlink == 2
+    paired_bytes = target_path.read_bytes()
+    donor = create_scheduler_journal(
+        tmp_path / "published-pair-donor",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    donor.seal_pass_plan(_plan(donor, SchedulerPassKind.ORIENTATION))
+    wrong_expected = donor.journal_evidence
+    donor.close()
+    with pytest.raises(ValueError, match="resume journal evidence does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=wrong_expected,
+        )
+    assert target_path.read_bytes() == paired_bytes
+    assert temporary_path.read_bytes() == paired_bytes
+    assert target_path.stat().st_ino == temporary_path.stat().st_ino
+    assert target_path.stat().st_nlink == 2
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert not temporary_path.exists()
+    assert target_path.stat().st_nlink == 1
+    assert len(resumed.plans) == 1
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    resumed.close()
+
+
+def test_checkpoint_replacement_before_predecessor_cleanup_resumes_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "checkpoint-replaced"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    original_unlink = scheduler_module._unlink_exact_private_file
+
+    def crash_before_predecessor_cleanup(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        if leaf == scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME:
+            raise SimulatedProcessDeath
+        original_unlink(parent_descriptor, leaf, content)
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_unlink_exact_private_file",
+        crash_before_predecessor_cleanup,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+    monkeypatch.undo()
+
+    assert (path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME).is_file()
+    assert (
+        SchedulerJournalEvidence.model_validate_json(
+            (path / "journal-head-checkpoint.json").read_bytes()
+        ).pass_plan_count
+        == 1
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    assert not (path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME).exists()
+    resumed.close()
+
+
+@pytest.mark.parametrize("recovery_crash_point", ["event-publication", "checkpoint-pending"])
+def test_plan_missing_event_recovery_survives_a_second_process_death(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_crash_point: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"plan-recovery-{recovery_crash_point}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    original_write_model = scheduler_module._write_model
+    writes = 0
+
+    def crash_before_planned_event(*args: Any, **kwargs: Any) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise SimulatedProcessDeath
+        original_write_model(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler_module, "_write_model", crash_before_planned_event)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+    monkeypatch.undo()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovery(parent_descriptor: int, leaf: str, content: bytes) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (recovery_crash_point == "event-publication" and leaf == "event-00000000.json") or (
+            recovery_crash_point == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovery,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert tuple(item.kind for item in resumed.events) == (SchedulerTaskEventKind.PLANNED,)
+    recovered = resumed.journal_evidence
+    resumed.close()
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+@pytest.mark.parametrize("retained_runtime", ["output", "attempt"])
+@pytest.mark.parametrize("recovery_crash_point", ["result-publication", "checkpoint-pending"])
+def test_derived_terminal_recovery_survives_a_second_process_death(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    retained_runtime: str,
+    recovery_crash_point: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"{retained_runtime}-recovery-{recovery_crash_point}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    if retained_runtime == "output":
+        usage = build_scheduler_test_usage(task, activation, validated_output=payload)
+        journal.persist_output(task.task_id, payload, usage_record=usage)
+    else:
+        journal.persist_provider_attempt(
+            task.task_id,
+            _failed_accountable_mock_usage(
+                plan,
+                task,
+                activation,
+                reported_cost_usd_exact=None,
+                accounted_cost_usd_exact="0",
+            ),
+        )
+    predecessor = journal.journal_evidence
+    journal.close()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovery(parent_descriptor: int, leaf: str, content: bytes) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (
+            recovery_crash_point == "result-publication" and leaf.startswith(f"{task.task_id}-")
+        ) or (
+            recovery_crash_point == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovery,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    expected_status = (
+        SchedulerTerminalStatus.SUCCEEDED
+        if retained_runtime == "output"
+        else SchedulerTerminalStatus.UNCERTAIN
+    )
+    assert resumed.task_results[0].terminal_status is expected_status
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    recovered = resumed.journal_evidence
+    resumed.close()
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+@pytest.mark.parametrize("second_crash", ["result-publication", "checkpoint-pending"])
+def test_uncheckpointed_dispatch_survives_a_second_recovery_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second_crash: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"dispatch-recovery-{second_crash}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    predecessor = journal.journal_evidence
+
+    def crash_before_dispatch_checkpoint() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        journal,
+        "_refresh_journal_head_checkpoint",
+        crash_before_dispatch_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.mark_dispatched(task.task_id)
+    journal.close()
+    monkeypatch.undo()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovered_terminal(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (second_crash == "result-publication" and leaf.startswith(f"{task.task_id}-")) or (
+            second_crash == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+            and SchedulerJournalEvidence.model_validate_json(content).uncertain_count == 1
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovered_terminal,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    phase_snapshot = _journal_private_file_snapshot(path)
+    with pytest.raises(ValueError, match="resume journal evidence does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    assert _journal_private_file_snapshot(path) == phase_snapshot
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.UNCERTAIN
+    recovered = resumed.journal_evidence
+    resumed.close()
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+@pytest.mark.parametrize(
+    ("terminal_status", "checkpointed_attempt"),
+    (
+        (SchedulerTerminalStatus.FAILED, False),
+        (SchedulerTerminalStatus.FAILED, True),
+        (SchedulerTerminalStatus.INVALID, False),
+        (SchedulerTerminalStatus.INVALID, True),
+        (SchedulerTerminalStatus.UNBOUND, False),
+        (SchedulerTerminalStatus.UNBOUND, True),
+        (SchedulerTerminalStatus.INCONCLUSIVE, False),
+        (SchedulerTerminalStatus.INCONCLUSIVE, True),
+        (SchedulerTerminalStatus.EXPLICIT_EMPTY, False),
+    ),
+)
+def test_terminal_observation_crash_replays_exact_result_instead_of_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpointed_attempt: bool,
+    terminal_status: SchedulerTerminalStatus,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"terminal-prefix-{checkpointed_attempt}-{terminal_status.value}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    if terminal_status is SchedulerTerminalStatus.EXPLICIT_EMPTY:
+        for pass_kind in SCHEDULER_PASS_ORDER[:4]:
+            _complete_pass(
+                journal,
+                pass_kind,
+                candidate_ids=(
+                    ()
+                    if pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+                    else ("candidate-critical",)
+                ),
+            )
+        plan = journal.seal_pass_plan(
+            _plan(
+                journal,
+                SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                task_kind=SchedulerTaskKind.EMPTY_COMPLETION,
+            )
+        )
+    else:
+        plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=(
+            task.system_prompt_sha256 if task.task_kind is SchedulerTaskKind.MODEL_REQUEST else None
+        ),
+        user_prompt_sha256=(
+            "1" * 64 if task.task_kind is SchedulerTaskKind.MODEL_REQUEST else None
+        ),
+        provider_prompt_sha256=(
+            "2" * 64 if task.task_kind is SchedulerTaskKind.MODEL_REQUEST else None
+        ),
+        response_schema_sha256=(
+            task.response_schema_sha256
+            if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
+            else None
+        ),
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+        upstream_task_result_sha256s=(
+            (plan.candidate_workset.source_result_sha256,)
+            if task.task_kind is SchedulerTaskKind.EMPTY_COMPLETION
+            and plan.candidate_workset is not None
+            else ()
+        ),
+    )
+    journal.mark_dispatched(task.task_id)
+    if checkpointed_attempt:
+        journal.persist_provider_attempt(
+            task.task_id,
+            _failed_accountable_mock_usage(
+                plan,
+                task,
+                activation,
+                reported_cost_usd_exact=None,
+                accounted_cost_usd_exact="0",
+            ),
+        )
+    predecessor = journal.journal_evidence
+    expected_result = SchedulerTaskResult.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        terminal_status=terminal_status,
+        terminal_evidence_sha256=scheduler_canonical_sha256(
+            {
+                "classification": "synthetic_terminal_prefix",
+                "terminal_status": terminal_status.value,
+            }
+        ),
+    )
+
+    def crash_before_terminal_event(**_values: Any) -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(journal, "_append_event", crash_before_terminal_event)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_terminal(expected_result)
+    assert tuple(item for item in journal.result_observations if item.task_id == task.task_id) == (
+        expected_result,
+    )
+    assert tuple(item for item in journal.task_results if item.task_id == task.task_id) == ()
+    journal.close()
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert tuple(item for item in resumed.task_results if item.task_id == task.task_id) == (
+        expected_result,
+    )
+    assert tuple(item for item in resumed.result_observations if item.task_id == task.task_id) == (
+        expected_result,
+    )
+    assert resumed.events[-1].kind is SchedulerTaskEventKind.TERMINAL
+    assert resumed.events[-1].task_result_sha256 == expected_result.result_sha256
+    recovered = resumed.journal_evidence
+    resumed.close()
+
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    assert tuple(item for item in replayed.task_results if item.task_id == task.task_id) == (
+        expected_result,
+    )
+    replayed.close()
+
+
+@pytest.mark.parametrize("second_crash", ["result-publication", "checkpoint-pending"])
+def test_uncheckpointed_provider_attempt_survives_a_second_recovery_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second_crash: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / f"attempt-recovery-{second_crash}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    dispatch = journal.mark_dispatched(task.task_id)
+    predecessor = journal.journal_evidence
+
+    def crash_before_attempt_checkpoint() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        journal,
+        "_refresh_journal_head_checkpoint",
+        crash_before_attempt_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.persist_provider_attempt(
+            task.task_id,
+            _failed_accountable_mock_usage(
+                plan,
+                task,
+                activation,
+                reported_cost_usd_exact=None,
+                accounted_cost_usd_exact="0",
+            ),
+        )
+    journal.close()
+    monkeypatch.undo()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovered_terminal(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (second_crash == "result-publication" and leaf.startswith(f"{task.task_id}-")) or (
+            second_crash == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+            and SchedulerJournalEvidence.model_validate_json(content).uncertain_count == 1
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovered_terminal,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.UNCERTAIN
+    assert resumed.task_results[0].terminal_evidence_sha256 == scheduler_canonical_sha256(
+        {
+            "classification": "dispatch_without_terminal",
+            "dispatch_event_sha256": dispatch.event_sha256,
+        }
+    )
+    recovered = resumed.journal_evidence
+    resumed.close()
+    replayed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+def test_uncheckpointed_provider_attempt_rejects_an_arbitrary_terminal_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "attempt-arbitrary-terminal"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    predecessor = journal.journal_evidence
+
+    def crash_before_checkpoint() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(journal, "_refresh_journal_head_checkpoint", crash_before_checkpoint)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.persist_provider_attempt(
+            task.task_id,
+            _failed_accountable_mock_usage(
+                plan,
+                task,
+                activation,
+                reported_cost_usd_exact=None,
+                accounted_cost_usd_exact="0",
+            ),
+        )
+    arbitrary = SchedulerTaskResult.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        terminal_status=SchedulerTerminalStatus.FAILED,
+        terminal_evidence_sha256="f" * 64,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_terminal(arbitrary)
+    journal.close()
+    monkeypatch.undo()
+
+    before = _journal_private_file_snapshot(path)
+    with pytest.raises(ValueError, match="checkpoint does not match durable journal evidence"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    assert _journal_private_file_snapshot(path) == before
+
+
+@pytest.mark.parametrize("artifact_kind", ["result", "output", "attempt"])
+def test_terminal_checkpoint_rejects_fresh_same_task_runtime_evidence(
+    tmp_path: Path,
+    artifact_kind: str,
+) -> None:
+    path = tmp_path / f"terminal-plus-{artifact_kind}"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    dispatch = journal.mark_dispatched(task.task_id)
+    canonical = SchedulerTaskResult.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        terminal_status=SchedulerTerminalStatus.UNCERTAIN,
+        terminal_evidence_sha256=scheduler_canonical_sha256(
+            {
+                "classification": "dispatch_without_terminal",
+                "dispatch_event_sha256": dispatch.event_sha256,
+            }
+        ),
+    )
+    journal.record_terminal(canonical)
+    predecessor = journal.journal_evidence
+    if artifact_kind == "result":
+        unreachable_result = SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.FAILED,
+            terminal_evidence_sha256="f" * 64,
+        )
+        scheduler_module._write_model(
+            journal._root_descriptor,
+            journal._directory_descriptors,
+            scheduler_module._task_result_path(unreachable_result),
+            unreachable_result,
+        )
+        journal._retain_result_observation(unreachable_result)
+    elif artifact_kind == "output":
+        payload = build_scheduler_test_model_payload(plan, task)
+        unreachable_output = SchedulerTaskOutput.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            payload=payload,
+            usage_record=build_scheduler_test_usage(
+                task,
+                activation,
+                validated_output=payload,
+            ),
+        )
+        scheduler_module._write_model(
+            journal._root_descriptor,
+            journal._directory_descriptors,
+            scheduler_module._task_output_path(unreachable_output),
+            unreachable_output,
+        )
+        journal._retain_output(unreachable_output)
+    else:
+        unreachable_attempt = SchedulerProviderAttemptEvidence.build(
+            task=task,
+            activation=activation,
+            usage_record=_failed_accountable_mock_usage(
+                plan,
+                task,
+                activation,
+                reported_cost_usd_exact=None,
+                accounted_cost_usd_exact="0",
+            ),
+            audit_model_selection=journal.manifest.bindings.audit_model_selection,
+            audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+            audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
+        )
+        scheduler_module._write_model(
+            journal._root_descriptor,
+            journal._directory_descriptors,
+            scheduler_module._provider_attempt_path(unreachable_attempt),
+            unreachable_attempt,
+        )
+        journal._retain_provider_attempt(unreachable_attempt)
+    journal.close()
+
+    before = _journal_private_file_snapshot(path)
+    with pytest.raises(ValueError, match="checkpoint does not match durable journal evidence"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+        )
+    assert _journal_private_file_snapshot(path) == before
+
+
+def test_partial_immutable_temp_is_cleaned_only_after_expected_predecessor_join(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "partial-immutable"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    target_leaf = "pass-01-plan.json"
+    temporary_leaf = scheduler_module._immutable_write_temp_leaf(target_leaf)
+    original_write = scheduler_module._write_exclusive_private_file
+
+    def leave_partial_temp(parent_descriptor: int, leaf: str, content: bytes) -> None:
+        if leaf != temporary_leaf:
+            original_write(parent_descriptor, leaf, content)
+            return
+        descriptor = os.open(
+            leaf,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            os.write(descriptor, content[:11])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(parent_descriptor)
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_exclusive_private_file",
+        leave_partial_temp,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+    monkeypatch.undo()
+
+    temporary_path = path / "pass-plans" / temporary_leaf
+    assert temporary_path.read_bytes()
+    assert not (path / "pass-plans" / target_leaf).exists()
+    donor = create_scheduler_journal(
+        tmp_path / "donor",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    donor.seal_pass_plan(_plan(donor, SchedulerPassKind.ORIENTATION))
+    wrong_expected = donor.journal_evidence
+    donor.close()
+    with pytest.raises(ValueError, match="resume journal evidence does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=wrong_expected,
+        )
+    assert temporary_path.is_file()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert not temporary_path.exists()
+    assert resumed.plans == ()
+    sealed = resumed.seal_pass_plan(_plan(resumed, SchedulerPassKind.ORIENTATION))
+    assert (path / "pass-plans" / target_leaf).read_bytes() == stable_json(sealed).encode("utf-8")
+    resumed.close()
+
+
+def test_partial_checkpoint_staging_temp_recovers_exact_plan_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "partial-checkpoint-staging"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    predecessor = journal.journal_evidence
+    checkpoint_temp = scheduler_module._immutable_write_temp_leaf(
+        scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+    )
+    original_write = scheduler_module._write_exclusive_private_file
+
+    def leave_partial_checkpoint(parent_descriptor: int, leaf: str, content: bytes) -> None:
+        if leaf != checkpoint_temp:
+            original_write(parent_descriptor, leaf, content)
+            return
+        descriptor = os.open(
+            leaf,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            os.write(descriptor, content[:17])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(parent_descriptor)
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_exclusive_private_file",
+        leave_partial_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+    monkeypatch.undo()
+
+    checkpoint_temp_path = path / checkpoint_temp
+    assert checkpoint_temp_path.is_file()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert len(resumed.plans) == 1
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    assert not checkpoint_temp_path.exists()
+    assert not (path / scheduler_module._JOURNAL_TRANSITION_PREDECESSOR_FILENAME).exists()
+    resumed.close()
+
+
 def test_returned_output_payload_cannot_mutate_retained_checkpoint_state(
     tmp_path: Path,
 ) -> None:
@@ -1303,6 +2617,7 @@ def test_live_full_validation_rejects_replacement_after_an_earlier_artifact_read
         directory_descriptors: dict[str, int],
         relative: str,
         model_type: Any,
+        **kwargs: Any,
     ) -> Any:
         nonlocal replaced
         model = original_read_model(
@@ -1310,6 +2625,7 @@ def test_live_full_validation_rejects_replacement_after_an_earlier_artifact_read
             directory_descriptors,
             relative,
             model_type,
+            **kwargs,
         )
         if not replaced and relative.startswith("task-results/"):
             replacement = earlier_event.with_name(f".{earlier_event.name}.replacement")
@@ -2950,6 +4266,1553 @@ def test_preflight_failure_closes_without_activation_or_dispatch(tmp_path: Path)
     journal.close()
 
 
+def _failed_accountable_mock_usage(
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    activation: SchedulerTaskActivation,
+    *,
+    reported_cost_usd_exact: str | None,
+    accounted_cost_usd_exact: str,
+    attempts: int = 1,
+    released_before_send: bool = False,
+) -> UsageRecord:
+    """Build synthetic failed-attempt accounting with an exact atomic inventory."""
+
+    payload = build_scheduler_test_model_payload(plan, task)
+    base = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        cost_usd_exact=accounted_cost_usd_exact,
+    )
+    routing = dict(base.routing)
+    if attempts == 2:
+        first_token = AtomicTokenReservationEvidence.model_validate(
+            routing["atomic_token_reservation"]
+        )
+        second_token = AtomicTokenReservationEvidence.build(
+            request_id=f"{task.logical_request_id}:attempt:2",
+            exact_model_id=first_token.exact_model_id,
+            role=first_token.role,
+            request_token_plan_sha256=first_token.request_token_plan_sha256,
+            planned_prompt_tokens=first_token.planned_prompt_tokens,
+            planned_visible_output_tokens=first_token.planned_visible_output_tokens,
+            planned_reasoning_tokens=first_token.planned_reasoning_tokens,
+            planned_completion_tokens=first_token.planned_completion_tokens,
+            global_input_token_limit=first_token.global_input_token_limit,
+            global_output_token_limit=first_token.global_output_token_limit,
+            spent_input_tokens_before=first_token.planned_prompt_tokens,
+            reserved_input_tokens_before=0,
+            spent_output_tokens_before=first_token.planned_completion_tokens,
+            reserved_output_tokens_before=0,
+        )
+        first_request = AtomicRequestLimitReservationEvidence.model_validate(
+            routing["atomic_request_limit_reservation"]
+        )
+        second_request = AtomicRequestLimitReservationEvidence.build(
+            request_id=second_token.request_id,
+            exact_model_id=first_request.exact_model_id,
+            role=first_request.role,
+            request_token_plan_sha256=first_request.request_token_plan_sha256,
+            request_limit_scope=first_request.request_limit_scope,
+            request_limit_count_before=1,
+            request_limit_maximum=first_request.request_limit_maximum,
+        )
+        routing.update(
+            {
+                "atomic_token_reservations": [
+                    first_token.model_dump(mode="json"),
+                    second_token.model_dump(mode="json"),
+                ],
+                "atomic_token_reservation_sha256s": [
+                    first_token.evidence_sha256,
+                    second_token.evidence_sha256,
+                ],
+                "atomic_token_reservation": second_token.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": second_token.evidence_sha256,
+                "atomic_request_limit_reservations": [
+                    first_request.model_dump(mode="json"),
+                    second_request.model_dump(mode="json"),
+                ],
+                "atomic_request_limit_reservation_sha256s": [
+                    first_request.evidence_sha256,
+                    second_request.evidence_sha256,
+                ],
+                "atomic_request_limit_reservation": second_request.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": second_request.evidence_sha256,
+            }
+        )
+    failure_updates: dict[str, object] = {
+        "execution_evidence": ExecutionEvidenceKind.MOCK,
+        "reported_cost_usd": (
+            float(Decimal(reported_cost_usd_exact)) if reported_cost_usd_exact is not None else None
+        ),
+        "reported_cost_usd_exact": reported_cost_usd_exact,
+        "accounted_cost_usd": float(Decimal(accounted_cost_usd_exact)),
+        "accounted_cost_usd_exact": accounted_cost_usd_exact,
+        "routing": routing,
+        "identity_strength": ModelIdentityStrength.UNBOUND,
+        "provider_error_classification": "timeout",
+        "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+        "status": "provider_error",
+        "attempts": attempts,
+        "retry_count": attempts - 1,
+    }
+    if released_before_send:
+        failure_updates.update(
+            {
+                "returned_model": None,
+                "actual_model": None,
+                "provider": None,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cached_tokens": 0,
+                "reasoning_tokens": 0,
+                "reasoning_evidence": None,
+                "token_detail_accounting_evidence": None,
+                "response_sha256": None,
+                "validated_response_sha256": None,
+                "openrouter_generation_id": None,
+                "actual_provider_endpoint": None,
+                "finish_reason": None,
+            }
+        )
+    record = UsageRecord.model_validate(
+        base.model_copy(update=failure_updates).model_dump(mode="python")
+    )
+    assert is_structurally_accountable_usage_record(record)
+    return record
+
+
+def _persist_failed_provider_attempt(
+    journal: SchedulerJournal,
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    activation: SchedulerTaskActivation,
+    usage: UsageRecord,
+    *,
+    terminal_evidence_sha256: str | None = None,
+) -> None:
+    attempt = journal.persist_provider_attempt(task.task_id, usage)
+    journal.record_terminal(
+        SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.FAILED,
+            terminal_evidence_sha256=(terminal_evidence_sha256 or attempt.attempt_evidence_sha256),
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_ledger_state", "reported_cost", "accounted_cost", "expected_status"),
+    (
+        ("uncertain", None, "0.25", CostEntryStatus.UNCERTAIN_ACCOUNTED),
+        ("reserved_unknown", None, "0.25", CostEntryStatus.UNCERTAIN_ACCOUNTED),
+        ("reserved_reported", "0.125", "0.125", CostEntryStatus.RECONCILED),
+    ),
+)
+async def test_resume_restores_terminal_failed_retained_attempt_from_exact_ledger_state(
+    tmp_path: Path,
+    initial_ledger_state: str,
+    reported_cost: str | None,
+    accounted_cost: str,
+    expected_status: CostEntryStatus,
+) -> None:
+    path = tmp_path / initial_ledger_state
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=reported_cost,
+        accounted_cost_usd_exact=accounted_cost,
+    )
+    _persist_failed_provider_attempt(journal, plan, task, activation, usage)
+    journal.close()
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"{initial_ledger_state}.json", cap_usd=Decimal("1")
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    if initial_ledger_state == "uncertain":
+        ledger.reconcile(reservation, None)
+    budget = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=1_000_000,
+        global_output_token_budget=100_000,
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+
+    records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+        atomic_ledger=ledger
+    )
+    assert records == (usage,)
+    await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+
+    entry = ledger.snapshot().entries[0]
+    assert entry.status is expected_status
+    assert entry.accounted_cost_usd == Decimal(accounted_cost)
+    assert budget.spent_usd_exact == Decimal(accounted_cost)
+    assert budget.spent_model_usd(task.requested_model or "") == Decimal(accounted_cost)
+    resumed.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "release_reason",
+    (
+        ReleaseReason.FAILED_BEFORE_SEND,
+        ReleaseReason.CANCELLED_BEFORE_SEND,
+    ),
+)
+async def test_resume_restores_zero_cost_released_retained_attempt(
+    tmp_path: Path,
+    release_reason: ReleaseReason,
+) -> None:
+    path = tmp_path / release_reason.value
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"{release_reason.value}.json",
+        cap_usd=Decimal("1"),
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=release_reason)
+    _persist_failed_provider_attempt(
+        journal,
+        plan,
+        task,
+        activation,
+        usage,
+        terminal_evidence_sha256=cost_entry_sha256(released),
+    )
+    journal.close()
+
+    budget = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=1_000_000,
+        global_output_token_budget=100_000,
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+        atomic_ledger=ledger
+    )
+    await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+
+    assert records == (usage,)
+    assert budget.spent_usd_exact == 0
+    assert budget.spent_input_tokens == 0
+    assert budget.spent_output_tokens == 0
+    retry = await budget.reserve(
+        f"{task.logical_request_id}:attempt:2",
+        task.role,
+        "x",
+        exact_model_id=task.requested_model,
+        planned_prompt_tokens=1,
+        planned_visible_output_tokens=1,
+        planned_reasoning_tokens=0,
+        planned_completion_tokens=1,
+        request_token_plan_sha256="3" * 64,
+        request_limit_scope=_issue_trusted_request_limit_scope(task.logical_request_id),
+    )
+    assert retry.request_limit_reservation_evidence is not None
+    assert retry.request_limit_reservation_evidence.request_limit_count_before == 1
+    await budget.release(retry)
+    resumed.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_restores_uncertain_prefix_with_zero_cost_released_tail(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "uncertain-released-tail"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0.10",
+        attempts=2,
+        released_before_send=True,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "uncertain-released-tail.json",
+        cap_usd=Decimal("1"),
+    )
+    first = ledger.reserve(task.logical_request_id, Decimal("0.10"))
+    ledger.reconcile(first, None)
+    tail = ledger.reserve(f"{task.logical_request_id}:attempt:2", Decimal("0.20"))
+    released = ledger.release(tail, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    _persist_failed_provider_attempt(
+        journal,
+        plan,
+        task,
+        activation,
+        usage,
+        terminal_evidence_sha256=cost_entry_sha256(released),
+    )
+    journal.close()
+
+    budget = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=1_000_000,
+        global_output_token_budget=100_000,
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+        atomic_ledger=ledger
+    )
+    await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+
+    first_token = AtomicTokenReservationEvidence.model_validate(
+        usage.routing["atomic_token_reservations"][0]
+    )
+    assert budget.spent_usd_exact == Decimal("0.10")
+    assert budget.spent_input_tokens == first_token.planned_prompt_tokens
+    assert budget.spent_output_tokens == first_token.planned_completion_tokens
+    retry = await budget.reserve(
+        f"{task.logical_request_id}:attempt:3",
+        task.role,
+        "x",
+        exact_model_id=task.requested_model,
+        planned_prompt_tokens=1,
+        planned_visible_output_tokens=1,
+        planned_reasoning_tokens=0,
+        planned_completion_tokens=1,
+        request_token_plan_sha256="4" * 64,
+        request_limit_scope=_issue_trusted_request_limit_scope(task.logical_request_id),
+    )
+    assert retry.request_limit_reservation_evidence is not None
+    assert retry.request_limit_reservation_evidence.request_limit_count_before == 2
+    await budget.release(retry)
+    resumed.close()
+
+
+def test_retained_usage_rejects_nonfinal_released_attempt_before_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nonfinal-released"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0.20",
+        attempts=2,
+        released_before_send=True,
+    )
+    _persist_failed_provider_attempt(journal, plan, task, activation, usage)
+    journal.close()
+
+    ledger_path = tmp_path / "nonfinal-released.json"
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    first = ledger.reserve(task.logical_request_id, Decimal("0.10"))
+    ledger.release(first, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    tail = ledger.reserve(f"{task.logical_request_id}:attempt:2", Decimal("0.20"))
+    ledger.reconcile(tail, None)
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger_path.read_bytes()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    with pytest.raises(ValueError, match="lacks an exact uncertain retry prefix"):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    resumed.close()
+
+
+@pytest.mark.parametrize(
+    "entry_change",
+    ("wrong_reason", "actual_cost", "accounted_cost"),
+)
+def test_released_retained_attempt_requires_exact_zero_cost_lifecycle(
+    tmp_path: Path,
+    entry_change: str,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / entry_change,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"{entry_change}.json",
+        cap_usd=Decimal("1"),
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    entry = ledger.snapshot().entries[0]
+    if entry_change == "wrong_reason":
+        forged = replace(entry, release_reason=None)
+    elif entry_change == "actual_cost":
+        forged = replace(entry, actual_cost_usd=Decimal("0.01"))
+    else:
+        forged = replace(entry, accounted_cost_usd=Decimal("0.01"))
+
+    with pytest.raises(ValueError, match="release lacks exact pre-send custody"):
+        scheduler_module._retained_main_usage_cost_recovery_plan(
+            records=(usage,),
+            tasks_by_request={task.logical_request_id: task},
+            ledger_entries=(forged,),
+        )
+    journal.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_restores_multi_attempt_usage_and_reconciles_only_retained_reserved_tail(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retained-retry"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact="0.125",
+        accounted_cost_usd_exact="0.225",
+        attempts=2,
+    )
+    _persist_failed_provider_attempt(journal, plan, task, activation, usage)
+    journal.close()
+
+    ledger = AtomicCostLedger.initialize(tmp_path / "retained-retry.json", cap_usd=Decimal("1"))
+    first = ledger.reserve(task.logical_request_id, Decimal("0.10"))
+    ledger.reconcile(first, None)
+    ledger.reserve(f"{task.logical_request_id}:attempt:2", Decimal("0.20"))
+    budget = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=1_000_000,
+        global_output_token_budget=100_000,
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+        atomic_ledger=ledger
+    )
+    await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+
+    assert records == (usage,)
+    assert [entry.status for entry in ledger.snapshot().entries] == [
+        CostEntryStatus.UNCERTAIN_ACCOUNTED,
+        CostEntryStatus.RECONCILED,
+    ]
+    assert ledger.snapshot().entries[1].actual_cost_usd == Decimal("0.125")
+    assert budget.spent_usd_exact == Decimal("0.225")
+    resumed.close()
+
+
+@pytest.mark.parametrize(
+    ("case", "reported_cost", "accounted_cost", "expected_error"),
+    (
+        ("accounting_mismatch", None, "0.20", "accounting differs from its ledger"),
+        ("reservation_overrun", "0.30", "0.30", "reported cost exceeds its reservation"),
+    ),
+)
+def test_retained_attempt_cost_mismatch_fails_before_ledger_mutation(
+    tmp_path: Path,
+    case: str,
+    reported_cost: str | None,
+    accounted_cost: str,
+    expected_error: str,
+) -> None:
+    path = tmp_path / case
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=reported_cost,
+        accounted_cost_usd_exact=accounted_cost,
+    )
+    _persist_failed_provider_attempt(journal, plan, task, activation, usage)
+    journal.close()
+
+    ledger_path = tmp_path / f"{case}.json"
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    if case == "accounting_mismatch":
+        ledger.reconcile(reservation, None)
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger_path.read_bytes()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    resumed.close()
+
+
+def test_retained_attempt_cannot_hide_an_extra_active_retry_entry(tmp_path: Path) -> None:
+    path = tmp_path / "extra-retry"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0.25",
+    )
+    _persist_failed_provider_attempt(journal, plan, task, activation, usage)
+    journal.close()
+
+    ledger_path = tmp_path / "extra-retry.json"
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    first = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    ledger.reconcile(first, None)
+    ledger.reserve(f"{task.logical_request_id}:attempt:2", Decimal("0.20"))
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger_path.read_bytes()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    with pytest.raises(ValueError, match="complete ledger attempt inventory"):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    resumed.close()
+
+
+def test_terminal_failure_without_retained_usage_cannot_claim_accounted_uncertainty(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "failed-without-usage"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    journal.record_terminal(
+        SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.FAILED,
+            terminal_evidence_sha256="d" * 64,
+        )
+    )
+    journal.close()
+
+    ledger_path = tmp_path / "failed-without-usage.json"
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    ledger.reconcile(reservation, None)
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger_path.read_bytes()
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+
+    with pytest.raises(ValueError, match="differs from its scheduler terminal"):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    resumed.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "journal_state",
+    (
+        "activated",
+        "activated_terminal",
+        "dispatched",
+        "dispatched_terminal",
+    ),
+)
+async def test_no_usage_released_attempt_terminalizes_and_restores_idempotently(
+    tmp_path: Path,
+    journal_state: str,
+) -> None:
+    path = tmp_path / journal_state
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    if journal_state.startswith("dispatched"):
+        journal.mark_dispatched(task.task_id)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"{journal_state}.json",
+        cap_usd=Decimal("1"),
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    expected_result = SchedulerTaskResult.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        terminal_status=SchedulerTerminalStatus.FAILED,
+        terminal_evidence_sha256=cost_entry_sha256(released),
+    )
+    if journal_state == "activated_terminal":
+        journal.record_activated_preflight_failure(expected_result)
+    elif journal_state == "dispatched_terminal":
+        journal.record_terminal(expected_result)
+    journal.close()
+    ledger_bytes = ledger.path.read_bytes()
+
+    observed_result: SchedulerTaskResult | None = None
+    observed_events: tuple[SchedulerTaskEventKind, ...] | None = None
+    for _resume_ordinal in range(2):
+        resumed = resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            atomic_ledger=ledger,
+        )
+        assert resumed.task_results == (expected_result,)
+        assert task.task_id not in resumed.dispatchable_task_ids
+        task_events = tuple(event.kind for event in resumed.events if event.task_id == task.task_id)
+        assert task_events[-1] is (
+            SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+            if journal_state.startswith("activated")
+            else SchedulerTaskEventKind.TERMINAL
+        )
+        if observed_result is None:
+            observed_result = resumed.task_results[0]
+            observed_events = task_events
+        else:
+            assert resumed.task_results[0] == observed_result
+            assert task_events == observed_events
+
+        budget = BudgetManager(
+            total_usd=1,
+            max_output_tokens=10,
+            conservative_usd_per_million_tokens=1,
+            max_requests_per_agent=10,
+            atomic_ledger=ledger,
+            global_input_token_budget=100,
+            global_output_token_budget=200,
+        )
+        records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+            atomic_ledger=ledger
+        )
+        assert records == ()
+        await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+        assert budget.spent_usd_exact == 0
+        assert budget.spent_input_tokens == 0
+        assert budget.spent_output_tokens == 0
+        assert budget._request_limit_counts[("scheduled_task", task.logical_request_id)] == 1
+        assert ledger.path.read_bytes() == ledger_bytes
+        resumed.close()
+
+
+@pytest.mark.asyncio
+async def test_live_activated_released_usage_is_retained_and_restored(
+    tmp_path: Path,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "live-release-ledger.json", cap_usd=Decimal("1")
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    runtime = PipelineScheduler.create(
+        tmp_path / "live-release-journal",
+        bindings=bindings,
+        analysis_input_inventory=_analysis_inventory(),
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+        privacy_evidence_custody=_privacy_custody(),
+    )
+    task = _task(runtime.journal, SchedulerPassKind.ORIENTATION)
+    plan = runtime.seal_pass(SchedulerPassKind.ORIENTATION, (task,))
+    activation = runtime.journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    runtime._activations[task.task_id] = activation
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+
+    result = runtime.record_failure(
+        task,
+        RuntimeError("synthetic pre-send host failure"),
+        usage_records=(usage,),
+        atomic_ledger=ledger,
+    )
+
+    assert result.terminal_status is SchedulerTerminalStatus.FAILED
+    assert result.terminal_evidence_sha256 == cost_entry_sha256(released)
+    assert runtime.journal.retained_provider_usage_records == (usage,)
+    assert tuple(event.kind for event in runtime.journal.events)[-1] is (
+        SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+    )
+    runtime.close()
+
+    resumed = PipelineScheduler.resume(
+        tmp_path / "live-release-journal",
+        bindings=bindings,
+        analysis_input_inventory=_analysis_inventory(),
+        shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    records, recovery_scope = resumed.journal.claim_restorable_usage_for_budget_recovery(
+        atomic_ledger=ledger
+    )
+    budget = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        global_input_token_budget=100,
+        global_output_token_budget=200,
+    )
+    await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+    assert records == (usage,)
+    assert budget.spent_usd_exact == 0
+    assert budget.spent_input_tokens == 0
+    assert budget.spent_output_tokens == 0
+    assert budget._request_limit_counts[("scheduled_task", task.logical_request_id)] == 1
+    resumed.close()
+
+
+def test_live_activated_release_crash_after_attempt_checkpoint_terminalizes_on_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "attempt-crash-ledger.json", cap_usd=Decimal("1")
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    journal = create_scheduler_journal(
+        tmp_path / "attempt-crash-journal",
+        bindings=bindings,
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+
+    def crash_before_terminal(_result: SchedulerTaskResult) -> NoReturn:
+        raise RuntimeError("synthetic crash after provider-attempt checkpoint")
+
+    monkeypatch.setattr(journal, "record_activated_preflight_failure", crash_before_terminal)
+    with pytest.raises(RuntimeError, match="after provider-attempt checkpoint"):
+        journal.record_released_provider_failure(
+            task.task_id,
+            usage_records=(usage,),
+            atomic_ledger=ledger,
+        )
+    assert journal.retained_provider_usage_records == (usage,)
+    assert tuple(event.kind for event in journal.events)[-1] is SchedulerTaskEventKind.ACTIVATED
+    journal.close()
+
+    resumed = resume_scheduler_journal(
+        tmp_path / "attempt-crash-journal",
+        expected_bindings=bindings,
+        expected_shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+    assert resumed.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+    assert tuple(event.kind for event in resumed.events)[-1] is (
+        SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+    )
+    resumed.close()
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_live_release_crash_before_attempt_checkpoint_terminalizes_on_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dispatched: bool,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "attempt-checkpoint-crash-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    journal = create_scheduler_journal(
+        tmp_path / "attempt-checkpoint-crash-journal",
+        bindings=bindings,
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    if dispatched:
+        journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+
+    def crash_before_attempt_checkpoint() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        journal,
+        "_refresh_journal_head_checkpoint",
+        crash_before_attempt_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_released_provider_failure(
+            task.task_id,
+            usage_records=(usage,),
+            atomic_ledger=ledger,
+        )
+    assert journal.retained_provider_usage_records == (usage,)
+    assert tuple(event.kind for event in journal.events)[-1] is (
+        SchedulerTaskEventKind.DISPATCHED if dispatched else SchedulerTaskEventKind.ACTIVATED
+    )
+    journal.close()
+
+    resumed = resume_scheduler_journal(
+        tmp_path / "attempt-checkpoint-crash-journal",
+        expected_bindings=bindings,
+        expected_shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+    assert resumed.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+    assert tuple(event.kind for event in resumed.events)[-1] is (
+        SchedulerTaskEventKind.TERMINAL
+        if dispatched
+        else SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+    )
+    resumed.close()
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+@pytest.mark.parametrize("second_crash", ["result-publication", "checkpoint-pending"])
+def test_uncheckpointed_live_release_survives_a_second_recovery_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dispatched: bool,
+    second_crash: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"released-twice-{dispatched}-{second_crash}-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    journal_path = tmp_path / f"released-twice-{dispatched}-{second_crash}-journal"
+    journal = create_scheduler_journal(
+        journal_path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    if dispatched:
+        journal.mark_dispatched(task.task_id)
+    predecessor = journal.journal_evidence
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+
+    def crash_before_attempt_checkpoint() -> NoReturn:
+        raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        journal,
+        "_refresh_journal_head_checkpoint",
+        crash_before_attempt_checkpoint,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_released_provider_failure(
+            task.task_id,
+            usage_records=(usage,),
+            atomic_ledger=ledger,
+        )
+    journal.close()
+    monkeypatch.undo()
+
+    original_publish = scheduler_module._write_fresh_private_file
+
+    def crash_during_recovered_terminal(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_publish(parent_descriptor, leaf, content)
+        if (second_crash == "result-publication" and leaf.startswith(f"{task.task_id}-")) or (
+            second_crash == "checkpoint-pending"
+            and leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+            and SchedulerJournalEvidence.model_validate_json(content).task_result_count == 1
+        ):
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_during_recovered_terminal,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        resume_scheduler_journal(
+            journal_path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+            atomic_ledger=ledger,
+        )
+    monkeypatch.undo()
+
+    phase_snapshot = _journal_private_file_snapshot(journal_path)
+    ledger_bytes = ledger.path.read_bytes()
+    with pytest.raises(ValueError, match="resume journal evidence does not match"):
+        resume_scheduler_journal(
+            journal_path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=predecessor,
+            atomic_ledger=ledger,
+        )
+    assert _journal_private_file_snapshot(journal_path) == phase_snapshot
+    assert ledger.path.read_bytes() == ledger_bytes
+
+    resumed = resume_scheduler_journal(
+        journal_path,
+        expected_bindings=bindings,
+        expected_shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    assert resumed.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+    assert tuple(item.kind for item in resumed.events)[-1] is (
+        SchedulerTaskEventKind.TERMINAL
+        if dispatched
+        else SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+    )
+    recovered = resumed.journal_evidence
+    resumed.close()
+    replayed = resume_scheduler_journal(
+        journal_path,
+        expected_bindings=bindings,
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=recovered,
+        atomic_ledger=ledger,
+    )
+    assert replayed.journal_evidence == recovered
+    replayed.close()
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+@pytest.mark.parametrize("tamper_pending", [False, True])
+def test_live_release_pending_checkpoint_is_adopted_only_after_exact_resume_join(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dispatched: bool,
+    tamper_pending: bool,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "pending-checkpoint-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    journal_path = tmp_path / "pending-checkpoint-journal"
+    journal = create_scheduler_journal(
+        journal_path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+    )
+    wrong_expected = journal.journal_evidence
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    if dispatched:
+        journal.mark_dispatched(task.task_id)
+    expected = journal.journal_evidence
+    checkpoint_path = journal_path / "journal-head-checkpoint.json"
+    checkpoint_before = checkpoint_path.read_bytes()
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    ledger_before = ledger.path.read_bytes()
+    original_write = scheduler_module._write_fresh_private_file
+
+    def crash_after_pending_fsync(
+        parent_descriptor: int,
+        leaf: str,
+        content: bytes,
+    ) -> None:
+        original_write(parent_descriptor, leaf, content)
+        if leaf == scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME:
+            raise SimulatedProcessDeath
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        crash_after_pending_fsync,
+    )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_released_provider_failure(
+            task.task_id,
+            usage_records=(usage,),
+            atomic_ledger=ledger,
+        )
+    journal.close()
+    monkeypatch.setattr(
+        scheduler_module,
+        "_write_fresh_private_file",
+        original_write,
+    )
+    pending_path = journal_path / scheduler_module._JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME
+    assert pending_path.is_file()
+
+    with pytest.raises(ValueError, match="resume journal evidence does not match"):
+        resume_scheduler_journal(
+            journal_path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=wrong_expected,
+            atomic_ledger=ledger,
+        )
+    assert pending_path.is_file()
+    assert checkpoint_path.read_bytes() == checkpoint_before
+    assert ledger.path.read_bytes() == ledger_before
+
+    if tamper_pending:
+        pending_path.write_bytes(b"{}")
+        with pytest.raises(ValueError, match="artifact is invalid"):
+            resume_scheduler_journal(
+                journal_path,
+                expected_bindings=bindings,
+                expected_shard_inventory=_inventory(),
+                expected_journal_evidence=expected,
+                atomic_ledger=ledger,
+            )
+        assert pending_path.read_bytes() == b"{}"
+        assert checkpoint_path.read_bytes() == checkpoint_before
+        assert ledger.path.read_bytes() == ledger_before
+        return
+
+    for _resume_ordinal in range(2):
+        resumed = resume_scheduler_journal(
+            journal_path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=expected if _resume_ordinal == 0 else None,
+            atomic_ledger=ledger,
+        )
+        assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+        assert resumed.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+        assert tuple(event.kind for event in resumed.events)[-1] is (
+            SchedulerTaskEventKind.TERMINAL
+            if dispatched
+            else SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+        )
+        assert not pending_path.exists()
+        assert ledger.path.read_bytes() == ledger_before
+        resumed.close()
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+@pytest.mark.parametrize("crash_stage", ["result", "terminal_checkpoint"])
+def test_live_release_terminal_suffix_crashes_resume_exact_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dispatched: bool,
+    crash_stage: str,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "terminal-checkpoint-crash-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = _bindings(cost_ledger_baseline_sha256=baseline.baseline_sha256)
+    journal = create_scheduler_journal(
+        tmp_path / "terminal-checkpoint-crash-journal",
+        bindings=bindings,
+        shard_inventory=_inventory(),
+        cost_ledger_baseline=baseline,
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    if dispatched:
+        journal.mark_dispatched(task.task_id)
+    usage = _failed_accountable_mock_usage(
+        plan,
+        task,
+        activation,
+        reported_cost_usd_exact=None,
+        accounted_cost_usd_exact="0",
+        released_before_send=True,
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    released = ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    if crash_stage == "result":
+
+        def crash_before_terminal_event(**_values: Any) -> NoReturn:
+            raise SimulatedProcessDeath
+
+        monkeypatch.setattr(journal, "_append_event", crash_before_terminal_event)
+    else:
+        original_refresh = journal._refresh_journal_head_checkpoint
+        refresh_calls = 0
+
+        def crash_before_terminal_checkpoint() -> SchedulerJournalEvidence:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            if refresh_calls == 2:
+                raise SimulatedProcessDeath
+            return original_refresh()
+
+        monkeypatch.setattr(
+            journal,
+            "_refresh_journal_head_checkpoint",
+            crash_before_terminal_checkpoint,
+        )
+    with pytest.raises(SimulatedProcessDeath):
+        journal.record_released_provider_failure(
+            task.task_id,
+            usage_records=(usage,),
+            atomic_ledger=ledger,
+        )
+    assert journal.result_observations[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+    if crash_stage == "result":
+        assert journal.task_results == ()
+        assert tuple(event.kind for event in journal.events)[-1] is (
+            SchedulerTaskEventKind.DISPATCHED if dispatched else SchedulerTaskEventKind.ACTIVATED
+        )
+    else:
+        assert journal.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+        assert tuple(event.kind for event in journal.events)[-1] is (
+            SchedulerTaskEventKind.TERMINAL
+            if dispatched
+            else SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+        )
+    journal.close()
+
+    resumed = resume_scheduler_journal(
+        tmp_path / "terminal-checkpoint-crash-journal",
+        expected_bindings=bindings,
+        expected_shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.FAILED
+    assert resumed.task_results[0].terminal_evidence_sha256 == cost_entry_sha256(released)
+    assert tuple(event.kind for event in resumed.events)[-1] is (
+        SchedulerTaskEventKind.TERMINAL
+        if dispatched
+        else SchedulerTaskEventKind.ACTIVATED_PREFLIGHT_TERMINAL
+    )
+    resumed.close()
+
+
+@pytest.mark.asyncio
+async def test_no_usage_uncertain_prefix_and_released_tail_restore_exactly_once(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "uncertain-released-no-usage"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "uncertain-released-no-usage.json",
+        cap_usd=Decimal("1"),
+    )
+    first = ledger.reserve(task.logical_request_id, Decimal("0.10"))
+    ledger.reconcile(first, None)
+    tail = ledger.reserve(f"{task.logical_request_id}:attempt:2", Decimal("0.20"))
+    released = ledger.release(tail, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    expected_result = SchedulerTaskResult.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        terminal_status=SchedulerTerminalStatus.FAILED,
+        terminal_evidence_sha256=cost_entry_sha256(released),
+    )
+    journal.close()
+    ledger_bytes = ledger.path.read_bytes()
+
+    for _resume_ordinal in range(2):
+        resumed = resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            atomic_ledger=ledger,
+        )
+        assert resumed.task_results == (expected_result,)
+        budget = BudgetManager(
+            total_usd=1,
+            max_output_tokens=10,
+            conservative_usd_per_million_tokens=1,
+            max_requests_per_agent=10,
+            atomic_ledger=ledger,
+            global_input_token_budget=100,
+            global_output_token_budget=200,
+        )
+        records, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
+            atomic_ledger=ledger
+        )
+        await budget.restore_recovered_usage(records, recovery_scope=recovery_scope)
+        assert budget.spent_usd_exact == Decimal("0.10")
+        assert budget.spent_input_tokens == 100
+        assert budget.spent_output_tokens == 200
+        assert budget._request_limit_counts[("scheduled_task", task.logical_request_id)] == 2
+        assert ledger.path.read_bytes() == ledger_bytes
+        resumed.close()
+
+
+def test_no_usage_released_attempt_rejects_wrong_terminal_hash_before_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wrong-released-terminal"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "wrong-released-terminal.json",
+        cap_usd=Decimal("1"),
+    )
+    reservation = ledger.reserve(task.logical_request_id, Decimal("0.25"))
+    ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    journal.record_activated_preflight_failure(
+        SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.FAILED,
+            terminal_evidence_sha256="d" * 64,
+        )
+    )
+    journal.close()
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger.path.read_bytes()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        atomic_ledger=ledger,
+    )
+    with pytest.raises(ValueError, match="differs from its scheduler terminal"):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger.path.read_bytes() == before_bytes
+    resumed.close()
+
+
 @pytest.mark.asyncio
 async def test_resume_adopts_activated_cost_reservation_and_dispatches_same_task_once(
     tmp_path: Path,
@@ -3917,7 +6780,7 @@ def test_result_without_checkpoint_update_fails_closed_before_recovery(
         )
 
 
-def test_output_without_terminal_result_is_retained_and_dispatch_is_uncertain(
+def test_output_without_terminal_result_recovers_deterministic_success(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "journal"
@@ -3945,11 +6808,12 @@ def test_output_without_terminal_result_is_retained_and_dispatch_is_uncertain(
     )
     assert resumed.outputs == (output,)
     assert resumed.load_output(task.task_id) == output.payload
-    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.UNCERTAIN
-    assert resumed.uncertain_task_ids == (task.task_id,)
+    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    assert resumed.task_results[0].terminal_evidence_sha256 == usage.validated_response_sha256
+    assert resumed.uncertain_task_ids == ()
     assert resumed.resumable_task_ids == ()
     assert resumed.artifact().journal_evidence.task_output_count == 1
-    assert resumed.artifact().journal_evidence.succeeded_count == 0
+    assert resumed.artifact().journal_evidence.succeeded_count == 1
     resumed.close()
 
 
@@ -4237,13 +7101,14 @@ def test_resume_child_swap_cannot_redirect_descriptor_held_listing(
         root_descriptor: int,
         directory_descriptors: Any,
         manifest: Any,
+        **kwargs: Any,
     ) -> Any:
         nonlocal swapped
         if not swapped:
             (path / "events").rename(tmp_path / "retained-events")
             (path / "events").mkdir(mode=0o700)
             swapped = True
-        return original(root_descriptor, directory_descriptors, manifest)
+        return original(root_descriptor, directory_descriptors, manifest, **kwargs)
 
     monkeypatch.setattr(scheduler_module, "_load_state", swap_before_listing)
     with pytest.raises(ValueError, match="directories must remain"):

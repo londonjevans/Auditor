@@ -2851,6 +2851,7 @@ class _TrustedUsageRecoveryScope:
 
 
 type UsageRecoveryRequestLimitCoordinate = tuple[str, str, int]
+type UsageRecoveryRequestLimitTransition = tuple[str, str, int, int, int]
 
 
 def _build_trusted_usage_recovery_authority() -> tuple[
@@ -2865,6 +2866,7 @@ def _build_trusted_usage_recovery_authority() -> tuple[
             weakref.ReferenceType[_TrustedUsageRecoveryScope],
             tuple[str, ...],
             tuple[UsageRecoveryRequestLimitCoordinate, ...],
+            tuple[UsageRecoveryRequestLimitTransition, ...],
             bool,
         ],
     ] = {}
@@ -2914,16 +2916,67 @@ def _build_trusted_usage_recovery_authority() -> tuple[
             raise ValueError("journal usage recovery coordinates are not exact and sorted")
         return frozen
 
+    def normalize_transitions(
+        normalized: tuple[UsageRecord, ...],
+        transitions: tuple[UsageRecoveryRequestLimitTransition, ...],
+    ) -> tuple[UsageRecoveryRequestLimitTransition, ...]:
+        if (
+            type(transitions) is not tuple
+            or len(transitions) > _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS
+        ):
+            raise ValueError("journal usage recovery transitions exceed their compiled bound")
+        exact: list[UsageRecoveryRequestLimitTransition] = []
+        for item in transitions:
+            if type(item) is not tuple or len(item) != 5:
+                raise ValueError("journal usage recovery transition is invalid")
+            request_id, root_scope, count_before, count_after, maximum = item
+            if (
+                type(request_id) is not str
+                or type(root_scope) is not str
+                or _REQUEST_LIMIT_SCOPE.fullmatch(request_id) is None
+                or _REQUEST_LIMIT_SCOPE.fullmatch(root_scope) is None
+                or type(count_before) is not int
+                or type(count_after) is not int
+                or type(maximum) is not int
+                or not 0 <= count_before < count_after <= maximum <= _MAX_METERED_UNITS
+                or count_after != count_before + 1
+            ):
+                raise ValueError("journal usage recovery transition is invalid")
+            exact.append(item)
+        frozen = tuple(exact)
+        request_ids = tuple(item[0] for item in frozen)
+        record_attempt_ids: set[str] = set()
+        for record in normalized:
+            try:
+                record_attempt_ids.update(
+                    item.request_id for item in atomic_token_reservations_from_usage(record)
+                )
+            except (TypeError, ValueError):
+                record_attempt_ids.add(record.request_id)
+        if (
+            frozen != tuple(sorted(frozen, key=lambda item: (item[1], item[2], item[0])))
+            or len(request_ids) != len(set(request_ids))
+            or set(request_ids).intersection(record_attempt_ids)
+        ):
+            raise ValueError("journal usage recovery transitions are not exact and sorted")
+        return frozen
+
     def normalize_structural(
         records: tuple[UsageRecord, ...],
         coordinates: tuple[UsageRecoveryRequestLimitCoordinate, ...],
+        transitions: tuple[UsageRecoveryRequestLimitTransition, ...],
     ) -> tuple[UsageRecord, ...]:
         normalized = normalize_shape(records)
         frozen_coordinates = normalize_coordinates(normalized, coordinates)
+        frozen_transitions = normalize_transitions(normalized, transitions)
         coordinate_by_request = {item[0]: item for item in frozen_coordinates}
         request_ids = {record.request_id for record in normalized}
         record_by_request = {record.request_id: record for record in normalized}
         chains: dict[str, list[tuple[int, int, int, str]]] = {}
+        for request_id, root_scope, count_before, count_after, maximum in frozen_transitions:
+            chains.setdefault(root_scope, []).append(
+                (count_before, count_after, maximum, request_id)
+            )
         for record in normalized:
             coordinate = coordinate_by_request.get(record.request_id)
             require_real = record.execution_evidence is ExecutionEvidenceKind.REAL
@@ -2974,6 +3027,8 @@ def _build_trusted_usage_recovery_authority() -> tuple[
         for root_scope, chain in chains.items():
             if root_scope not in request_ids:
                 raise ValueError("journal usage recovery coordinate has an unknown root scope")
+            if root_scope in coordinate_by_request:
+                raise ValueError("journal usage recovery root cannot be recovery-scoped")
             ordered = tuple(sorted(chain, key=lambda item: (item[0], item[3])))
             root_maximum: int | None = None
             root_count_after: int | None = None
@@ -3012,11 +3067,23 @@ def _build_trusted_usage_recovery_authority() -> tuple[
             UsageRecoveryRequestLimitCoordinate,
             ...,
         ] = (),
+        non_usage_request_limit_transitions: tuple[
+            UsageRecoveryRequestLimitTransition,
+            ...,
+        ] = (),
     ) -> _TrustedUsageRecoveryScope:
-        normalized = normalize_structural(records, recovery_request_limit_coordinates)
+        normalized = normalize_structural(
+            records,
+            recovery_request_limit_coordinates,
+            non_usage_request_limit_transitions,
+        )
         frozen_coordinates = normalize_coordinates(
             normalized,
             recovery_request_limit_coordinates,
+        )
+        frozen_transitions = normalize_transitions(
+            normalized,
+            non_usage_request_limit_transitions,
         )
         hashes = tuple(_usage_record_sha256(record) for record in normalized)
         scope = object.__new__(_TrustedUsageRecoveryScope)
@@ -3030,7 +3097,13 @@ def _build_trusted_usage_recovery_authority() -> tuple[
 
         reference = weakref.ref(scope, discard)
         with lock:
-            registry[key] = (reference, hashes, frozen_coordinates, False)
+            registry[key] = (
+                reference,
+                hashes,
+                frozen_coordinates,
+                frozen_transitions,
+                False,
+            )
         return scope
 
     def recover(
@@ -3046,11 +3119,12 @@ def _build_trusted_usage_recovery_authority() -> tuple[
                 or registered is None
                 or registered[0]() is not scope
                 or registered[1] != hashes
-                or registered[3]
+                or registered[4]
             ):
                 raise ValueError("journal usage recovery capability is invalid or consumed")
             frozen_coordinates = registered[2]
-        normalized = normalize_structural(records, frozen_coordinates)
+            frozen_transitions = registered[3]
+        normalized = normalize_structural(records, frozen_coordinates, frozen_transitions)
         if tuple(_usage_record_sha256(record) for record in normalized) != hashes:
             raise ValueError("journal usage recovery changed during validation")
         with lock:
@@ -3060,13 +3134,15 @@ def _build_trusted_usage_recovery_authority() -> tuple[
                 or registered[0]() is not scope
                 or registered[1] != hashes
                 or registered[2] != frozen_coordinates
-                or registered[3]
+                or registered[3] != frozen_transitions
+                or registered[4]
             ):
                 raise ValueError("journal usage recovery capability is invalid or consumed")
             registry[id(scope)] = (
                 registered[0],
                 registered[1],
                 registered[2],
+                registered[3],
                 True,
             )
         return tuple(

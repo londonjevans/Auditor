@@ -95,11 +95,14 @@ from mmaudit.language_plugins import (
 from mmaudit.logging import JsonLineHandler, RedactingFilter
 from mmaudit.models import openrouter as openrouter_models
 from mmaudit.models.coverage_planning import (
+    ModelPortfolioResourcePreflight,
+    ModelPortfolioTaskKind,
     ModelSurfaceCoveragePlan,
     ModelSurfaceGapTask,
     ModelSurfaceResourcePreflight,
     ModelSurfaceReviewerBinding,
     ModelSurfaceTaskResourcePreview,
+    build_model_portfolio_resource_preflight,
     build_model_surface_coverage_plan,
     build_model_surface_resource_preflight,
 )
@@ -124,6 +127,7 @@ from mmaudit.models.openrouter import (
     OpenRouterTruncatedResponseError,
     trusted_openrouter_execution_evidence,
     trusted_preview_candidate_review_task_resources,
+    trusted_preview_model_portfolio_task_resources,
 )
 from mmaudit.models.policy_eligibility import PolicyUsePurpose
 from mmaudit.models.policy_selection import (
@@ -315,7 +319,13 @@ from mmaudit.orchestration.assurance import (
     _issue_provider_session_provenance,
     is_qualifying_real_foundry_portfolio,
 )
-from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
+from mmaudit.orchestration.budgets import (
+    BudgetExhaustedError,
+    BudgetManager,
+    BudgetPortfolioReservation,
+    BudgetReservationStateError,
+    PortfolioTaskSlot,
+)
 from mmaudit.orchestration.candidate_enrichment import (
     attach_formal_counterexamples as _attach_formal_counterexamples,
 )
@@ -356,7 +366,13 @@ from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
     write_context_manifest,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    CostPortfolioHold,
+    PortfolioAttemptSlot,
+    PortfolioHoldStatus,
+)
 from mmaudit.orchestration.coverage import generic_source_coverage_metrics
 from mmaudit.orchestration.execution_candidates import (
     ExecutionCandidateBuildResult,
@@ -403,6 +419,7 @@ from mmaudit.orchestration.scheduler import (
 )
 from mmaudit.orchestration.scheduler_runtime import (
     PipelineScheduler,
+    PreparedTruncationRecoveryRequest,
     build_scheduler_analysis_input_inventory,
     build_scheduler_bindings,
     build_scheduler_cost_ledger_baseline,
@@ -526,6 +543,7 @@ from mmaudit.traceability import (
 
 _TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT = 700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS + 1
 _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = trusted_preview_candidate_review_task_resources
+_TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES = trusted_preview_model_portfolio_task_resources
 
 
 def _exact_completed_usage(
@@ -1575,9 +1593,217 @@ def _model_surface_reviewer_bindings(
     return tuple(bindings), tuple(sorted(mandatory_roles))
 
 
+def _build_model_portfolio_scheduler_tasks(
+    *,
+    config: AuditConfig,
+    client: OpenRouterClient,
+    scheduler: PipelineScheduler,
+    coverage_plan: ModelSurfaceCoveragePlan,
+    selected_model_ids: frozenset[str] | None,
+    production_qualification: VerifiedProductionQualification | None,
+) -> tuple[SchedulerTaskPlan, ...]:
+    """Compile the exact orientation and blind task inventory without transport."""
+
+    agent_config = _scheduler_primary_only_config(config)
+
+    def model_task(
+        *,
+        pass_kind: SchedulerPassKind,
+        scope: SchedulerScope,
+        task_key: str,
+        request_role: str,
+        request_protocol: AgentRequestProtocol,
+        configured_role: str | None = None,
+        model_id: str | None = None,
+        root_lineage: str | None = None,
+    ) -> SchedulerTaskPlan:
+        selected_model = model_id
+        if selected_model is None:
+            if configured_role is None:
+                raise ValueError("portfolio scheduler task lacks a configured role")
+            selected_model = config.models.role(configured_role).primary
+        _require_policy_selected_scheduled_model(
+            selected_model_ids=selected_model_ids,
+            request_role=request_role,
+            model_id=selected_model,
+        )
+        request_hashes = client.preview_structured_request_hashes(
+            role=request_role,
+            model=selected_model,
+            system_prompt=request_protocol.system_prompt,
+            user_prompt="",
+            response_model=request_protocol.response_model,
+            schema_name=request_protocol.schema_name,
+        )
+        response_schema_sha256 = _scheduler_response_schema_sha256(request_protocol.response_model)
+        if request_hashes.schema_sha256 != response_schema_sha256:
+            raise ValueError("portfolio request protocol schema hash is inconsistent")
+        return scheduler.model_task(
+            pass_kind=pass_kind,
+            scope=scope,
+            task_key=task_key,
+            role=request_role,
+            requested_model=selected_model,
+            root_lineage=root_lineage or _scheduler_root_lineage(config, selected_model),
+            system_prompt_sha256=request_hashes.system_prompt_sha256,
+            response_schema_sha256=response_schema_sha256,
+            candidate_ids=(),
+        )
+
+    threat_agent = ThreatModelAgent(agent_config, client)
+    tasks = [
+        model_task(
+            pass_kind=SchedulerPassKind.ORIENTATION,
+            scope=SchedulerScope.global_scope(),
+            task_key="threat-model",
+            request_role="threat_model",
+            configured_role="threat_model",
+            request_protocol=threat_agent.request_protocol,
+        )
+    ]
+    shards_by_id = {shard.shard_id: shard for shard in scheduler.manifest.shard_inventory.shards}
+    for shard in scheduler.manifest.shard_inventory.shards:
+        tasks.append(
+            model_task(
+                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                scope=SchedulerScope.single_shard(shard.shard_id),
+                task_key=f"source_audit-{shard.shard_id}",
+                request_role="source_audit",
+                configured_role="source_audit",
+                request_protocol=SourceAuditAgent(agent_config, client).request_protocol,
+            )
+        )
+    specialist_roles = {
+        role for role in SPECIALIST_INVESTIGATOR_ROLES if role in config.models.specialists
+    }
+    for coverage_task in coverage_plan.tasks:
+        shard = shards_by_id.get(coverage_task.scope_id)
+        if shard is None:
+            raise ValueError("portfolio coverage task refers to an unknown scheduler shard")
+        request_role = coverage_task.review_role
+        if request_role in {"business_logic", "configuration"}:
+            configured_role = request_role
+            agent_type = (
+                BusinessLogicAgent if request_role == "business_logic" else ConfigurationAgent
+            )
+            request_protocol = agent_type(agent_config, client).request_protocol
+        elif request_role.startswith("specialist:"):
+            configured_role = request_role.split(":", 1)[1]
+            if configured_role not in specialist_roles:
+                raise ValueError("portfolio coverage task refers to a disabled specialist")
+            request_protocol = SpecialistFindingAgent(
+                agent_config,
+                client,
+                configured_role,
+            ).request_protocol
+        else:
+            raise ValueError("portfolio coverage task has an unsupported review role")
+        tasks.append(
+            model_task(
+                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                scope=SchedulerScope.single_shard(shard.shard_id),
+                task_key=coverage_task.task_id,
+                request_role=request_role,
+                request_protocol=request_protocol,
+                model_id=coverage_task.requested_model,
+                root_lineage=coverage_task.root_lineage,
+            )
+        )
+    for review_index, (model_id, root_lineage) in enumerate(
+        _whole_protocol_review_models(
+            config,
+            production_qualification,
+            selected_model_ids=selected_model_ids,
+        )
+    ):
+        agent = WholeProtocolReviewAgent(
+            agent_config,
+            client,
+            review_index=review_index,
+            exact_model_id=model_id,
+        )
+        tasks.append(
+            model_task(
+                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                scope=SchedulerScope.global_scope(),
+                task_key=f"whole-protocol-review-{review_index}",
+                request_role=agent.role,
+                request_protocol=agent.request_protocol,
+                model_id=model_id,
+                root_lineage=root_lineage,
+            )
+        )
+    if len({task.task_id for task in tasks}) != len(tasks):
+        raise ValueError("portfolio scheduler task inventory repeats an identity")
+    return tuple(tasks)
+
+
+def _model_portfolio_tasks_are_terminal(
+    tasks: Iterable[SchedulerTaskPlan],
+    results: Iterable[SchedulerTaskResult],
+) -> bool:
+    """Apply one exact terminal-task predicate at release and resume boundaries."""
+
+    task_ids = tuple(task.task_id for task in tasks)
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("model portfolio task inventory repeats an identity")
+    task_id_set = set(task_ids)
+    matching_result_ids = tuple(
+        result.task_id for result in results if result.task_id in task_id_set
+    )
+    if len(matching_result_ids) != len(set(matching_result_ids)):
+        raise ValueError("model portfolio terminal result inventory repeats an identity")
+    return set(matching_result_ids) == task_id_set
+
+
+def _model_portfolio_dispatch_is_closed(
+    tasks: Iterable[SchedulerTaskPlan],
+    results: Iterable[SchedulerTaskResult],
+    *,
+    orientation_result: SchedulerPassResult | None,
+) -> bool:
+    """Prove all initial tasks terminal or later dispatch barred by orientation."""
+
+    exact_tasks = tuple(tasks)
+    exact_results = tuple(results)
+    if _model_portfolio_tasks_are_terminal(exact_tasks, exact_results):
+        return True
+    if orientation_result is None:
+        return False
+    orientation_tasks = tuple(
+        task for task in exact_tasks if task.pass_kind is SchedulerPassKind.ORIENTATION
+    )
+    if (
+        len(orientation_tasks) != 1
+        or orientation_result.plan.pass_kind is not SchedulerPassKind.ORIENTATION
+        or tuple(task.task_id for task in orientation_result.plan.tasks)
+        != tuple(task.task_id for task in orientation_tasks)
+    ):
+        raise ValueError("portfolio orientation result differs from its exact task")
+    return orientation_result.status is not SchedulerPassStatus.COMPLETE
+
+
+def _matching_model_portfolio_holds(
+    *,
+    plan_sha256: str,
+    expected_slots: tuple[PortfolioAttemptSlot, ...],
+    holds: Iterable[CostPortfolioHold],
+) -> tuple[CostPortfolioHold, ...]:
+    """Return at most one hold only after its full durable slot set is exact."""
+
+    matching = tuple(hold for hold in holds if hold.plan_sha256 == plan_sha256)
+    if len(matching) > 1:
+        raise ValueError("resumed portfolio has ambiguous durable hold custody")
+    if matching and matching[0].initial_slots != expected_slots:
+        raise ValueError("resumed portfolio durable hold differs from its exact slots")
+    return matching
+
+
 def _persist_private_coverage_evidence(
     path: Path,
-    evidence: ModelSurfaceCoveragePlan | ModelSurfaceResourcePreflight,
+    evidence: (
+        ModelPortfolioResourcePreflight | ModelSurfaceCoveragePlan | ModelSurfaceResourcePreflight
+    ),
 ) -> None:
     """Create immutable private planning evidence or compare exact prior bytes."""
 
@@ -1610,6 +1836,24 @@ def _load_private_coverage_preflight(path: Path) -> ModelSurfaceResourcePrefligh
         raise ValueError("private model-surface resource preflight failed validation") from exc
     if raw != stable_json(parsed).encode("utf-8"):
         raise ValueError("private model-surface resource preflight is not canonical")
+    return parsed
+
+
+def _load_private_portfolio_preflight(path: Path) -> ModelPortfolioResourcePreflight:
+    """Load canonical, bounded portfolio intent without treating it as authority."""
+
+    if not path.exists() or path.is_symlink():
+        raise ValueError("private model portfolio preflight is missing or unsafe")
+    metadata = path.lstat()
+    if not path.is_file() or metadata.st_nlink != 1 or metadata.st_size > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("private model portfolio preflight path is unsafe")
+    raw = path.read_bytes()
+    try:
+        parsed = ModelPortfolioResourcePreflight.model_validate_json(raw)
+    except ValueError as exc:
+        raise ValueError("private model portfolio preflight failed validation") from exc
+    if raw != stable_json(parsed).encode("utf-8"):
+        raise ValueError("private model portfolio preflight is not canonical")
     return parsed
 
 
@@ -3280,6 +3524,9 @@ class AuditPipeline:
         model_review_coverage: ModelReviewCoverage | None = None
         model_surface_coverage_plan: ModelSurfaceCoveragePlan | None = None
         model_surface_resource_preflight: ModelSurfaceResourcePreflight | None = None
+        model_portfolio_resource_preflight: ModelPortfolioResourcePreflight | None = None
+        model_portfolio_scheduler_tasks: tuple[SchedulerTaskPlan, ...] = ()
+        model_portfolio_reservation: BudgetPortfolioReservation | None = None
         provider_session: ProviderSessionProvenance | None = None
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
         promoted_truncation_surface_coverages: list[
@@ -4635,18 +4882,303 @@ class AuditPipeline:
                             atomic_ledger=atomic_ledger
                         )
                     )
+                    scheduler_cost_ledger_baseline = scheduler.manifest.cost_ledger_baseline
+                    scheduler_bindings = scheduler.manifest.bindings
+                self.client.bind_request_lifecycle_observer(scheduler)
+                if model_surface_coverage_plan is not None:
+                    model_portfolio_scheduler_tasks = _build_model_portfolio_scheduler_tasks(
+                        config=self.config,
+                        client=self.client,
+                        scheduler=scheduler,
+                        coverage_plan=model_surface_coverage_plan,
+                        selected_model_ids=(
+                            policy_selected_model_ids if paid_audit_policy_required else None
+                        ),
+                        production_qualification=self.production_qualification,
+                    )
+                    coverage_tasks_by_id = {
+                        task.task_id: task for task in model_surface_coverage_plan.tasks
+                    }
+                    if len(coverage_tasks_by_id) != len(model_surface_coverage_plan.tasks):
+                        raise ValueError("portfolio coverage plan repeats a task identity")
+                    task_envelopes = []
+                    for scheduler_task in model_portfolio_scheduler_tasks:
+                        coverage_task = coverage_tasks_by_id.get(scheduler_task.task_key)
+                        if scheduler_task.pass_kind is SchedulerPassKind.ORIENTATION:
+                            task_kind = ModelPortfolioTaskKind.ORIENTATION
+                        elif coverage_task is not None:
+                            task_kind = ModelPortfolioTaskKind.COMPACT_COVERAGE
+                        elif scheduler_task.role == "source_audit":
+                            task_kind = ModelPortfolioTaskKind.SOURCE_AUDIT
+                        elif scheduler_task.task_key.startswith("whole-protocol-review-"):
+                            task_kind = ModelPortfolioTaskKind.WHOLE_PROTOCOL
+                        else:
+                            raise ValueError(
+                                "portfolio scheduler task has an unsupported spend class"
+                            )
+                        if (
+                            trusted_preview_model_portfolio_task_resources
+                            is not _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES
+                            or openrouter_models.trusted_preview_model_portfolio_task_resources
+                            is not _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES
+                        ):
+                            raise OpenRouterCandidateReviewBoundaryError(
+                                "pipeline portfolio resource-preview boundary changed"
+                            )
+                        task_envelopes.append(
+                            _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES(
+                                self.client,
+                                task_kind=task_kind,
+                                scheduler_task=scheduler_task,
+                                campaign_manifest=scheduler.manifest,
+                                coverage_task=coverage_task,
+                            )
+                        )
+                    portfolio_path = run_dir / "private" / "model-portfolio-resource-preflight.json"
+                    retained_portfolio_path = (
+                        resume_scheduler_journal.parent / "model-portfolio-resource-preflight.json"
+                        if resume_scheduler_journal is not None
+                        else portfolio_path
+                    )
+                    retained_portfolio = (
+                        _load_private_portfolio_preflight(retained_portfolio_path)
+                        if resume_scheduler_journal is not None
+                        else None
+                    )
+                    if retained_portfolio is None:
+                        if budget.reserved_usd != 0:
+                            raise ValueError(
+                                "portfolio preflight requires no outstanding request reservation"
+                            )
+                        remaining_input = budget.remaining_input_tokens
+                        remaining_output = budget.remaining_output_tokens
+                        if remaining_input is None or remaining_output is None:
+                            raise ValueError("portfolio preflight requires exact global token caps")
+                        remaining_global = _subtract_coverage_usd(
+                            Decimal(str(budget.total_usd)),
+                            budget.spent_usd_exact,
+                        )
+                        if remaining_global < 0:
+                            raise ValueError("portfolio preflight observed negative remaining USD")
+                        planned_roles = {item.request_role for item in task_envelopes}
+                        planned_models = {item.requested_model for item in task_envelopes}
+                        remaining_by_role: dict[str, str] = {}
+                        for role in sorted(
+                            set(budget.per_role_usd_caps)
+                            if budget.per_role_usd_caps
+                            else planned_roles
+                        ):
+                            cap = budget.per_role_usd_caps.get(role)
+                            scoped = remaining_global
+                            if cap is not None:
+                                scoped = min(
+                                    scoped,
+                                    max(
+                                        Decimal(0),
+                                        _subtract_coverage_usd(
+                                            cap,
+                                            budget.spent_role_usd(role),
+                                            budget.reserved_role_usd(role),
+                                        ),
+                                    ),
+                                )
+                            remaining_by_role[role] = _canonical_decimal_text(scoped)
+                        remaining_by_model: dict[str, str] = {}
+                        for model_id in sorted(
+                            set(budget.per_model_usd_caps)
+                            if budget.per_model_usd_caps
+                            else planned_models
+                        ):
+                            cap = budget.per_model_usd_caps.get(model_id)
+                            scoped = remaining_global
+                            if cap is not None:
+                                scoped = min(
+                                    scoped,
+                                    max(
+                                        Decimal(0),
+                                        _subtract_coverage_usd(
+                                            cap,
+                                            budget.spent_model_usd(model_id),
+                                            budget.reserved_model_usd(model_id),
+                                        ),
+                                    ),
+                                )
+                            remaining_by_model[model_id] = _canonical_decimal_text(scoped)
+                        preflight_limits = (
+                            remaining_input,
+                            remaining_output,
+                            _canonical_decimal_text(remaining_global),
+                            remaining_by_role,
+                            remaining_by_model,
+                        )
+                    else:
+                        preflight_limits = (
+                            retained_portfolio.maximum_input_tokens,
+                            retained_portfolio.maximum_output_tokens,
+                            retained_portfolio.maximum_cost_usd_exact,
+                            {
+                                cap.scope_key: cap.remaining_cost_usd_exact
+                                for cap in retained_portfolio.remaining_cost_caps_by_role
+                            },
+                            {
+                                cap.scope_key: cap.remaining_cost_usd_exact
+                                for cap in retained_portfolio.remaining_cost_caps_by_model
+                            },
+                        )
+                    model_portfolio_resource_preflight = build_model_portfolio_resource_preflight(
+                        model_surface_coverage_plan,
+                        task_envelopes,
+                        campaign_manifest_sha256=scheduler.manifest.manifest_sha256,
+                        maximum_requests_per_task=budget.max_requests_per_agent,
+                        maximum_input_tokens=preflight_limits[0],
+                        maximum_output_tokens=preflight_limits[1],
+                        maximum_cost_usd_exact=preflight_limits[2],
+                        remaining_cost_usd_by_role=preflight_limits[3],
+                        remaining_cost_usd_by_model=preflight_limits[4],
+                    )
+                    if (
+                        retained_portfolio is not None
+                        and retained_portfolio != model_portfolio_resource_preflight
+                    ):
+                        raise ValueError("resumed portfolio preflight differs from current inputs")
+                    _persist_private_coverage_evidence(
+                        portfolio_path,
+                        model_portfolio_resource_preflight,
+                    )
+                    if not model_portfolio_resource_preflight.feasible:
+                        raise BudgetExhaustedError(
+                            "pre-orientation model portfolio preflight failed: "
+                            + ", ".join(
+                                code.value
+                                for code in model_portfolio_resource_preflight.failure_codes
+                            )
+                        )
+                    portfolio_slots = tuple(
+                        PortfolioTaskSlot(
+                            task_id=envelope.scheduler_task_id,
+                            logical_request_id=envelope.scheduler_logical_request_id,
+                            attempt_ordinal=attempt_ordinal,
+                            request_id=request_id,
+                            role=envelope.request_role,
+                            exact_model_id=envelope.requested_model,
+                            provider_endpoint=envelope.provider_endpoint,
+                            endpoint_policy_snapshot_sha256=(
+                                envelope.endpoint_policy_snapshot_sha256
+                            ),
+                            endpoint_policy_pricing_sha256=(
+                                envelope.endpoint_policy_pricing_sha256
+                            ),
+                            endpoint_pricing_snapshot_sha256=(
+                                envelope.endpoint_pricing_snapshot_sha256
+                            ),
+                            envelope_recipe_sha256=(envelope.request_envelope_recipe_sha256),
+                            planned_prompt_tokens=(envelope.maximum_prompt_tokens_per_attempt),
+                            planned_visible_output_tokens=(
+                                envelope.maximum_visible_output_tokens_per_attempt
+                            ),
+                            planned_reasoning_tokens=(
+                                envelope.maximum_reasoning_tokens_per_attempt
+                            ),
+                            planned_completion_tokens=(
+                                envelope.maximum_completion_tokens_per_attempt
+                            ),
+                            maximum_cost_usd=Decimal(envelope.maximum_cost_usd_per_attempt_exact),
+                        )
+                        for envelope in model_portfolio_resource_preflight.task_envelopes
+                        for attempt_ordinal, request_id in enumerate(
+                            envelope.attempt_request_ids,
+                            start=1,
+                        )
+                    )
+                    recovered_usage_restored = False
+                    if resume_scheduler_journal is None:
+                        model_portfolio_reservation = await budget.reserve_portfolio(
+                            model_portfolio_resource_preflight.preflight_sha256,
+                            portfolio_slots,
+                        )
+                    else:
+                        assert atomic_ledger is not None
+                        ledger_snapshot = atomic_ledger.snapshot()
+                        expected_cost_slots = tuple(slot.as_cost_slot() for slot in portfolio_slots)
+                        matching_holds = _matching_model_portfolio_holds(
+                            plan_sha256=model_portfolio_resource_preflight.preflight_sha256,
+                            expected_slots=expected_cost_slots,
+                            holds=ledger_snapshot.portfolio_holds,
+                        )
+                        matching_active_holds = tuple(
+                            hold
+                            for hold in matching_holds
+                            if hold.status is PortfolioHoldStatus.ACTIVE
+                        )
+                        portfolio_task_ids = {
+                            task.task_id for task in model_portfolio_scheduler_tasks
+                        }
+                        portfolio_orientation_tasks = tuple(
+                            task
+                            for task in model_portfolio_scheduler_tasks
+                            if task.pass_kind is SchedulerPassKind.ORIENTATION
+                        )
+                        retained_portfolio_orientation = scheduler.completed_pass_result(
+                            SchedulerPassKind.ORIENTATION,
+                            portfolio_orientation_tasks,
+                        )
+                        portfolio_dispatch_closed = _model_portfolio_dispatch_is_closed(
+                            model_portfolio_scheduler_tasks,
+                            scheduler.journal.task_results,
+                            orientation_result=retained_portfolio_orientation,
+                        )
+                        if matching_active_holds:
+                            model_portfolio_reservation = await budget.recover_portfolio(
+                                model_portfolio_resource_preflight.preflight_sha256,
+                                portfolio_slots,
+                            )
+                        else:
+                            prior_portfolio_attempts = tuple(
+                                attempt
+                                for attempt in scheduler.journal.provider_attempts
+                                if attempt.task_id in portfolio_task_ids
+                            )
+                            if matching_holds and not portfolio_dispatch_closed:
+                                raise ValueError(
+                                    "incomplete resumed portfolio lacks its exact active durable "
+                                    "hold"
+                                )
+                            if not matching_holds and (
+                                portfolio_dispatch_closed
+                                or recovered_usage
+                                or prior_portfolio_attempts
+                            ):
+                                raise ValueError(
+                                    "resumed portfolio lacks its exact durable hold history"
+                                )
+                            await budget.restore_recovered_usage(
+                                recovered_usage,
+                                recovery_scope=recovery_scope,
+                            )
+                            recovered_usage_restored = True
+                            if not portfolio_dispatch_closed:
+                                model_portfolio_reservation = await budget.reserve_portfolio(
+                                    model_portfolio_resource_preflight.preflight_sha256,
+                                    portfolio_slots,
+                                )
+                        if not recovered_usage_restored:
+                            await budget.restore_recovered_usage(
+                                recovered_usage,
+                                recovery_scope=recovery_scope,
+                            )
+                        for record in recovered_usage:
+                            usage.add(record)
+                elif resume_scheduler_journal is not None:
                     await budget.restore_recovered_usage(
                         recovered_usage,
                         recovery_scope=recovery_scope,
                     )
                     for record in recovered_usage:
                         usage.add(record)
-                    scheduler_cost_ledger_baseline = scheduler.manifest.cost_ledger_baseline
-                    scheduler_bindings = scheduler.manifest.bindings
-                self.client.bind_request_lifecycle_observer(scheduler)
             except SecretSafetyError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.PRIVACY_REFUSAL
+                budget_halted = True
             except BudgetExhaustedError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.INCOMPLETE
@@ -4654,14 +5186,17 @@ class AuditPipeline:
             except OpenRouterAuthenticationError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.MODEL_FAILURE
+                budget_halted = True
             except OpenRouterError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.MODEL_FAILURE
+                budget_halted = True
             except (OSError, ValueError) as exc:
                 incomplete.append(
                     f"seven-pass scheduler preflight failed: {type(exc).__name__}: {exc}"
                 )
                 terminal_code = ExitCode.INCOMPLETE
+                budget_halted = True
 
         packages: list[ContextPackage] = []
         accepted_specialist_outcomes: list[SpecialistAcceptedOutcome] = []
@@ -4670,10 +5205,16 @@ class AuditPipeline:
             self.config,
             selected_model_ids=(policy_selected_model_ids if paid_audit_policy_required else None),
         )
+        judgment_host_task: SchedulerTaskPlan | None = None
+        judge_scheduler_task: SchedulerTaskPlan | None = None
+        report_quality_scheduler_task: SchedulerTaskPlan | None = None
+        pass_seven_results: list[SchedulerTaskResult] = []
+        completed_pass_seven: SchedulerPassResult | None = None
         if (
             context_builder is not None
             and self.client is not None
             and self._active_scheduler is not None
+            and not budget_halted
         ):
             client = self.client
             scheduler = self._active_scheduler
@@ -4949,7 +5490,7 @@ class AuditPipeline:
                 )
                 if request_hashes.schema_sha256 != response_schema_sha256:
                     raise ValueError("scheduled request protocol schema hash is inconsistent")
-                return scheduler.model_task(
+                planned_task = scheduler.model_task(
                     pass_kind=pass_kind,
                     scope=scope,
                     task_key=task_key,
@@ -4960,6 +5501,91 @@ class AuditPipeline:
                     response_schema_sha256=response_schema_sha256,
                     candidate_ids=tuple(sorted(candidate_ids or ())),
                 )
+                portfolio_matches = tuple(
+                    task
+                    for task in model_portfolio_scheduler_tasks
+                    if task.pass_kind is pass_kind and task.task_key == task_key
+                )
+                if portfolio_matches:
+                    if len(portfolio_matches) != 1 or portfolio_matches[0] != planned_task:
+                        raise ValueError(
+                            "runtime scheduler task differs from its pre-orientation portfolio"
+                        )
+                    return portfolio_matches[0]
+                return planned_task
+
+            def require_current_portfolio_task_envelope(
+                scheduler_task: SchedulerTaskPlan,
+            ) -> None:
+                """Revalidate route, pricing, and conservative ceilings at dispatch."""
+
+                if model_portfolio_resource_preflight is None:
+                    return
+                matches = tuple(
+                    envelope
+                    for envelope in model_portfolio_resource_preflight.task_envelopes
+                    if envelope.scheduler_task_id == scheduler_task.task_id
+                )
+                if len(matches) != 1:
+                    raise BudgetReservationStateError(
+                        "portfolio dispatch lacks one exact task envelope"
+                    )
+                expected = matches[0]
+                coverage_task = (
+                    next(
+                        (
+                            task
+                            for task in model_portfolio_resource_preflight.coverage_plan.tasks
+                            if task.task_id == expected.coverage_task_id
+                        ),
+                        None,
+                    )
+                    if expected.coverage_task_id is not None
+                    else None
+                )
+                if (
+                    trusted_preview_model_portfolio_task_resources
+                    is not _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES
+                    or openrouter_models.trusted_preview_model_portfolio_task_resources
+                    is not _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES
+                ):
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "pipeline portfolio resource-preview boundary changed"
+                    )
+                current = _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES(
+                    client,
+                    task_kind=expected.task_kind,
+                    scheduler_task=scheduler_task,
+                    campaign_manifest=scheduler.manifest,
+                    coverage_task=coverage_task,
+                )
+                if current != expected:
+                    raise BudgetReservationStateError(
+                        "portfolio task route, pricing, or envelope changed before dispatch"
+                    )
+
+            async def release_model_portfolio_if_terminal() -> None:
+                """Release once tasks are terminal or orientation bars later dispatch."""
+
+                nonlocal model_portfolio_reservation
+                if model_portfolio_reservation is None:
+                    return
+                orientation_tasks = tuple(
+                    task
+                    for task in model_portfolio_scheduler_tasks
+                    if task.pass_kind is SchedulerPassKind.ORIENTATION
+                )
+                orientation_result = scheduler.completed_pass_result(
+                    SchedulerPassKind.ORIENTATION,
+                    orientation_tasks,
+                )
+                if _model_portfolio_dispatch_is_closed(
+                    model_portfolio_scheduler_tasks,
+                    scheduler.journal.task_results,
+                    orientation_result=orientation_result,
+                ):
+                    await budget.release_portfolio(model_portfolio_reservation)
+                    model_portfolio_reservation = None
 
             def conclude_scheduler_result(result: SchedulerPassResult) -> SchedulerPassStatus:
                 nonlocal terminal_code, budget_halted, scheduler_halted
@@ -5140,12 +5766,29 @@ class AuditPipeline:
                         )
                     else:
                         self.logger.info("Running threat-model role", extra={"run_id": run_id})
-                        raw_threat_model = await bounded_call(
-                            threat_agent.run(
-                                threat_context,
-                                logical_request_id=threat_task.logical_request_id,
+                        if model_portfolio_resource_preflight is None:
+                            raw_threat_model = await bounded_call(
+                                threat_agent.run(
+                                    threat_context,
+                                    logical_request_id=threat_task.logical_request_id,
+                                )
                             )
-                        )
+                        else:
+                            if model_portfolio_reservation is None:
+                                raise BudgetReservationStateError(
+                                    "threat-model dispatch lacks its durable portfolio reservation"
+                                )
+                            require_current_portfolio_task_envelope(threat_task)
+                            async with budget.portfolio_task_scope(
+                                model_portfolio_reservation,
+                                threat_task.task_id,
+                            ):
+                                raw_threat_model = await bounded_call(
+                                    threat_agent.run(
+                                        threat_context,
+                                        logical_request_id=threat_task.logical_request_id,
+                                    )
+                                )
                     threat_model, threat_location_rejections = _validated_threat_model(
                         discovery.root,
                         raw_threat_model,
@@ -5157,13 +5800,23 @@ class AuditPipeline:
                             output_value=raw_threat_model,
                             usage_records=usage.records,
                         )
-                except BudgetExhaustedError as exc:
-                    scheduler.record_failure(threat_task, exc, usage_records=usage.records)
+                except (BudgetExhaustedError, BudgetReservationStateError) as exc:
+                    scheduler.record_failure(
+                        threat_task,
+                        exc,
+                        usage_records=usage.records,
+                        atomic_ledger=atomic_ledger,
+                    )
                     incomplete.append(f"threat_model: {exc}")
                     terminal_code = ExitCode.INCOMPLETE
                     budget_halted = True
                 except OpenRouterError as exc:
-                    scheduler.record_failure(threat_task, exc, usage_records=usage.records)
+                    scheduler.record_failure(
+                        threat_task,
+                        exc,
+                        usage_records=usage.records,
+                        atomic_ledger=atomic_ledger,
+                    )
                     incomplete.append(f"threat_model: {exc}")
                     terminal_code = ExitCode.MODEL_FAILURE
             else:
@@ -5175,6 +5828,7 @@ class AuditPipeline:
                 conclude_scheduler_pass()
             else:
                 conclude_scheduler_result(completed_orientation)
+            await release_model_portfolio_if_terminal()
             check_accounted_budget()
 
             specialist_roles = (
@@ -5701,24 +6355,49 @@ class AuditPipeline:
                                 resumed_preflight,
                             )
                         else:
-                            if budget.reserved_usd != 0:
-                                raise ValueError(
-                                    "compact coverage preflight requires no outstanding reservation"
+                            if model_portfolio_resource_preflight is not None:
+                                remaining_input = (
+                                    model_portfolio_resource_preflight.maximum_input_tokens
                                 )
-                            remaining_input = budget.remaining_input_tokens
-                            remaining_output = budget.remaining_output_tokens
-                            if remaining_input is None or remaining_output is None:
-                                raise ValueError(
-                                    "compact coverage preflight requires exact global token caps"
+                                remaining_output = (
+                                    model_portfolio_resource_preflight.maximum_output_tokens
                                 )
-                            remaining_global = _subtract_coverage_usd(
-                                Decimal(str(budget.total_usd)),
-                                budget.spent_usd_exact,
-                            )
-                            if remaining_global < 0:
-                                raise ValueError(
-                                    "compact coverage preflight observed negative remaining USD"
+                                remaining_global = Decimal(
+                                    model_portfolio_resource_preflight.maximum_cost_usd_exact
                                 )
+                                portfolio_role_caps = {
+                                    cap.scope_key: cap.remaining_cost_usd_exact
+                                    for cap in model_portfolio_resource_preflight.remaining_cost_caps_by_role
+                                }
+                                portfolio_model_caps = {
+                                    cap.scope_key: cap.remaining_cost_usd_exact
+                                    for cap in model_portfolio_resource_preflight.remaining_cost_caps_by_model
+                                }
+                            else:
+                                if budget.reserved_usd != 0:
+                                    raise ValueError(
+                                        "compact coverage preflight requires no outstanding "
+                                        "reservation"
+                                    )
+                                live_input = budget.remaining_input_tokens
+                                live_output = budget.remaining_output_tokens
+                                if live_input is None or live_output is None:
+                                    raise ValueError(
+                                        "compact coverage preflight requires exact global token "
+                                        "caps"
+                                    )
+                                remaining_input = live_input
+                                remaining_output = live_output
+                                remaining_global = _subtract_coverage_usd(
+                                    Decimal(str(budget.total_usd)),
+                                    budget.spent_usd_exact,
+                                )
+                                if remaining_global < 0:
+                                    raise ValueError(
+                                        "compact coverage preflight observed negative remaining USD"
+                                    )
+                                portfolio_role_caps = None
+                                portfolio_model_caps = None
                             planned_roles = {
                                 task.review_role for task in model_surface_coverage_plan.tasks
                             }
@@ -5732,6 +6411,10 @@ class AuditPipeline:
                                 else planned_roles
                             )
                             for role in sorted(scoped_role_keys):
+                                if portfolio_role_caps is not None:
+                                    if role in portfolio_role_caps:
+                                        remaining_by_role[role] = portfolio_role_caps[role]
+                                    continue
                                 configured_cap = budget.per_role_usd_caps.get(role)
                                 scoped_remaining = remaining_global
                                 if configured_cap is not None:
@@ -5754,6 +6437,12 @@ class AuditPipeline:
                                 else planned_models
                             )
                             for model_id in sorted(scoped_model_keys):
+                                if portfolio_model_caps is not None:
+                                    if model_id in portfolio_model_caps:
+                                        remaining_by_model[model_id] = portfolio_model_caps[
+                                            model_id
+                                        ]
+                                    continue
                                 configured_cap = budget.per_model_usd_caps.get(model_id)
                                 scoped_remaining = remaining_global
                                 if configured_cap is not None:
@@ -5821,6 +6510,7 @@ class AuditPipeline:
                         scheduler.record_failure(task_plan, blind_failure)
                     for _request_role, _model_id, _agent, task_plan in whole_protocol_specs:
                         scheduler.record_failure(task_plan, blind_failure)
+                    await release_model_portfolio_if_terminal()
                 else:
                     if coverage_resource_failure is not None:
                         resource_failure_exception = BudgetExhaustedError(coverage_resource_failure)
@@ -5877,24 +6567,25 @@ class AuditPipeline:
                         expected_preview = coverage_preview_by_scheduler_id.get(
                             scheduler_task.task_id
                         )
-                        if expected_preview is None:
-                            return await bounded_call(
-                                agent.run(
+
+                        async def dispatch() -> Any:
+                            if expected_preview is None:
+                                return await agent.run(
                                     package,
                                     logical_request_id=scheduler_task.logical_request_id,
                                 )
+                            coverage_task = coverage_task_by_scheduler_id.get(
+                                scheduler_task.task_id
                             )
-                        coverage_task = coverage_task_by_scheduler_id.get(scheduler_task.task_id)
-                        if coverage_task is None:
-                            raise OpenRouterSchemaError(
-                                "resource-bound coverage dispatch lacks its exact plan task"
-                            )
-                        if coverage_preview_checked_at is None:
-                            raise OpenRouterSchemaError(
-                                "resource-bound coverage dispatch lacks its preview timestamp"
-                            )
-                        return await bounded_call(
-                            agent.run(
+                            if coverage_task is None:
+                                raise OpenRouterSchemaError(
+                                    "resource-bound coverage dispatch lacks its exact plan task"
+                                )
+                            if coverage_preview_checked_at is None:
+                                raise OpenRouterSchemaError(
+                                    "resource-bound coverage dispatch lacks its preview timestamp"
+                                )
+                            return await agent.run(
                                 package,
                                 logical_request_id=scheduler_task.logical_request_id,
                                 expected_resource_preview=expected_preview,
@@ -5903,7 +6594,19 @@ class AuditPipeline:
                                 campaign_manifest=scheduler.manifest,
                                 resource_preview_checked_at=coverage_preview_checked_at,
                             )
-                        )
+
+                        if model_portfolio_resource_preflight is None:
+                            return await bounded_call(dispatch())
+                        if model_portfolio_reservation is None:
+                            raise BudgetReservationStateError(
+                                "blind model dispatch lacks its durable portfolio reservation"
+                            )
+                        require_current_portfolio_task_envelope(scheduler_task)
+                        async with budget.portfolio_task_scope(
+                            model_portfolio_reservation,
+                            scheduler_task.task_id,
+                        ):
+                            return await bounded_call(dispatch())
 
                     def queue_exact_recovery_root(
                         *,
@@ -6152,6 +6855,7 @@ class AuditPipeline:
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                             if queue_exact_recovery_root(
                                 request_role=request_role,
@@ -6174,11 +6878,12 @@ class AuditPipeline:
                                     else ExitCode.MODEL_FAILURE
                                 )
                             budget_halted = True
-                        except BudgetExhaustedError as exc:
+                        except (BudgetExhaustedError, BudgetReservationStateError) as exc:
                             scheduler.record_failure(
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                             incomplete.append(f"{request_role}: {exc}")
                             terminal_code = ExitCode.INCOMPLETE
@@ -6188,10 +6893,12 @@ class AuditPipeline:
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                             incomplete.append(f"{request_role}: {exc}")
                             if terminal_code is ExitCode.SUCCESS:
                                 terminal_code = ExitCode.MODEL_FAILURE
+                    await release_model_portfolio_if_terminal()
                     if recovery_roots:
                         result_by_task_id = {
                             result.task_id: result for result in scheduler.journal.task_results
@@ -6202,6 +6909,50 @@ class AuditPipeline:
                             raise OpenRouterSchemaError(
                                 "truncation recovery cannot begin before blind-task quiescence"
                             )
+
+                    def retain_released_recovery_child_failure(
+                        prepared: PreparedTruncationRecoveryRequest,
+                    ) -> SchedulerTruncationRecoveryChildResult | None:
+                        """Retain one exact live pre-send release without granting credit."""
+
+                        exact_failed = tuple(
+                            record
+                            for record in usage.records
+                            if record.request_id == prepared.logical_request_id
+                        )
+                        if not exact_failed:
+                            return None
+                        if len(exact_failed) != 1:
+                            raise OpenRouterSchemaError(
+                                "released recovery child has ambiguous failed usage custody"
+                            )
+                        if atomic_ledger is None:
+                            raise OpenRouterSchemaError(
+                                "released recovery child requires the exact persistent cost ledger"
+                            )
+                        child_request_id = prepared.logical_request_id
+                        matching_entries = tuple(
+                            entry
+                            for entry in atomic_ledger.snapshot().entries
+                            if entry.request_id == child_request_id
+                            or entry.request_id.startswith(f"{child_request_id}:attempt:")
+                        )
+                        if not any(
+                            entry.status is CostEntryStatus.RELEASED for entry in matching_entries
+                        ):
+                            return None
+                        try:
+                            return (
+                                scheduler.journal.record_truncation_recovery_child_released_failure(
+                                    prepared.child_task_id,
+                                    failed_usage_record=exact_failed[0],
+                                    atomic_ledger=atomic_ledger,
+                                )
+                            )
+                        except (TypeError, ValueError) as exc:
+                            raise OpenRouterSchemaError(
+                                "released recovery child usage differs from its exact ledger tail"
+                            ) from exc
 
                     async def execute_nested_recovery_children(
                         *,
@@ -6331,14 +7082,25 @@ class AuditPipeline:
                                         truncation_projection=child_projection,
                                     )
                                 )
-                            except (BudgetExhaustedError, OpenRouterError) as exc:
+                            except (
+                                BudgetExhaustedError,
+                                BudgetReservationStateError,
+                                OpenRouterError,
+                            ) as exc:
+                                released_result = retain_released_recovery_child_failure(prepared)
+                                if released_result is not None:
+                                    terminal_entries[child.child_task_id] = released_result
+                                    continue
                                 if (
                                     child.child_task_id
                                     in scheduler.journal.dispatchable_truncation_recovery_child_ids
                                 ):
                                     terminal_status = (
                                         SchedulerTruncationRecoveryTerminalStatus.INCONCLUSIVE
-                                        if isinstance(exc, BudgetExhaustedError)
+                                        if isinstance(
+                                            exc,
+                                            (BudgetExhaustedError, BudgetReservationStateError),
+                                        )
                                         else SchedulerTruncationRecoveryTerminalStatus.INVALID
                                         if isinstance(
                                             exc,
@@ -6631,14 +7393,25 @@ class AuditPipeline:
                                         truncation_projection=child_projection,
                                     )
                                 )
-                            except (BudgetExhaustedError, OpenRouterError) as exc:
+                            except (
+                                BudgetExhaustedError,
+                                BudgetReservationStateError,
+                                OpenRouterError,
+                            ) as exc:
+                                released_result = retain_released_recovery_child_failure(prepared)
+                                if released_result is not None:
+                                    terminal_entries[child.child_task_id] = released_result
+                                    continue
                                 if (
                                     child.child_task_id
                                     in scheduler.journal.dispatchable_truncation_recovery_child_ids
                                 ):
                                     terminal_status = (
                                         SchedulerTruncationRecoveryTerminalStatus.INCONCLUSIVE
-                                        if isinstance(exc, BudgetExhaustedError)
+                                        if isinstance(
+                                            exc,
+                                            (BudgetExhaustedError, BudgetReservationStateError),
+                                        )
                                         else SchedulerTruncationRecoveryTerminalStatus.INVALID
                                         if isinstance(
                                             exc,
@@ -7696,6 +8469,7 @@ class AuditPipeline:
                             scheduler_task,
                             exc,
                             usage_records=usage.records,
+                            atomic_ledger=atomic_ledger,
                         )
                         incomplete.append(
                             f"cross-shard relationship review {relationship_id}: {exc}"
@@ -7818,6 +8592,7 @@ class AuditPipeline:
                             invariant_scheduler_task,
                             exc,
                             usage_records=usage.records,
+                            atomic_ledger=atomic_ledger,
                         )
                         incomplete.append(f"specialist:invariant_review: {exc}")
                         terminal_code = ExitCode.INCOMPLETE
@@ -7827,6 +8602,7 @@ class AuditPipeline:
                             invariant_scheduler_task,
                             exc,
                             usage_records=usage.records,
+                            atomic_ledger=atomic_ledger,
                         )
                         incomplete.append(f"specialist:invariant_review: {exc}")
                         if terminal_code is ExitCode.SUCCESS:
@@ -8312,6 +9088,7 @@ class AuditPipeline:
                                     scheduler_task,
                                     exc,
                                     usage_records=usage.records,
+                                    atomic_ledger=atomic_ledger,
                                 )
                                 incomplete.append(
                                     f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
@@ -8323,6 +9100,7 @@ class AuditPipeline:
                                     scheduler_task,
                                     exc,
                                     usage_records=usage.records,
+                                    atomic_ledger=atomic_ledger,
                                 )
                                 incomplete.append(
                                     f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
@@ -8760,6 +9538,7 @@ class AuditPipeline:
                             verifier_scheduler_task,
                             exc,
                             usage_records=usage.records,
+                            atomic_ledger=atomic_ledger,
                         )
                     )
                     incomplete.append(f"verifier: {exc}")
@@ -8871,6 +9650,7 @@ class AuditPipeline:
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                         )
                         incomplete.append(f"candidate_falsifier:{falsifier_index}: {exc}")
@@ -9117,6 +9897,7 @@ class AuditPipeline:
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                         )
                         incomplete.append(f"{planner_label}:exploit_test: {exc}")
@@ -9128,6 +9909,7 @@ class AuditPipeline:
                                 scheduler_task,
                                 exc,
                                 usage_records=usage.records,
+                                atomic_ledger=atomic_ledger,
                             )
                         )
                         incomplete.append(f"{planner_label}:exploit_test: {exc}")
@@ -9276,6 +10058,7 @@ class AuditPipeline:
                                     falsifier_scheduler_task,
                                     exc,
                                     usage_records=usage.records,
+                                    atomic_ledger=atomic_ledger,
                                 )
                             )
                             incomplete.append(f"falsifier: {exc}")
@@ -9287,6 +10070,7 @@ class AuditPipeline:
                                     falsifier_scheduler_task,
                                     exc,
                                     usage_records=usage.records,
+                                    atomic_ledger=atomic_ledger,
                                 )
                             )
                             incomplete.append(f"falsifier: {exc}")
@@ -9420,11 +10204,6 @@ class AuditPipeline:
             group_payloads = [
                 _group_payload(group, decisions, validations, scanner_findings) for group in groups
             ]
-            judgment_host_task: SchedulerTaskPlan | None = None
-            judge_scheduler_task: SchedulerTaskPlan | None = None
-            report_quality_scheduler_task: SchedulerTaskPlan | None = None
-            pass_seven_results: list[SchedulerTaskResult] = []
-            completed_pass_seven: SchedulerPassResult | None = None
             if not scheduler_halted:
                 judgment_host_task = scheduler.host_task(
                     pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
@@ -9546,6 +10325,7 @@ class AuditPipeline:
                             judge_scheduler_task,
                             exc,
                             usage_records=usage.records,
+                            atomic_ledger=atomic_ledger,
                         )
                     )
                     incomplete.append(f"judge: {exc}")
@@ -10206,6 +10986,7 @@ class AuditPipeline:
                         report_quality_scheduler_task,
                         exc,
                         usage_records=usage.records,
+                        atomic_ledger=atomic_ledger,
                     )
                 )
                 incomplete.append(f"report_quality: {exc}")
@@ -10218,6 +10999,7 @@ class AuditPipeline:
                         report_quality_scheduler_task,
                         exc,
                         usage_records=usage.records,
+                        atomic_ledger=atomic_ledger,
                     )
                 )
                 incomplete.append(f"report_quality: {exc}")
@@ -10229,6 +11011,7 @@ class AuditPipeline:
                         report_quality_scheduler_task,
                         exc,
                         usage_records=usage.records,
+                        atomic_ledger=atomic_ledger,
                     )
                 )
                 incomplete.append(f"report_quality: {exc}")
@@ -11111,6 +11894,7 @@ class AuditPipeline:
             solidity_coverage=report.solidity_coverage,
             model_review_coverage=model_review_coverage,
             model_surface_coverage_plan=model_surface_coverage_plan,
+            model_portfolio_resource_preflight=model_portfolio_resource_preflight,
             model_surface_resource_preflight=model_surface_resource_preflight,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -11947,6 +12731,7 @@ class AuditPipeline:
         solidity_coverage: SolidityCoverage | None,
         model_review_coverage: ModelReviewCoverage,
         model_surface_coverage_plan: ModelSurfaceCoveragePlan | None,
+        model_portfolio_resource_preflight: ModelPortfolioResourcePreflight | None,
         model_surface_resource_preflight: ModelSurfaceResourcePreflight | None,
         scope_assessment: AuditScopeAssessment,
         prior_audit_comparison: PriorAuditComparison,
@@ -12065,6 +12850,24 @@ class AuditPipeline:
                 coverage=solidity_coverage,
             ),
         )
+        portfolio_hold = None
+        if model_portfolio_resource_preflight is not None:
+            if cost_ledger is None:
+                raise ValueError("portfolio preflight lacks its durable cost ledger")
+            expected_portfolio_cost_slots = tuple(
+                PortfolioAttemptSlot(
+                    request_id=request_id,
+                    maximum_cost_usd=Decimal(envelope.maximum_cost_usd_per_attempt_exact),
+                )
+                for envelope in model_portfolio_resource_preflight.task_envelopes
+                for request_id in envelope.attempt_request_ids
+            )
+            matching_portfolio_holds = _matching_model_portfolio_holds(
+                plan_sha256=model_portfolio_resource_preflight.preflight_sha256,
+                expected_slots=expected_portfolio_cost_slots,
+                holds=cost_ledger.snapshot().portfolio_holds,
+            )
+            portfolio_hold = matching_portfolio_holds[0] if matching_portfolio_holds else None
         write_json(
             run_dir / "model-review-coverage.json",
             {
@@ -12074,6 +12877,45 @@ class AuditPipeline:
                     model_surface_coverage_plan.plan_sha256
                     if model_surface_coverage_plan is not None
                     else None
+                ),
+                "portfolio_resource_preflight_sha256": (
+                    model_portfolio_resource_preflight.preflight_sha256
+                    if model_portfolio_resource_preflight is not None
+                    else None
+                ),
+                "portfolio_resource_preflight_scope": (
+                    "orientation_compact_source_audit_whole_protocol_all_attempts"
+                    if model_portfolio_resource_preflight is not None
+                    else None
+                ),
+                "portfolio_resource_preflight_position": (
+                    "before_paid_orientation"
+                    if model_portfolio_resource_preflight is not None
+                    else None
+                ),
+                "portfolio_candidate_independent_request_roles": (
+                    list(model_portfolio_resource_preflight.candidate_independent_request_roles)
+                    if model_portfolio_resource_preflight is not None
+                    else []
+                ),
+                "portfolio_supplemental_blind_spend_included": (
+                    model_portfolio_resource_preflight is not None
+                ),
+                "portfolio_reservation_durable": portfolio_hold is not None,
+                "portfolio_hold_status": (
+                    portfolio_hold.status.value if portfolio_hold is not None else None
+                ),
+                "portfolio_initial_slot_count": (
+                    len(portfolio_hold.initial_slots) if portfolio_hold is not None else 0
+                ),
+                "portfolio_claimed_slot_count": (
+                    len(portfolio_hold.claimed_slots) if portfolio_hold is not None else 0
+                ),
+                "portfolio_released_slot_count": (
+                    len(portfolio_hold.released_slots) if portfolio_hold is not None else 0
+                ),
+                "portfolio_held_slot_count": (
+                    len(portfolio_hold.remaining_slots) if portfolio_hold is not None else 0
                 ),
                 "resource_preflight_sha256": (
                     model_surface_resource_preflight.preflight_sha256

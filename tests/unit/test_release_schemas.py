@@ -16,6 +16,7 @@ from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictProjection,
 )
 from mmaudit.models.coverage_planning import (
+    ModelPortfolioResourcePreflight,
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourcePreflight,
 )
@@ -490,6 +491,155 @@ def test_model_surface_resource_preflight_schema_binds_tasks_caps_and_failures()
         assert forbidden_private_fields.isdisjoint(properties)
 
 
+def test_model_portfolio_resource_preflight_schema_binds_all_task_envelopes() -> None:
+    filename = "model_portfolio_resource_preflight.schema.json"
+    assert MODELS[filename] is ModelPortfolioResourcePreflight
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    definitions = schema["$defs"]
+    sha256_pattern = r"^[0-9a-f]{64}$"
+
+    assert schema["title"] == (
+        "mmaudit non-authorizing pre-orientation model portfolio resource preflight"
+    )
+    assert definitions["ModelPortfolioTaskKind"]["enum"] == [
+        "orientation",
+        "compact_coverage",
+        "source_audit",
+        "whole_protocol",
+        "invariant_review",
+        "report_quality",
+    ]
+    assert schema["properties"]["task_envelopes"] == {
+        "items": {"$ref": "#/$defs/ModelPortfolioTaskResourceEnvelope"},
+        "maxItems": 200_000,
+        "minItems": 1,
+        "title": "Task Envelopes",
+        "type": "array",
+    }
+    assert schema["properties"]["candidate_independent_request_roles"]["maxItems"] == 24
+    assert schema["properties"]["maximum_requests_per_task"] == {
+        "maximum": 64,
+        "minimum": 1,
+        "title": "Maximum Requests Per Task",
+        "type": "integer",
+    }
+
+    envelope = definitions["ModelPortfolioTaskResourceEnvelope"]
+    identity_hash_fields = {
+        "scheduler_task_plan_sha256",
+        "campaign_manifest_sha256",
+        "request_envelope_recipe_sha256",
+        "endpoint_policy_snapshot_sha256",
+        "endpoint_policy_pricing_sha256",
+        "endpoint_pricing_snapshot_sha256",
+        "envelope_sha256",
+    }
+    for field_name in identity_hash_fields:
+        assert envelope["properties"][field_name]["pattern"] == sha256_pattern
+        assert field_name in envelope["required"]
+    assert envelope["properties"]["scheduler_task_id"]["pattern"] == (
+        r"^scheduler-task-[0-9a-f]{64}$"
+    )
+    assert envelope["properties"]["scheduler_logical_request_id"]["pattern"] == (
+        r"^scheduler-request-[0-9a-f]{64}$"
+    )
+    assert envelope["properties"]["requested_model"]["pattern"] == (
+        r"^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$"
+    )
+    assert envelope["properties"]["attempt_request_ids"]["minItems"] == 1
+    assert envelope["properties"]["attempt_request_ids"]["maxItems"] == 64
+    assert envelope["properties"]["maximum_attempts"]["minimum"] == 1
+    assert envelope["properties"]["maximum_attempts"]["maximum"] == 64
+    assert envelope["properties"]["coverage_task_id"]["anyOf"][0]["pattern"] == (
+        r"^model-surface-gap-task-[0-9a-f]{64}$"
+    )
+    assert envelope["properties"]["coverage_task_sha256"]["anyOf"][0]["pattern"] == (sha256_pattern)
+
+    exact_envelope_properties = {
+        "artifact_kind",
+        "schema_version",
+        "task_kind",
+        "scheduler_task_id",
+        "scheduler_task_plan_sha256",
+        "scheduler_logical_request_id",
+        "campaign_manifest_sha256",
+        "request_role",
+        "requested_model",
+        "coverage_task_id",
+        "coverage_task_sha256",
+        "request_envelope_recipe_sha256",
+        "endpoint_policy_snapshot_sha256",
+        "endpoint_policy_pricing_sha256",
+        "provider_endpoint",
+        "endpoint_pricing_snapshot_sha256",
+        "maximum_attempts",
+        "attempt_request_ids",
+        "maximum_prompt_tokens_per_attempt",
+        "maximum_visible_output_tokens_per_attempt",
+        "maximum_reasoning_tokens_per_attempt",
+        "maximum_completion_tokens_per_attempt",
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_request_count",
+        "maximum_input_tokens",
+        "maximum_output_tokens",
+        "maximum_cost_usd_exact",
+        "envelope_sha256",
+        "authorizes_dispatch",
+        "grants_review_credit",
+        "grants_completion_credit",
+    }
+    assert set(envelope["properties"]) == exact_envelope_properties
+    assert set(envelope["required"]) == exact_envelope_properties - {
+        "artifact_kind",
+        "schema_version",
+        "coverage_task_id",
+        "coverage_task_sha256",
+        "authorizes_dispatch",
+        "grants_review_credit",
+        "grants_completion_credit",
+    }
+
+    scoped_collections = {
+        "planned_costs_by_role": "ModelSurfaceResourceScopeCost",
+        "planned_costs_by_model": "ModelSurfaceResourceScopeCost",
+        "remaining_cost_caps_by_role": "ModelSurfaceResourceScopeCap",
+        "remaining_cost_caps_by_model": "ModelSurfaceResourceScopeCap",
+        "scoped_failures": "ModelSurfaceResourceScopeFailure",
+    }
+    for field_name, definition_name in scoped_collections.items():
+        assert schema["properties"][field_name]["items"] == {"$ref": f"#/$defs/{definition_name}"}
+        assert field_name in schema["required"]
+
+    model_definitions = tuple(
+        name for name, definition in definitions.items() if definition.get("type") == "object"
+    )
+    for definition_name in model_definitions:
+        assert definitions[definition_name]["additionalProperties"] is False
+        _assert_non_authorizing_model_schema(definitions[definition_name])
+    _assert_non_authorizing_model_schema(schema)
+
+    self_hashes = {
+        "ModelPortfolioTaskResourceEnvelope": "envelope_sha256",
+        "ModelSurfaceCoverageDeficit": "deficit_sha256",
+        "ModelSurfaceCoveragePlan": "plan_sha256",
+        "ModelSurfaceCoveragePolicy": "policy_sha256",
+        "ModelSurfaceCoverageRequirement": "requirement_sha256",
+        "ModelSurfaceGapAssignment": "assignment_sha256",
+        "ModelSurfaceGapTask": "task_sha256",
+        "ModelSurfaceResourceScopeCap": "cap_sha256",
+        "ModelSurfaceResourceScopeCost": "cost_sha256",
+        "ModelSurfaceResourceScopeFailure": "failure_sha256",
+        "ModelSurfaceReviewerBinding": "binding_sha256",
+        "ModelSurfaceTierRequirement": "requirement_sha256",
+    }
+    for definition_name, field_name in self_hashes.items():
+        definition = definitions[definition_name]
+        assert definition["properties"][field_name]["pattern"] == sha256_pattern
+        assert field_name in definition["required"]
+    assert schema["properties"]["preflight_sha256"]["pattern"] == sha256_pattern
+    assert "preflight_sha256" in schema["required"]
+
+
 def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discriminated() -> None:
     schema = json.loads((ROOT / "schemas" / "scheduler_state.schema.json").read_text())
     definitions = schema["$defs"]
@@ -622,8 +772,17 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
 
     request = definitions["SchedulerTruncationRecoveryModelRequestEvidence"]
     assert request["additionalProperties"] is False
-    assert request["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
-    assert request["properties"]["terminal_status"]["enum"] == ["SUCCEEDED", "TRUNCATED"]
+    assert request["properties"]["schema_version"]["enum"] == [
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+    ]
+    assert request["properties"]["terminal_status"]["enum"] == [
+        "SUCCEEDED",
+        "TRUNCATED",
+        "FAILED",
+    ]
     completion_fields = (
         "runtime_completion_evidence_sha256",
         "validated_response_sha256",
@@ -644,6 +803,41 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         "recovery_plan_sha256",
         "family_closure_id",
         "family_closure_sha256",
+    )
+    release_tree_fields = (
+        "global_request_ordinal",
+        "recovery_family_id",
+        "family_root_sha256",
+        "recovery_plan_sha256",
+        "child_plan_sha256",
+    )
+    release_accounting_fields = (
+        "result_origin",
+        "released_cost_entry_sha256",
+        "pre_send_release_reason",
+        "provider_attempt_evidence_sha256",
+        "accounted_provider_attempts",
+        "accounted_completion_tokens",
+        "accounted_cost_usd_exact",
+        "cost_disposition",
+    )
+    release_only_fields = (
+        "child_plan_sha256",
+        "dispatch_id",
+        "dispatch_sha256",
+        *release_accounting_fields,
+    )
+    release_absent_fields = (
+        "promotion_entry_sha256",
+        "promotion_disposition",
+        "family_closure_id",
+        "family_closure_sha256",
+        "runtime_completion_evidence_sha256",
+        "provider_response_sha256",
+        "validated_response_sha256",
+        "normalization_evidence_sha256",
+        "output_artifact_sha256",
+        "specialist_accepted_outcome_sha256",
     )
     assert request["properties"]["promotion_disposition"]["anyOf"] == [
         {"$ref": "#/$defs/SchedulerTruncationRecoveryPromotionDisposition"},
@@ -682,9 +876,59 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
                 "required": ["promotion_entry_sha256", *recursive_request_fields],
             },
             "else": {
+                "if": {
+                    "properties": {"schema_version": {"const": "1.3"}},
+                    "required": ["schema_version"],
+                },
+                "else": {
+                    "not": {
+                        "anyOf": [
+                            {"required": [field_name]} for field_name in recursive_request_fields
+                        ]
+                    }
+                },
+            },
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.3"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "dependentRequired": {
+                    "dispatch_id": ["dispatch_sha256"],
+                    "dispatch_sha256": ["dispatch_id"],
+                },
                 "not": {
-                    "anyOf": [{"required": [field_name]} for field_name in recursive_request_fields]
-                }
+                    "anyOf": [{"required": [field_name]} for field_name in release_absent_fields]
+                },
+                "properties": {
+                    **{
+                        field_name: {"not": {"type": "null"}}
+                        for field_name in (
+                            *release_tree_fields,
+                            *release_accounting_fields,
+                            "dispatch_id",
+                            "dispatch_sha256",
+                        )
+                    },
+                    "result_origin": {"const": "RUNTIME"},
+                    "cost_disposition": {"const": "RELEASED_PRE_SEND_TAIL"},
+                    "terminal_status": {"const": "FAILED"},
+                },
+                "required": [
+                    *release_tree_fields,
+                    *release_accounting_fields,
+                    "terminal_status",
+                ],
+            },
+            "else": {
+                "not": {
+                    "anyOf": [{"required": [field_name]} for field_name in release_only_fields]
+                },
+                "properties": {
+                    "terminal_status": {"enum": ["SUCCEEDED", "TRUNCATED"]},
+                },
             },
         },
         {

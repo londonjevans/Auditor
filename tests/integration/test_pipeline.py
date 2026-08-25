@@ -1397,6 +1397,7 @@ async def _run(
     output: Path | None = None,
     severity_threshold: Severity = Severity.INFORMATIONAL,
     context_package_budget_observer: Callable[..., None] | None = None,
+    client_configurator: Callable[[OpenRouterClient], None] | None = None,
 ):
     if cost_ledger is None:
         tmp_path.mkdir(parents=True, exist_ok=True)
@@ -1412,6 +1413,8 @@ async def _run(
         atomic_ledger=cost_ledger,
         context_package_budget_observer=context_package_budget_observer,
     )
+    if client_configurator is not None:
+        client_configurator(client)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,

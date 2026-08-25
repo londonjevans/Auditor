@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 3624,
-  "inventory_sha256": "1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda",
+  "gate_source_count": 3642,
+  "inventory_sha256": "6f9be06561bf1d98cbf6c5102560e20b4f8a353cd566681b44156ac73cc6040a",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -940,12 +940,17 @@
         "completion-entrypoint:models_init_cost_ledger:cost_ledger",
         "completion-entrypoint:models_qualify:cost_ledger",
         "completion-entrypoint:models_verify_qualification:cost_ledger",
+        "direct-env-ast:orchestration.budgets:_accounting_portfolio_scope_material:process-identity:1",
+        "direct-env-ast:orchestration.budgets:budgetmanager.portfolio_task_scope:process-identity:1",
+        "direct-env-ast:orchestration.budgets:budgetmanager.reserve:process-identity:1",
         "direct-env-ast:orchestration.cost_ledger:_open_lock_file:host-identity:1",
         "direct-env-ast:orchestration.cost_ledger:_open_regular_private_file:host-identity:1",
         "direct-env-ast:orchestration.cost_ledger:_require_exact_lock_path:host-identity:1",
         "direct-env-ast:orchestration.cost_ledger:_require_exact_lock_path:host-identity:2",
         "direct-env-ast:orchestration.cost_ledger:_validate_operator_ledger_parent:host-identity:1",
+        "entropy-ast:orchestration.cost_ledger:atomiccostledger.claim_portfolio_slot:uuid-uuid4:1",
         "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve:uuid-uuid4:1",
+        "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve_portfolio:uuid-uuid4:1",
         "environment-override:mmaudit_cost_ledger_path",
         "explicit:cost-ledger-existing-state-contract",
         "filesystem-input:cli:_audit_config_overrides:1",
@@ -1468,6 +1473,11 @@
         "filesystem-input:orchestration.pipeline:_load_private_coverage_preflight:3",
         "filesystem-input:orchestration.pipeline:_load_private_coverage_preflight:4",
         "filesystem-input:orchestration.pipeline:_load_private_coverage_preflight:5",
+        "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:1",
+        "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:2",
+        "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:3",
+        "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:4",
+        "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:5",
         "filesystem-input:orchestration.pipeline:_persist_private_coverage_evidence:1",
         "filesystem-input:orchestration.pipeline:_persist_private_coverage_evidence:2",
         "filesystem-input:orchestration.pipeline:_persist_private_coverage_evidence:3",
@@ -2185,21 +2195,19 @@
         "filesystem-input:orchestration.pipeline:resolve_safe_output_root:3",
         "filesystem-input:orchestration.scheduler:_acquire_custody_lock:1",
         "filesystem-input:orchestration.scheduler:_acquire_custody_lock:2",
+        "filesystem-input:orchestration.scheduler:_adopt_pending_private_file:1",
         "filesystem-input:orchestration.scheduler:_assert_root_path_identity:1",
         "filesystem-input:orchestration.scheduler:_assert_root_path_identity:2",
         "filesystem-input:orchestration.scheduler:_assert_root_path_identity:3",
         "filesystem-input:orchestration.scheduler:_bounded_directory_names:1",
+        "filesystem-input:orchestration.scheduler:_cleanup_orphan_immutable_writes:1",
         "filesystem-input:orchestration.scheduler:_create_private_root:1",
         "filesystem-input:orchestration.scheduler:_create_private_root:2",
         "filesystem-input:orchestration.scheduler:_create_private_root:3",
-        "filesystem-input:orchestration.scheduler:_load_contiguous_pass_artifacts:1",
-        "filesystem-input:orchestration.scheduler:_load_indexed_events:1",
+        "filesystem-input:orchestration.scheduler:_durable_directory_names:1",
+        "filesystem-input:orchestration.scheduler:_inspect_orphan_immutable_writes:1",
         "filesystem-input:orchestration.scheduler:_load_state:1",
         "filesystem-input:orchestration.scheduler:_load_state:2",
-        "filesystem-input:orchestration.scheduler:_load_state:3",
-        "filesystem-input:orchestration.scheduler:_load_state:4",
-        "filesystem-input:orchestration.scheduler:_load_state:5",
-        "filesystem-input:orchestration.scheduler:_load_state:6",
         "filesystem-input:orchestration.scheduler:_open_control_directories:1",
         "filesystem-input:orchestration.scheduler:_open_control_directories:2",
         "filesystem-input:orchestration.scheduler:_open_model_observation:1",
@@ -2221,11 +2229,21 @@
         "filesystem-input:orchestration.scheduler:_validate_control_layout:1",
         "filesystem-input:orchestration.scheduler:_validate_control_layout:2",
         "filesystem-input:orchestration.scheduler:_validate_control_layout:3",
+        "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:1",
+        "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:2",
+        "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:3",
+        "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:4",
         "filesystem-input:orchestration.scheduler:_write_fresh_private_file:1",
         "filesystem-input:orchestration.scheduler:_write_fresh_private_file:2",
-        "filesystem-input:orchestration.scheduler:_write_fresh_private_file:3",
-        "filesystem-input:orchestration.scheduler:_write_fresh_private_file:4",
+        "filesystem-input:orchestration.scheduler:_write_model:1",
+        "filesystem-input:orchestration.scheduler:resume_scheduler_journal:1",
+        "filesystem-input:orchestration.scheduler:resume_scheduler_journal:2",
+        "filesystem-input:orchestration.scheduler:schedulerjournal._adopt_staged_journal_head_checkpoint:1",
+        "filesystem-input:orchestration.scheduler:schedulerjournal._assert_live_custody:1",
+        "filesystem-input:orchestration.scheduler:schedulerjournal._refresh_journal_head_checkpoint:1",
         "filesystem-input:orchestration.scheduler:schedulerjournal._require_exact_retained_artifact_layout:1",
+        "filesystem-input:orchestration.scheduler:schedulerjournal._require_exact_retained_artifact_layout:2",
+        "filesystem-input:orchestration.scheduler:schedulerjournal._validate_state:1",
         "filesystem-input:orchestration.scheduler_runtime:_validated_projection_root:1",
         "filesystem-input:orchestration.scheduler_runtime:_validated_projection_root:2",
         "filesystem-input:orchestration.scheduler_runtime:_validated_projection_root:3",
@@ -4036,7 +4054,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 3667,
+  "source_count": 3685,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9571,7 +9589,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/coverage_planning.py",
-      "source_semantics_sha256": "55e9797525c814c60c495fc365a4443bc6b8f670e87015058754e325eddd1914"
+      "source_semantics_sha256": "32f95d5e6bd3adf78fee6ed6fdc3b05ab146a920e81391721689583e05e86cce"
     },
     {
       "classification": "GATE",
@@ -9679,7 +9697,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/openrouter.py",
-      "source_semantics_sha256": "8a7ce9fddd9a6a92657fde8e02685671a037795ad868f8925cd18fa98b9087c3"
+      "source_semantics_sha256": "0af542b48ccda0e9885cb53e044a5c0b1ab909da71e507214a6461ff71991632"
     },
     {
       "classification": "GATE",
@@ -9859,7 +9877,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/scheduler.py",
-      "source_semantics_sha256": "6f3e4be9d8e072821883eb1248496297d6e9193638516aec50a1bbcf5175f247"
+      "source_semantics_sha256": "c7abf54bf909a8569dccf92ef389b14f6f3a945971a610b26af86c83fbabbe4d"
     },
     {
       "classification": "GATE",
@@ -9931,7 +9949,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/truncation_recovery_journal.py",
-      "source_semantics_sha256": "50fc71396ae4d504841bc972751a457b5dfb9f058c412154a350b54b8f51e1f3"
+      "source_semantics_sha256": "54b262baef78802fb4e28808ef056fe21cdc43036774c6ada954bf719cd895fa"
     },
     {
       "classification": "GATE",
@@ -9940,7 +9958,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/usage.py",
-      "source_semantics_sha256": "5ee0b0c99d91746c63c1670e5f683966807b638d5b8af954c1c8a599852824fa"
+      "source_semantics_sha256": "d86e83e400eaa0e39673b90a8df93d463c8230494bac98ab782665be70881177"
     },
     {
       "classification": "GATE",
@@ -9994,7 +10012,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "75f09456574142f1018e3cff6ef8a914b539b6ba7fe8ad45a57929e22d4c9f54"
+      "source_semantics_sha256": "6397993fafd7bc6d14bbdec76ff48a30f2f45a0c949ab76897791f0c12039531"
     },
     {
       "classification": "GATE",
@@ -10003,7 +10021,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/budgets.py",
-      "source_semantics_sha256": "91609f4aff396688b2486748a987c50b3b3b15dcd16f1aa476ec11d91e2cf0db"
+      "source_semantics_sha256": "b7456b7d25ba5f326d3ddcf8865b6d6ab4ec29d70293eeab77059c2e1407430e"
     },
     {
       "classification": "GATE",
@@ -10066,7 +10084,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/cost_ledger.py",
-      "source_semantics_sha256": "e890d93265d9d2cca2a4520faa13f571526a95f72592467a44f82773ce5089ac"
+      "source_semantics_sha256": "4bd3d86f506bf9a8a371cc8d07b8c2908e7225aa72416641293cd60fabc86a7e"
     },
     {
       "classification": "GATE",
@@ -10129,7 +10147,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/pipeline.py",
-      "source_semantics_sha256": "c5bc2babe4c635d46b613cdb2a0dc48fa4460217c766405d5840bf6fe7a7d265"
+      "source_semantics_sha256": "ecf6cfbc4b504d70da7b1d4d080b633203aa1a02de0a6d9a8af2620d4a68a82e"
     },
     {
       "classification": "GATE",
@@ -10174,7 +10192,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler.py",
-      "source_semantics_sha256": "6233265873440f5435a17dcaf3e101f5f0da38a60f2ca22bda69a4d90688f48d"
+      "source_semantics_sha256": "2b44b430fccb203278fa98c707ae5352450590abf42b8456bb0f5cfe14e1c45f"
     },
     {
       "classification": "GATE",
@@ -10183,7 +10201,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler_runtime.py",
-      "source_semantics_sha256": "a5ecfe01e2d8fb40d2ceb9ea0f90b0ada7d7f26de77243545416602019cd8cda"
+      "source_semantics_sha256": "a283caf274b6449e8b142eec7d6b08da906d32436136b11c70fb1bf655be6f23"
     },
     {
       "classification": "GATE",
@@ -16406,6 +16424,33 @@
     },
     {
       "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "direct-env-ast:orchestration.budgets:_accounting_portfolio_scope_material:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/budgets.py:_accounting_portfolio_scope_material:process-identity:1",
+      "source_semantics_sha256": "9bc28032ba85e1989dcb592edf64e8e1ce825d33d113e908fe312905a5f9d7af"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "direct-env-ast:orchestration.budgets:budgetmanager.portfolio_task_scope:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/budgets.py:BudgetManager.portfolio_task_scope:process-identity:1",
+      "source_semantics_sha256": "7e6e132c3d83a789f78db641044fe669079f1ba586db5bd2ba415688aced67f6"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "direct-env-ast:orchestration.budgets:budgetmanager.reserve:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/budgets.py:BudgetManager.reserve:process-identity:1",
+      "source_semantics_sha256": "8ed9049360790c696f5e8014a90f4356b89f99c91187a4bf01b8bd30c9f15a71"
+    },
+    {
+      "classification": "GATE",
       "logical_gate_id": "gate-release-evidence-pipeline",
       "source_id": "direct-env-ast:orchestration.ci:_open_ci_bundle_root:working-directory:1",
       "source_kind": "DIRECT_ENVIRONMENT_INPUT",
@@ -18873,11 +18918,29 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "entropy-ast:orchestration.cost_ledger:atomiccostledger.claim_portfolio_slot:uuid-uuid4:1",
+      "source_kind": "ENTROPY_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/cost_ledger.py:AtomicCostLedger.claim_portfolio_slot:uuid.uuid4:1",
+      "source_semantics_sha256": "ee16409fc02bb40d9a37dff834bd345a179e18f0d8ae9c103289ffea89918441"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
       "source_id": "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve:uuid-uuid4:1",
       "source_kind": "ENTROPY_INPUT",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/cost_ledger.py:AtomicCostLedger.reserve:uuid.uuid4:1",
       "source_semantics_sha256": "3762d450500e9d4b8a932652e4c1715ec36b810cd453b42c2767e99ce8c74314"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve_portfolio:uuid-uuid4:1",
+      "source_kind": "ENTROPY_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/cost_ledger.py:AtomicCostLedger.reserve_portfolio:uuid.uuid4:1",
+      "source_semantics_sha256": "958f3f334e48ca9d5e7a7286b3bd690c70838c1ff52e62dcfb05cce6acc6c6e8"
     },
     {
       "classification": "GATE",
@@ -19210,7 +19273,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.cost_ledger.AtomicCostLedger",
-      "source_semantics_sha256": "895e70eb2a6525d0db66cded2d544d4dffbaabe5e6729c731e1208926e12ccf9"
+      "source_semantics_sha256": "d88da4442877bf60bfb3ed9e86703c5b6a2bbfa16dff8ff8068755b1565b4500"
     },
     {
       "classification": "GATE",
@@ -19264,7 +19327,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.pipeline.AuditPipeline._run_with_provider",
-      "source_semantics_sha256": "8be3c3df7e3a21ad33a39621058d81e5f42fb6a0294190cb5154874738f4f722"
+      "source_semantics_sha256": "26c13e875c1b6649ca53f121ab1716fced6471ca713b86351d480f3e6a9718fe"
     },
     {
       "classification": "GATE",
@@ -27261,6 +27324,51 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/pipeline.py:_load_private_portfolio_preflight:metadata-observation:1",
+      "source_semantics_sha256": "0e580ed01d5dbbf64e8a815c115426102e87502b0510ab39e9d36798146087f3"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/pipeline.py:_load_private_portfolio_preflight:metadata-observation:2",
+      "source_semantics_sha256": "f6d69b4a151c5c2df775a62b89f075756e748e19ea378254439ae837ab738b94"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:3",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/pipeline.py:_load_private_portfolio_preflight:metadata-observation:3",
+      "source_semantics_sha256": "7510803b3915fa09f90ecc5eb009699167acf6dc8a14c6bd381970d0c5cded26"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:4",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/pipeline.py:_load_private_portfolio_preflight:metadata-observation:4",
+      "source_semantics_sha256": "c9e9c1c7e52935377ff1e5e195f3ac05ae9540d1c7e9d17b7df94a3fea857cab"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "filesystem-input:orchestration.pipeline:_load_private_portfolio_preflight:5",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/pipeline.py:_load_private_portfolio_preflight:content-read:5",
+      "source_semantics_sha256": "f6793cfca6234f78d1676f4d962fc6c6304da476b796e08ba53a273ea10fd85d"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
       "source_id": "filesystem-input:orchestration.pipeline:_persist_private_coverage_evidence:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
@@ -28116,6 +28224,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_adopt_pending_private_file:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_adopt_pending_private_file:directory-enumeration:1",
+      "source_semantics_sha256": "2937cad2aba6c94ada875c94fef7e2e47f18fbdd4b997315adba2878c3527b93"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
       "source_id": "filesystem-input:orchestration.scheduler:_assert_root_path_identity:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
@@ -28152,6 +28269,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_cleanup_orphan_immutable_writes:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_cleanup_orphan_immutable_writes:directory-enumeration:1",
+      "source_semantics_sha256": "031cb005ad3cc1997dd9284f2094acec8f240dcabf4313d536420c8e99e6cd65"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
       "source_id": "filesystem-input:orchestration.scheduler:_create_private_root:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
@@ -28179,20 +28305,20 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_contiguous_pass_artifacts:1",
+      "source_id": "filesystem-input:orchestration.scheduler:_durable_directory_names:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_contiguous_pass_artifacts:directory-enumeration:1",
-      "source_semantics_sha256": "a12bed42fa845a91e4f6ad754926edaf738a6207c46c1d7c95a81a78a3776b4d"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_durable_directory_names:directory-enumeration:1",
+      "source_semantics_sha256": "c9bb37df236538362904c45e472affb54523dbfbfaf498b788cc55eacc13c3e9"
     },
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_indexed_events:1",
+      "source_id": "filesystem-input:orchestration.scheduler:_inspect_orphan_immutable_writes:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_indexed_events:directory-enumeration:1",
-      "source_semantics_sha256": "084f912e712f445228c253c7663ee8f78720cf1897e8e8ea9d375ca386ce57cf"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_inspect_orphan_immutable_writes:directory-enumeration:1",
+      "source_semantics_sha256": "155d3cf97e3d38064071e72b2b5eb353364b40f2070a25e1fa211f29ea2bc519"
     },
     {
       "classification": "GATE",
@@ -28209,43 +28335,7 @@
       "source_id": "filesystem-input:orchestration.scheduler:_load_state:2",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:directory-enumeration:2",
-      "source_semantics_sha256": "9aa273257f040e05e688c0c2b2aadfa0188dbbfc98c08a13d8628841e1ec690c"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_state:3",
-      "source_kind": "EXPLICIT_NON_FIELD_GATE",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:directory-enumeration:3",
-      "source_semantics_sha256": "877543715d743aa18f41c9c81f756658870330fbdcbe0b290dbdd983d6430e64"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_state:4",
-      "source_kind": "EXPLICIT_NON_FIELD_GATE",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:directory-enumeration:4",
-      "source_semantics_sha256": "c94911e2e89a457fdc704522a1b2ce802b6b61cf13116673425e1313d4ee9e2d"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_state:5",
-      "source_kind": "EXPLICIT_NON_FIELD_GATE",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:directory-enumeration:5",
-      "source_semantics_sha256": "6f47c2f3957e6ca56ed4fd77aa35709389a8401862b1243f7c490c81cb22fc93"
-    },
-    {
-      "classification": "GATE",
-      "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_load_state:6",
-      "source_kind": "EXPLICIT_NON_FIELD_GATE",
-      "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:metadata-observation:6",
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_load_state:metadata-observation:2",
       "source_semantics_sha256": "222ca4c160a3b84c61b0a555238858efe47934e1069b308c00dd9d1ee188a9fc"
     },
     {
@@ -28440,11 +28530,47 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_exclusive_private_file:content-read:1",
+      "source_semantics_sha256": "0a2a660ac0f6bb504d2357fe9b42f1d2214e9cee597a14c43f2bf4e8c73089fb"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_exclusive_private_file:metadata-observation:2",
+      "source_semantics_sha256": "d055bceb38b9f93c130825462720336f8b2fc769625a9ef4f55c50d90a118af3"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:3",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_exclusive_private_file:metadata-observation:3",
+      "source_semantics_sha256": "d055bceb38b9f93c130825462720336f8b2fc769625a9ef4f55c50d90a118af3"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:4",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_exclusive_private_file:metadata-observation:4",
+      "source_semantics_sha256": "d055bceb38b9f93c130825462720336f8b2fc769625a9ef4f55c50d90a118af3"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
       "source_id": "filesystem-input:orchestration.scheduler:_write_fresh_private_file:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:content-read:1",
-      "source_semantics_sha256": "2f694d11f833cf616ee875966727baf1706c502d88380ebc4634a03596421a86"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:directory-enumeration:1",
+      "source_semantics_sha256": "5d763818137317481478dab0f4f27a1b59bec64a99d16d2a1d6df9e0465113d8"
     },
     {
       "classification": "GATE",
@@ -28452,26 +28578,62 @@
       "source_id": "filesystem-input:orchestration.scheduler:_write_fresh_private_file:2",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:metadata-observation:2",
-      "source_semantics_sha256": "0d5350c6409257bce8f64a6d65e5f49ba6df286827469ad66735e6eb06ca0712"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:directory-enumeration:2",
+      "source_semantics_sha256": "5d763818137317481478dab0f4f27a1b59bec64a99d16d2a1d6df9e0465113d8"
     },
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_write_fresh_private_file:3",
+      "source_id": "filesystem-input:orchestration.scheduler:_write_model:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:metadata-observation:3",
-      "source_semantics_sha256": "0d5350c6409257bce8f64a6d65e5f49ba6df286827469ad66735e6eb06ca0712"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_model:directory-enumeration:1",
+      "source_semantics_sha256": "aa0efaaa0ad5185de4ff7ffbb484ea4ea130930cc0a1a4bd0dcbb686957739fb"
     },
     {
       "classification": "GATE",
       "logical_gate_id": "gate-managed-output-provisioning",
-      "source_id": "filesystem-input:orchestration.scheduler:_write_fresh_private_file:4",
+      "source_id": "filesystem-input:orchestration.scheduler:resume_scheduler_journal:1",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
-      "source_path": "src/mmaudit/orchestration/scheduler.py:_write_fresh_private_file:metadata-observation:4",
-      "source_semantics_sha256": "0d5350c6409257bce8f64a6d65e5f49ba6df286827469ad66735e6eb06ca0712"
+      "source_path": "src/mmaudit/orchestration/scheduler.py:resume_scheduler_journal:directory-enumeration:1",
+      "source_semantics_sha256": "ce9074e9ed906c101f895fcfc0503d6e7faa586753a8f00cf9d80ace91515771"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:resume_scheduler_journal:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:resume_scheduler_journal:directory-enumeration:2",
+      "source_semantics_sha256": "ce9074e9ed906c101f895fcfc0503d6e7faa586753a8f00cf9d80ace91515771"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:schedulerjournal._adopt_staged_journal_head_checkpoint:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._adopt_staged_journal_head_checkpoint:directory-enumeration:1",
+      "source_semantics_sha256": "3b6f35a031a7eeeefa3a387e76ebdf5d2d5c3ce2b0139e9393cf0a948e92bd77"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:schedulerjournal._assert_live_custody:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._assert_live_custody:directory-enumeration:1",
+      "source_semantics_sha256": "c5308a3711df4decbff9bb8035c7ea95725a85f12dbf2757f4ae1d83d6fc5b98"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:schedulerjournal._refresh_journal_head_checkpoint:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._refresh_journal_head_checkpoint:directory-enumeration:1",
+      "source_semantics_sha256": "5f16b7a78572760cf6cb61932a40c2a734e813d3161f74eef8846623b3b07f03"
     },
     {
       "classification": "GATE",
@@ -28480,7 +28642,25 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._require_exact_retained_artifact_layout:directory-enumeration:1",
+      "source_semantics_sha256": "c178e7697cdbcdcd91fb56da0c86f3e609225ec4ea225818831219e2bbc6ec68"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:schedulerjournal._require_exact_retained_artifact_layout:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._require_exact_retained_artifact_layout:directory-enumeration:2",
       "source_semantics_sha256": "9c39d5a9dcebf7819655f2cb55b71c0c68b0ad84f8e1fdf02dae87c7fdcdf235"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-output-provisioning",
+      "source_id": "filesystem-input:orchestration.scheduler:schedulerjournal._validate_state:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/scheduler.py:SchedulerJournal._validate_state:directory-enumeration:1",
+      "source_semantics_sha256": "20241f6ef320eac8aacf9b75a94d61aa6b6ea329686ffe9646b560f3499b6b6d"
     },
     {
       "classification": "GATE",
@@ -37042,7 +37222,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99",
+  "source_discovery_semantics_sha256": "d3f7b11db48b6cccf50d058f9d46ed69efed7ea02bc3d10865ce011e553c2f7b",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 232,
     "AUDIT_CONFIG_LEAF": 505,
@@ -37050,16 +37230,16 @@
     "AUDIT_RUN_OPTION_LEAF": 13,
     "CLI_RUN_PARAMETER": 50,
     "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-    "DIRECT_ENVIRONMENT_INPUT": 491,
-    "ENTROPY_INPUT": 17,
+    "DIRECT_ENVIRONMENT_INPUT": 494,
+    "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 1932,
+    "EXPLICIT_NON_FIELD_GATE": 1945,
     "PIPELINE_INIT_PARAMETER": 25,
     "PIPELINE_RUN_PARAMETER": 15,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 3670,
-  "source_universe_sha256": "6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913",
+  "source_occurrence_count": 3688,
+  "source_universe_sha256": "8951ede35cacfadafdb893a89548cabaf8cb05c592b8884e42b90407a8d16b42",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

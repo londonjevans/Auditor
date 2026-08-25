@@ -69,17 +69,17 @@ _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
     "a4ebabe9ec53adc6b9ec2d394655fd519d847d9c5032089e0b017a5da4eaa5b6"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "4e3e83c74a772e6339a954db153fd1e7b034e3c7da4f53522a8cd10003df788a"
+    "40f3dbb784de6ad21a04a0ef909cd10c75807d17e12bb9474656087923c4ed92"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "4eba42a2add5dcd61557d74ff266143f21f1796465ef920068b05f5fd9abf8aa"
+    "45ba8aa1ccab7087fc6339d85ec8532aa7f3790d4b7052e4caf02268a95c17de"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 _FROZEN_ENTROPY_INPUT_LOCI_SHA256 = (
-    "d8713e467b0c53130d9e2b15994d3e5592add2a2ccc89daffbf4b4b51435291b"
+    "2c6625ea6c47281deb350151cb369c8e2f08e0eee853fca319ff8bbcaef5a9fd"
 )
 
 
@@ -2392,6 +2392,8 @@ def _direct_environment_gate(
     if kind in {"process-identity", "process-identity-binding"}:
         if relative_path == "benchmark/model_portfolio.py":
             return "gate-benchmark-evidence-authority"
+        if relative_path == "orchestration/budgets.py":
+            return "gate-cost-ledger-provisioning"
         if relative_path in {"models/openrouter.py", "models/usage.py"}:
             return "gate-authenticated-real-campaign"
         if relative_path.startswith("models/authenticated_runner"):

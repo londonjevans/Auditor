@@ -1061,6 +1061,21 @@ class FakeOpenRouter:
             raise httpx.ReadTimeout("synthetic timeout", request=request)
         if self.mode == "invalid_json" and role == self.role:
             return self._completion(body, "not valid json")
+        if self.mode == "clean_no_candidates" and (
+            schema_name
+            in {
+                "mmaudit_verification",
+                "mmaudit_judgment",
+                "mmaudit_exploit_test",
+                "mmaudit_test_generation",
+                "mmaudit_exploit_reproduction_plan",
+                "mmaudit_falsification",
+            }
+            or schema_name.startswith("mmaudit_candidate_cross_examination_")
+        ):
+            raise AssertionError(
+                "clean no-candidate synthetic run scheduled candidate-dependent model work"
+            )
 
         if schema_name == "mmaudit_threat_model":
             content: Any = _threat_model()
@@ -1148,6 +1163,7 @@ class FakeOpenRouter:
         elif schema_name == "mmaudit_source_audit_findings":
             user = body["messages"][1]["content"]
             if self.mode in {
+                "clean_no_candidates",
                 "execution_origin_post_judge",
                 "maximum_assurance",
                 "semantic_accounting",
@@ -1243,7 +1259,11 @@ class FakeOpenRouter:
                     ),
                 }
                 return self._completion(body, _candidate_review_wire(content))
-            if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
+            if self.mode in {
+                "clean_no_candidates",
+                "execution_origin_post_judge",
+                "maximum_assurance",
+            }:
                 content = {
                     "findings": [],
                     "surface_reviews": _surface_reviews(
@@ -1285,6 +1305,7 @@ class FakeOpenRouter:
                 }
                 if self.mode
                 in {
+                    "clean_no_candidates",
                     "execution_origin_post_judge",
                     "solidity_reproduction",
                     "maximum_assurance",
