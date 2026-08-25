@@ -4,21 +4,164 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T19:00:38Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-25T06:42:22Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
-OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET
-LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
-CURRENT_TICKET: V3-TRUNCATION-001
-CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING
-LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001
-NEXT_ACTION: Require separately authorized genuine provider-backed positive full-pipeline promotion and a terminal maximum-assurance result before completing V3-TRUNCATION-001. Deeper recursion, retained surfaces on the recursive bridge, and specialist-role recursion remain fail closed. No provider, operator, or inferred run-index action is authorized.
-LAST_VALIDATION_COMMAND: Checkpoint `e61b7d7` passed separate overlapping gates of `108` truncation evidence/journal/promotion tests in 415.50s, `63` model-coverage tests in 218.47s, `244` assurance tests in 663.44s, `58` scheduler-model tests, `9` scheduler/recovery runtime tests, `105` scheduler-journal tests, `2` exact direct/recursive live synthetic promotion/replay nodes in 155.74s, `1` MOCK recursive integration in 251.93s, `1` specialist direct compatibility integration in 158.93s, `4` PLAN selected-display regressions in 0.21s, and a final `57` autonomy-inventory/release-schema tests in 46.04s (independent audit: 46.85s). Focused consumer and independent adversarial matrices also passed but are not added to those full-suite counts. Ruff check/format, separate strict-mypy runs over `9` and `10` source files, canonical generator write/verify, import smoke, diff-check, and `19` operator-free product-documentation/objective tests passed. Independent final frozen-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
-LAST_VALIDATION_RESULT: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING — distinct opaque recursive verification and journal-promotion capabilities bind all five live usage/context identities. One v1.1 promotion and v1.1 recovered output produce four public v1.2 requests with one superseded truncated bridge and three ordered successful leaves. The bridge earns no review or completion credit; exact direct and recursive parent-plus-child/leaf partitions are universally consumed, including zero-retained parents without invented references. Synthetic REAL re-attestation is not genuine provider execution; MOCK remains unpromoted, noncrediting, and zero-transport on resume.
-LAST_CHECKPOINT_COMMIT: `e61b7d7d168488bea8f27f40b31c4db4a0bf8386`, direct child of `ea85af3849db30c9832624c675594541a698ab06`, owns exactly 20 source, generated-artifact, generator, and unit-test paths; `git diff-tree --no-commit-id --name-only -r e61b7d7d168488bea8f27f40b31c4db4a0bf8386` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `827b3fb3153366efdd4f59ac30b439612c26523675d134cf502d6d36b3094fec`, `1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda`, `4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99`, and `6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913`; counts are 3,667 sources / 3,670 occurrences / 3,624 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; historical PLANCONSTRAINTS base: `7ef4717`; historical replay checkpoint: `c627f2d`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-PLANCONSTRAINTS-001` is repaired and complete. `V3-TRUNCATION-001` remains `PARTIAL`: direct retained-parent, specialist-role, one generic recursive level, and its full-tree live opaque promotion are checkpointed provider-free; genuine provider-backed positive promotion, deeper recursion, retained recursive-bridge surfaces, and specialist recursion remain outstanding. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; the next unused index is NOT_STATED and no command or paid authority is current.
+AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
+OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_NO_LAUNCH_NONAUTHORIZING
+LAST_RECONCILED_OPERATOR_RESULTS: `e158c955f7ba89c374013a7fa5ccbae0acad0258942492f95da55117854805e0` / 127656 bytes / 2316 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
+CURRENT_TICKET: V3-COVERAGE-001
+CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING
+LAST_COMPLETED_TICKET: V3-COVERAGE-001
+NEXT_ACTION: STOP after closing V3-COVERAGE-001. V3-CALIBRATE-001 is the next critical path but remains BLOCKED_TECHNICAL and is not selected or restarted in this turn. The r21 preflight failed before transport because its supplied qualification-policy path was absent; the immediate file-stage remedy is UNDETERMINED, and exact precommitted REAL calibration inputs plus the later source-pinned P2/C2 transition remain unavailable. Do not select AUTHSEAL, launch a campaign, emit a command, or infer a run index; fresh operator authorization is required after the calibration blocker clears.
+LAST_VALIDATION_COMMAND: Checkpoint `33001d12` passed separate overlapping gates of `187` scheduler-journal tests in 47.17s, `78` truncation-journal tests in 308.72s, `178` wider scheduler-unit tests, `46` scheduler integrations, `280` cost-ledger/budget/usage tests in 2.20s, `82` coverage planning/resource/wiring tests in 3.47s, `33` autonomy-inventory tests, and `48` release-schema/public-projection tests. The clean no-candidate Solidity/EVM exact-24 runtime passed `1` test in 710.96s with its pre/post 244-file digest unchanged at `634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f`; the live local v1.3 released-child/resume regression passed `1` test in 105.34s. These suites overlap and their counts are not additive. Full Ruff format/check, strict mypy over all `210` source modules, canonical generator verification, py_compile, and scoped diff integrity passed. Independent final matrices passed `42` atomic, `24` portfolio/recovery, `59` schema/inventory, `12` v1.3, and `1` live test with no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
+LAST_VALIDATION_RESULT: V3_COVERAGE_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING — one durable pre-orientation portfolio preflight and atomic hold bind the exact orientation, compact, source_audit, and whole_protocol attempt scope before transport. A clean no-candidate synthetic runtime executed exactly 22 investigator roles plus invariant_review and report_quality. Crash-safe journal publication and exact transition recovery preserve v1.3 released pre-send failures as FAILED, comparison-only, noncrediting evidence with zero-transport resume. Synthetic/MOCK evidence is not REAL/provider execution.
+LAST_CHECKPOINT_COMMIT: `33001d12d62ffe54788a41ed7321a77cd9fcb05f`, direct child of `d6c7c5b05d8466a3793b3174809e1cd48b6a02e8`, owns exactly 33 source, generated-artifact, generator, integration-test, and unit-test paths; `git diff-tree --no-commit-id --name-only -r 33001d12d62ffe54788a41ed7321a77cd9fcb05f` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `4bfac51801ff5999435081ac3fda4b2fa6fe5826cc9f89afd380ee53f4e2eb48`, `6f9be06561bf1d98cbf6c5102560e20b4f8a353cd566681b44156ac73cc6040a`, `d3f7b11db48b6cccf50d058f9d46ed69efed7ea02bc3d10865ce011e553c2f7b`, and `8951ede35cacfadafdb893a89548cabaf8cb05c592b8884e42b90407a8d16b42`; counts are 3,685 sources / 3,688 occurrences / 3,642 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. The `EXPLICIT_NON_FIELD_GATE` class contains 1,945 sources; scheduler filesystem discovery contains 51 explicitly labeled loci. Prior truncation-promotion checkpoint: `e61b7d7`; recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 42 unfinished tickets. `V3-COVERAGE-001` is `COMPLETE` provider-free and nonauthorizing at `33001d12`. `V3-TRUNCATION-001` remains `PARTIAL`: direct retained-parent, specialist-role, one generic recursive level, and its full-tree live opaque promotion are checkpointed provider-free; genuine provider-backed positive promotion, deeper recursion, retained recursive-bridge surfaces, and specialist recursion remain outstanding. `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL`, but the current operator-supplied refusal establishes it as the critical path to `completed_real_audits > 0`; no next ticket is selected or started. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its smoke path is proven twice, the next unused index is NOT_STATED, and no command or paid authority is current.
+
+## 2026-08-25T06:42:22Z — current operator result reconciled without launch authority
+
+- **Current ticket:** `V3-COVERAGE-001` remains `COMPLETE` provider-free and nonauthorizing at
+  `33001d12d62ffe54788a41ed7321a77cd9fcb05f`. This reconciliation does not reopen it, select a
+  successor ticket, or authorize external work.
+- **Operator-result custody:** The exact current operator-supplied record is 127,656 bytes / 2,316
+  lines at SHA-256 `e158c955f7ba89c374013a7fa5ccbae0acad0258942492f95da55117854805e0`.
+  Its latest entry is `2026-08-25T05:16Z`; the record is nonauthorizing and not independently
+  authenticated by Codex.
+- **Latest recorded result:** The authorized 24-case campaign did not launch. A provider-free `$0`
+  authenticated-runner preflight using the r21 inputs failed closed with
+  `qualification input is unavailable` at `qualification.py:5316`, where `path.stat()` found the required
+  `--qualification-policy` artifact absent. The operator
+  reports the 29-entry ledger unchanged at `0.43458261` USD and `completed_real_audits` remains
+  zero. That stat failure proves only that the supplied path was absent; it does not identify the
+  required policy stage or prove P2 was missing. `V3-CALIBRATE-001` is therefore the recorded
+  critical path to `completed_real_audits > 0`; the AUTHRUNNER smoke path has succeeded twice,
+  including r21/index 21, and is not the current constraint. A later campaign requires fresh
+  authorization after this blocker clears. The same entry also records live metadata probes with
+  zero new spend; `provider-free` describes the refused preflight and absence of 24-case campaign
+  completion transport, not every observation in the operator record.
+- **Three-question relay:** (1) The failed `path.stat()` proves only an absent supplied
+  `--qualification-policy` path; the artifact version and content at that immediate file stage
+  remain `UNDETERMINED`. Current config/release pins schema-v1 P1 SHA-256
+  `1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`; the exact embedded
+  `qualification_policy` object in `benchmarks/model_corpus/verdict_policy.json` validates against
+  `config/openrouter-qualification.toml` and the 24-case suite under
+  `_require_qualification_release_pins`. A separately materialized P1 bootstrap could likely
+  satisfy the current C1 pin, but no repository CLI materializer exists and this immediate remedy
+  is unproven. A derived P2 would be rejected by current C1 until a reviewed successor C2 pins it;
+  the earlier attribution of the stat-missing file to `write_calibrated_qualification_policy` was
+  operator inference, not established by the failure. The r21 bundle remains one-case,
+  nonauthorizing smoke evidence and cannot drive or substitute for the implemented legacy,
+  optional two-campaign bridge: fresh `mmaudit models benchmark` candidate-registry J1 calibration
+  bound to exact registry/discovery evidence, the 24-case corpus, journal and ledger custody,
+  predecessor P1/C1, a signed lineage-review bundle and trust anchor, and at least eight complete
+  REAL candidates across at least six reviewed root lineages with role support, followed by A/P2
+  publication, source review and C2 pinning, and a separate J2 qualification campaign. That bridge
+  is not sufficient for frozen current-objective completion. The current-objective critical path
+  separately lacks precommitted constructed/public frozen truth, cross-lineage automated
+  adjudication, and exact REAL calibration custody. Those exact inputs are absent, so no honest
+  runnable operator command exists; only the legacy command family is identified. (2) Schema-invalid
+  structured output is not retried on the same route. `max_model_retries = 1` governs transient
+  network/status retry; schema failure becomes `SCHEMA_VALIDATION_FAILED` and uses an explicitly
+  configured fallback or terminates. The operator chose retry, so a future code change and
+  regressions are required; this ticket changes neither code nor config. (3) The exact-model
+  metadata returned a nonempty endpoint list, but none of the four configured
+  `openai/gpt-5.6-sol` identifiers matched, proving those plan route identifiers stale. Validation
+  failed before snapshot publication, so no alternative route identity, operational status, ZDR,
+  or eligibility was sealed; Azure was unlisted rather than probed. A globally usable route remains
+  `INCONCLUSIVE`, not proven genuinely unserved. Refresh the nonauthorizing exact endpoint inventory
+  before any `$0` re-probe. Lineage, documentary, entry, role, and selection authority remain
+  unconfirmed/false even if a route later appears; Opus 4.6 remains dropped by operator decision.
+- **Evidence boundary / next safe action:** Stop after closing `V3-COVERAGE-001`. Identify
+  `V3-CALIBRATE-001` only as the next critical path; leave it `BLOCKED_TECHNICAL` and do not reopen
+  it in this closure. Do not select AUTHSEAL, launch a campaign, emit a command, or infer a run index.
+- **Governance validation:** The full product documentation/objective suite, including the current
+  authorized operator-history reconciliation contract, passed `21` tests. Focused Ruff check/format
+  and scoped diff integrity passed.
+
+## 2026-08-25T06:29:52Z — durable exact-24 coverage portfolio checkpointed
+
+- **Current ticket:** `V3-COVERAGE-001` is `COMPLETE` provider-free and nonauthorizing at source
+  checkpoint `33001d12d62ffe54788a41ed7321a77cd9fcb05f`, direct child of
+  `d6c7c5b05d8466a3793b3174809e1cd48b6a02e8`. `V3-TRUNCATION-001` remains `PARTIAL`; no second
+  major ticket was opened by this reconciliation.
+- **Completed changes:** The scheduler compiles and persists one self-hashed portfolio resource
+  preflight before paid orientation, then atomically holds the exact request/token/USD attempt
+  envelopes for orientation, compact coverage, `source_audit`, and `whole_protocol` work before
+  any transport. Infeasibility, persistence failure, lifecycle-observer failure, or preview drift
+  fails before dispatch. A clean no-candidate synthetic Solidity/EVM runtime executes exactly the
+  22 investigator roles plus `invariant_review` and `report_quality`; candidate-dependent
+  specialist roles, verifier, and judge remained absent. Durable journal publication stages,
+  fsyncs, read-backs, and
+  no-replace publishes immutable artifacts, while predecessor/checkpoint recovery accepts only
+  exact legal state transitions. A released pre-send truncation tail is retained as exact v1.3
+  `FAILED` / `RELEASED_PRE_SEND_TAIL` comparison evidence, earns no coverage or authority, and
+  resumes without transport.
+- **Exact source manifest:** `docs/remediation/v3/autonomy_gate_inventory.json`,
+  `schemas/model_portfolio_resource_preflight.schema.json`, `schemas/scheduler_state.schema.json`,
+  `scripts/generate_release_schemas.py`, `src/mmaudit/models/coverage_planning.py`,
+  `src/mmaudit/models/openrouter.py`, `src/mmaudit/models/scheduler.py`,
+  `src/mmaudit/models/truncation_recovery_journal.py`, `src/mmaudit/models/usage.py`,
+  `src/mmaudit/orchestration/autonomy_gate_inventory.py`, `src/mmaudit/orchestration/budgets.py`,
+  `src/mmaudit/orchestration/cost_ledger.py`, `src/mmaudit/orchestration/pipeline.py`,
+  `src/mmaudit/orchestration/scheduler.py`, `src/mmaudit/orchestration/scheduler_runtime.py`,
+  `tests/fake_openrouter.py`, `tests/integration/test_coverage_pipeline_integration.py`,
+  `tests/integration/test_pipeline.py`,
+  `tests/integration/test_scheduler_truncation_recovery_pipeline.py`,
+  `tests/unit/test_autonomy_gate_inventory.py`, `tests/unit/test_budgets.py`,
+  `tests/unit/test_cost_ledger.py`, `tests/unit/test_coverage_pipeline_wiring.py`,
+  `tests/unit/test_coverage_planning.py`, `tests/unit/test_coverage_resource_preview.py`,
+  `tests/unit/test_logical_request_identity.py`, `tests/unit/test_release_schemas.py`,
+  `tests/unit/test_scheduler_journal.py`, `tests/unit/test_scheduler_manifest.py`,
+  `tests/unit/test_scheduler_recovery_release_projection.py`,
+  `tests/unit/test_truncation_recovery_cost_resume.py`,
+  `tests/unit/test_truncation_recovery_journal.py`, and `tests/unit/test_usage.py`.
+- **Inventory custody:** Raw/self/discovery/universe SHA-256 values are
+  `4bfac51801ff5999435081ac3fda4b2fa6fe5826cc9f89afd380ee53f4e2eb48`,
+  `6f9be06561bf1d98cbf6c5102560e20b4f8a353cd566681b44156ac73cc6040a`,
+  `d3f7b11db48b6cccf50d058f9d46ed69efed7ea02bc3d10865ce011e553c2f7b`, and
+  `8951ede35cacfadafdb893a89548cabaf8cb05c592b8884e42b90407a8d16b42`. Counts are 3,685
+  sources / 3,688 occurrences / 3,642 gate sources / 43 non-gating controls / 13 source kinds / 35
+  logical gates / 29 unsatisfied / 15 current-manual; `EXPLICIT_NON_FIELD_GATE` contributes 1,945
+  sources and the narrower scheduler-filesystem discovery class contains 51 labeled loci.
+- **Commands run / results:** Separate overlapping provider-free gates passed `187`
+  scheduler-journal tests in 47.17s, `78` truncation-journal tests in 308.72s, `178` wider
+  scheduler-unit tests, `46` scheduler integrations, `280` cost-ledger/budget/usage tests in 2.20s,
+  `82` coverage planning/resource/wiring tests in 3.47s, `33` autonomy-inventory tests, and `48`
+  release-schema/public-projection tests. The exact-24 clean runtime passed `1` test in 710.96s;
+  the pre/post 244-file digest remained
+  `634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f`. The live local v1.3
+  released-child/resume regression passed `1` test in 105.34s. Counts overlap and are not additive.
+  Full Ruff format/check, strict mypy over all `210` source modules, canonical generator
+  verification, py_compile, and scoped diff integrity passed. Independent final matrices passed
+  `42` atomic, `24` portfolio/recovery, `59` schema/inventory, `12` v1.3, and `1` live test with no
+  blocker/HIGH.
+- **Evidence boundary / remaining limitation:** All execution was local synthetic or MOCK. It is
+  not REAL/provider, qualification, campaign, benchmark, AUTHSEAL, audit, product-completion, or
+  release evidence. The v1.3 release path remains failed, comparison-only, noncrediting, and
+  unpromotable. `V3-TRUNCATION-001` remains `PARTIAL` with genuine provider-backed positive
+  promotion, deeper recursion, retained recursive-bridge surfaces, and specialist recursion still
+  outstanding.
+- **Next safe action at that boundary:** Stop pending reconciliation of the then-current operator
+  result; no successor ticket is selected or started by this closure.
+
+## 2026-08-24T19:23:20Z — aggregate full-spend coverage closure opened
+
+- **Current ticket:** `V3-COVERAGE-001` is `IN_PROGRESS` only for one bounded provider-free
+  closure slice. `V3-TRUNCATION-001` remains `PARTIAL` with its checkpointed capabilities and
+  limitations unchanged.
+- **Planned change:** Move aggregate full-spend feasibility and reservation before any paid
+  orientation. Bind every compact task plus supplemental `source_audit` and `whole_protocol`
+  tasks into one atomic all-task request/token/USD reservation before transport can begin.
+- **Required proof:** In a clean, no-candidate synthetic full runtime, execute exactly 24 distinct
+  candidate-independent roles without crediting aliases, retries, repeated calls, or conditional
+  absences.
+- **Evidence boundary:** Local synthetic and MOCK evidence may prove deterministic scheduling,
+  reservation, and role execution only. It is not REAL/provider, qualification, campaign,
+  benchmark, AUTHSEAL, audit, completion, or release evidence.
+- **External effects:** None authorized or required. No provider, network, credential,
+  private-ledger, operator-record, paid-orientation, or run-index action may occur.
 
 ## 2026-08-24T19:00:38Z — one-level full-tree live promotion checkpointed
 

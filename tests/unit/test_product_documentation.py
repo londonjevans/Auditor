@@ -82,6 +82,9 @@ HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT = "dcd9ab2be15f4a0416372c110734b5079a
 HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT = "d738f2760da047d15d4e53f87d6e0aeaf13d442a"
 CURRENT_TRUNCATION_PROMOTION_CHECKPOINT = "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
 CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT = "ea85af3849db30c9832624c675594541a698ab06"
+CURRENT_COVERAGE_CHECKPOINT = "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
+CURRENT_COVERAGE_PARENT_CHECKPOINT = "d6c7c5b05d8466a3793b3174809e1cd48b6a02e8"
+CURRENT_OPERATOR_RESULTS_SHA256 = "e158c955f7ba89c374013a7fa5ccbae0acad0258942492f95da55117854805e0"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
 )
@@ -351,6 +354,43 @@ TRUNCATION_PROMOTION_SOURCE_PATHS = frozenset(
         "tests/unit/test_truncation_recovery_evidence.py",
         "tests/unit/test_truncation_recovery_journal.py",
         "tests/unit/test_truncation_recovery_promotion_models.py",
+    }
+)
+CURRENT_COVERAGE_SOURCE_PATHS = frozenset(
+    {
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/model_portfolio_resource_preflight.schema.json",
+        "schemas/scheduler_state.schema.json",
+        "scripts/generate_release_schemas.py",
+        "src/mmaudit/models/coverage_planning.py",
+        "src/mmaudit/models/openrouter.py",
+        "src/mmaudit/models/scheduler.py",
+        "src/mmaudit/models/truncation_recovery_journal.py",
+        "src/mmaudit/models/usage.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "src/mmaudit/orchestration/budgets.py",
+        "src/mmaudit/orchestration/cost_ledger.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/orchestration/scheduler.py",
+        "src/mmaudit/orchestration/scheduler_runtime.py",
+        "tests/fake_openrouter.py",
+        "tests/integration/test_coverage_pipeline_integration.py",
+        "tests/integration/test_pipeline.py",
+        "tests/integration/test_scheduler_truncation_recovery_pipeline.py",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_budgets.py",
+        "tests/unit/test_cost_ledger.py",
+        "tests/unit/test_coverage_pipeline_wiring.py",
+        "tests/unit/test_coverage_planning.py",
+        "tests/unit/test_coverage_resource_preview.py",
+        "tests/unit/test_logical_request_identity.py",
+        "tests/unit/test_release_schemas.py",
+        "tests/unit/test_scheduler_journal.py",
+        "tests/unit/test_scheduler_manifest.py",
+        "tests/unit/test_scheduler_recovery_release_projection.py",
+        "tests/unit/test_truncation_recovery_cost_resume.py",
+        "tests/unit/test_truncation_recovery_journal.py",
+        "tests/unit/test_usage.py",
     }
 )
 AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS = (
@@ -1137,14 +1177,42 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         capture_output=True,
         text=True,
     )
-    truncation_promotion_current_match = subprocess.run(
+    coverage_resolved = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_COVERAGE_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    coverage_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_COVERAGE_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    coverage_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_COVERAGE_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    coverage_current_match = subprocess.run(
         [
             "git",
             "diff",
             "--quiet",
-            CURRENT_TRUNCATION_PROMOTION_CHECKPOINT,
+            CURRENT_COVERAGE_CHECKPOINT,
             "--",
-            *sorted(TRUNCATION_PROMOTION_SOURCE_PATHS),
+            *sorted(CURRENT_COVERAGE_SOURCE_PATHS),
         ],
         cwd=ROOT,
         check=False,
@@ -1341,7 +1409,13 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert len(TRUNCATION_PROMOTION_SOURCE_PATHS) == 20
     assert OPERATOR_RESULTS_RELATIVE_PATH not in TRUNCATION_PROMOTION_SOURCE_PATHS
     assert not (TRUNCATION_PROMOTION_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
-    assert truncation_promotion_current_match.returncode == 0
+    assert coverage_resolved.stdout.strip() == CURRENT_COVERAGE_CHECKPOINT
+    assert coverage_parent.stdout.strip() == CURRENT_COVERAGE_PARENT_CHECKPOINT
+    assert frozenset(coverage_changed.stdout.splitlines()) == CURRENT_COVERAGE_SOURCE_PATHS
+    assert len(CURRENT_COVERAGE_SOURCE_PATHS) == 33
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in CURRENT_COVERAGE_SOURCE_PATHS
+    assert not (CURRENT_COVERAGE_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+    assert coverage_current_match.returncode == 0
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -1352,7 +1426,7 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
     combined = codex | canonical
     unfinished = sum(status != "COMPLETE" for status in combined.values())
 
-    assert unfinished == 43
+    assert unfinished == 42
     assert (
         "REMAINING_ACTIONABLE_TICKETS: The combined queues contain "
         f"{unfinished} unfinished tickets."
@@ -1406,37 +1480,139 @@ def test_truncation_promotion_custody_remains_partial_after_planconstraints_repa
         assert "Pause this ticket while" not in section
 
 
-def test_recursive_promotion_checkpoint_is_current_without_external_authority() -> None:
+def test_coverage_portfolio_checkpoint_meets_provider_free_acceptance() -> None:
+    for document in (
+        QUEUE_PATH.read_text(encoding="utf-8"),
+        CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
+    ):
+        match = re.search(
+            r"^#{2,3} V3-COVERAGE-001\b.*?(?=^#{2,3} V3-[A-Z0-9-]+\b|\Z)",
+            document,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        section = " ".join(match.group().split())
+        assert "**Status:** `COMPLETE`" in section
+        assert CURRENT_COVERAGE_CHECKPOINT in section
+        assert CURRENT_COVERAGE_PARENT_CHECKPOINT in section
+        assert "pre-orientation portfolio" in section
+        assert "orientation, compact, `source_audit`, and `whole_protocol`" in section
+        assert "atomic" in section and "request/token/USD" in section
+        assert "22 investigators plus `invariant_review` and `report_quality`" in section
+        assert "clean no-candidate" in section
+        assert "`710.96s`" in section
+        assert "634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f" in (section)
+        assert "v1.3" in section and "comparison-only" in section
+        assert "zero-transport on resume" in section
+        assert "synthetic/mock" in section.lower()
+        assert "not real/provider" in section.lower()
+        assert "`V3-TRUNCATION-001` remains `PARTIAL`" in section
+        assert "`V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL`" in section
+        assert "not reopened by this closure" in section
+        assert "Stop after recording this ticket `COMPLETE`" in section
+        assert "do not select AUTHSEAL" in section
+
+
+def test_coverage_checkpoint_is_current_without_external_authority() -> None:
     worklogs = (
         CODEX_WORKLOG_PATH.read_text(encoding="utf-8"),
         (ROOT / "docs/remediation/v3/worklog.md").read_text(encoding="utf-8"),
     )
-    for worklog in worklogs:
+    for raw_worklog in worklogs:
+        worklog = " ".join(raw_worklog.split())
         assert (
-            "AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_"
-            "CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING_"
+            "AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
+            "EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_"
             "ZERO_CURRENT_EXTERNAL_COMMANDS"
         ) in worklog
         assert (
-            "CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_COMPLETE_"
-            "TICKET_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING"
+            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
+            "EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING"
         ) in worklog
+        assert "CURRENT_TICKET: V3-COVERAGE-001" in worklog
+        assert "LAST_COMPLETED_TICKET: V3-COVERAGE-001" in worklog
+        assert (
+            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: "
+            "RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_"
+            "NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_"
+            "NO_LAUNCH_NONAUTHORIZING"
+        ) in worklog
+        assert CURRENT_OPERATOR_RESULTS_SHA256 in worklog
+        assert "127656 bytes / 2316 lines" in worklog
+        assert "127,656 bytes / 2,316" in worklog
+        assert "latest entry is `2026-08-25T05:16Z`" in worklog
+        assert CURRENT_COVERAGE_CHECKPOINT in worklog
+        assert CURRENT_COVERAGE_PARENT_CHECKPOINT in worklog
+        assert "owns exactly 33" in worklog
+        assert "orientation, compact, source_audit, and whole_protocol attempt scope" in worklog
+        assert "clean no-candidate synthetic" in worklog.lower()
+        assert "22 investigator roles plus `invariant_review` and `report_quality`" in worklog
+        assert "journal publication" in worklog.lower()
+        assert "exact legal state transitions" in worklog
+        assert "v1.3" in worklog
+        assert "`FAILED` / `RELEASED_PRE_SEND_TAIL`" in worklog
+        assert "comparison-only" in worklog
+        assert "zero-transport resume" in worklog
+        assert "4bfac51801ff5999435081ac3fda4b2fa6fe5826cc9f89afd380ee53f4e2eb48" in (worklog)
+        assert "6f9be06561bf1d98cbf6c5102560e20b4f8a353cd566681b44156ac73cc6040a" in (worklog)
+        assert "d3f7b11db48b6cccf50d058f9d46ed69efed7ea02bc3d10865ce011e553c2f7b" in (worklog)
+        assert "8951ede35cacfadafdb893a89548cabaf8cb05c592b8884e42b90407a8d16b42" in (worklog)
+        assert "3,685 sources / 3,688 occurrences / 3,642 gate sources" in worklog
+        assert "43 non-gating controls / 13 source kinds / 35 logical gates" in worklog
+        assert "29 unsatisfied / 15 current-manual" in worklog
+        assert "1,945" in worklog and "51" in worklog
+        assert "710.96s" in worklog
+        assert "634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f" in (worklog)
+        assert "Counts overlap and are not additive" in worklog
+        assert "105.34s" in worklog
+        assert "no blocker/HIGH" in worklog
         assert CURRENT_TRUNCATION_PROMOTION_CHECKPOINT in worklog
-        assert CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT in worklog
-        assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT[:7] in worklog
-        assert "owns exactly 20" in worklog
-        assert "all five live usage/context identities" in worklog
-        assert "One v1.1 promotion and v1.1 recovered output" in worklog
-        assert "four public v1.2 requests" in worklog
-        assert "one superseded truncated bridge and three ordered successful leaves" in worklog
-        assert "exact direct and recursive parent-plus-child/leaf partitions" in worklog
-        assert "zero-retained parents without invented references" in worklog
-        assert "Synthetic REAL re-attestation is not genuine provider execution" in worklog
-        assert "MOCK remains unpromoted, noncrediting, and zero-transport on resume" in worklog
-        assert "108" in worklog and "244" in worklog and "57" in worklog
-        assert "genuine provider-backed positive full-pipeline promotion" in worklog
-        assert "Deeper recursion, retained surfaces on the recursive bridge" in worklog
+        assert "`V3-TRUNCATION-001` remains `PARTIAL`" in worklog
+        assert "All execution was local synthetic or MOCK" in worklog or (
+            "all execution was local synthetic or MOCK" in worklog
+        )
         assert "No provider, network, credential, private-ledger" in worklog
+        assert "qualification input is unavailable" in worklog
+        assert "qualification.py:5316" in worklog
+        assert "29-entry ledger unchanged at `0.43458261` USD" in worklog
+        assert "AUTHRUNNER smoke path" in worklog
+        assert "has succeeded twice" in worklog
+        assert "live metadata probes with zero new spend" in worklog
+        assert "absence of 24-case campaign completion transport" in worklog
+        assert "one-case, nonauthorizing smoke evidence" in worklog
+        assert "`mmaudit models benchmark`" in worklog
+        assert "predecessor P1/C1" in worklog
+        assert "1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c" in (worklog)
+        assert "`benchmarks/model_corpus/verdict_policy.json`" in worklog
+        assert "failed `path.stat()` proves only an absent supplied" in worklog
+        assert "artifact version and content at that immediate file stage" in worklog
+        assert "remain `UNDETERMINED`" in worklog
+        assert "`config/openrouter-qualification.toml`" in worklog
+        assert "`_require_qualification_release_pins`" in worklog
+        assert "could likely satisfy the current C1 pin" in worklog
+        assert "no repository CLI materializer exists" in worklog
+        assert "derived P2 would be rejected by current C1" in worklog
+        assert "operator inference, not established by the failure" in worklog
+        assert "A/P2 publication, source review and C2 pinning" in worklog
+        assert "implemented legacy, optional two-campaign bridge" in worklog
+        assert "not sufficient for frozen current-objective completion" in worklog
+        assert "precommitted constructed/public frozen truth" in worklog
+        assert "cross-lineage automated adjudication" in worklog
+        assert "exact REAL calibration custody" in worklog
+        assert "at least eight complete REAL candidates" in worklog
+        assert "at least six reviewed root lineages" in worklog
+        assert "no honest runnable operator command exists" in worklog
+        assert "Schema-invalid structured output is not retried on the same route" in worklog
+        assert "`SCHEMA_VALIDATION_FAILED`" in worklog
+        assert "future code change and regressions are required" in worklog
+        assert "metadata returned a nonempty endpoint list" in worklog
+        assert "proving those plan route identifiers stale" in worklog
+        assert "no alternative route identity, operational status, ZDR" in worklog
+        assert "A globally usable route remains" in worklog
+        assert "`INCONCLUSIVE`, not proven genuinely unserved" in worklog
+        assert "Azure was unlisted rather than probed" in worklog
+        assert "`V3-CALIBRATE-001` only as the next critical path" in worklog
+        assert "do not reopen it in this closure" in worklog
 
 
 def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
@@ -1642,9 +1818,16 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "Synthetic REAL attestations" in autonomy_evidence
     assert "not provider execution" in autonomy_evidence
     autonomy_remaining = requirements_by_id["U"]["remaining_proof"]
-    assert "genuine provider-backed positive promotion" in autonomy_remaining
-    assert "terminal maximum-assurance result" in autonomy_remaining
-    assert "No operator/provider action is authorized" in autonomy_remaining
+    assert "Genuine provider-backed promotion" in autonomy_remaining
+    assert "terminal maximum assurance" in autonomy_remaining
+    assert "Embedded P1/C1" in autonomy_remaining
+    assert "precommitted constructed/public frozen truth" in autonomy_remaining
+    assert "automated cross-lineage adjudication" in autonomy_remaining
+    assert "exact REAL calibration custody" in autonomy_remaining
+    assert "legacy/optional bridge" in autonomy_remaining
+    assert "insufficient for current production eligibility" in autonomy_remaining
+    assert "V3-CALIBRATE-001" in autonomy_remaining
+    assert "No current command or run index exists" in autonomy_remaining
     for requirement in requirements:
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
@@ -1706,6 +1889,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         capture_output=True,
     ).stdout
     operator_results = operator_result_bytes.decode("utf-8")
+    current_operator_result_bytes = (ROOT / OPERATOR_RESULTS_RELATIVE_PATH).read_bytes()
+    current_operator_results = current_operator_result_bytes.decode("utf-8")
     queues = (
         (ROOT / "docs/codex_work_queue.md").read_text(encoding="utf-8"),
         QUEUE_PATH.read_text(encoding="utf-8"),
@@ -1716,36 +1901,65 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         assert (
-            "AUTORUN_STATUS: V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_CHECKPOINTED_"
-            "PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_NEXT"
+            "AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
+            "EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_"
+            "ZERO_CURRENT_EXTERNAL_COMMANDS"
         ) in worklog
-        assert "CURRENT_TICKET: V3-TRUNCATION-001" in worklog
+        assert "CURRENT_TICKET: V3-COVERAGE-001" in worklog
         assert (
-            "CURRENT_LOCAL_SLICE_STATUS: SPECIALIST_ROLE_RECOVERY_COMPLETE_PROVIDER_FREE_"
-            "NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_PENDING"
+            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
+            "EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING"
         ) in worklog
-        assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in worklog
-        assert "recursive recovery of one truncated recovery child" in worklog
+        assert CURRENT_COVERAGE_CHECKPOINT in worklog
+        assert "V3-CALIBRATE-001 is the next critical path" in worklog
+        assert "not selected or restarted in this turn" in worklog
         assert (
-            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_"
-            "OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
+            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_E158C955_"
+            "LIVE_METADATA_PROBES_ZERO_NEW_SPEND_NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_"
+            "QUALIFICATION_POLICY_BLOCK_NO_LAUNCH_NONAUTHORIZING"
         ) in worklog
         assert (
-            f"LAST_RECONCILED_OPERATOR_RESULTS: `{LAST_RECONCILED_OPERATOR_RESULTS_SHA256}` / "
-            "115171 bytes / 2111 lines"
+            f"LAST_RECONCILED_OPERATOR_RESULTS: `{CURRENT_OPERATOR_RESULTS_SHA256}` / "
+            "127656 bytes / 2316 lines"
         ) in worklog
     normalized_queues = tuple(" ".join(queue.split()) for queue in queues)
+    for raw_queue, normalized_queue in zip(queues, normalized_queues, strict=True):
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-COVERAGE-001"] == "COMPLETE"
+        assert "V3-CALIBRATE-001" in normalized_queue
+        assert "not reopened by this closure" in normalized_queue
+        assert "Stop after recording this ticket `COMPLETE`" in normalized_queue
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     assert runtime_status["operator_results_current_worktree_status"] == (
-        "USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
+        "RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_"
+        "NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_"
+        "NO_LAUNCH_NONAUTHORIZING"
     )
     assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
     assert (
-        runtime_status["last_reconciled_operator_results_sha256"]
-        == LAST_RECONCILED_OPERATOR_RESULTS_SHA256
+        runtime_status["last_reconciled_operator_results_sha256"] == CURRENT_OPERATOR_RESULTS_SHA256
     )
-    assert runtime_status["last_reconciled_operator_results_bytes"] == 115_171
-    assert runtime_status["last_reconciled_operator_results_lines"] == 2_111
+    assert runtime_status["last_reconciled_operator_results_bytes"] == 127_656
+    assert runtime_status["last_reconciled_operator_results_lines"] == 2_316
+    assert (
+        hashlib.sha256(current_operator_result_bytes).hexdigest() == CURRENT_OPERATOR_RESULTS_SHA256
+    )
+    assert len(current_operator_result_bytes) == 127_656
+    assert len(current_operator_results.splitlines()) == 2_316
+    assert "## 2026-08-25T05:16Z" in current_operator_results
+    assert "qualification input is unavailable" in current_operator_results
+    assert "ledger unchanged at 29" in current_operator_results
+    assert "0.43458261" in current_operator_results
+    assert runtime_status["candidate_commit"] == CURRENT_COVERAGE_CHECKPOINT
+    assert runtime_status["current_ticket"] == "V3-COVERAGE-001"
+    assert runtime_status["completed_real_audits"] == 0
+    assert (
+        "V3-CALIBRATE-001 is therefore the current critical path"
+        in (runtime_status["blocked_tickets"]["V3-CALIBRATE-001"])
+    )
+    assert (
+        "No current command or run index is authorized or inferred"
+        in (runtime_status["blocked_tickets"]["V3-CALIBRATE-001"])
+    )
     autonomy_inventory_bytes = AUTONOMY_INVENTORY_PATH.read_bytes()
     autonomy_inventory = json.loads(autonomy_inventory_bytes)
     autonomy_schema_bytes = AUTONOMY_INVENTORY_SCHEMA_PATH.read_bytes()
@@ -2285,6 +2499,48 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
+    historical_runtime_status = json.loads(
+        subprocess.run(
+            [
+                "git",
+                "show",
+                f"{HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT}:"
+                "docs/remediation/v3/runtime_status.json",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    historical_autonomy_inventory_bytes = subprocess.run(
+        [
+            "git",
+            "show",
+            f"{HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT}:"
+            "docs/remediation/v3/autonomy_gate_inventory.json",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    historical_autonomy_inventory = json.loads(historical_autonomy_inventory_bytes)
+    historical_autonomy_inventory_raw_sha256 = (
+        "82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2"
+    )
+    historical_autonomy_inventory_sha256 = (
+        "349af767d9e07bb44a7483a5ab3e309ee7d8f739d49902f5143508901d79f90e"
+    )
+    historical_autonomy_source_universe_sha256 = (
+        "c0d55db7f01762a1f014290af40544fc1a20842a8bbff72e053b379792d17fa5"
+    )
+    historical_autonomy_discovery_semantics_sha256 = (
+        "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042"
+    )
+
+    # Assertions below this boundary preserve the exact historical specialist checkpoint.
+    runtime_status = historical_runtime_status
+    autonomy_inventory_bytes = historical_autonomy_inventory_bytes
+    autonomy_inventory = historical_autonomy_inventory
     assert runtime_status["updated_at"] == "2026-08-24T14:43:31Z"
     assert runtime_status["candidate_commit"] == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
     assert (
@@ -2526,16 +2782,16 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
         "artifact_reconciled_for_slice": "V3_TRUNCATION_SPECIALIST_ROLE_RECOVERY",
-        "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
+        "artifact_raw_sha256": historical_autonomy_inventory_raw_sha256,
         "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
-        "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
-        "source_universe_sha256": AUTONOMY_SOURCE_UNIVERSE_SHA256,
+        "source_discovery_semantics_sha256": historical_autonomy_discovery_semantics_sha256,
+        "source_universe_sha256": historical_autonomy_source_universe_sha256,
         "source_semantics_sha256": None,
         "source_semantics_sha256_reported": False,
         "historical_03d_source_semantics_sha256": (
             "67f1ff32913327913ab19adbe60ff54263bf0fcb347304b151bd009311cfe1b0"
         ),
-        "inventory_sha256": AUTONOMY_INVENTORY_SHA256,
+        "inventory_sha256": historical_autonomy_inventory_sha256,
         "source_count": 3657,
         "source_occurrence_count": 3660,
         "gate_source_count": 3614,
@@ -2606,7 +2862,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     }
     assert "next_slice" not in phase_zero
     assert "next_slice" not in runtime_status["managed_toolchain_phase_one"]
-    assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == AUTONOMY_INVENTORY_RAW_SHA256
+    assert (
+        hashlib.sha256(autonomy_inventory_bytes).hexdigest()
+        == historical_autonomy_inventory_raw_sha256
+    )
     assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
     assert hashlib.sha256(managed_toolchain_bytes).hexdigest() == MANAGED_TOOLCHAIN_RAW_SHA256
     assert (
@@ -2617,10 +2876,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert autonomy_inventory["phase"] == "PHASE_0_INVENTORY_ONLY"
     assert autonomy_inventory["status"] == "PARTIAL_NONAUTHORIZING"
     assert autonomy_inventory["source_discovery_semantics_sha256"] == (
-        AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+        historical_autonomy_discovery_semantics_sha256
     )
-    assert autonomy_inventory["source_universe_sha256"] == AUTONOMY_SOURCE_UNIVERSE_SHA256
-    assert autonomy_inventory["inventory_sha256"] == AUTONOMY_INVENTORY_SHA256
+    assert (
+        autonomy_inventory["source_universe_sha256"] == historical_autonomy_source_universe_sha256
+    )
+    assert autonomy_inventory["inventory_sha256"] == historical_autonomy_inventory_sha256
     assert autonomy_inventory["source_count"] == 3657
     assert autonomy_inventory["source_occurrence_count"] == 3660
     assert autonomy_inventory["gate_source_count"] == 3614

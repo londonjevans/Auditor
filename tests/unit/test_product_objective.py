@@ -164,11 +164,15 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "No current AUTHRUNNER/operator command" in autonomy_evidence
     assert "pins three package resources" in autonomy_evidence
     assert "leaves 25 external roles unresolved" in autonomy_evidence
-    assert "Phase 2" in requirements["U"]["remaining_proof"]
+    assert "paused V3-AUTONOMY-001" in requirements["U"]["remaining_proof"]
+    assert (
+        "complete V3-CALIBRATE-001 before any campaign claim"
+        in (requirements["U"]["remaining_proof"])
+    )
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
+    assert runtime_status["candidate_commit"] == "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
+        "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
@@ -181,7 +185,12 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
         in (requirements["R"]["remaining_proof"])
     )
     assert "OBJECTIVE_OUT_OF_SCOPE" in runtime_status["blocked_tickets"]["V3-LINEAGE-001"]
-    assert "OBJECTIVE_OUT_OF_SCOPE" in runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
+    calibration_block = runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
+    assert "current critical path" in calibration_block
+    assert "no calibrated P2 frozen qualification-policy artifact" in calibration_block
+    assert "stat failure does not prove the missing standalone input stage" in calibration_block
+    assert "completed real audits remain zero" in calibration_block
+    assert "No current command or run index is authorized or inferred" in calibration_block
 
     def ticket(ticket_id: str) -> str:
         section = queue.split(f"## {ticket_id}", maxsplit=1)[1].split("\n## ", maxsplit=1)[0]

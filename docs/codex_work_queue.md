@@ -310,28 +310,47 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   USD boundary and one-over failures, clean-target 24-responsibility execution, no-credit aliases
   and absences, resume/tamper, generated schemas, Ruff, and strict mypy.
 - **Dependencies:** `V3-TRUNCATION-001` (`PARTIAL`, with fail-closed direct recovery available).
-- **Status:** `PARTIAL`
+- **Status:** `COMPLETE`
 - **Result:** Implemented a versioned T0-T3 policy and independently replayed completion gate;
   deterministic distinct-root gap assignments and 32-surface compact tasks; exact provider
   context/pricing previews and nonauthorizing request/token/USD preflight evidence; private
   preflight retention with byte-stable zero-transport resume; an exact 24-role
   candidate-independent portfolio (22 investigators plus `invariant_review` and
   `report_quality`); graph-omission fail-closed classification; and trusted captured-descriptor
-  preview/completion dispatch that rejects mutable client or class dispatch seams.
-- **Validation:** Final root matrices passed `129` coverage tests, `42` trusted-dispatch tests,
-  `29` documentation/schema tests, and `5` coverage integrations. Exact post-hardening
-  integrations passed for generic fallback (`1` in `147.48s`), enabled-specialist fallback (`1`
-  in `234.14s`), and compact no-duplication plus byte-identical zero-transport resume (`1` in
-  `123.19s`); its focused unit/shadow slice passed `5` in `4.06s`. Ruff, strict mypy over `11`
-  coverage/pipeline source files, release-schema generation/verification, and diff integrity
-  passed.
-- **Remaining limitation:** Aggregate preflight occurs after paid orientation and covers compact
-  gap tasks only; supplemental `source_audit`/`whole_protocol` spend is excluded. There is no
-  atomic all-task reservation, no clean/no-candidate full-runtime proof that all exact 24 roles
-  execute, and no REAL coverage run. None of those missing paths receives completion credit.
-- **Next action:** Begin corrected documentary `V3-AUTHLINEAGE-PUBLIC-001` as unblock fix #1;
-  then real egress (#2), then external authority-log publication (#3). Keep benchmark harness
-  implementation and every benchmark run queued until those prerequisites complete.
+  preview/completion dispatch that rejects mutable client or class dispatch seams. Checkpoint
+  `33001d12d62ffe54788a41ed7321a77cd9fcb05f`, direct child of
+  `d6c7c5b05d8466a3793b3174809e1cd48b6a02e8`, adds a durable pre-orientation portfolio hold for
+  the exact orientation, compact, `source_audit`, and `whole_protocol` attempt envelopes. The
+  private preflight and one atomic request/token/USD reservation must persist before orientation
+  transport; infeasibility, persistence failure, or preview drift fails before paid work. The
+  scheduler journal now publishes immutable artifacts crash-safely and recovers only exact legal
+  checkpoint transitions. Released pre-send truncation tails remain v1.3 `FAILED`, comparison-only,
+  noncrediting, and zero-transport on resume.
+- **Validation:** Separate overlapping gates passed `187` scheduler-journal, `78`
+  truncation-journal, `178` wider scheduler-unit, `46` scheduler-integration, `280`
+  cost-ledger/budget/usage, `82` coverage planning/resource/wiring, `33` autonomy-inventory, and
+  `48` release-schema/public-projection tests. The clean no-candidate Solidity/EVM runtime executed
+  exactly the 22 investigator roles plus `invariant_review` and `report_quality` (`1` pass in
+  `710.96s`) while its 244-file manifest digest remained
+  `634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f`. A live local v1.3
+  release/resume regression passed in `105.34s`. Ruff/format, strict mypy over all `210` source
+  modules, canonical generation, bytecode compilation, scoped diff integrity, and independent
+  no-blocker/HIGH review passed.
+- **Remaining limitation:** The clean runtime and retained recovery evidence are synthetic/MOCK,
+  not REAL/provider execution, and grant no qualification, campaign, benchmark, AUTHSEAL, audit,
+  completion, or release authority. `V3-TRUNCATION-001` remains `PARTIAL` with its separately
+  recorded provider and recursive limitations. The current operator-supplied result separately
+  records a provider-free `$0` authenticated-runner preflight refusing because the supplied
+  `--qualification-policy` path was absent; that stat failure does not establish the artifact stage,
+  reopen this ticket, or prove a REAL audit.
+- **Next critical path:** `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL` and is not reopened by this
+  closure. The immediate missing-file remedy is `UNDETERMINED`: current C1 pins schema-v1 P1, a
+  standalone P1 bootstrap has no repository CLI materializer, and derived P2 would require a
+  reviewed successor C2. The implemented legacy/optional J1-to-A/P2-to-C2-to-J2 bridge remains
+  insufficient for frozen current-objective completion; precommitted constructed/public frozen
+  truth, cross-lineage automated adjudication, and exact REAL calibration custody remain absent.
+  Stop after recording this ticket `COMPLETE`: do not select AUTHSEAL, launch a campaign, emit a
+  command, or infer a run index.
 
 ### V3-BENCHMARK-001 — Blind contamination-controlled benchmark harness
 
