@@ -3,6 +3,68 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-27T17:22Z — **FIRST REAL 24-CASE CAMPAIGN LAUNCHED AND FAILED CLOSED — candidate reselection required**
+
+The 24-case campaign was operator-authorized and launched against live providers. It **failed closed**
+after roughly `24` logical requests for **`0.20264508`** USD. Every structural layer worked; the
+**candidate model** is the sole cause. `completed_real_audits` remains **0**, which is correct.
+
+### 1. What ran
+
+Full chain cleared for the first time: materialized qualification policy → fresh `r23` discovery for
+all three roles → live-route gate `VALID` → paid smoke index `22` (`0.04395915` USD, bundle
+`29702a02f52626deca38ff36401eb3cb7bb4602f07677881760ad26ba40df5d4`, verified `VALID / NONCREDITING /
+NONAUTHORIZING` offline) → `FULL_CAMPAIGN_ADMISSION` satisfied via that bundle → campaign launch.
+
+Preflight inventory: `runs=2; cases=24; candidate_logical_requests=48; judge_logical_requests=48;
+logical_requests=96`. Candidate `derived_interval_cap_usd=5.03716224`.
+
+### 2. How it failed
+
+```
+Structured model request failed                                            x9
+Configured model failed; considering the next explicit fallback            x9
+Completed response identity is unbound; preserving evidence without ...    x15
+mmaudit failed safely: REAL candidate report content lacks owned runtime execution provenance
+```
+
+Terminal raise at `benchmark/model_portfolio.py:2420`.
+
+**The candidate failed structured output on `9` of roughly `24` requests — about `37%`**, materially
+worse than the ~`20%` previously observed for `deepseek/deepseek-v4-pro-0813` via `parasail/fp8`.
+
+**Schema retry could not engage.** `config/openrouter-qualification.toml` carries
+`max_schema_validation_retries = 0` because that file is hash-pinned and
+`test_schema_validation_retry_is_default_off_without_changing_qualification_hash` forbids changing it.
+Each schema failure therefore fell through to "the next explicit fallback", which does not exist on a
+singleton pinned route. **The retry pin conflict recorded on `2026-08-25` is now demonstrated live
+rather than argued**: the operator's retry decision is unreachable for this campaign until a
+re-pinned config or a separate non-pinned continuity path exists.
+
+### 3. What worked — worth recording precisely
+
+Authentication, provider pinning, `r23` route binding, runtime-evidence admission through the new
+`V3-RUNTIMEADMIT-001` mechanism, cost reserve→spend→reconcile, and fail-closed termination all
+behaved correctly. **All `24` new ledger entries are `reconciled`**; the only two
+`uncertain_accounted` entries remain the historical pair from index 17. The system refused to
+manufacture a result from degraded evidence and stopped for `$0.20`. Ledger now `57` entries /
+`0.68118684` USD against the `250` cap.
+
+### 4. Two items for Codex
+
+1. **`Completed response identity is unbound` fired 15 times.** That is more than the schema failures
+   and is a distinct condition from `SCHEMA_VALIDATION_FAILED`. Is unbound generation identity
+   expected at this rate on a healthy route, or is it a second defect? It is currently handled by
+   preserving evidence without fallback, so it may be silently degrading candidate reports before the
+   provenance check rejects them.
+2. **Candidate reselection is now empirically required**, not merely advisable. Three independent
+   mechanisms converge on it: the `EMPIRICAL_SCHEMA_CONFORMANCE` predicate, the first-attempt-only
+   scoring decision, and now a live campaign failure. A route advertising `structured_outputs` is
+   demonstrably not evidence that it honours a schema contract, so any replacement must be validated
+   empirically before a campaign, not selected from metadata flags.
+
+No further paid attempt should use this candidate.
+
 ## 2026-08-27T10:28Z — **V3-RUNTIMEADMIT-001 WORKS: schema conformance now SATISFIED; token-detail isolated to one clause**
 
 `V3-RUNTIMEADMIT-001` is verified working against real sealed evidence. `EMPIRICAL_SCHEMA_CONFORMANCE`
