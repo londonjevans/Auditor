@@ -3,6 +3,73 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-27T10:28Z — **V3-RUNTIMEADMIT-001 WORKS: schema conformance now SATISFIED; token-detail isolated to one clause**
+
+`V3-RUNTIMEADMIT-001` is verified working against real sealed evidence. `EMPIRICAL_SCHEMA_CONFORMANCE`
+now **passes**. One predicate remains, and it is isolated to a single equality. All provider-free;
+ledger unchanged at 29 entries / `0.43458261` USD. No smoke run was launched — see §4 for why.
+
+### 1. The mechanism works, and the diagnostics are transformative
+
+`RoutePredicateRequirementError` now renders `purpose=...; failures=<id>=<reason>,...`. Four distinct
+states were distinguished in minutes, where the previous message named none of them:
+
+| inputs | result |
+|---|---|
+| no runtime evidence | `EMPIRICAL_SCHEMA_CONFORMANCE=EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE`, `TOKEN_DETAIL_REPORTING_CONVENTION=TOKEN_DETAIL_CONVENTION_UNAVAILABLE` |
+| index-19 bundle | `authenticated runner smoke evidence cannot prove exact runtime predicates` |
+| index-21 bundle + **r22** registries | both `=RUNTIME_EVIDENCE_BINDING_MISMATCH` |
+| index-21 bundle + **r21** registries | **schema conformance SATISFIED**; only `TOKEN_DETAIL_REPORTING_CONVENTION=RUNTIME_EVIDENCE_INVALID` |
+
+### 2. Index-19 is permanently unusable as runtime evidence
+
+Its `CandidateModel` records do not carry the four route-custody fields **at all** — not null, absent
+from the serialized model. Custody entered `candidate_selection.py` at `7ef4717`
+(`Enforce route constraint parity`, `2026-08-24`), after that run. Index 21 carries all `4/4`.
+Only index 21 is admissible, and only against the `r21` registries it was produced from.
+
+### 3. Token detail fails on exactly one equality, in all four usages
+
+`_token_detail_proof_is_valid` (`route_runtime_evidence.py:375`) has ten conjuncts. Nine pass for
+**every** usage — primary/candidate, primary/judge, replay/candidate, replay/judge — including
+`accounting_method`, `completion_semantics`, `accounting_basis`, `provider_total_relation`,
+`request_body_sha256`, the raw plan dict, and `evidence.request_token_plan_sha256 ==
+usage.routing["request_token_plan_sha256"]`.
+
+The sole failure, uniformly:
+
+```
+item.plan.request_preview.request_token_plan_projection_sha256 == evidence.request_token_plan_sha256
+```
+
+Usage and evidence agree with each other; the **cost-plan preview projection** disagrees with both.
+
+**Hypothesis requiring Codex's confirmation — flagged as a hypothesis, not a finding.**
+`request_token_plan_projection_sha256` is produced by
+`_candidate_review_request_token_plan_projection_sha256` (`openrouter.py:2076`), which is a different
+computation from the plain `request_token_plan_sha256`. If those two are structurally different
+digests over different payloads, this conjunct can never be true for any bundle, and
+`TOKEN_DETAIL_REPORTING_CONVENTION` is unsatisfiable by construction — the same class of defect this
+ticket was raised to fix. The alternative is that they coincide only under conditions the index-21
+run did not meet. **Please determine which, and add a regression pinning the intended relation.**
+
+### 4. Why no smoke run was launched
+
+Index 22 is pre-authorized and costs about `$0.04`, and a fresh bundle is the obvious next step. It
+was **not** run because if the §3 hypothesis is correct the defect is in the comparison, not the
+evidence, so a new run reproduces the identical failure and spends real money to learn nothing.
+Resolve §3 first. If the relation is sound and index 21 simply predates it, say so and a fresh
+smoke will be run immediately at `$0.04`, followed by the campaign preflight.
+
+### 5. Standing inputs, ready to use
+
+- Qualification policy materialized at `~/.mmaudit/private/qualification-policy.json`, `2248` bytes,
+  mode `0600`, `policy_sha256 1df14052…`. Accepted by preflight.
+- Fresh `r22` registries and discovery runs exist for all three roles (`2026-08-27`), but note that
+  runtime evidence must bind to the registry generation that produced it — `r22` needs an `r22`-era
+  bundle.
+- `r21` registries plus the index-21 bundle are the only currently self-consistent pair.
+
 ## 2026-08-27T06:37Z — **CAMPAIGN BLOCKER FULLY TRACED: two admission predicates have no satisfying code path**
 
 The qualification-policy blocker reported on `2026-08-25` is **cleared**. The campaign now fails at a
