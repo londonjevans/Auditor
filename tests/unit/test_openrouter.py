@@ -83,6 +83,7 @@ from mmaudit.models.openrouter import (
     OpenRouterRequestLimitError,
     OpenRouterResponseIdentityError,
     OpenRouterSchemaError,
+    OpenRouterSchemaValidationRetryExhaustedError,
     OpenRouterStructuredOutputError,
     OpenRouterTimeoutError,
     OpenRouterTransientError,
@@ -119,7 +120,10 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     UsageRecord,
 )
-from mmaudit.models.structured_output import StructuredOutputFailureCode
+from mmaudit.models.structured_output import (
+    StructuredOutputDecodeError,
+    StructuredOutputFailureCode,
+)
 from mmaudit.models.token_planning import (
     ContextOmissionCategory,
     ContextOmissionItem,
@@ -167,7 +171,7 @@ from mmaudit.orchestration.context_manifest import (
     ContextRequestState,
     build_context_manifest,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostReservationOverrunError
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import (
     REQUIRED_PROHIBITED_CONTENT,
@@ -989,7 +993,11 @@ def _as_v3_unknown_token_smoke_usage(
     return upgraded
 
 
-def _as_two_attempt_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRecord:
+def _as_two_attempt_v3_unknown_token_smoke_usage(
+    record: UsageRecord,
+    *,
+    intermediate_accounted_cost: Decimal = Decimal("0.001"),
+) -> UsageRecord:
     """Extend one structural smoke fixture to two exact ordered attempt inventories."""
 
     assert record.attempts == 1
@@ -1069,7 +1077,7 @@ def _as_two_attempt_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRe
         "atomic_request_limit_reservation_sha256": second_request.evidence_sha256,
     }
     reported = Decimal(record.reported_cost_usd_exact or "0")
-    accounted = reported + Decimal("0.001")
+    accounted = reported + intermediate_accounted_cost
     upgraded = _attest_owned_real_usage_record(
         UsageRecord.model_validate(
             {
@@ -4175,6 +4183,7 @@ async def test_isolated_smoke_completion_and_metadata_vectors_join_exact_raw_evi
             exact_model_id=completion_usage.requested_model,
             maximum_attempts=2,
             expectation_sha256="c" * 64,
+            response_model=ModelBenchmarkResponse,
         )
 
     async def execute_completion_attempt(
@@ -4469,6 +4478,333 @@ async def test_isolated_smoke_completion_and_metadata_vectors_join_exact_raw_evi
                 revoke_metadata_operation(metadata_grant)
         finally:
             await metadata_client.close()
+
+
+@pytest.mark.parametrize(
+    ("first_response_kind", "first_response_cost", "first_ledger_cost", "seals"),
+    [
+        ("schema_invalid", Decimal("0.001"), Decimal("0.001"), True),
+        ("schema_valid", Decimal("0.001"), Decimal("0.001"), False),
+        ("invalid_json", Decimal("0.001"), Decimal("0.001"), False),
+        ("truncated_schema_invalid", Decimal("0.001"), Decimal("0.001"), False),
+        ("wrong_model_schema_invalid", Decimal("0.001"), Decimal("0.001"), False),
+        ("credential_schema_invalid", Decimal("0.001"), Decimal("0.001"), False),
+        ("token_overflow_schema_invalid", Decimal("0.001"), Decimal("0.001"), False),
+        ("schema_invalid", Decimal("0.001"), Decimal("0.002"), False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_isolated_completion_vector_seals_schema_retry_policy(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+    first_response_kind: str,
+    first_response_cost: Decimal,
+    first_ledger_cost: Decimal,
+    seals: bool,
+) -> None:
+    """Bind an intermediate 200 only to the schema-retry quota sealed by its grant."""
+
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    source_provenance = prove_pinned_noncrediting_smoke_model_benchmark_source(
+        bundle,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    response = ModelBenchmarkResponse(
+        case_id=bundle.case.case_id,
+        classification=ModelBenchmarkClassification.SAFE,
+        locations=[],
+        invariant=None,
+        repository_instructions_followed=True,
+        assumptions=[],
+        unsupported_assumptions=[],
+        verifier_conclusion=None,
+        falsifier_conclusion=None,
+        rationale="Synthetic schema-retry receipt response.",
+    )
+    response_json = response.model_dump_json()
+    schema_invalid_response_json = json.dumps({"case_id": bundle.case.case_id})
+    with pytest.raises(ValidationError):
+        ModelBenchmarkResponse.model_validate_json(schema_invalid_response_json)
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+        },
+        execution={
+            "max_json_repair_attempts": 0,
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+        },
+    )
+    observed_requests: list[httpx.Request] = []
+    mock_dir = tmp_path / "schema-retry-vector-mock"
+    mock_dir.mkdir()
+    (
+        mock_client,
+        mock_http_client,
+        mock_completion,
+        manifest,
+        discovery,
+    ) = await _dispatch_mock_smoke_request(
+        config=config,
+        tmp_path=mock_dir,
+        source_sha256=bundle.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=(f"authrunner.smoke.r1.candidate.primary:{bundle.bundle_sha256}"),
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response_json,
+        certification=True,
+        observed_requests=observed_requests,
+    )
+    await mock_client.close()
+    await mock_http_client.aclose()
+    assert len(observed_requests) == 1
+    request_body = json.loads(observed_requests[0].content)
+    completion_usage = _as_two_attempt_v3_unknown_token_smoke_usage(
+        _as_v3_unknown_token_smoke_usage(
+            UsageRecord.model_validate(
+                {
+                    **mock_completion.usage_record.model_dump(mode="json"),
+                    "execution_evidence": ExecutionEvidenceKind.REAL,
+                }
+            )
+        ),
+        intermediate_accounted_cost=first_ledger_cost,
+    )
+    assert canonical_sha256(request_body) == completion_usage.request_body_sha256
+
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "schema-retry-vector-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+        qualification_routing=(),
+    )
+    client.register_certification_model_discovery(evidence=discovery, manifest=manifest)
+
+    prepare_operation: Callable[..., Any]
+    prepare_attempt: Callable[..., Any]
+    dispatch_attempt: Callable[..., Any]
+    response_index = 0
+
+    @asynccontextmanager
+    async def schema_retry_stream(
+        http_client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ):
+        nonlocal response_index
+        request = http_client.build_request(
+            method,
+            url,
+            headers=kwargs["headers"],
+            json=kwargs["json"],
+        )
+        first_response = _completion(
+            (
+                response_json
+                if first_response_kind == "schema_valid"
+                else (
+                    "not json"
+                    if first_response_kind == "invalid_json"
+                    else schema_invalid_response_json
+                )
+            ),
+            cost=float(first_response_cost),
+            model=(
+                "beta/unexpected-model"
+                if first_response_kind == "wrong_model_schema_invalid"
+                else "alpha/atlas-secure"
+            ),
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+        )
+        if first_response_kind == "truncated_schema_invalid":
+            first_response["choices"][0]["finish_reason"] = "length"
+        if first_response_kind == "credential_schema_invalid":
+            first_response["synthetic_reflection"] = "synthetic-key"
+        if first_response_kind == "token_overflow_schema_invalid":
+            first_response["usage"].update(
+                {
+                    "prompt_tokens": 1_000_000_000,
+                    "total_tokens": 1_000_000_005,
+                }
+            )
+        response_payloads = (
+            first_response,
+            _completion(
+                response_json,
+                selected_model="alpha/atlas-secure-20260727",
+                provider="Approved Provider",
+            ),
+        )
+        payload = response_payloads[response_index]
+        response_index += 1
+        yield httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+            request=request,
+        )
+
+    async def prepare_completion(self: OpenRouterClient) -> object:
+        return prepare_operation(
+            self,
+            purpose="COMPLETION",
+            logical_request_id=completion_usage.request_id,
+            role=completion_usage.role,
+            exact_model_id=completion_usage.requested_model,
+            maximum_attempts=2,
+            expectation_sha256="c" * 64,
+            response_model=ModelBenchmarkResponse,
+        )
+
+    async def execute_completion_attempt(
+        self: OpenRouterClient,
+        grant: object,
+        reservation: object,
+        attempts: int,
+    ) -> tuple[object, httpx.Response]:
+        body = request_body
+        active_reservation = reservation
+        request_id = completion_usage.request_id
+        receipt = prepare_attempt(
+            self,
+            operation_grant=grant,
+            method="POST",
+            path="/chat/completions",
+            json_body=body,
+            reservation=active_reservation,
+            purpose="COMPLETION",
+        )
+        raw_response = await dispatch_attempt(
+            self,
+            receipt,
+            "POST",
+            "/chat/completions",
+            json_body=body,
+            max_bytes=1_000_000,
+        )
+        assert request_id == completion_usage.request_id
+        return receipt, raw_response
+
+    authority = openrouter_module._build_provider_transport_attempt_authority(
+        _isolated_stream=schema_retry_stream,
+        _isolated_parent_codes={"COMPLETION": prepare_completion.__code__},
+        _isolated_attempt_codes={"POST": execute_completion_attempt.__code__},
+        _isolated_frame_globals=globals(),
+    )
+    authority[0](
+        module=openrouter_module,
+        client_type=OpenRouterClient,
+        bounded_request=OpenRouterClient._bounded_request,
+        complete_one=OpenRouterClient._complete_one,
+        request_metadata=OpenRouterClient._request_metadata,
+        transport_lookup=openrouter_module._lookup_trusted_transport_binding,
+        pristine_predicate=openrouter_module._openrouter_client_callables_are_pristine,
+        execution_evidence_resolver=openrouter_module.trusted_openrouter_execution_evidence,
+        ledger_snapshot=openrouter_module._TRUSTED_ATOMIC_LEDGER_SNAPSHOT,
+        complete_with_evidence=OpenRouterClient.complete_with_evidence,
+        bind_real_completion_identity=OpenRouterClient._bind_real_completion_identity,
+        fetch_generation_attestations=OpenRouterClient._fetch_generation_attestations_with_deadline,
+        terminal_usage_cost_custody=OpenRouterClient._require_terminal_usage_cost_custody,
+        trusted_prequalification_request=OpenRouterClient._is_trusted_prequalification_request,
+        create_generation_verification=OpenRouterClient.create_trusted_generation_verification,
+    )
+    prepare_operation = authority[1]
+    prepare_attempt = authority[2]
+    dispatch_attempt = authority[3]
+    revoke_operation = authority[8]
+    revoke_composite = authority[13]
+    seal_completion = authority[19]
+
+    try:
+        grant = await prepare_completion(client)
+        receipts: list[object] = []
+        raw_responses: list[httpx.Response] = []
+        for ordinal, cost in enumerate((first_ledger_cost, Decimal("0.01")), start=1):
+            attempt_id = openrouter_module._attempt_request_id(
+                completion_usage.request_id,
+                ordinal,
+            )
+            persistent = ledger.reserve(attempt_id, cost)
+            reservation = openrouter_module.Reservation(
+                identifier=attempt_id,
+                estimated_cost_usd=float(cost),
+                persistent=persistent,
+            )
+            receipt, raw_response = await execute_completion_attempt(
+                client,
+                grant,
+                reservation,
+                ordinal,
+            )
+            ledger.reconcile(persistent, cost)
+            receipts.append(receipt)
+            raw_responses.append(raw_response)
+
+        assert response_index == 2
+        assert [raw_response.status_code for raw_response in raw_responses] == [200, 200]
+        first_content = raw_responses[0].json()["choices"][0]["message"]["content"]
+        if first_response_kind == "schema_valid":
+            assert ModelBenchmarkResponse.model_validate_json(first_content) == response
+        else:
+            with pytest.raises(ValidationError):
+                ModelBenchmarkResponse.model_validate_json(first_content)
+
+        if not seals:
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match="does not bind exact smoke usage",
+            ):
+                seal_completion(client, grant, completion_usage, tuple(receipts))
+            revoke_operation(grant)
+            return
+
+        sealed_execution = client.execution
+        mutated_execution = sealed_execution.model_copy(
+            update={
+                "max_model_retries": 1,
+                "max_schema_validation_retries": 0,
+            }
+        )
+        assert mutated_execution.maximum_model_attempts == sealed_execution.maximum_model_attempts
+        client.execution = mutated_execution
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="does not bind exact smoke usage",
+        ):
+            seal_completion(client, grant, completion_usage, tuple(receipts))
+
+        client.execution = sealed_execution
+        composite = seal_completion(client, grant, completion_usage, tuple(receipts))
+        revoke_composite(composite)
+        revoke_operation(grant)
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -8636,6 +8972,662 @@ async def test_rate_limit_retries_once(config_factory, monkeypatch) -> None:
     assert usage.records[0].attempts == 2
     assert usage.records[0].accounted_cost_usd > usage.records[0].reported_cost_usd
     assert usage.records[0].accounted_cost_usd == pytest.approx(client.budget.spent_usd)
+
+
+@pytest.mark.asyncio
+async def test_schema_validation_retry_is_default_off_even_with_transient_retry_budget(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"unexpected":"schema miss"}', cost=0.01)
+
+    config = config_factory(execution={"max_model_retries": 1})
+    assert config.execution.max_schema_validation_retries == 0
+    assert "max_schema_validation_retries" not in config.execution.model_dump(mode="json")
+    client, http_client, usage = _client(config, handler)
+    try:
+        with pytest.raises(OpenRouterStructuredOutputError) as raised:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="schema-default-off",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert type(raised.value) is OpenRouterStructuredOutputError
+    assert raised.value.failure_code is StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
+    assert usage.records[0].request_id == "schema-default-off"
+    assert Decimal(usage.records[0].accounted_cost_usd_exact) == Decimal("0.01")
+
+
+@pytest.mark.asyncio
+async def test_schema_validation_retry_succeeds_on_same_route_with_exact_attempt_custody(
+    config_factory,
+) -> None:
+    calls = 0
+    requested_models: list[str] = []
+    request_bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        requested_models.append(json.loads(request.content)["model"])
+        request_bodies.append(request.content)
+        content = (
+            '{"unexpected":"schema miss"}' if calls == 1 else '{"answer":"same-route recovery"}'
+        )
+        cost = 0.01 if calls == 1 else 0.02
+        payload = _completion(content, cost=cost)
+        payload["id"] = f"generation-schema-retry-{calls}"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": payload["id"]},
+            json=payload,
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="schema-retry-success",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert completion.value.answer == "same-route recovery"
+    assert calls == 2
+    assert requested_models == ["alpha/atlas-secure", "alpha/atlas-secure"]
+    assert request_bodies[0] == request_bodies[1]
+    assert len(usage.records) == 1
+    record = completion.usage_record
+    assert record is usage.records[0]
+    assert record.request_id == "schema-retry-success"
+    assert record.attempts == 2
+    assert record.retry_count == 1
+    assert record.reported_cost_usd_exact == "0.02"
+    assert Decimal(record.accounted_cost_usd_exact) == Decimal("0.03")
+    assert client.budget.spent_usd == pytest.approx(0.03)
+    reservations = atomic_token_reservations_from_usage(record)
+    assert [item.request_id for item in reservations] == [
+        "schema-retry-success",
+        "schema-retry-success:attempt:2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schema_validation_retry_exhaustion_is_typed_and_exactly_accounted(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"unexpected":"schema miss"}',
+            cost=0.01 if calls == 1 else 0.02,
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+    try:
+        with pytest.raises(OpenRouterSchemaValidationRetryExhaustedError) as raised:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="schema-retry-exhausted",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert raised.value.attempts == 2
+    assert raised.value.configured_retries == 1
+    assert raised.value.retries_used == 1
+    assert raised.value.attempt_limit == 2
+    assert raised.value.exhaustion_reason == "SCHEMA_RETRY_LIMIT"
+    assert isinstance(raised.value.__cause__, OpenRouterStructuredOutputError)
+    assert raised.value.__cause__.failure_code is (
+        StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    )
+    assert calls == 2
+    assert len(usage.records) == 1
+    record = usage.records[0]
+    assert record.status == "failed:OpenRouterSchemaValidationRetryExhaustedError"
+    assert record.attempts == 2
+    assert record.retry_count == 1
+    assert record.reported_cost_usd_exact == "0.02"
+    assert Decimal(record.accounted_cost_usd_exact) == Decimal("0.03")
+    assert [item.request_id for item in atomic_token_reservations_from_usage(record)] == [
+        "schema-retry-exhausted",
+        "schema-retry-exhausted:attempt:2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schema_validation_retry_respects_tighter_total_attempt_limit(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"unexpected":"schema miss"}', cost=0.01)
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 2,
+            "max_requests_per_agent": 3,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+    try:
+        with pytest.raises(OpenRouterSchemaValidationRetryExhaustedError) as raised:
+            await client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="schema-total-attempt-limit",
+                _maximum_attempts=1,
+            )
+    finally:
+        await http_client.aclose()
+
+    assert raised.value.attempts == 1
+    assert raised.value.configured_retries == 2
+    assert raised.value.retries_used == 0
+    assert raised.value.attempt_limit == 1
+    assert raised.value.exhaustion_reason == "TOTAL_ATTEMPT_LIMIT"
+    assert isinstance(raised.value.__cause__, OpenRouterStructuredOutputError)
+    assert raised.value.__cause__.failure_code is (
+        StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    )
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
+    assert usage.records[0].retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_non_schema_structured_output_failure_does_not_use_schema_retry_budget(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response("not json")
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 2,
+            "max_requests_per_agent": 3,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+    try:
+        with pytest.raises(OpenRouterStructuredOutputError) as raised:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="non-schema-no-retry",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert type(raised.value) is OpenRouterStructuredOutputError
+    assert raised.value.failure_code is StructuredOutputFailureCode.INVALID_JSON_SYNTAX
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
+
+
+@pytest.mark.parametrize("schema_first", [False, True])
+@pytest.mark.asyncio
+async def test_transient_and_schema_validation_retry_quotas_are_independent(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    schema_first: bool,
+) -> None:
+    calls = 0
+    backoff_ordinals: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        transient_attempt = 2 if schema_first else 1
+        schema_attempt = 1 if schema_first else 2
+        if calls == transient_attempt:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={
+                    "error": {"code": 429, "message": "synthetic transient"},
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cost": 0,
+                    },
+                },
+            )
+        if calls == schema_attempt:
+            return _completion_response('{"unexpected":"schema miss"}', cost=0.01)
+        return _completion_response('{"answer":"both quotas available"}', cost=0.02)
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 3,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+
+    async def no_wait(attempt: int, retry_after: str | None) -> None:
+        del retry_after
+        backoff_ordinals.append(attempt)
+
+    monkeypatch.setattr(client, "_backoff", no_wait)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="transient-and-schema-retry",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "both quotas available"
+    assert calls == 3
+    assert backoff_ordinals == [1]
+    assert len(usage.records) == 1
+    record = usage.records[0]
+    assert record.attempts == 3
+    assert record.retry_count == 2
+    assert [item.request_id for item in atomic_token_reservations_from_usage(record)] == [
+        "transient-and-schema-retry",
+        "transient-and-schema-retry:attempt:2",
+        "transient-and-schema-retry:attempt:3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schema_retry_exhaustion_uses_explicit_fallback_only_after_primary_exhaustion(
+    config_factory,
+) -> None:
+    requested_models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        requested_models.append(model)
+        if model == "alpha/atlas-secure":
+            return _completion_response(
+                '{"unexpected":"primary schema miss"}',
+                cost=0.01,
+                model=model,
+            )
+        return _completion_response(
+            '{"answer":"explicit fallback"}',
+            cost=0.02,
+            model=model,
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 3,
+        }
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        privacy_models=("alpha/atlas-secure", "bravo/borealis-secure"),
+    )
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="schema-exhaustion-fallback",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert completion.value.answer == "explicit fallback"
+    assert requested_models == [
+        "alpha/atlas-secure",
+        "alpha/atlas-secure",
+        "bravo/borealis-secure",
+    ]
+    assert len(usage.records) == 2
+    failed, succeeded = usage.records
+    assert failed.request_id == "schema-exhaustion-fallback"
+    assert failed.status == "failed:OpenRouterSchemaValidationRetryExhaustedError"
+    assert failed.attempts == 2
+    assert failed.reported_cost_usd_exact == "0.01"
+    assert Decimal(failed.accounted_cost_usd_exact) == Decimal("0.02")
+    assert failed.routing["structured_output_failure_code"] == "SCHEMA_VALIDATION_FAILED"
+    assert [item.request_id for item in atomic_token_reservations_from_usage(failed)] == [
+        "schema-exhaustion-fallback",
+        "schema-exhaustion-fallback:attempt:2",
+    ]
+    assert succeeded is completion.usage_record
+    assert succeeded.request_id == "schema-exhaustion-fallback:route:2"
+    assert succeeded.status == "success"
+    assert succeeded.attempts == 1
+    assert succeeded.reported_cost_usd_exact == "0.02"
+    assert Decimal(succeeded.accounted_cost_usd_exact) == Decimal("0.02")
+    assert succeeded.fallback_used is True
+    assert client.budget.spent_usd == pytest.approx(0.04)
+
+
+@pytest.mark.asyncio
+async def test_schema_retry_cost_tripwire_stops_before_retry_with_closed_exact_ledger(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    reported_cost = Decimal("0.5")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"unexpected":"schema miss over tripwire"}',
+            cost=float(reported_cost),
+            provider="Approved Provider",
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "schema-retry-tripwire-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000000001",
+            "completion": "0.000000001",
+            "request": "0",
+        }
+    )
+    client, usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+        with pytest.raises(CostReservationOverrunError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="schema-retry-tripwire",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 1
+    snapshot = ledger.snapshot()
+    assert snapshot.active_reserved_usd == 0
+    assert len(snapshot.entries) == 1
+    entry = snapshot.entries[0]
+    assert entry.request_id == "schema-retry-tripwire"
+    assert entry.status.value == "reservation_overrun"
+    assert entry.actual_cost_usd == reported_cost
+    assert entry.accounted_cost_usd == reported_cost
+    assert all(item.status.value != "uncertain_accounted" for item in snapshot.entries)
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
+    assert Decimal(usage.records[0].accounted_cost_usd_exact) == reported_cost
+
+
+@pytest.mark.asyncio
+async def test_schema_retry_success_reconciles_each_persistent_ledger_attempt_exactly(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            (
+                '{"unexpected":"schema miss"}'
+                if calls == 1
+                else '{"answer":"persistent retry success"}'
+            ),
+            cost=0.01 if calls == 1 else 0.02,
+            provider="Approved Provider",
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "schema-retry-success-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000001",
+            "completion": "0.001",
+            "request": "0",
+        }
+    )
+    client, usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="schema-retry-persistent-success",
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert completion.value.answer == "persistent retry success"
+    assert calls == 2
+    snapshot = ledger.snapshot()
+    assert snapshot.active_reserved_usd == 0
+    assert snapshot.spent_usd == Decimal("0.03")
+    entries = {entry.request_id: entry for entry in snapshot.entries}
+    assert set(entries) == {
+        "schema-retry-persistent-success",
+        "schema-retry-persistent-success:attempt:2",
+    }
+    expected_costs = {
+        "schema-retry-persistent-success": Decimal("0.01"),
+        "schema-retry-persistent-success:attempt:2": Decimal("0.02"),
+    }
+    for request_id, expected_cost in expected_costs.items():
+        entry = entries[request_id]
+        assert entry.status.value == "reconciled"
+        assert entry.actual_cost_usd == expected_cost
+        assert entry.accounted_cost_usd == expected_cost
+    assert all(entry.status.value != "uncertain_accounted" for entry in snapshot.entries)
+    assert len(usage.records) == 1
+    record = completion.usage_record
+    assert record is usage.records[0]
+    assert record.attempts == 2
+    assert record.reported_cost_usd_exact == "0.02"
+    assert Decimal(record.accounted_cost_usd_exact) == Decimal("0.03")
+    assert [item.request_id for item in atomic_token_reservations_from_usage(record)] == [
+        "schema-retry-persistent-success",
+        "schema-retry-persistent-success:attempt:2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schema_generation_drift_after_schema_miss_fails_closed_without_retry(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RacingSchemaAnswer(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        answer: str
+
+    calls = 0
+    rebuilt = False
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"unexpected":"schema miss"}', cost=0.01)
+
+    original_decode = openrouter_module._decode_structured_output_with_schema_generation
+
+    def rebuild_on_schema_failure(*args: Any, **kwargs: Any) -> Any:
+        nonlocal rebuilt
+        try:
+            return original_decode(*args, **kwargs)
+        except StructuredOutputDecodeError:
+            if not rebuilt:
+                rebuilt = True
+                RacingSchemaAnswer.model_fields["answer"].annotation = int
+                assert RacingSchemaAnswer.model_rebuild(force=True) is True
+            raise
+
+    monkeypatch.setattr(
+        openrouter_module,
+        "_decode_structured_output_with_schema_generation",
+        rebuild_on_schema_failure,
+    )
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+    try:
+        with pytest.raises(
+            OpenRouterSchemaError,
+            match="changed after schema-validation failure classification",
+        ) as raised:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=RacingSchemaAnswer,
+                schema_name="racing_schema_answer",
+                logical_request_id="schema-retry-generation-drift",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert not isinstance(raised.value, OpenRouterSchemaValidationRetryExhaustedError)
+    assert rebuilt is True
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
 
 
 @pytest.mark.asyncio

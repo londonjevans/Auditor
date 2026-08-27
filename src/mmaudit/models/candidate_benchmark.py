@@ -808,7 +808,7 @@ async def run_candidate_registry_benchmarks(
             expected_request_cost_previews=expected_request_cost_previews,
         )
         evidence = discovery_evidence[0]
-        configured_attempts = config.execution.max_model_retries + 1
+        configured_attempts = config.execution.maximum_model_attempts
         if any(
             preview.provider_endpoint != candidate.approved_provider_endpoint
             or preview.discovery_manifest_sha256 != discovery_manifest.manifest_sha256

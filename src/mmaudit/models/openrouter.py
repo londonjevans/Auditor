@@ -230,6 +230,7 @@ from mmaudit.models.usage import (
     _validated_usage_copy_preserving_owned_attestation,
     authrunner_noncrediting_unknown_token_smoke_scope,
     noncrediting_unknown_token_smoke_usage_diagnostics,
+    request_token_plan_from_usage,
     structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 from mmaudit.orchestration.budgets import (
@@ -1602,6 +1603,35 @@ class OpenRouterStructuredOutputError(OpenRouterSchemaError):
         self.failure_code = failure_code
         self.repair_evidence = repair_evidence
         super().__init__(f"model returned invalid structured data ({failure_code.value})")
+
+
+class OpenRouterSchemaValidationRetryExhaustedError(OpenRouterStructuredOutputError):
+    """A bounded same-route schema-validation retry policy was exhausted."""
+
+    def __init__(
+        self,
+        *,
+        attempts: int,
+        configured_retries: int,
+        retries_used: int,
+        attempt_limit: int,
+        repair_evidence: StructuredOutputRepairEvidence | None = None,
+    ) -> None:
+        self.attempts = attempts
+        self.configured_retries = configured_retries
+        self.retries_used = retries_used
+        self.attempt_limit = attempt_limit
+        self.exhaustion_reason = (
+            "SCHEMA_RETRY_LIMIT" if retries_used >= configured_retries else "TOTAL_ATTEMPT_LIMIT"
+        )
+        super().__init__(
+            failure_code=StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED,
+            repair_evidence=repair_evidence,
+        )
+        self.args = (
+            "schema-invalid structured output exhausted the bounded same-route retry policy "
+            f"after {attempts} attempts ({self.exhaustion_reason})",
+        )
 
 
 class OpenRouterCandidateReviewBoundaryError(OpenRouterSchemaError):
@@ -3690,7 +3720,7 @@ def preview_openrouter_structured_request_cost(
         raise OpenRouterRequestCostPreviewError(
             "provider-free request-cost preview discovery manifest does not bind the evidence"
         )
-    configured_attempts = sealed_execution.max_model_retries + 1
+    configured_attempts = sealed_execution.maximum_model_attempts
     attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
     if (
         type(attempt_limit) is not int
@@ -4779,6 +4809,7 @@ def _build_provider_transport_attempt_authority(
     trusted_supported_runtime_versions = ("0.28.1", "1.0.9", "0.16.0")
     trusted_decimal_type = Decimal
     trusted_token_detail_type = TokenDetailAccountingEvidence
+    trusted_request_token_plan_type = RequestTokenPlan
     trusted_validate_completion_usage = _validate_usage
     trusted_optional_cost_decimal = _optional_cost_decimal
     trusted_nonnegative_int = _nonnegative_int
@@ -4786,6 +4817,19 @@ def _build_provider_transport_attempt_authority(
     trusted_cached_tokens = _cached_tokens
     trusted_is_retryable_status = is_retryable_status
     trusted_cost_entry_reserved = CostEntryStatus.RESERVED
+    trusted_cost_entry_reconciled = CostEntryStatus.RECONCILED
+    trusted_schema_generation_type = _PydanticSchemaGeneration
+    trusted_schema_generation_factory = _pydantic_schema_generation
+    trusted_structured_output_decoder = _decode_structured_output_with_schema_generation
+    trusted_structured_output_decode_error_type = StructuredOutputDecodeError
+    trusted_schema_validation_failure_code = StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    trusted_provider_payload_error = _raise_provider_payload_error
+    trusted_completion_envelope_validator = _validate_completion_envelope
+    trusted_completion_finish_validator = _raise_for_completion_finish
+    trusted_provider_policy_canonicalizer = _canonical_provider_policy
+    trusted_provider_token_usage_validator = _validate_provider_token_usage
+    trusted_request_token_plan_from_usage = request_token_plan_from_usage
+    trusted_credential_value_validator = _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE
     trusted_expectation_sha256 = _generation_reconciliation_expectation_sha256
     trusted_verification_request_sha256 = _generation_verification_request_sha256
     trusted_metadata_payload_may_be_pending = _generation_metadata_payload_may_be_pending
@@ -5814,6 +5858,13 @@ def _build_provider_transport_attempt_authority(
                 or state.get("purpose") != grant_state.get("purpose")
                 or state.get("logical_request_id") != grant_state.get("logical_request_id")
                 or state.get("maximum_attempts") != grant_state.get("maximum_attempts")
+                or state.get("transient_retry_limit") != grant_state.get("transient_retry_limit")
+                or state.get("schema_validation_retry_limit")
+                != grant_state.get("schema_validation_retry_limit")
+                or state.get("json_repair_limit") != grant_state.get("json_repair_limit")
+                or state.get("response_model") is not grant_state.get("response_model")
+                or state.get("response_schema_generation")
+                is not grant_state.get("response_schema_generation")
                 or (require_claimed and state.get("phase") != "CLAIMED")
                 for _receipt, state in ordered
             )
@@ -5954,20 +6005,161 @@ def _build_provider_transport_attempt_authority(
             ):
                 receipt_reservations_are_exact = False
                 break
-        retry_outcomes_are_exact = all(
-            (
-                state.get("outcome") == "RESPONSE"
-                and type(state.get("response_status_code")) is int
-                and trusted_is_retryable_status(cast(int, state["response_status_code"]))
-            )
-            or (
-                type(state.get("error_type")) is type
-                and issubclass(
-                    cast(type[BaseException], state["error_type"]),
-                    (trusted_httpx.TimeoutException, trusted_httpx.NetworkError),
+        current_execution = getattr(client, "execution", None)
+        current_transient_retry_limit = getattr(current_execution, "max_model_retries", None)
+        current_schema_retry_limit = getattr(
+            current_execution,
+            "max_schema_validation_retries",
+            None,
+        )
+        current_json_repair_limit = getattr(
+            current_execution,
+            "max_json_repair_attempts",
+            None,
+        )
+        transient_retry_limit = grant_state.get("transient_retry_limit")
+        schema_retry_limit = grant_state.get("schema_validation_retry_limit")
+        json_repair_limit = grant_state.get("json_repair_limit")
+        response_model = grant_state.get("response_model")
+        response_schema_generation = grant_state.get("response_schema_generation")
+        try:
+            request_token_plan = trusted_request_token_plan_from_usage(usage_record)
+        except (TypeError, ValueError):
+            request_token_plan = None
+
+        def is_transient_retry(state: ReceiptState) -> bool:
+            status = state.get("response_status_code")
+            error_type = state.get("error_type")
+            return bool(
+                (
+                    state.get("outcome") == "RESPONSE"
+                    and type(status) is int
+                    and trusted_is_retryable_status(status)
+                )
+                or (
+                    type(error_type) is type
+                    and issubclass(
+                        cast(type[BaseException], error_type),
+                        (trusted_httpx.TimeoutException, trusted_httpx.NetworkError),
+                    )
                 )
             )
-            for _receipt, state in ordered[:-1]
+
+        def is_schema_validation_retry(state: ReceiptState, ordinal: int) -> bool:
+            status = state.get("response_status_code")
+            response = state.get("response")
+            response_values = vars(response) if type(response) is trusted_response_type else {}
+            response_content = response_values.get("_content")
+            response_headers = response_values.get("headers")
+            if (
+                state.get("outcome") != "RESPONSE"
+                or type(status) is not int
+                or not 200 <= status < 300
+                or type(response_content) is not bytes
+                or type(response_headers) is not trusted_headers_type
+                or not isinstance(response_model, type)
+                or type(response_schema_generation) is not trusted_schema_generation_type
+                or type(json_repair_limit) is not int
+            ):
+                return False
+            try:
+                response_payload = trusted_json_loads(
+                    response_content,
+                    parse_float=trusted_decimal_type,
+                    parse_constant=trusted_reject_nonfinite,
+                    object_pairs_hook=trusted_unique_object,
+                )
+                trusted_finite_numbers(response_payload)
+                choices = (
+                    response_payload.get("choices") if type(response_payload) is dict else None
+                )
+                first_choice = choices[0] if type(choices) is list and len(choices) == 1 else None
+                message = first_choice.get("message") if type(first_choice) is dict else None
+                response_text = message.get("content") if type(message) is dict else None
+                raw_usage = trusted_validate_completion_usage(
+                    response_payload.get("usage") if type(response_payload) is dict else None
+                )
+                raw_cost = trusted_optional_cost_decimal(raw_usage.get("cost"))
+                if (
+                    type(response_text) is not str
+                    or raw_cost is None
+                    or type(request_token_plan) is not trusted_request_token_plan_type
+                    or not response_schema_generation.is_current(response_model)
+                ):
+                    return False
+                trusted_credential_value_validator(
+                    cast(OpenRouterClient, client),
+                    response_payload,
+                )
+                trusted_provider_token_usage_validator(
+                    request_token_plan=request_token_plan,
+                    prompt_tokens=trusted_nonnegative_int(raw_usage.get("prompt_tokens")),
+                    completion_tokens=trusted_nonnegative_int(raw_usage.get("completion_tokens")),
+                    reasoning_tokens=trusted_reasoning_tokens(raw_usage),
+                )
+                requested_model = grant_state.get("exact_model_id")
+                if type(requested_model) is not str:
+                    return False
+                provider_policy = trusted_provider_policy_canonicalizer(
+                    trusted_object_getattribute(client, "provider_policy")
+                )
+                endpoint_pricing = trusted_object_getattribute(client, "_endpoint_pricing")
+                model_identities = trusted_object_getattribute(client, "_model_identities")
+                if type(endpoint_pricing) is not dict or type(model_identities) is not dict:
+                    return False
+                trusted_provider_payload_error(
+                    response_payload,
+                    requested_model=requested_model,
+                )
+                envelope = trusted_completion_envelope_validator(
+                    response_payload,
+                    response_headers,
+                    requested_model=requested_model,
+                    provider_policy=provider_policy,
+                    endpoint_policy=endpoint_pricing.get(requested_model),
+                    model_identity=model_identities.get(requested_model),
+                )
+                trusted_completion_finish_validator(envelope)
+                trusted_structured_output_decoder(
+                    envelope.content,
+                    response_model,
+                    schema_validator=response_schema_generation.validator,
+                    core_schema=response_schema_generation.core_schema,
+                    max_repair_attempts=json_repair_limit,
+                )
+            except trusted_structured_output_decode_error_type as output_error:
+                failure_code = output_error.code
+            except (OpenRouterError, TypeError, ValueError):
+                return False
+            else:
+                return False
+            attempt_entry = terminal_entries.get(expected_attempt_ids[ordinal - 1])
+            return bool(
+                failure_code is trusted_schema_validation_failure_code
+                and attempt_entry is not None
+                and attempt_entry.status is trusted_cost_entry_reconciled
+                and attempt_entry.actual_cost_usd == raw_cost
+                and attempt_entry.accounted_cost_usd == raw_cost
+            )
+
+        retry_classifications = tuple(
+            (
+                is_transient_retry(state),
+                is_schema_validation_retry(state, ordinal),
+            )
+            for ordinal, (_receipt, state) in enumerate(ordered[:-1], start=1)
+        )
+        transient_retry_outcomes = sum(transient for transient, _schema in retry_classifications)
+        schema_retry_outcomes = sum(schema for _transient, schema in retry_classifications)
+        retry_outcomes_are_exact = (
+            type(transient_retry_limit) is int
+            and type(schema_retry_limit) is int
+            and current_transient_retry_limit == transient_retry_limit
+            and current_schema_retry_limit == schema_retry_limit
+            and current_json_repair_limit == json_repair_limit
+            and transient_retry_outcomes <= transient_retry_limit
+            and schema_retry_outcomes <= schema_retry_limit
+            and all(transient is not schema for transient, schema in retry_classifications)
         )
         if (
             scope not in {"CANDIDATE", "JUDGE"}
@@ -6292,6 +6484,51 @@ def _build_provider_transport_attempt_authority(
             )
         except (AttributeError, TypeError, ValueError):
             completion_surface_is_exact = False
+        client_execution = getattr(client, "execution", None)
+        transient_retry_limit = (
+            getattr(client_execution, "max_model_retries", None)
+            if purpose == "COMPLETION"
+            else None
+        )
+        schema_validation_retry_limit = (
+            getattr(client_execution, "max_schema_validation_retries", None)
+            if purpose == "COMPLETION"
+            else None
+        )
+        json_repair_limit = (
+            getattr(client_execution, "max_json_repair_attempts", None)
+            if purpose == "COMPLETION"
+            else None
+        )
+        try:
+            response_schema_generation = (
+                trusted_schema_generation_factory(response_model)
+                if purpose == "COMPLETION"
+                and schema_validation_retry_limit != 0
+                and response_model is not None
+                else None
+            )
+        except (AttributeError, TypeError, ValueError):
+            response_schema_generation = None
+        completion_retry_policy_is_exact = bool(
+            purpose != "COMPLETION"
+            or (
+                type(maximum_attempts) is int
+                and type(transient_retry_limit) is int
+                and type(schema_validation_retry_limit) is int
+                and transient_retry_limit >= 0
+                and schema_validation_retry_limit >= 0
+                and maximum_attempts <= 1 + transient_retry_limit + schema_validation_retry_limit
+                and type(json_repair_limit) is int
+                and (
+                    schema_validation_retry_limit == 0
+                    or (
+                        isinstance(response_model, type)
+                        and type(response_schema_generation) is trusted_schema_generation_type
+                    )
+                )
+            )
+        )
         if (
             expected_code is None
             or frame.f_code is not expected_code
@@ -6309,6 +6546,7 @@ def _build_provider_transport_attempt_authority(
             or not trusted_is_exact_model_id(exact_model_id)
             or type(maximum_attempts) is not int
             or not 1 <= maximum_attempts <= 32
+            or not completion_retry_policy_is_exact
             or (generation_id is None) is not (purpose == "COMPLETION")
             or (not isolated and expectation_sha256 is None)
             or (anchor is None) is not (purpose == "COMPLETION")
@@ -6458,6 +6696,11 @@ def _build_provider_transport_attempt_authority(
             "role": role,
             "exact_model_id": exact_model_id,
             "maximum_attempts": maximum_attempts,
+            "transient_retry_limit": transient_retry_limit,
+            "schema_validation_retry_limit": schema_validation_retry_limit,
+            "json_repair_limit": json_repair_limit,
+            "response_model": (response_model if schema_validation_retry_limit != 0 else None),
+            "response_schema_generation": response_schema_generation,
             "next_attempt": 1,
             "receipts": (),
             "generation_id": generation_id,
@@ -7047,6 +7290,12 @@ def _build_provider_transport_attempt_authority(
             or module_values.get("_network_backend_graph_is_current")
             is not trusted_network_backend_current
             or module_values.get("is_retryable_status") is not trusted_is_retryable_status
+            or module_values.get("_validate_provider_token_usage")
+            is not trusted_provider_token_usage_validator
+            or module_values.get("request_token_plan_from_usage")
+            is not trusted_request_token_plan_from_usage
+            or module_values.get("_TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE")
+            is not trusted_credential_value_validator
             or module_values.get("_authrunner_request_origin_scope")
             is not trusted_request_origin_scope
             or module_values.get("_authrunner_noncrediting_smoke_request_scope")
@@ -7333,6 +7582,18 @@ def _build_provider_transport_attempt_authority(
         grant_state = operation_state(operation_grant)
         effective_purpose = grant_state.get("purpose") if purpose is None else purpose
         next_attempt = cast(int, grant_state["next_attempt"])
+        client_execution = getattr(client, "execution", None)
+        current_transient_retry_limit = getattr(client_execution, "max_model_retries", None)
+        current_schema_validation_retry_limit = getattr(
+            client_execution,
+            "max_schema_validation_retries",
+            None,
+        )
+        current_json_repair_limit = getattr(
+            client_execution,
+            "max_json_repair_attempts",
+            None,
+        )
         current_task = trusted_current_task()
         grant_generation_id = grant_state.get("generation_id")
         expected_generation_path = (
@@ -7361,6 +7622,15 @@ def _build_provider_transport_attempt_authority(
             )
             or grant_state.get("purpose") != effective_purpose
             or next_attempt > cast(int, grant_state["maximum_attempts"])
+            or (
+                method == "POST"
+                and (
+                    grant_state.get("transient_retry_limit") != current_transient_retry_limit
+                    or grant_state.get("schema_validation_retry_limit")
+                    != current_schema_validation_retry_limit
+                    or grant_state.get("json_repair_limit") != current_json_repair_limit
+                )
+            )
             or (
                 method == "POST"
                 and (
@@ -7458,6 +7728,11 @@ def _build_provider_transport_attempt_authority(
             "logical_request_id": grant_state["logical_request_id"],
             "attempt_ordinal": next_attempt,
             "maximum_attempts": grant_state["maximum_attempts"],
+            "transient_retry_limit": grant_state.get("transient_retry_limit"),
+            "schema_validation_retry_limit": grant_state.get("schema_validation_retry_limit"),
+            "json_repair_limit": grant_state.get("json_repair_limit"),
+            "response_model": grant_state.get("response_model"),
+            "response_schema_generation": grant_state.get("response_schema_generation"),
             "expected_generation_id": grant_state["generation_id"],
             "logical_body_sha256": logical_body_sha256,
             "json_body": json_body,
@@ -13788,7 +14063,7 @@ class OpenRouterClient:
                 "scheduler task lacks the exact framed candidate-review contract"
             )
 
-        maximum_attempts = self.execution.max_model_retries + 1
+        maximum_attempts = self.execution.maximum_model_attempts
         if self.budget.max_requests_per_agent < maximum_attempts:
             raise OpenRouterRequestLimitError(
                 "candidate-review retry attempts exceed the configured request limit"
@@ -14352,7 +14627,7 @@ class OpenRouterClient:
             raise OpenRouterRequestCostPreviewError(
                 "portfolio resource preview scheduler task lacks an exact model"
             )
-        maximum_attempts = self.execution.max_model_retries + 1
+        maximum_attempts = self.execution.maximum_model_attempts
         if self.budget.max_requests_per_agent < maximum_attempts:
             raise OpenRouterRequestLimitError(
                 "portfolio retry attempts exceed the configured request limit"
@@ -14829,7 +15104,7 @@ class OpenRouterClient:
             _expected_resource_preview = sealed_expected_resource_preview
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
-        configured_attempts = self.execution.max_model_retries + 1
+        configured_attempts = self.execution.maximum_model_attempts
         maximum_attempts = configured_attempts if _maximum_attempts is None else _maximum_attempts
         if type(maximum_attempts) is not int or not 1 <= maximum_attempts <= configured_attempts:
             raise OpenRouterRequestLimitError(
@@ -15850,7 +16125,7 @@ class OpenRouterClient:
         _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
     ) -> StructuredCompletion[ResponseT]:
         paid_controls_required = _trusted_paid_controls_required(self)
-        configured_attempts = self.execution.max_model_retries + 1
+        configured_attempts = self.execution.maximum_model_attempts
         attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
         if type(attempt_limit) is not int or not 1 <= attempt_limit <= configured_attempts:
             raise OpenRouterRequestLimitError(
@@ -16450,6 +16725,8 @@ class OpenRouterClient:
                 json.loads(request_material),
             )
         attempts = 0
+        transient_retries = 0
+        schema_validation_retries = 0
         usage_recorded = False
         accounted_cost_usd = 0.0
         accounted_cost_usd_exact = Decimal(0)
@@ -16523,6 +16800,156 @@ class OpenRouterClient:
             active_actual_prompt_tokens = token_detail.accounted_prompt_tokens
             active_actual_completion_tokens = token_detail.accounted_completion_tokens
             active_actual_reasoning_tokens = token_detail.accounted_reasoning_tokens
+
+        def decode_active_response(
+            response_value: Any,
+            headers: Mapping[str, str],
+        ) -> tuple[CompletionEnvelope, StructuredOutputDecodeResult[ResponseT], ResponseT]:
+            nonlocal active_actual_cost
+            nonlocal initial_cost
+            nonlocal initial_usage
+            nonlocal response_hash
+            nonlocal validated_envelope
+            nonlocal validated_response_hash
+
+            if not isinstance(response_value, dict):
+                raise OpenRouterSchemaError("model provider returned invalid JSON data")
+            _raise_provider_payload_error(response_value, requested_model=model)
+            raw_content = _response_content_if_string(response_value)
+            if raw_content is not None:
+                response_hash = hashlib.sha256(raw_content.encode()).hexdigest()
+            raw_usage = response_value.get("usage")
+            if isinstance(raw_usage, dict):
+                initial_cost = _optional_cost_decimal(raw_usage.get("cost"))
+                active_actual_cost = initial_cost
+            initial_usage = _validate_usage(raw_usage)
+            initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
+            assert initial_cost is not None
+            active_actual_cost = initial_cost
+            capture_active_token_usage(initial_usage)
+            envelope = _validate_completion_envelope(
+                response_value,
+                headers,
+                requested_model=model,
+                provider_policy=request_provider_policy,
+                endpoint_policy=endpoint_policy,
+                model_identity=self._model_identities.get(model),
+            )
+            validated_envelope = envelope
+            truncated_envelope_evidence = None
+            if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and (
+                envelope.finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+                or (
+                    envelope.native_finish_reason is not None
+                    and envelope.native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+                )
+            ):
+                if not _candidate_review_protocol_boundary_is_pristine():
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "candidate-review completion boundary changed during transport"
+                    )
+                assert response_hash is not None
+                try:
+                    truncated_envelope_evidence = (
+                        _TRUSTED_SEAL_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE(
+                            logical_request_id=request_id,
+                            generation_id=envelope.generation_id,
+                            generation_header_id=_header_value(headers, "x-generation-id"),
+                            requested_model=envelope.requested_model,
+                            returned_model=envelope.returned_model,
+                            selected_model=envelope.selected_model,
+                            response_provider_identity=envelope.response_provider_identity,
+                            selected_provider_endpoint=envelope.selected_provider,
+                            selected_provider_identity=envelope.selected_provider_identity,
+                            selected_provider_name=envelope.selected_provider_name,
+                            router_metadata_sha256=_canonical_sha256(envelope.router_metadata),
+                            finish_reason=envelope.finish_reason,
+                            native_finish_reason=envelope.native_finish_reason,
+                            wire_schema_sha256=schema_hash,
+                            response_sha256=response_hash,
+                        )
+                    )
+                except CandidateReviewTruncationError:
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "candidate-review truncated envelope custody could not be sealed"
+                    ) from None
+            _raise_for_completion_finish(
+                envelope,
+                truncated_envelope_evidence=truncated_envelope_evidence,
+            )
+            initial_usage = envelope.usage
+            capture_active_token_usage(initial_usage)
+            _validate_provider_token_usage(
+                request_token_plan=request_token_plan,
+                prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
+                completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
+                reasoning_tokens=_reasoning_tokens(initial_usage),
+            )
+            response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
+            if self.privacy.store_raw_responses:
+                _TRUSTED_STORE_DEBUG(
+                    self,
+                    request_id,
+                    "response.json",
+                    copy.deepcopy(response_value),
+                )
+            content = envelope.content
+            try:
+                response_schema_generation.require_current(
+                    response_model,
+                    phase="before provider response decoding",
+                )
+                if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE:
+                    if not _candidate_review_protocol_boundary_is_pristine():
+                        raise OpenRouterCandidateReviewBoundaryError(
+                            "candidate-review completion boundary changed during transport"
+                        )
+                    assert response_hash is not None
+                    try:
+                        framed_document = _TRUSTED_DECODE_COMPLETE_CANDIDATE_REVIEW_DOCUMENT(
+                            content
+                        )
+                        _TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT(
+                            framed_document,
+                            request_id=request_id,
+                        )
+                    except CandidateReviewTruncationError:
+                        raise OpenRouterStructuredOutputError(
+                            failure_code=(StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED),
+                        ) from None
+                    decoded_output = cast(
+                        StructuredOutputDecodeResult[ResponseT],
+                        StructuredOutputDecodeResult(
+                            value=framed_document,
+                            original_response_sha256=response_hash,
+                            validated_json_sha256=response_hash,
+                            repair_evidence=None,
+                        ),
+                    )
+                else:
+                    decoded_output = _decode_structured_output_with_schema_generation(
+                        content,
+                        response_model,
+                        schema_validator=response_schema_generation.validator,
+                        core_schema=response_schema_generation.core_schema,
+                        max_repair_attempts=self.execution.max_json_repair_attempts,
+                    )
+                response_schema_generation.require_current(
+                    response_model,
+                    phase="during provider response decoding",
+                )
+            except StructuredOutputDecodeError as output_error:
+                raise OpenRouterStructuredOutputError(
+                    failure_code=output_error.code,
+                    repair_evidence=output_error.repair_evidence,
+                ) from None
+            parsed = decoded_output.value
+            validated_response_hash = _canonical_sha256(parsed.model_dump(mode="json"))
+            response_schema_generation.require_current(
+                response_model,
+                phase="during validated response hashing",
+            )
+            return envelope, decoded_output, parsed
 
         async def finalize_active(actual_cost: Decimal | None) -> None:
             nonlocal accounted_cost_usd, accounted_cost_usd_exact, active_reservation
@@ -17165,9 +17592,13 @@ class OpenRouterClient:
                         _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
                 except (httpx.TimeoutException, httpx.NetworkError):
                     await finalize_active(None)
-                    if attempts >= attempt_limit:
+                    if (
+                        transient_retries >= self.execution.max_model_retries
+                        or attempts >= attempt_limit
+                    ):
                         raise OpenRouterTimeoutError("model request timed out") from None
-                    await self._backoff(attempts, None)
+                    transient_retries += 1
+                    await self._backoff(transient_retries, None)
                     continue
                 except httpx.HTTPError:
                     await finalize_active(None)
@@ -17194,7 +17625,10 @@ class OpenRouterClient:
                     raise OpenRouterModelError(f"configured model is unavailable: {model}")
                 if is_retryable_status(response.status_code):
                     await finalize_active(None)
-                    if attempts >= attempt_limit:
+                    if (
+                        transient_retries >= self.execution.max_model_retries
+                        or attempts >= attempt_limit
+                    ):
                         if response.status_code == 429:
                             raise OpenRouterRateLimitError(
                                 "OpenRouter rate limit exhausted the retry policy"
@@ -17206,156 +17640,67 @@ class OpenRouterClient:
                         raise OpenRouterProviderUnavailableError(
                             f"provider unavailable after retries (HTTP {response.status_code})"
                         )
-                    await self._backoff(attempts, response.headers.get("Retry-After"))
+                    transient_retries += 1
+                    await self._backoff(
+                        transient_retries,
+                        response.headers.get("Retry-After"),
+                    )
                     continue
                 if response.status_code >= 400:
                     await finalize_active(None)
                     raise OpenRouterModelError(
                         f"model request rejected with HTTP {response.status_code}"
                     )
+                try:
+                    envelope, decoded_output, parsed = decode_active_response(
+                        response_value,
+                        response.headers,
+                    )
+                except OpenRouterStructuredOutputError as output_error:
+                    if output_error.failure_code is not (
+                        StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+                    ):
+                        raise
+                    response_schema_generation.require_current(
+                        response_model,
+                        phase="after schema-validation failure classification",
+                    )
+                    if (
+                        response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                        and not _candidate_review_protocol_boundary_is_pristine()
+                    ):
+                        raise OpenRouterCandidateReviewBoundaryError(
+                            "candidate-review completion boundary changed after decoding failure"
+                        ) from output_error
+                    if (
+                        schema_validation_retries >= self.execution.max_schema_validation_retries
+                        or attempts >= attempt_limit
+                    ):
+                        if self.execution.max_schema_validation_retries == 0:
+                            raise
+                        raise OpenRouterSchemaValidationRetryExhaustedError(
+                            attempts=attempts,
+                            configured_retries=(self.execution.max_schema_validation_retries),
+                            retries_used=schema_validation_retries,
+                            attempt_limit=attempt_limit,
+                            repair_evidence=output_error.repair_evidence,
+                        ) from output_error
+                    await finalize_active(active_actual_cost)
+                    schema_validation_retries += 1
+                    self.logger.warning(
+                        "Schema-invalid structured output; retrying the same route",
+                        extra={
+                            "request_id": request_id,
+                            "role": role,
+                            "status": "schema_retry",
+                        },
+                    )
+                    continue
                 break
 
-            payload = response_value
-            if not isinstance(payload, dict):
-                raise OpenRouterSchemaError("model provider returned invalid JSON data")
-            _raise_provider_payload_error(payload, requested_model=model)
-            raw_content = _response_content_if_string(payload)
-            if raw_content is not None:
-                response_hash = hashlib.sha256(raw_content.encode()).hexdigest()
-            raw_usage = payload.get("usage")
-            if isinstance(raw_usage, dict):
-                initial_cost = _optional_cost_decimal(raw_usage.get("cost"))
-                active_actual_cost = initial_cost
-            initial_usage = _validate_usage(raw_usage)
-            initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
+            assert response_hash is not None
+            assert validated_response_hash is not None
             assert initial_cost is not None
-            active_actual_cost = initial_cost
-            capture_active_token_usage(initial_usage)
-            envelope = _validate_completion_envelope(
-                payload,
-                response.headers,
-                requested_model=model,
-                provider_policy=request_provider_policy,
-                endpoint_policy=endpoint_policy,
-                model_identity=self._model_identities.get(model),
-            )
-            validated_envelope = envelope
-            truncated_envelope_evidence = None
-            if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and (
-                envelope.finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
-                or (
-                    envelope.native_finish_reason is not None
-                    and envelope.native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
-                )
-            ):
-                if not _candidate_review_protocol_boundary_is_pristine():
-                    raise OpenRouterCandidateReviewBoundaryError(
-                        "candidate-review completion boundary changed during transport"
-                    )
-                assert response_hash is not None
-                try:
-                    truncated_envelope_evidence = (
-                        _TRUSTED_SEAL_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE(
-                            logical_request_id=request_id,
-                            generation_id=envelope.generation_id,
-                            generation_header_id=_header_value(
-                                response.headers,
-                                "x-generation-id",
-                            ),
-                            requested_model=envelope.requested_model,
-                            returned_model=envelope.returned_model,
-                            selected_model=envelope.selected_model,
-                            response_provider_identity=(envelope.response_provider_identity),
-                            selected_provider_endpoint=envelope.selected_provider,
-                            selected_provider_identity=(envelope.selected_provider_identity),
-                            selected_provider_name=envelope.selected_provider_name,
-                            router_metadata_sha256=_canonical_sha256(envelope.router_metadata),
-                            finish_reason=envelope.finish_reason,
-                            native_finish_reason=envelope.native_finish_reason,
-                            wire_schema_sha256=schema_hash,
-                            response_sha256=response_hash,
-                        )
-                    )
-                except CandidateReviewTruncationError:
-                    raise OpenRouterCandidateReviewBoundaryError(
-                        "candidate-review truncated envelope custody could not be sealed"
-                    ) from None
-            _raise_for_completion_finish(
-                envelope,
-                truncated_envelope_evidence=truncated_envelope_evidence,
-            )
-            initial_usage = envelope.usage
-            capture_active_token_usage(initial_usage)
-            _validate_provider_token_usage(
-                request_token_plan=request_token_plan,
-                prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
-                completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
-                reasoning_tokens=_reasoning_tokens(initial_usage),
-            )
-            response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
-            if self.privacy.store_raw_responses:
-                _TRUSTED_STORE_DEBUG(
-                    self,
-                    request_id,
-                    "response.json",
-                    copy.deepcopy(payload),
-                )
-            content = envelope.content
-            try:
-                response_schema_generation.require_current(
-                    response_model,
-                    phase="before provider response decoding",
-                )
-                if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE:
-                    if not _candidate_review_protocol_boundary_is_pristine():
-                        raise OpenRouterCandidateReviewBoundaryError(
-                            "candidate-review completion boundary changed during transport"
-                        )
-                    assert response_hash is not None
-                    try:
-                        framed_document = _TRUSTED_DECODE_COMPLETE_CANDIDATE_REVIEW_DOCUMENT(
-                            content
-                        )
-                        _TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT(
-                            framed_document,
-                            request_id=request_id,
-                        )
-                    except CandidateReviewTruncationError:
-                        raise OpenRouterStructuredOutputError(
-                            failure_code=StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED,
-                        ) from None
-                    decoded_output = cast(
-                        StructuredOutputDecodeResult[ResponseT],
-                        StructuredOutputDecodeResult(
-                            value=framed_document,
-                            original_response_sha256=response_hash,
-                            validated_json_sha256=response_hash,
-                            repair_evidence=None,
-                        ),
-                    )
-                else:
-                    decoded_output = _decode_structured_output_with_schema_generation(
-                        content,
-                        response_model,
-                        schema_validator=response_schema_generation.validator,
-                        core_schema=response_schema_generation.core_schema,
-                        max_repair_attempts=self.execution.max_json_repair_attempts,
-                    )
-                response_schema_generation.require_current(
-                    response_model,
-                    phase="during provider response decoding",
-                )
-            except StructuredOutputDecodeError as output_error:
-                raise OpenRouterStructuredOutputError(
-                    failure_code=output_error.code,
-                    repair_evidence=output_error.repair_evidence,
-                ) from None
-            parsed = decoded_output.value
-            validated_response_hash = _canonical_sha256(parsed.model_dump(mode="json"))
-            response_schema_generation.require_current(
-                response_model,
-                phase="during validated response hashing",
-            )
             await finalize_active(active_actual_cost)
             ended_at = datetime.now(UTC)
             latency_ms = max(0, round((time.perf_counter() - started_clock) * 1_000))
@@ -17574,7 +17919,7 @@ class OpenRouterClient:
                             schema_validator=response_schema_generation.validator,
                             core_schema=response_schema_generation.core_schema,
                         ).value
-                    except StructuredOutputDecodeError:
+                    except (OpenRouterSchemaError, StructuredOutputDecodeError):
                         pass
                     else:
                         validated_response_hash = _canonical_sha256(

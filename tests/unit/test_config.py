@@ -16,6 +16,7 @@ from mmaudit.config import (
     AuditConfigOverrides,
     AuditRunOptions,
     ConfigError,
+    ExecutionConfig,
     ReproductionConfig,
     audit_config_overrides,
     canonical_audit_config_json,
@@ -34,6 +35,10 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.privacy import PrivacyProfile
 from tests.conftest import base_config_data
+
+_QUALIFICATION_CONFIG_SHA256_WITH_SCHEMA_RETRY_OFF = (
+    "e81516464de46b3b10d4533b1c0f792ae895e09c43cafc2d01f60cc2ad5bc438"
+)
 
 
 def _write_config(path: Path, budget: float = 20.0) -> None:
@@ -89,6 +94,65 @@ def test_load_configuration_and_defaults(tmp_path: Path) -> None:
     assert config.models.catalog_refresh.automatic_benchmark_per_model_budget_usd == "0"
     assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
     assert config.privacy.require_zdr is True
+
+
+def test_schema_validation_retry_is_default_off_without_changing_qualification_hash() -> None:
+    qualification_path = Path(__file__).parents[2] / "config" / "openrouter-qualification.toml"
+    baseline = load_config(qualification_path, environ={})
+    explicit_zero_execution = ExecutionConfig.model_validate(
+        {
+            **baseline.execution.model_dump(mode="json"),
+            "max_schema_validation_retries": 0,
+        }
+    )
+    explicit_zero = baseline.model_copy(update={"execution": explicit_zero_execution})
+
+    baseline_execution = baseline.execution.model_dump(mode="json")
+    baseline_execution_json = baseline.execution.model_dump_json()
+    baseline_canonical = canonical_audit_config_json(baseline)
+    assert baseline.execution.max_schema_validation_retries == 0
+    assert baseline.execution.maximum_model_attempts == baseline.execution.max_model_retries + 1
+    assert "max_schema_validation_retries" not in baseline_execution
+    assert "max_schema_validation_retries" not in baseline_execution_json
+    assert "max_schema_validation_retries" not in baseline_canonical
+    assert explicit_zero.execution.model_dump(mode="json") == baseline_execution
+    assert explicit_zero.execution.model_dump_json() == baseline_execution_json
+    assert canonical_audit_config_json(explicit_zero) == baseline_canonical
+    assert baseline.stable_hash() == explicit_zero.stable_hash()
+    assert baseline.stable_hash() == _QUALIFICATION_CONFIG_SHA256_WITH_SCHEMA_RETRY_OFF
+
+    enabled_execution = ExecutionConfig.model_validate(
+        {
+            **baseline_execution,
+            "max_schema_validation_retries": 2,
+        }
+    )
+    enabled = baseline.model_copy(update={"execution": enabled_execution})
+    assert enabled_execution.maximum_model_attempts == baseline.execution.max_model_retries + 3
+    assert enabled_execution.model_dump(mode="json")["max_schema_validation_retries"] == 2
+    assert '"max_schema_validation_retries":2' in enabled_execution.model_dump_json()
+    assert '"max_schema_validation_retries":2' in canonical_audit_config_json(enabled)
+    assert enabled.stable_hash() != baseline.stable_hash()
+
+
+def test_schema_and_transient_retry_quotas_share_the_exact_32_attempt_ceiling() -> None:
+    boundary = ExecutionConfig(
+        max_model_retries=0,
+        max_schema_validation_retries=31,
+    )
+    assert boundary.maximum_model_attempts == 32
+
+    with pytest.raises(ValueError, match="combined model attempts must not exceed 32"):
+        ExecutionConfig(
+            max_model_retries=1,
+            max_schema_validation_retries=31,
+        )
+
+    validation_bypassed = boundary.model_copy(
+        update={"max_model_retries": 5, "max_schema_validation_retries": 31}
+    )
+    with pytest.raises(ValueError, match="combined model attempts must not exceed 32"):
+        _ = validation_bypassed.maximum_model_attempts
 
 
 def test_model_catalog_refresh_policy_is_exact_and_fail_closed(config_factory) -> None:

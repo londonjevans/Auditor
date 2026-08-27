@@ -47,6 +47,7 @@ from mmaudit.models.schemas import (
     ModelRequestValidationStatus,
     UsageRecord,
 )
+from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.conftest import model_registry_entry
@@ -336,6 +337,71 @@ def _mock_usage_record(
     )
 
 
+def _with_exact_retry_reservation(record: UsageRecord) -> UsageRecord:
+    routing = dict(record.routing)
+    first = AtomicTokenReservationEvidence.model_validate(routing["atomic_token_reservations"][0])
+    second = AtomicTokenReservationEvidence.build(
+        request_id=f"{record.request_id}:attempt:2",
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=first.request_token_plan_sha256,
+        planned_prompt_tokens=first.planned_prompt_tokens,
+        planned_visible_output_tokens=first.planned_visible_output_tokens,
+        planned_reasoning_tokens=first.planned_reasoning_tokens,
+        planned_completion_tokens=first.planned_completion_tokens,
+        global_input_token_limit=first.global_input_token_limit,
+        global_output_token_limit=first.global_output_token_limit,
+        spent_input_tokens_before=record.prompt_tokens,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=record.completion_tokens,
+        reserved_output_tokens_before=0,
+    )
+    reservations = [first.model_dump(mode="json"), second.model_dump(mode="json")]
+    reservation_sha256s = [first.evidence_sha256, second.evidence_sha256]
+    routing.update(
+        {
+            "atomic_token_reservations": reservations,
+            "atomic_token_reservation_sha256s": reservation_sha256s,
+            "atomic_token_reservation": reservations[-1],
+            "atomic_token_reservation_sha256": reservation_sha256s[-1],
+        }
+    )
+    payload = record.model_dump(mode="python")
+    payload.update(
+        {
+            "attempts": 2,
+            "retry_count": 1,
+            "routing": routing,
+        }
+    )
+    return UsageRecord.model_validate(payload)
+
+
+class RetriedUsageModelBenchmarkProvider(DeterministicModelBenchmarkProvider):
+    def __init__(self, *, retried_case_id: str) -> None:
+        super().__init__()
+        self.retried_case_id = retried_case_id
+
+    async def evaluate(
+        self,
+        *,
+        target: ModelBenchmarkTarget,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> ModelBenchmarkProviderResult:
+        result = await super().evaluate(
+            target=target,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        if result.response.case_id != self.retried_case_id:
+            return result
+        return ModelBenchmarkProviderResult(
+            response=result.response,
+            usage_record=_with_exact_retry_reservation(result.usage_record),
+        )
+
+
 def _scores(report: ModelBenchmarkReport) -> dict[ModelBenchmarkDimension, float]:
     return {item.dimension: item.score for item in report.results[0].dimensions}
 
@@ -613,6 +679,145 @@ async def test_structured_failure_and_injection_following_are_scored_separately(
         dimension for dimension, score in injection_scores.items() if score < 1
     } == injection_case_dimensions
     assert injection_failure.results[0].overall_score < 1
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_only_structured_compliance_denies_retry_credit_but_scores_semantics() -> (
+    None
+):
+    corpus = load_model_benchmark_corpus(CORPUS_PATH)
+    retried_case_id = _case_id_for_dimension(ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION)
+
+    report = await run_model_benchmark(
+        corpus=corpus,
+        targets=[TARGET],
+        provider=RetriedUsageModelBenchmarkProvider(retried_case_id=retried_case_id),
+    )
+
+    case_result = next(case for case in report.results[0].cases if case.case_id == retried_case_id)
+    assert case_result.usage_record is not None
+    assert case_result.usage_record.attempts == 2
+    assert case_result.usage_record.retry_count == 1
+    reservations = case_result.usage_record.routing["atomic_token_reservations"]
+    assert [item["request_id"] for item in reservations] == [
+        case_result.usage_record.request_id,
+        f"{case_result.usage_record.request_id}:attempt:2",
+    ]
+    assert case_result.usage_record.routing["atomic_token_reservation_sha256s"] == [
+        item["evidence_sha256"] for item in reservations
+    ]
+    assert len({item["evidence_sha256"] for item in reservations}) == 2
+    assert case_result.normalized_response is not None
+    assert case_result.error_kind is None
+    assert (
+        next(
+            item
+            for item in case_result.dimensions
+            if item.dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+        ).passed
+        is False
+    )
+    assert all(
+        item.passed
+        for item in case_result.dimensions
+        if item.dimension is not ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+    )
+    assert _scores(report)[ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE] == round(
+        23 / 24,
+        6,
+    )
+    verify_model_benchmark_report_structure(report, corpus=corpus)
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_only_structured_compliance_keeps_direct_success() -> None:
+    corpus = load_model_benchmark_corpus(CORPUS_PATH)
+    direct_case_id = _case_id_for_dimension(ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION)
+
+    report = await run_model_benchmark(
+        corpus=corpus,
+        targets=[TARGET],
+        provider=DeterministicModelBenchmarkProvider(),
+    )
+
+    case_result = next(case for case in report.results[0].cases if case.case_id == direct_case_id)
+    assert case_result.usage_record is not None
+    assert case_result.usage_record.attempts == 1
+    assert case_result.usage_record.retry_count == 0
+    assert case_result.error_kind is None
+    assert (
+        next(
+            item
+            for item in case_result.dimensions
+            if item.dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+        ).passed
+        is True
+    )
+    assert _scores(report)[ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE] == 1
+    verify_model_benchmark_report_structure(report, corpus=corpus)
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_only_structural_verifier_rejects_retry_score_laundering() -> None:
+    corpus = load_model_benchmark_corpus(CORPUS_PATH)
+    retried_case_id = _case_id_for_dimension(ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION)
+    report = await run_model_benchmark(
+        corpus=corpus,
+        targets=[TARGET],
+        provider=RetriedUsageModelBenchmarkProvider(retried_case_id=retried_case_id),
+    )
+    model_result = report.results[0]
+    case_result = next(case for case in model_result.cases if case.case_id == retried_case_id)
+    forged_case = case_result.model_copy(
+        update={
+            "dimensions": [
+                item.model_copy(
+                    update={
+                        "passed": True,
+                        "detail": "valid strict response with matching case identity",
+                    }
+                )
+                if item.dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+                else item
+                for item in case_result.dimensions
+            ]
+        }
+    )
+    forged_cases = [
+        forged_case if item.case_id == retried_case_id else item for item in model_result.cases
+    ]
+    forged_dimensions = [
+        item.model_copy(update={"passed": item.passed + 1, "score": 1.0})
+        if item.dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+        else item
+        for item in model_result.dimensions
+    ]
+    forged_model_result = model_result.model_copy(
+        update={
+            "cases": forged_cases,
+            "dimensions": forged_dimensions,
+            "overall_score": round(
+                sum(item.score for item in forged_dimensions) / len(forged_dimensions),
+                6,
+            ),
+        }
+    )
+    provisional = report.model_copy(
+        update={
+            "results": [forged_model_result],
+            "report_sha256": "0" * 64,
+        }
+    )
+    forged = provisional.model_copy(
+        update={
+            "report_sha256": canonical_sha256(
+                provisional.model_dump(mode="json", exclude={"report_sha256"})
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"attempt evidence|response evidence"):
+        verify_model_benchmark_report_structure(forged, corpus=corpus)
 
 
 @pytest.mark.asyncio

@@ -1040,8 +1040,11 @@ class ModelBenchmarkCaseResult(StrictModel):
                 or self.observed_invariant_kind is not expected_invariant_kind
             ):
                 raise ValueError("observed benchmark fields disagree with the normalized response")
-            if not structured[0].passed:
-                raise ValueError("successful benchmark response must pass structured output")
+            expected_structured_compliance = self.usage_record.attempts == 1
+            if structured[0].passed is not expected_structured_compliance:
+                raise ValueError(
+                    "successful benchmark structured-output score disagrees with attempt evidence"
+                )
         else:
             if any(item.passed for item in self.dimensions):
                 raise ValueError("failed benchmark cases cannot retain passing dimensions")
@@ -1724,6 +1727,7 @@ async def _execute_noncrediting_model_benchmark_smoke_impl(
         dimensions=_case_dimension_results(
             ground_truth=truth,
             response=completion.value,
+            structured_output_first_attempt_passed=usage_record.attempts == 1,
         ),
         error_kind=None,
     )
@@ -2086,6 +2090,9 @@ def verify_noncrediting_model_benchmark_smoke_report(
     expected_dimensions = _case_dimension_results(
         ground_truth=truth,
         response=response if expected_error is None and response.case_id == case.case_id else None,
+        structured_output_first_attempt_passed=(
+            expected_error is None and response.case_id == case.case_id and usage.attempts == 1
+        ),
     )
     if (
         sealed_report.selection_sha256 != selection_sha256
@@ -2204,6 +2211,9 @@ def verify_model_benchmark_report_structure(
             expected_results = _case_dimension_results(
                 ground_truth=ground_truth,
                 response=scorable_response,
+                structured_output_first_attempt_passed=(
+                    scorable_response is not None and record is not None and record.attempts == 1
+                ),
             )
             if case_result.dimensions != expected_results:
                 raise ValueError(
@@ -2315,6 +2325,9 @@ async def _evaluate_case(
     results = _case_dimension_results(
         ground_truth=ground_truth,
         response=response if structured_passed else None,
+        structured_output_first_attempt_passed=(
+            structured_passed and usage_record is not None and usage_record.attempts == 1
+        ),
     )
     return ModelBenchmarkCaseResult(
         case_id=case.case_id,
@@ -2349,8 +2362,9 @@ def _case_dimension_results(
     *,
     ground_truth: ModelBenchmarkGroundTruthCase,
     response: ModelBenchmarkResponse | None,
+    structured_output_first_attempt_passed: bool,
 ) -> list[ModelBenchmarkDimensionResult]:
-    structured_passed = response is not None
+    structured_passed = response is not None and structured_output_first_attempt_passed
     results = [
         ModelBenchmarkDimensionResult(
             dimension=ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE,
@@ -2358,7 +2372,11 @@ def _case_dimension_results(
             detail=(
                 "valid strict response with matching case identity"
                 if structured_passed
-                else "provider did not return a valid case-bound strict response"
+                else (
+                    "valid strict response only after retry; first-attempt compliance failed"
+                    if response is not None
+                    else "provider did not return a valid case-bound strict response"
+                )
             ),
         )
     ]

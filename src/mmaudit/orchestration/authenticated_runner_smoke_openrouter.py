@@ -961,7 +961,7 @@ def _preflight_authenticated_runner_smoke_launch(
     initial = ledger.snapshot()
     _require_clean_snapshot(initial, final=False)
     _require_unused_smoke_run_index(initial, smoke_run_index=smoke_run_index)
-    maximum_attempts = config.execution.max_model_retries + 1
+    maximum_attempts = config.execution.maximum_model_attempts
     if (
         maximum_attempts != 2
         or 4 * maximum_attempts != smoke.verdict_policy.maximum_provider_attempts
@@ -1325,7 +1325,7 @@ def _candidate_cost_plan(
         schema_name=descriptor.schema_name,
         logical_request_id=descriptor.logical_request_id,
         context_package=None,
-        maximum_attempts=config.execution.max_model_retries + 1,
+        maximum_attempts=config.execution.maximum_model_attempts,
     )
     validate_authenticated_runner_smoke_model_benchmark_cost_preview(
         descriptor=descriptor,
@@ -1352,7 +1352,7 @@ def _judge_cost_plan(
         prepared=prepared.prepared_adjudication,
         discovery_manifest=prepared.plan.judge_discovery_manifest,
         discovery_evidence=prepared.plan.judge_discovery_evidence[0],
-        maximum_attempts=config.execution.max_model_retries + 1,
+        maximum_attempts=config.execution.maximum_model_attempts,
     )
     if len(previews) != 1:
         raise AuthenticatedRunnerSmokeOpenRouterError(

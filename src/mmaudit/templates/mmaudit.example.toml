@@ -52,6 +52,8 @@ concurrency = 3
 request_timeout_seconds = 180
 scanner_timeout_seconds = 900
 max_model_retries = 2
+# Same-route retries for locally confirmed schema-validation failures are separate and opt-in.
+max_schema_validation_retries = 0
 max_json_repair_attempts = 0
 budget_usd = 20.0
 # Paid provider runs fail closed unless this existing cumulative ledger is selected

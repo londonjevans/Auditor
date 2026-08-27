@@ -42,7 +42,7 @@ _GATE_ID_PATTERN = r"^gate-[a-z0-9][a-z0-9-]{0,98}$"
 _MAX_SOURCES = 4_096
 _MAX_GATES = 128
 _FROZEN_AUDIT_CONFIG_PATHS_SHA256 = (
-    "b7b29efe3476d0694a856cfe513901cc144ae837888efdb140060409f598d7cc"
+    "e85213984bdb6be856714d1b102c2d9311845f4d8d17a64b62f900adf41dcbc4"
 )
 _FROZEN_AUDIT_RUN_OPTION_PATHS_SHA256 = (
     "094721b7521af2a8a7349d0fd8a7a7f66c8988f2698497e682bef593640f234e"
@@ -225,8 +225,8 @@ class AutonomyGateInventory(StrictModel):
     )
     source_count: int = Field(ge=1, le=_MAX_SOURCES)
     source_occurrence_count: int = Field(ge=1, le=_MAX_SOURCES)
-    audit_config_leaf_locator_count: Literal[505]
-    audit_config_leaf_occurrence_count: Literal[508]
+    audit_config_leaf_locator_count: Literal[506]
+    audit_config_leaf_occurrence_count: Literal[509]
     audit_config_shared_locator_count: Literal[3]
     audit_run_option_leaf_count: Literal[13]
     audit_override_path_count: Literal[45]
@@ -3605,8 +3605,8 @@ def build_autonomy_gate_inventory(
         "logical_gates": [item.model_dump(mode="json") for item in logical_gates],
         "source_count": len(source_coverage),
         "source_occurrence_count": sum(item.source_occurrence_count for item in source_coverage),
-        "audit_config_leaf_locator_count": 505,
-        "audit_config_leaf_occurrence_count": 508,
+        "audit_config_leaf_locator_count": 506,
+        "audit_config_leaf_occurrence_count": 509,
         "audit_config_shared_locator_count": 3,
         "audit_run_option_leaf_count": 13,
         "audit_override_path_count": 45,

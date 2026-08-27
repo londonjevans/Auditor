@@ -1519,6 +1519,31 @@ async def test_preflight_rejects_plan_order_and_cost_cap_before_dispatch(
 
 
 @pytest.mark.asyncio
+async def test_preflight_counts_enabled_schema_retries_in_provider_attempt_inventory(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    harness = await _harness(tmp_path / "schema-retry-attempts", config_factory)
+    execution = harness.config.execution.model_copy(
+        update={
+            "max_schema_validation_retries": 1,
+        }
+    )
+    config = harness.config.model_copy(update={"execution": execution})
+    harness = replace(harness, config=config)
+
+    assert config.execution.maximum_model_attempts == 3
+    assert harness.budget.max_requests_per_agent == 192
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="request cap is below the preflight maximum-attempt inventory",
+    ):
+        await _execute(harness)
+    assert harness.candidate_executor.calls == []
+    assert harness.judge_route_preparation_executor.calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("role_index", [-1, 0, 1])
 async def test_preflight_rejects_non_native_structured_output_for_every_runner_role(
     tmp_path: Path,

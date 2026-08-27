@@ -38,7 +38,7 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert config.execution.max_output_tokens_per_request == 4_096
     assert config.effective_reserved_output_tokens == 4_096
     assert config.execution.max_requests_per_agent == 576
-    assert 12 * 24 * (config.execution.max_model_retries + 1) == (
+    assert 12 * 24 * config.execution.maximum_model_attempts == (
         config.execution.max_requests_per_agent
     )
     assert config.privacy.allow_code_egress is False

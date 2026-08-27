@@ -155,6 +155,12 @@ class ExecutionConfig(ConfigModel):
     request_timeout_seconds: float = Field(default=180, gt=0, le=900)
     scanner_timeout_seconds: float = Field(default=900, gt=0, le=3_600)
     max_model_retries: int = Field(default=2, ge=0, le=5)
+    max_schema_validation_retries: int = Field(
+        default=0,
+        ge=0,
+        le=31,
+        exclude_if=lambda value: value == 0,
+    )
     max_json_repair_attempts: int = Field(default=0, ge=0, le=1)
     budget_usd: float = Field(default=20.0, gt=0, le=250.0)
     cost_ledger_path: str | None = None
@@ -162,6 +168,28 @@ class ExecutionConfig(ConfigModel):
     max_output_tokens_per_request: int = Field(default=32_768, ge=256, le=65_536)
     max_requests_per_agent: int = Field(default=2, ge=1, le=640)
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
+
+    @model_validator(mode="after")
+    def combined_model_attempt_bound_is_safe(self) -> ExecutionConfig:
+        if self.maximum_model_attempts > 32:
+            raise ValueError("combined model attempts must not exceed 32")
+        return self
+
+    @property
+    def maximum_model_attempts(self) -> int:
+        """Bound all transient and schema-validation attempts for one route."""
+
+        if (
+            type(self.max_model_retries) is not int
+            or type(self.max_schema_validation_retries) is not int
+            or self.max_model_retries < 0
+            or self.max_schema_validation_retries < 0
+        ):
+            raise ValueError("model retry limits must be nonnegative integers")
+        attempts = 1 + self.max_model_retries + self.max_schema_validation_retries
+        if attempts > 32:
+            raise ValueError("combined model attempts must not exceed 32")
+        return attempts
 
     @field_validator("cost_ledger_path")
     @classmethod

@@ -11,6 +11,12 @@ import pytest
 
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.usage as usage_module
+from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationRunKind
+from mmaudit.models.authenticated_runner_cost_plan import (
+    AUTHENTICATED_RUNNER_COST_PLAN_CASE_COUNT,
+    AuthenticatedRunnerCostPlanStage,
+    build_authenticated_runner_staged_cost_plan,
+)
 from mmaudit.models.candidate_selection import (
     seal_authenticated_runner_route_predicate_profile,
 )
@@ -287,6 +293,98 @@ def test_provider_free_request_cost_preview_is_exact_stable_and_nonauthorizing(
     assert not first.authorizes_provider_transport
     assert not first.grants_review_credit
     assert not first.grants_completion_credit
+
+
+def test_schema_retry_quota_is_in_retry_inclusive_cost_and_attempt_inventory(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 2,
+            "max_requests_per_agent": 4,
+        }
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+    reasoning_policy = _disabled_reasoning_policy()
+    previews = tuple(
+        _preview(
+            config=config,
+            manifest=manifest,
+            evidence=evidence,
+            policy=policy,
+            reasoning_policy=reasoning_policy,
+            user_prompt=f"synthetic provider-free request {index:02d}",
+            logical_request_id=f"authrunner-schema-request-{index:02d}",
+        )
+        for index in range(AUTHENTICATED_RUNNER_COST_PLAN_CASE_COUNT)
+    )
+
+    assert config.execution.maximum_model_attempts == 4
+    assert {preview.maximum_attempts for preview in previews} == {4}
+    assert all(
+        Decimal(preview.maximum_cost_usd_all_attempts_exact)
+        == Decimal(preview.maximum_cost_usd_per_attempt_exact) * 4
+        for preview in previews
+    )
+    assert {preview.execution_config_sha256 for preview in previews} == {
+        openrouter_module._canonical_sha256(config.execution.model_dump(mode="json"))
+    }
+
+    plan = build_authenticated_runner_staged_cost_plan(
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+        stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+        case_ids=tuple(
+            f"case-{index:016x}" for index in range(AUTHENTICATED_RUNNER_COST_PLAN_CASE_COUNT)
+        ),
+        request_previews=previews,
+    )
+    assert plan.maximum_attempts_per_logical_request == 4
+    assert plan.maximum_provider_attempt_count == (AUTHENTICATED_RUNNER_COST_PLAN_CASE_COUNT * 4)
+    assert plan.provider_attempt_request_ids[:4] == (
+        "authrunner-schema-request-00",
+        "authrunner-schema-request-00:attempt:2",
+        "authrunner-schema-request-00:attempt:3",
+        "authrunner-schema-request-00:attempt:4",
+    )
+    assert plan.provider_attempt_request_ids[-1] == "authrunner-schema-request-23:attempt:4"
+    assert len(set(plan.provider_attempt_request_ids)) == plan.maximum_provider_attempt_count
+    assert Decimal(plan.maximum_cost_usd_exact) == sum(
+        (Decimal(preview.maximum_cost_usd_all_attempts_exact) for preview in previews),
+        start=Decimal(0),
+    )
+
+    transient_only_config = config_factory(
+        execution={
+            "max_model_retries": 3,
+            "max_schema_validation_retries": 0,
+            "max_requests_per_agent": 4,
+        }
+    )
+    transient_only = _preview(
+        config=transient_only_config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=reasoning_policy,
+        user_prompt="synthetic provider-free request 00",
+        logical_request_id="authrunner-schema-request-00",
+    )
+    assert transient_only.maximum_attempts == previews[0].maximum_attempts == 4
+    assert (
+        transient_only.maximum_cost_usd_all_attempts_exact
+        == previews[0].maximum_cost_usd_all_attempts_exact
+    )
+    assert transient_only.execution_config_sha256 != previews[0].execution_config_sha256
+    assert transient_only.preview_sha256 != previews[0].preview_sha256
 
 
 @pytest.mark.asyncio

@@ -565,7 +565,7 @@ def _candidate_staged_cost_plan(
             schema_name=descriptor.schema_name,
             logical_request_id=descriptor.logical_request_id,
             context_package=None,
-            maximum_attempts=config.execution.max_model_retries + 1,
+            maximum_attempts=config.execution.maximum_model_attempts,
         )
         for descriptor in descriptors
     )
@@ -590,7 +590,7 @@ def _judge_staged_cost_plan(
         prepared=prepared,
         discovery_manifest=plan.judge_discovery_manifest,
         discovery_evidence=plan.judge_discovery_evidence[0],
-        maximum_attempts=config.execution.max_model_retries + 1,
+        maximum_attempts=config.execution.maximum_model_attempts,
     )
     return build_authenticated_runner_staged_cost_plan(
         run_kind=plan.run_kind,
@@ -1318,7 +1318,7 @@ def _preflight_execution(
         )
     if usage.records:
         raise AuthenticatedRunnerExecutionError("runner requires a fresh empty usage ledger")
-    maximum_attempts = config.execution.max_model_retries + 1
+    maximum_attempts = config.execution.maximum_model_attempts
     maximum_provider_attempts = _LOGICAL_REQUEST_COUNT * maximum_attempts
     if (
         config.execution.max_requests_per_agent < maximum_provider_attempts

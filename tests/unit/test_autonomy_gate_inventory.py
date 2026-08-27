@@ -43,10 +43,10 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3685
-    assert inventory.source_occurrence_count == 3688
-    assert inventory.audit_config_leaf_locator_count == 505
-    assert inventory.audit_config_leaf_occurrence_count == 508
+    assert inventory.source_count == 3686
+    assert inventory.source_occurrence_count == 3689
+    assert inventory.audit_config_leaf_locator_count == 506
+    assert inventory.audit_config_leaf_occurrence_count == 509
     assert inventory.audit_config_shared_locator_count == 3
     assert inventory.audit_run_option_leaf_count == 13
     assert inventory.audit_override_path_count == 45
@@ -56,7 +56,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert inventory.pipeline_run_parameter_count == 15
     assert inventory.completion_entrypoint_parameter_count == 300
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
-        "AUDIT_CONFIG_LEAF": 505,
+        "AUDIT_CONFIG_LEAF": 506,
         "AUDIT_RUN_OPTION_LEAF": 13,
         "AUDIT_OVERRIDE_PATH": 45,
         "ENVIRONMENT_OVERRIDE": 28,
@@ -71,7 +71,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3642,
+        SourceCoverageClassification.GATE: 3643,
         SourceCoverageClassification.NON_GATING_CONTROL: 43,
     }
     assert {item.value for item in SourceCoverageClassification} == {

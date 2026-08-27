@@ -184,12 +184,12 @@
       "type": "string"
     },
     "audit_config_leaf_locator_count": {
-      "const": 505,
+      "const": 506,
       "title": "Audit Config Leaf Locator Count",
       "type": "integer"
     },
     "audit_config_leaf_occurrence_count": {
-      "const": 508,
+      "const": 509,
       "title": "Audit Config Leaf Occurrence Count",
       "type": "integer"
     },
