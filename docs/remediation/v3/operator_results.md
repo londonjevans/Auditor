@@ -3,6 +3,1778 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-27T06:37Z — **CAMPAIGN BLOCKER FULLY TRACED: two admission predicates have no satisfying code path**
+
+The qualification-policy blocker reported on `2026-08-25` is **cleared**. The campaign now fails at a
+later, different, and final gate. All work below was provider-free; the ledger is unchanged at 29
+entries / `0.43458261` USD.
+
+### 1. Qualification policy — resolved
+
+The embedded `qualification_policy` object in `benchmarks/model_corpus/verdict_policy.json` carries
+`policy_sha256 = 1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`, which is exactly
+the pinned C1 value. `_require_qualification_release_pins` binds `policy.policy_sha256`, the value
+**inside** the object, not the file digest — so materializing the object to a bounded unshared regular
+file is sufficient. Written to `~/.mmaudit/private/qualification-policy.json`, mode `0600`, `2248`
+bytes, single link. The preflight now passes the qualification stage. Codex's earlier note that "no
+repository CLI materializer exists and this immediate remedy is unproven" was correct that none
+exists; the remedy is now proven.
+
+### 2. Fresh `r22` evidence — the working triple is still live
+
+All three roles re-discovered at `$0` on `2026-08-27` under the current constraint system:
+
+| role | route | registry | frozen sha256 |
+|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813=parasail/fp8` | `candidate-registry-r22.json` | `d828e6b77fb16fbc4bd980f2fcd6e610394b915e33915864714b68d2ce205bc7` |
+| primary | `z-ai/glm-5.2=sail-research/fp8` | `primary-judge-registry-r22.json` | `db75dcbcfcdde75b95d64e0e66be224a650896ba5b4829e25b04f1effda0d0f4` |
+| replay | `moonshotai/kimi-k3=modal/mxfp4` | `replay-judge-registry-r22.json` | `73550667098aa0b96bfd35019a52fdd8b30c91ff680068a1f2b6ccfce45416a9` |
+
+Discovery runs `authrunner-{candidate,primary-judge,replay-judge}-20260827-r22`.
+
+### 3. The actual blocker
+
+With a valid policy and fresh `r22` evidence the preflight fails with:
+
+```
+mmaudit failed safely: route predicate report does not satisfy its closed purpose
+```
+
+Raised at `route_constraints.py:723`. `FULL_CAMPAIGN_ADMISSION` requires `28` predicates against
+`NONCREDITING_SMOKE_ADMISSION`'s `27`. The exact difference:
+
+- **required only by the campaign:** `EMPIRICAL_SCHEMA_CONFORMANCE`, `TOKEN_DETAIL_REPORTING_CONVENTION`
+- **required only by smoke:** `FROZEN_LIVE_EQUIVALENCE`
+
+Both campaign-only predicates are members of `_SEPARATE_RUNTIME_PREDICATES`, are excluded from
+`_DISCOVERY_REQUIRED`, and are emitted **unconditionally** as `_unavailable_result` at
+`route_constraints.py:1245-1252` with reasons `EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE` and
+`TOKEN_DETAIL_CONVENTION_UNAVAILABLE`.
+
+**Both predicate ids appear only in `route_constraints.py`. No code path anywhere under `src/` can
+set either to `SATISFIED`.** The 24-case campaign is therefore unreachable *by construction*, not by
+policy, stale evidence, missing authorization, or absent budget. This is the same pair the worklog
+referred to as "the unresolved empirical schema and token-detail gates still prohibit any campaign";
+this record establishes that no mechanism to resolve them exists yet.
+
+Queued as **`V3-RUNTIMEADMIT-001`** in `docs/codex_work_queue.md`. It also asks that
+`RoutePredicateRequirementError` surface the failing predicate ids and reasons — the current message
+names neither, and identifying this pair required reading the purpose matrix directly.
+
+### 4. Retry decision CANNOT be enabled on the qualification campaign — pin conflict
+
+`V3-RETRY-001` is `COMPLETE` at `4f666d0` and its `129` focused tests pass. Attempting to honour the
+`2026-08-25` operator retry decision by setting `max_schema_validation_retries = 3` in
+`config/openrouter-qualification.toml` **failed two regressions** and was reverted; the file is
+unchanged.
+
+`test_schema_validation_retry_is_default_off_without_changing_qualification_hash`
+(`tests/unit/test_config.py:99`) asserts that the qualification config loads with
+`max_schema_validation_retries == 0` and that the field is **absent** from
+`model_dump`, `model_dump_json`, and `canonical_audit_config_json`. That is the point of the
+`exclude_if=lambda value: value == 0` declaration: the retry feature must not perturb the canonical
+qualification config hash that release pins bind. Setting it there would silently invalidate frozen
+release evidence.
+
+**Consequence:** the operator's retry decision is implemented but is **not applicable to the
+hash-pinned qualification campaign** as things stand. Enabling it there requires either a deliberate
+re-pin of the qualification config (a release-level action with its own evidence) or a separate
+non-pinned execution path for campaign continuity. That is a product decision for codex, not an
+operator config edit, and it should be resolved alongside `V3-RUNTIMEADMIT-001`. Recording the
+intended value for whenever a mechanism exists: `3` schema retries, which at the observed ~`0.2`
+per-attempt failure rate leaves roughly `0.16%` residual failure per logical request, so a ~48-request
+campaign completes without a schema-induced abort about `93%` of the time.
+
+Note the convergence worth recording: `EMPIRICAL_SCHEMA_CONFORMANCE` and the first-attempt scoring
+decision independently disqualify the **same** candidate for the **same** reason. A route that emits
+schema-invalid output roughly one attempt in five cannot honestly satisfy an empirical schema
+conformance predicate. Candidate reselection is likely required regardless of how
+`V3-RUNTIMEADMIT-001` is implemented.
+
+## 2026-08-25T09:30Z — **OPERATOR DECISION: first-attempt-only structured-output scoring; calibration evidence scope**
+
+Two operator decisions, both binding. No command was run and no spend occurred; the ledger remains
+29 entries / `0.43458261` USD.
+
+### 1. `structured_output_compliance` is scored on the FIRST ATTEMPT only
+
+A retried success earns **no** compliance credit.
+
+Rationale: a gate fixed at `1.0` that tolerates retries is not a `1.0` gate — it is a `1.0` gate on a
+weaker predicate, mislabelled. "Eventually emits schema-valid output given enough attempts" is
+satisfied by essentially any model, so as a gate it is vacuous. This dimension is one of the three
+deliberately held at `1.0` *because determinism is required*; a retry-tolerant determinism gate is a
+contradiction in terms. It also carries the corpus's largest denominator (`24` of `24`, against `4`
+for the judgment dimensions), so unlike those, a threshold here is genuinely measurable.
+
+If a retry-tolerant metric is wanted later it must be a **separately named dimension** with its own
+derived threshold. It must not overload this gate.
+
+**Direct consequence, stated plainly:** `deepseek/deepseek-v4-pro-0813` via `parasail/fp8` returned
+schema-invalid structured output on roughly `2` of `10` observed attempts, and smoke run index `18`
+terminated `SCHEMA_VALIDATION_FAILED`. At approximately `0.8` first-attempt compliance against a
+`1.0` gate, **the current candidate does not qualify** and must be reselected, or the gate must be
+lowered by an explicit, recorded decision and thereby cease to be a determinism gate. Reselection is
+a `$0` metadata exercise. This is the correct outcome: a model that violates the structured-output
+contract one time in five is not a suitable deterministic-contract candidate for an audit product,
+and surfacing that is preferable to masking it behind retries.
+
+Retry itself remains authorized and is queued as `V3-RETRY-001` in `docs/codex_work_queue.md`. Its
+purpose is narrow: prevent a multi-case campaign terminating on one recoverable schema miss, so the
+remaining dimensions still produce measurements. Its acceptance criteria now require attempt
+provenance to be preserved in durable evidence so scoring can separate first-attempt from retried
+success. Retry must never be able to launder a compliance failure.
+
+### 2. Calibration evidence scope — what it can and cannot support
+
+The frozen objective re-expresses "superiority" as cross-lineage benchmark performance. That is an
+internally-relative measure: candidates judged by other lineages on this project's own corpus. It is
+a real and verifiable property and it is **not** a best-in-class claim, because it contains no
+comparator external to the system. These must not be conflated in any published artifact.
+
+The schema-v2 derivation machinery is sound for its actual purpose — deriving a meaningful
+qualification filter. It cannot support a superiority claim, and the queue already says so: four
+cases per judgment dimension "cannot support a broad statistical claim", and the cutoffs are
+"explicitly empirical support cutoffs, not statistical-significance claims". At `n=4` the
+greatest-supported-non-perfect rule lands on `0.75`, where a single case separates pass from fail.
+
+A genuine best-in-class claim would require four things this project does not currently have:
+per-dimension depth on the order of `30`+ observations rather than `4`; a contamination-controlled
+partition of newly-constructed post-training-cutoff synthetic targets, sized to carry the claim
+alone, with any public partition reported separately as contaminated; a comparator external to this
+corpus, which is what `V3-HUMANCMP-001` already specifies correctly; and publish-regardless
+pre-registration with terms frozen before the run.
+
+None of that is a completion blocker under the frozen objective. It is a constraint on what may be
+claimed. The recorded `superiority_status: NOT_DEMONSTRATED` and `release_status: INCOMPLETE` are
+correct and must not be advanced on cross-lineage benchmark evidence alone.
+
+## 2026-08-25T05:16Z — **24-CASE CAMPAIGN CANNOT LAUNCH: BLOCKED ON A MISSING QUALIFICATION POLICY**
+
+The operator authorized the 24-case campaign. It cannot start. This is not a spend or authorization
+problem — a required input does not exist. Verified provider-free at **$0**; ledger unchanged at 29
+entries / `0.43458261` USD throughout everything below.
+
+### 1. The blocker (primary finding)
+
+`models authenticated-runner --preflight-only` (corpus defaults, `--allow-code-egress`, r21 registries
+and discovery runs for all three roles) refuses with:
+
+```
+mmaudit failed safely: qualification input is unavailable
+```
+
+Traced to `qualification.py:5316` — a failed `path.stat()` inside `_load_model`, i.e. the
+`--qualification-policy` file simply does not exist. Searched exhaustively:
+
+- not in `~/.mmaudit/private/` (no calibration output of any kind exists there)
+- never committed on **any** branch — `git log --all --diff-filter=A` finds no policy instance
+  outside `schemas/` and one test file
+- absent from all four worktrees
+
+`write_calibrated_qualification_policy` produces this artifact, so the campaign is gated on
+**`V3-CALIBRATE-001`**, whose recorded block is: *"Current-objective completion requires measured
+constructed/public frozen ground truth, cross-lineage automated adjudication, and REAL calibration
+evidence."*
+
+**Calibration is now the critical path to `completed_real_audits > 0`.** The AUTHRUNNER smoke path is
+proven twice and is not the constraint. Please state what specifically is needed to produce a frozen
+qualification policy, and whether the two-campaign bridge already implemented under `V3-CALIBRATE-001`
+can be driven from the sealed r21 bundle. If it needs an operator command, name it and I will run it.
+
+Separately: the scoped permission rule covers only `authenticated-runner-smoke`, so the campaign will
+need a fresh operator authorization even once unblocked. Cost projection when it unblocks: the r21
+1-case run was **$0.0384** actual across 4 logical requests, so 24 cases is ~$0.92 linear; real audit
+outputs are far longer than smoke outputs, so $1–3 remains the honest range.
+
+### 2. Operator decision — **retry** on schema-invalid candidate output
+
+The operator chose **retry** for the `deepseek-v4-pro-0813=parasail/fp8` structured-output failures
+(run index 18 failed `SCHEMA_VALIDATION_FAILED`).
+
+`config/openrouter-qualification.toml` sets `max_model_retries = 1` (→ 2 attempts; the field caps at
+5). But both sealed bundles record `maximum_attempts=2, attempts=1` — **no retry has ever actually
+fired in sealed evidence**, so raising the number is unproven, not a fix.
+
+**Question, stated as a hypothesis I could not settle from source:** the loop at `openrouter.py:15270`
+catches `OpenRouterSchemaError` and advances to the *next fallback model*, not a retry of the same
+route. Is a schema-invalid structured response classified as retryable **within** the per-request
+attempt loop, or does it terminate the logical request? If it is not retryable in-request, raising
+`max_model_retries` will do nothing for this failure mode at 24 cases and the operator's decision needs
+a code change to honour. I have not changed the config; say which value you want and I will set it.
+
+### 3. Operator decision — evidence-standard scope: drop Opus 4.6, **admit `openai/gpt-5.6-sol` if possible**
+
+The operator has ruled `anthropic/claude-opus-4.6` out (superseded, not worth using) and asked
+specifically about **`openai/gpt-5.6-sol`**. Three findings, in order of how binding they are.
+
+**(a) The earlier "no HuggingFace model card" framing in this file is wrong and should not be relied
+on.** `DOCUMENTARY_EXACT_BYTES_V1` is not HuggingFace-specific: of the 17 sources in
+`config/public_model_lineage/manifest.json`, the `openai` entry is a **`raw.githubusercontent.com`
+README pinned to git commit `599476783c6f88508dab8577808b5ead5cbee8d2`**. The real requirement is an
+*immutably-revisioned primary-publisher document*, and a pinned git SHA satisfies it. So the standard
+is more admissive than previously recorded here.
+
+**(b) The documentary bar that actually fails for OpenAI is the claim, not the source.**
+`openai/gpt-oss-120b` has a valid immutable source and is still `UNCONFIRMED` with
+`unconfirmed_reasons: ["VAGUE_ONLY"]` — the bytes carry no decisive lineage claim, unlike the GLM-5.2
+card's explicit "GLM-5.2 … over its predecessor GLM-5.1". For the closed GPT-5.x family there is no
+immutably-revisioned primary document at all, and a mutable vendor page cannot satisfy an exact-bytes
+standard by construction. Note the manifest already carries `sigstore_lineage_receipt_required`; if a
+second source kind is ever added for closed models, an anchored transparency-log receipt looks like the
+only shape that preserves reproducibility. **That is an operator/product decision, not mine.**
+
+**(c) But the binding constraint today is route availability, and it is fresh, not stale.** The earlier
+"no ZDR route at all" verdict for `gpt-5.6-sol` predated the `425502c` display-name repair, so I
+re-tested it live rather than trusting it. `config/models.selection-plan.json` lists exactly four
+allowed endpoints; all four were probed just now under the repaired constraint system, **$0**:
+
+| route | result |
+|---|---|
+| `together` | `configured endpoint tag or slug is unavailable: together` |
+| `deepinfra` | `configured endpoint tag or slug is unavailable: deepinfra` |
+| `novita` | `configured endpoint tag or slug is unavailable: novita` |
+| `google-vertex` | `configured endpoint tag or slug is unavailable: google-vertex` |
+| `azure` | `candidate selection route uses an unlisted endpoint` (not in the plan) |
+
+`openai/gpt-5.6-sol` therefore has **no live route whatsoever** right now, independent of any
+documentary question. Its plan entry is also `availability: UNVERIFIED`, `documentary_lineage:
+UNCONFIRMED`, `entry_authority: false`, `approved_roles: []`, and
+`constraint-gpt-oss-gpt-5-6` binds it to `gpt-oss-120b` as one `CONSERVATIVE_ORGANIZATIONAL` group with
+`positive_root_assignment_authorized: false` — so the two can never count as independent lineages.
+
+**Question:** are those four endpoint slugs stale plan data, or is `gpt-5.6-sol` genuinely unserved on
+OpenRouter? If the plan is stale, refreshing it is the cheapest possible step toward the operator's
+goal and I will re-probe at $0 as soon as it changes. Admitting this model needs (c) fixed first, then
+(b); (a) is already satisfied.
+
+### 4. Diagnosability — a concrete case, freshly generated
+
+Per the standing request to surface typed/named reasons: `qualification.py:5316` raises
+`ValueError("qualification input is unavailable")` from a `_load_model` shared by **four** loaders
+(`load_candidate_registry`, `load_qualification_policy`, `load_model_qualification_artifact`,
+`load_production_selection`). The message names no path, no field, and no code — so a plain
+"this file does not exist" cost a source read to identify, and would be materially harder to diagnose
+mid-campaign. A named reason plus the offending path would have made §1 a one-line answer.
+
+### 5. Durability
+
+The 40 unpushed commits are now pushed: `origin/agent/v3-wip-checkpoint` is at `d6c7c5b`, 0 unpushed,
+scanned for credentials before pushing (clean). Pushing had stopped for two days. `main` is at
+`f794db0` and is a clean ancestor of `HEAD`, so a merge fast-forwards 82 commits with no conflicts
+whenever that decision is taken.
+
+## 2026-08-24T12:57Z — **REGRESSION REPAIRED; SECOND SEALED BUNDLE VERIFIED UNDER THE NEW CONSTRAINT SYSTEM**
+
+`425502c` (`Restore selected endpoint name parity`) removed the whole-inventory clause. The predicate
+is now `display_count == 1` alone, matching `endpoint_snapshots.py:558-563`. Confirmed at
+`route_constraints.py`.
+
+All three roles re-discovered cleanly under the constraint system ($0):
+
+| role | route | registry | discovery run |
+|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813=parasail/fp8` | `candidate-registry-r21.json` | `authrunner-candidate-20260824-r21` |
+| primary | `z-ai/glm-5.2=sail-research/fp8` | `primary-judge-registry-r21.json` | `authrunner-primary-judge-20260824-r21` |
+| replay | `moonshotai/kimi-k3=modal/mxfp4` | `replay-judge-registry-r21.json` | `authrunner-replay-judge-20260824-r21` |
+
+Live-route gate **VALID**. Paid run at index 21 **COMPLETE**, and the bundle **verifies**:
+
+```
+AUTHRUNNER smoke evidence: VALID / NONCREDITING / NONAUTHORIZING
+Smoke run index: 21
+Bundle SHA-256: 3291d6a827fce5bcf169a301d1aa318532d0a6acab60b9ea2bb85514df6cb174
+Inventory: case=case-df79ea132113b863; runs=2; logical_requests=4
+Closed ledger: entries=4; final_spent_usd=0.43458261
+```
+
+**This is the second independent end-to-end success, and the first under `V3-PLANCONSTRAINTS-001`.**
+The constraint system now admits the working triple, the campaign executes, and the bundle replays.
+Global ledger 29 entries, **total $0.434583**.
+
+### Two operator-side notes
+
+1. **Output path cosmetic issue (operator error, harmless):** the run was launched from a command
+   derived from the gate invocation, so `--output` still carried the gate's path. The index-21 bundle
+   is therefore written to `authenticated-runner-smoke-evidence-20260822-s3.json`. Content and
+   verification are correct — `smoke_run_index: 21`, SHA `3291d6a8…` — only the filename is
+   misleading. Any emitted command should carry an output name matching its run index.
+
+2. **An earlier rejection was legitimate, not a defect:** an attempt using the stale r10/r15
+   registries correctly failed `authenticated runner route lacks constrained discovery evidence`.
+   Pre-constraint evidence is properly inadmissible; re-discovery is required after
+   `V3-PLANCONSTRAINTS-001`, and costs $0.
+
+## 2026-08-24T09:52Z — **REGRESSION: `V3-PLANCONSTRAINTS-001` rejects the verified triple** (`DISPLAY_NAME_NOT_INJECTIVE`)
+
+`7ef4717` (`Enforce route constraint parity`) is well-built — `route_constraints.py` /
+`route_admission.py` with per-predicate named reasons and an explicit
+registry / late-live / separate-runtime taxonomy. That is exactly the requested parity property, and
+better structured than proposed.
+
+**But it rejects the exact configuration that produced the verified index-19 bundle six hours ago.**
+
+First, existing evidence was invalidated (expected for this change):
+`authenticated runner route lacks constrained discovery evidence`. Re-discovery under the new system
+gave:
+
+| role | route | result |
+|---|---|---|
+| candidate `deepseek/deepseek-v4-pro-0813` | `parasail/fp8` | **OK** — `candidate-registry-r20.json` |
+| primary `z-ai/glm-5.2` | `sail-research/fp8` | **REJECTED** — `predicates: DISPLAY_NAME_NOT_INJECTIVE` |
+| replay `moonshotai/kimi-k3` | `modal/mxfp4` | **REJECTED** — `predicates: DISPLAY_NAME_NOT_INJECTIVE` |
+
+Gate then fails `qualification input is unavailable` (two of three registries missing).
+
+### The predicate is stricter than the runtime rule it mirrors
+
+Live inventory, verified now:
+
+```
+z-ai/glm-5.2      selected=sail-research/fp8  provider_name="Sail Research"  count in inventory = 1
+                  duplicated names elsewhere: Alibaba x2, Fireworks x3, Cloudflare x2, BaseTen x2
+moonshotai/kimi-k3 selected=modal/mxfp4       provider_name="Modal"          count in inventory = 1
+                  duplicated names elsewhere: Morph x2, Fireworks x2
+```
+
+**Both selected endpoints ARE injective.** The runtime check at `endpoint_snapshots.py:558-563`
+iterates `for raw_endpoint in matched:` and requires
+`provider_name_counts[provider_name] == 1` — i.e. uniqueness of the **selected** endpoint's display
+name. The new plan-time predicate appears to require the **entire endpoint inventory** to be free of
+duplicate display names, which is a different and stricter property.
+
+Consequence if unchanged: duplicated display names are near-universal on OpenRouter (`Fireworks`
+appears multiple times in most inventories), so whole-inventory injectivity would reject almost every
+model — including one proven working end to end.
+
+**Requested:** align the plan-time predicate to the runtime semantics — injectivity of the *selected*
+endpoint's display name within the inventory, not injectivity of the whole inventory. Parity means the
+same predicate, and the runtime is the reference.
+
+Candidate `parasail/fp8` passing while both judges fail is consistent with this reading: its inventory
+happens to have no duplicate display names.
+
+## 2026-08-24T03:23Z — **END-TO-END COMPLETE: SEALED BUNDLE INDEPENDENTLY VERIFIED**
+
+`c627f2d` (`Repair canonical smoke replay`) fixed the strict-mode datetime asymmetry. The **same
+bundle** produced before the fix now verifies — no re-run, no new spend:
+
+```
+AUTHRUNNER smoke evidence: VALID / NONCREDITING / NONAUTHORIZING
+Smoke run index: 19
+Bundle SHA-256: e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703
+Inventory: case=case-df79ea132113b863; runs=2; logical_requests=4
+Closed ledger: entries=4; final_spent_usd=0.39622262
+```
+
+Bundle SHA-256 is byte-identical to the seal recorded at 02:17, confirming the evidence was always
+valid and only the replay reader was at fault. **The full AUTHRUNNER smoke path is now proven:
+live authenticated campaign → sealed evidence → independent offline verification.**
+
+### What is now demonstrated against a real provider
+
+| layer | status |
+|---|---|
+| authentication, routing, provider pinning | proven |
+| ZDR / operational / display-name / structured-output / reasoning constraints | proven |
+| custody namespacing, run-index lifecycle | proven |
+| cost reserve → spend → reconcile, closed ledger | proven |
+| token accounting (additive reasoning semantics) | proven |
+| generation-metadata identity binding | proven |
+| strict usage validation | proven |
+| immutable transport receipt custody | proven |
+| **cross-lineage adjudication (candidate + 2 judges, 3 lineages, 3 providers)** | **proven** |
+| **evidence sealing and independent offline replay** | **proven** |
+
+**Total spend to reach this: $0.396223 across 25 ledger entries.**
+
+### What this does NOT establish
+
+- `completed_real_audits` remains **0**. The bundle is `NONCREDITING` by construction and grants no
+  qualification, calibration, benchmark, audit, AUTHSEAL, or release authority.
+- One case, not 24. Cross-case aggregation, scoring, and adjudication at scale are unexercised.
+- **Nothing about audit quality.** Whether findings are correct, complete, or better than alternatives
+  is untouched — that is benchmarks and calibration, which have not started.
+
+### Carried forward to the 24-case campaign
+
+1. **Candidate reliability** — `deepseek/deepseek-v4-pro-0813` via `parasail/fp8` returned
+   schema-invalid structured output on 2 of ~10 attempts despite advertising `structured_outputs`.
+   At 24 cases this will fail intermittently; decide whether to retry, tolerate, or reselect.
+2. **Evidence drift** — six sub-hour drifts observed on the primary judge route in one day; the replay
+   judge drifted after ~24 h. Discovery, gate, and launch must be adjacent.
+3. **Run duration** — a 1-case campaign takes ~3-5 minutes; budget command timeouts accordingly (an
+   operator-side 2-minute timeout killed index 17 mid-run).
+4. **`V3-PLANCONSTRAINTS-001`** — plan-time constraint parity, queued but not implemented.
+
+## 2026-08-24T02:17Z — **FIRST COMPLETE SMOKE RUN — SEALED BUNDLE PRODUCED**
+
+`03d6e8a` (`Bind smoke reasoning identity parameters`) cleared the required-provider-parameters
+asymmetry. Index 19:
+
+```
+AUTHRUNNER smoke: COMPLETE / NONCREDITING / NONAUTHORIZING
+Smoke run index: 19
+Bundle SHA-256: e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703
+Closed ledger: entries=4; final_spent_usd=0.39622262
+Result: $HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260824-s19.json
+        (282,802 bytes)
+```
+
+**The full campaign executed end to end for the first time in this build's history:** candidate
+primary + candidate replay + judge primary + judge replay, cross-lineage adjudication across three
+distinct lineages and three distinct providers, with a closed 4-entry ledger and a sealed evidence
+bundle.
+
+Bundle header: `artifact_kind=authenticated_runner_noncrediting_smoke_evidence`,
+`purpose=NONCREDITING_SMOKE`, `schema_version=1.2`, `smoke_run_index=19`.
+
+### BLOCKER — the bundle cannot pass its own canonical replay
+
+```
+mmaudit models verify-authenticated-runner-smoke --bundle … --smoke-corpus benchmarks/model_corpus_smoke
+-> mmaudit failed safely: authenticated runner smoke bundle failed canonical replay
+```
+
+Invocation verified correct against `--help` (both required arguments supplied). Underlying error,
+obtained by calling the validator directly (`cli.py:5738` suppresses it with `from None`):
+
+```
+AuthenticatedRunnerSmokeError: authenticated runner smoke bytes do not validate
+```
+
+**Root cause — strict-mode datetime asymmetry.** `revalidate_authenticated_runner_smoke_evidence_bytes`
+(`authenticated_runner_smoke.py:761`) calls:
+
+```python
+AuthenticatedRunnerSmokeEvidenceBundle.model_validate_json(raw, strict=True)
+```
+
+Pydantic **strict mode refuses str→datetime coercion**, but the bundle serializes datetimes as ISO
+strings. Verified directly:
+
+```
+strict=True  -> 15 validation errors, ALL datetime fields
+   runs.0.candidate_report.result.usage_record.timestamp
+     Input should be a valid datetime [type=datetime_type,
+      input_value='2026-08-24T02:14:55.181934Z', input_type=str]
+   … started_at, ended_at, and the same three fields under runs.0.adjudication_report.cases.0
+strict=False -> VALIDATES OK
+```
+
+**The bundle is not corrupt.** Its content is valid; the writer and the replay reader disagree on
+strict-mode datetime handling, so *no* smoke bundle can ever replay. This is a write/read asymmetry in
+the verification path.
+
+Suggested fix: either serialize datetimes in a strict-parseable form, or relax `strict=True` for
+datetime fields specifically (keeping strictness elsewhere), or validate via
+`model_validate(json.loads(raw), strict=True)` after an explicit datetime coercion pass. Whichever
+preserves the intended tamper-detection.
+
+Also worth addressing: `cli.py:5738` discards the underlying error with `from None` — the fifth
+occurrence of this pattern on this ticket. Each previous instance cost a diagnostic round trip.
+
+### Spend
+
+Ledger 25 entries, **total $0.396223**. Note index 17 was terminated mid-run by an operator-side
+2-minute command timeout (my error, not a defect) leaving one `uncertain_accounted` judge entry; a full
+campaign needs ~3-5 minutes. Index 18 hit the known intermittent `SCHEMA_VALIDATION_FAILED` on the
+candidate. Index 19 completed.
+
+**Candidate reliability remains a real concern for the 24-case campaign:** `deepseek/deepseek-v4-pro-0813`
+via `parasail/fp8` produced schema-invalid structured output on indices 8 and 18 — roughly 2 failures
+in ~10 candidate attempts despite the route advertising `structured_outputs`.
+
+## 2026-08-24T01:10Z — clause isolated: `STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS`
+
+`3a1246d` (`Refine structured output routing diagnostics`) works exactly as intended. Gate green, run
+at index 16:
+
+```
+mmaudit failed safely: NONCREDITING_SMOKE identity binding lacks immutable receipt custody
+  (usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS)
+```
+
+Ledger 16 entries, **total $0.151976** (this run $0.006281). Next free index **17**.
+
+**Note:** my stated guess in the previous entry (`requested_mode` mismatch) was **wrong** — the mode
+check `IDENTITY_MODE` passes and the failure is two clauses later. That is the fourth incorrect
+operator-side hypothesis on this ticket; the clause-level codes are doing the work that guessing could
+not.
+
+### The failing comparison
+
+`usage.py:1900-1901`:
+
+```python
+required_special_parameters = set(capabilities.required_parameters) - {"max_tokens", "temperature"}
+...
+if set(evidence.required_provider_parameters) != required_special_parameters:
+    return "STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS"
+```
+
+An **exact set equality** between two independently constructed sets. The clauses before it all pass:
+`IDENTITY_ENDPOINT_SNAPSHOT_SHA256`, `IDENTITY_OUTPUT_CAPABILITY_SHA256`, `IDENTITY_MODE`, and
+`IDENTITY_PARAMETER_SUBSET`.
+
+### The two construction sites to compare
+
+**Capabilities side** — `openrouter.py:18568`:
+
+```python
+required_parameters = tuple(sorted(
+    (set(endpoint.required_request_parameters) - _ROUTE_SENSITIVE_REQUEST_PARAMETERS)
+    | set(output_mode_request_parameters(evidence.structured_output_mode))
+    | ({REASONING_REQUEST_PARAMETER} if reasoning_requested else set())
+))
+```
+
+**Evidence side** — the structured-output request shape, built near `openrouter.py:~545`:
+
+```python
+sorted({*_BASE_REQUEST_PARAMETERS,
+        *(("reasoning",) if reasoning_requested else ()),
+        *special_output_parameters})
+```
+
+The two differ in construction: the capabilities side subtracts `_ROUTE_SENSITIVE_REQUEST_PARAMETERS`
+from the endpoint's declared required parameters and unions `output_mode_request_parameters(...)`,
+while the evidence side unions `_BASE_REQUEST_PARAMETERS` with `special_output_parameters`. The
+comparison then subtracts only `{max_tokens, temperature}` from the capabilities side and nothing from
+the evidence side. **A single element present in one construction and not the other fails the equality.**
+
+### Supporting data (frozen discovery, candidate r10, `parasail/fp8`)
+
+```
+structured_output_parameters = ['response_format', 'structured_outputs']
+supported_parameters         = [frequency_penalty, include_reasoning, logit_bias, logprobs,
+                                max_tokens, presence_penalty, reasoning, reasoning_effort,
+                                repetition_penalty, response_format, seed, stop,
+                                structured_outputs, temperature, tool_choice, tools,
+                                top_k, top_logprobs, top_p]
+```
+
+Frozen `supported_parameters` matches the live endpoint exactly, so the endpoint snapshot is accurate —
+this is an internal construction asymmetry, not stale or wrong provider data.
+
+**Request:** log both sets on mismatch (`expected=…, observed=…`). Given the equality is exact and both
+sets are built internally, the two values will identify the discrepancy immediately.
+
+## 2026-08-24T00:15Z — receipt seal FIXED; new named failure `STRUCTURED_OUTPUT_ROUTING`
+
+`68126e0` (`Harden receipt cookie lifecycle`) cleared the receipt-seal blocker — the
+`provider transport receipt cannot seal owned request state` error is gone. Gate was still green after
+90 minutes (no drift this cycle). Run at index 14:
+
+```
+mmaudit failed safely: NONCREDITING_SMOKE identity binding lacks immutable receipt custody
+  (usage_diagnostics=STRUCTURED_OUTPUT_ROUTING)
+```
+
+Ledger now 15 entries, **total $0.145695** (index 14 charged $0.004044; a follow-up instrumented run
+at index 15 charged $0.008478). Indices 1–15 consumed; **next free index is 16.**
+
+### The named code is working — this is your diagnostics investment paying off
+
+`STRUCTURED_OUTPUT_ROUTING` is returned by `_strict_usage_record_failure_code`
+(`usage.py:843-844`) when `_has_valid_structured_output_routing` (`usage.py:1648`) returns `False`.
+Earlier at index 10 this reported `NONE`; it now reports a specific clause family. That is a strictly
+better position than the generic errors of two days ago.
+
+### Why the operator side cannot narrow it further
+
+`_has_valid_structured_output_routing` is a single composite boolean over ~15 conditions:
+`repair_used`, `truncated`, `requested_mode is not achieved_mode`, plus twelve hash/endpoint equality
+checks (`configured_provider_endpoints`, `selected_provider_endpoint`, `prompt_sha256`,
+`request_body_sha256`, `schema_sha256`, `original_response_sha256`, `validated_response_sha256`,
+`provider_policy_sha256`, `endpoint_snapshot_sha256`, `output_capability_sha256`, `repair_used`
+routing parity) and a further `request_shape_routing` block.
+
+**External instrumentation cannot reach it.** The predicate is bound to a module-level name at import
+(`usage.py:931`: `structured_output_routing_predicate = _has_valid_structured_output_routing`), so
+patching the module attribute after import does not affect the captured reference — the same pattern
+as `_authrunner_usage_origin_scope`. A wrapper attempt produced no output while still charging.
+
+**Request:** extend the failure code with the specific clause, e.g.
+`STRUCTURED_OUTPUT_ROUTING:requested_mode_mismatch` or
+`STRUCTURED_OUTPUT_ROUTING:validated_response_sha256`. Given the route advertises `structured_outputs`
+but the candidate has already been observed returning schema-invalid output intermittently (index 8),
+`requested_mode is not achieved_mode` is the most probable clause — but that is a guess, and three
+previous guesses of mine on this ticket were wrong.
+
+## 2026-08-23T22:40Z — `48ea635` receipt custody blocks pre-transport — **$0, no charge**
+
+Gate run at index 14 after `48ea635` (`Add receipt-bound smoke transport custody`). **Both judges had
+drifted** and were re-frozen at $0:
+
+| role | new registry | new discovery run | note |
+|---|---|---|---|
+| primary `z-ai/glm-5.2` | `primary-judge-registry-r15.json` | `authrunner-primary-judge-20260823-r15` | 6th sub-hour drift today |
+| replay `moonshotai/kimi-k3` | `replay-judge-registry-r15.json` | `authrunner-replay-judge-20260823-r15` | first drift — r8 evidence was >24 h old, failed on `model metadata` |
+
+Gate then **VALID** on all three routes. Paid launch at index 14:
+
+```
+mmaudit failed safely: provider transport receipt cannot seal owned request state
+```
+
+**Ledger unchanged — 13 entries, $0.133173. Index 14 was not consumed. No provider charge.**
+The receipt check runs pre-transport, which is the correct ordering.
+
+### Diagnosis
+
+Raised at `openrouter.py:6198` (a second identical site at `:6226`), from an
+`except (AttributeError, TypeError): ... raise ... from None` wrapping introspection of httpx
+internals:
+
+```
+client._cookies, client._params, client._timeout, headers._list, cookies.jar,
+jar._cookies, jar._policy, params._dict, binding.transport._pool, pool._ssl_context
+```
+
+**Every one of those attributes exists on a fresh `httpx.AsyncClient` under the installed httpx
+0.28.1** — verified directly, all eleven return `True`. So this is not a missing-attribute or
+httpx-version problem on a newly constructed client.
+
+That leaves the object actually being introspected at runtime differing from a fresh client — most
+likely `binding.transport` not exposing `_pool` when it is a wrapped/custom transport rather than
+`httpx.AsyncHTTPTransport`, or the client having been replaced by then.
+
+**`from None` suppresses the cause again.** This is the third occurrence of the same diagnostic
+pattern (token details, usage strictness, now receipt sealing), and each previous instance was
+resolved in one run once the underlying value or reason was surfaced. **Please include the failing
+attribute name and owning type in this error.** External wrapping cannot reach it — the
+`object.__getattribute__` alias is function-local, not module-level.
+
+This is a regression in code committed ~90 minutes prior, caught before any spend.
+
+## 2026-08-23T16:26Z — **STRICT USAGE PREDICATE NOW PASSES** — `usage_diagnostics=NONE`
+
+Run at index 10 after `d2364f6` (`Harden smoke scope and usage diagnostics`). Gate re-run
+immediately before launch; primary judge re-frozen again to `primary-judge-registry-r14.json` /
+`authrunner-primary-judge-20260823-r14` (fifth sub-hour drift on that route today).
+
+```
+mmaudit failed safely: NONCREDITING_SMOKE identity binding awaits immutable completion receipts
+  (usage_diagnostics=NONE)
+```
+
+**`usage_diagnostics=NONE` means the strict usage record has no failure code — the predicate that
+blocked runs 11–13 is now satisfied.** Your `StrictUsageFailureCode` / `_strict_usage_record_failure_code`
+work did exactly what was asked, and the answer is that there is no longer a strict failure to report.
+
+The remaining message is **not a new defect** — it is the immutable-receipt composite you have already
+scheduled (`PAUSED_FOR_AUTHRUNNER_SCOPE_CUTOFF_HOTFIX_THEN_IMMUTABLE_RECEIPT_COMPOSITE_BEFORE_INDEX_10_GATE`).
+No operator action is available until that lands.
+
+### Ledger
+
+13 entries, **total $0.133173**. All `reconciled` except `r2` (the pre-fix `uncertain_accounted`
+entry from before `8e1581d`, retained deliberately — that charge was real).
+
+Indices consumed: 1–13. Next free index is **14**.
+
+### Cumulative position
+
+Every layer is now proven against live provider calls: authentication, routing, provider custody
+namespacing, run-index lifecycle, cost reserve/reconcile, token accounting, structured-output
+validation, **generation-metadata identity binding**, and now **strict usage validation**. The single
+remaining gate before a sealed smoke bundle is the immutable completion-receipt composite, which is in
+progress.
+
+## 2026-08-23T15:30Z — **IDENTITY BINDING IS FIXED** — the pre-restart blocker is resolved
+
+`8058e7b` (dormant provider receipt scaffold) resolved it. Runs 11, 12, 13. Ledger now 12 entries,
+**total $0.124584**; indices 1–9 and 11–13 consumed (10 was gated but never launched).
+
+Captured usage-record state at validation:
+
+```
+identity_strength  : CANONICAL_MODEL_AND_ENDPOINT_BOUND
+identity_binding_status : generation_metadata_bound     <-- BOUND (was generation_metadata_unbound)
+execution_evidence : real
+status             : success
+generation_id      : gen-1787498019-9wq863hcQEsYs4sNm0Cy
+certification_request : True
+```
+
+**`generation_metadata_bound`.** The `UNBOUND provider identity` condition recorded in the
+pre-restart handover — and reproduced continuously since — no longer occurs. The
+"Completed response identity is unbound" warning is gone from the run output, and
+`identity_diagnostics` no longer appears in the failure. Whatever the dormant-attempt receipt work
+changed, it fixed the generation-metadata fetch.
+
+### Remaining failure — same symptom, different cause
+
+```
+mmaudit failed safely: model benchmark smoke completion is not exact successful REAL evidence
+  (usage_error=UsageValidationError)
+```
+
+Still `UsageValidationError`, but now with a **bound** identity, so it is no longer the identity path.
+The failure is inside `_is_strict_usage_record` (`usage.py`), reached via
+`is_creditable_usage_record(require_real=True, require_certification=True)`.
+
+Observed call kwargs at failure:
+
+```
+require_real=True, require_certification=True, allow_unbound_real=False, require_runtime_attestation=False
+```
+
+**Bisection result:** flipping `require_certification`, `require_real`, or `allow_unbound_real`
+individually does **not** make it pass. The record therefore fails an intrinsic strictness condition,
+not a mode gate. External instrumentation cannot see which — the predicate is a single composite
+boolean.
+
+**Request:** surface which clause of `_is_strict_usage_record` rejects the record, in the same style as
+the identity diagnostics you added in `77fb4b9`. That change turned a two-day-old unknown into a
+one-run answer; the same treatment here should close this immediately.
+
+### Status
+
+Every layer from transport through identity binding is now proven working against live provider calls:
+auth, routing, custody namespacing, run-index lifecycle, cost reserve/reconcile, token accounting,
+structured output, and **generation-metadata identity binding**. The only remaining gate before a
+sealed smoke bundle is this single strictness predicate.
+
+## 2026-08-23T09:07Z — GATE READY at **index 10** (not 8 — 8 and 9 are consumed)
+
+`PAUSED_FOR_AUTHRUNNER_FRESH_INDEX_8_GATE_AFTER_IDENTITY_DIAGNOSTIC` cannot be satisfied:
+**indices 1–9 are all consumed.** Index 8 was spent producing the `SCHEMA_VALIDATION_FAILED`
+observation and index 9 produced the identity diagnostic you requested. **Next free index is 10.**
+
+Live-route gate at index 10 — **VALID**, provider-free, $0:
+
+```
+Validated exact routes: candidate=deepseek/deepseek-v4-pro-0813; primary_judge=z-ai/glm-5.2;
+                        replay_judge=moonshotai/kimi-k3
+Metadata request inventory: logical_gets=15; maximum_provider_attempts=30
+Runtime state: usage_records=0; budget=UNCHANGED; atomic_cost_ledger=UNCHANGED; output=NOT_PUBLISHED
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+Composition (primary judge re-frozen twice today due to drift):
+
+| role | model | route | registry | discovery run |
+|---|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `parasail/fp8` | `candidate-registry-r10.json` | `authrunner-candidate-20260823-r10` |
+| primary | `z-ai/glm-5.2` | `sail-research/fp8` | `primary-judge-registry-r12.json` | `authrunner-primary-judge-20260823-r12` |
+| replay | `moonshotai/kimi-k3` | `modal/mxfp4` | `replay-judge-registry-r8.json` | `authrunner-replay-judge-20260822-r8` |
+
+**Primary-judge evidence drifted again within ~25 minutes** (r11 frozen 09:40, stale by 10:05). Third
+observation of sub-hour drift on this route. Any emitted sequence should assume the gate must be
+re-run immediately before launch.
+
+**No paid run was made at index 10.** The fetch-loop instrumentation is not yet in
+(`77fb4b9` surfaced the codes only), so a paid attempt now would reproduce the identical failure at a
+further ~$0.005. Emit the fix and the operator side will gate and launch in one pass.
+
+## 2026-08-23T09:05Z — IDENTITY DIAGNOSTIC (answers `PAUSED_FOR_AUTHRUNNER_GENERATION_IDENTITY_DIAGNOSTIC_BEFORE_INDEX_8_GATE`)
+
+`77fb4b9` surfaced the codes. Run at index 9:
+
+```
+mmaudit failed safely: model benchmark smoke completion is not exact successful REAL evidence
+  (usage_error=UsageValidationError,
+   identity_diagnostics=GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING)
+```
+
+Ledger: 9 entries, **total accounted $0.10457436**, indices 1–9 consumed. All reconciled except r2.
+
+### Three hypotheses tested and ELIMINATED — do not re-investigate these
+
+**1. Model-ID naming mismatch — NOT the cause.** The generation endpoint returns the canonical dated
+form `deepseek/deepseek-v4-pro-20260813` while the request uses `deepseek/deepseek-v4-pro-0813`, but
+the frozen registry already carries both (`exact_model_id` / `canonical_slug`) and the runtime routing
+shows `accepted_model_aliases` containing both. Not it.
+
+**2. Fetch timeout / IO budget — NOT the cause.** Measured generation-metadata availability directly:
+issued a minimal completion, then polled `/api/v1/generation?id=…` once per second.
+**Metadata became available after 9.6 s.** mmaudit's poll schedule
+(`_GENERATION_METADATA_POLL_DELAYS_SECONDS = (0, 1, 3, 7, 15, 30, 60)`) attempts at cumulative
+0 / 1 / 4 / 11 / 26 / 56 / 116 s, so the 4th attempt (11 s) should succeed. Per-attempt IO budget is
+`request_timeout_seconds * 0.25` clamped to `[0.05, 15.0]`; `request_timeout_seconds = 180`
+(`config/openrouter-qualification.toml:24`), giving the **maximum 15.00 s** budget per attempt. Ample.
+
+**3. Payload validation rejection — NOT the cause.** Ran mmaudit's own validator against a live
+response:
+
+```
+validate_openrouter_generation_payload(raw_response,
+    requested_generation_id=…, retrieved_at=now, execution_evidence=REAL)
+-> VALIDATES OK, exact_model_id=deepseek/deepseek-v4-pro-20260813
+```
+
+Note it must be passed the **full response object**, not `response["data"]` — the latter raises
+"generation response data must be an object". Live payload fields all present and well-formed:
+`cancelled=False`, `tokens_prompt`, `tokens_completion`, `total_cost`, `usage` (matching),
+`native_tokens_*`, `finish_reason`, `provider_name`, `created_at`, `latency`, `generation_time`.
+
+### What remains — the fetch loop itself
+
+Metadata exists, arrives in ~9.6 s, validates cleanly, and the poll schedule and IO budget both cover
+it. Yet the run reports `GENERATION_METADATA_MISSING`. **The most likely remaining explanation is that
+the poll loop exits before its schedule completes** — e.g. an early empty/404/"not ready" response
+being treated as terminal rather than retryable, or the loop being cut short by an outer deadline.
+
+Suggested internal instrumentation (external wrapping cannot see inside the fetch):
+- log each poll attempt: index, elapsed seconds, HTTP status, whether a body was returned
+- log why the loop terminated (schedule exhausted vs early return vs exception)
+- log which branch sets `GENERATION_METADATA_INVALID` vs `GENERATION_METADATA_MISSING`, since both are
+  currently reported together and may not be independently meaningful
+
+### Secondary finding — the candidate is intermittently non-conformant
+
+Across runs 5–9 the same configuration produced **two different failures**: index 8 failed with
+`SCHEMA_VALIDATION_FAILED` (model returned invalid structured data) while indices 5, 7 and 9 reached
+identity binding. `deepseek/deepseek-v4-pro-0813` via `parasail/fp8` therefore does not reliably
+produce schema-valid structured output even though the route advertises `structured_outputs`. This
+will surface as flaky failures across a 24-case campaign and is worth a decision: tolerate with
+retries, or prefer a candidate with more reliable structured output.
+
+## 2026-08-23T08:45Z — **THE ORIGINAL BLOCKER ISOLATED**: identity downgrade happens only at generation-metadata binding
+
+Runs 5, 6, 7 executed after `531a9d8`. Indices 1–7 now consumed. **Total accounted: $0.09414372.**
+All entries `reconciled` except the pre-fix r2.
+
+### Two of your fixes are confirmed working
+
+1. **Token accounting (`531a9d8`)** — replacing the OpenAI subset assumption with independent
+   plan-based bounds (`completion_tokens > reserved_output_tokens`,
+   `reasoning_tokens > reserved_reasoning_tokens`) cleared the check entirely. No recurrence across
+   three runs.
+2. **Typed usage errors** — the failure now reports
+   `usage_error=UsageValidationError` instead of the generic message. That was proposal item 5 and it
+   immediately narrowed the search.
+
+### The remaining failure is the pre-restart blocker, now precisely located
+
+```
+Completed response identity is unbound; preserving evidence without automatic fallback
+mmaudit failed safely: model benchmark smoke completion is not exact successful REAL evidence
+  (usage_error=UsageValidationError)
+```
+
+Captured routing state from the unbound usage record (external instrumentation, read-only):
+
+```
+provisional_identity_strength = CANONICAL_MODEL_AND_ENDPOINT_BOUND   <-- provisionally BOUND
+identity_binding.strength     = UNBOUND                              <-- downgraded
+identity_binding_status       = generation_metadata_unbound
+accepted_model_aliases        = ["deepseek/deepseek-v4-pro-0813", "deepseek/deepseek-v4-pro-20260813"]
+canonical_model               = deepseek/deepseek-v4-pro-20260813
+provider                      = Parasail
+provider_fallback_used        = false
+host_model_fallback_used      = false
+certification_request         = true
+privacy_endpoint_policy_class = ZDR
+generation_id                 = gen-1787474588-l7LSLr4WudUYE3orNGO8
+```
+
+**Everything except generation metadata binds correctly.** Model aliases cover both naming forms,
+provider matches the frozen snapshot, no fallback occurred, endpoint policy is ZDR, and the
+provisional strength is already `CANONICAL_MODEL_AND_ENDPOINT_BOUND`. The downgrade to `UNBOUND`
+happens **only** in the generation-metadata step.
+
+### The metadata is not missing — it exists and is complete
+
+Queried `/api/v1/generation?id=…` directly for two unbound generations. Both returned full records:
+
+| field | gen-1787474457-OH7yH0ph… | gen-1787474588-l7LSLr4W… |
+|---|---|---|
+| `model` | `deepseek/deepseek-v4-pro-20260813` | `deepseek/deepseek-v4-pro-20260813` |
+| `provider_name` | Parasail | Parasail |
+| `total_cost` | 0.00533808 | 0.00404316 |
+| `tokens_prompt` / `tokens_completion` | 225 / 1474 | — |
+| `native_tokens_reasoning` | 1237 | — |
+| `finish_reason` | stop | — |
+| `generation_time` | — | 10878 ms (latency 523 ms) |
+
+The returned `model` is the canonical dated form, which **is** in `accepted_model_aliases`, so naming
+is not the cause.
+
+Timing looks unlikely but is not excluded: generation took ~10.9 s, and
+`_GENERATION_METADATA_POLL_DELAYS_SECONDS = (0, 1, 3, 7, 15, 30, 60)` gives cumulative polls at
+0/1/4/11/26/56/116 s. However the per-attempt IO budget is
+`request_timeout_seconds * 0.25` clamped to `[0.05, 15.0]`
+(`openrouter.py:350-354`, applied at `:15128`) — if `request_timeout_seconds` is small, each poll gets
+a very short timeout regardless of the generous delay schedule. **Worth checking what
+`request_timeout_seconds` actually is for this path.**
+
+### What codex needs to determine (internal instrumentation required)
+
+External wrapping cannot see inside the fetch. The three candidates are:
+
+1. **Fetch timeout** — per-attempt IO budget too small (see above)
+2. **Validation rejection** — `OpenRouterGenerationEvidence.model_validate` rejecting a field present
+   in the live payload (note `native_tokens_completion_images`, `cache_discount`, `is_byok`,
+   `data_region`, `moderation_latency` are present; if the model is strict, an unexpected key or an
+   unmodelled type could reject an otherwise-valid record)
+3. **Reconciliation mismatch** — `GenerationReconciliationExpectation` failing on a field other than
+   model/provider (e.g. `catalog_identity_binding_sha256`, `discovery_evidence_sha256`, or
+   `require_certification`)
+
+**Please log the specific `OpenRouterIdentityDiagnosticCode` set on the unbound path** — the codes are
+computed (`GENERATION_METADATA_INTEGRITY_REJECTED`, `GENERATION_METADATA_MISSING`,
+`ENDPOINT_VARIANT_MISMATCH`, `PROVIDER_MISMATCH`, `UNAPPROVED_FALLBACK`) and then not surfaced. Same
+diagnostic gap as the token message and the usage error, both of which resolved their questions in one
+run once surfaced.
+
+This is the last known gate before a sealed smoke bundle.
+
+## PROPOSAL — six quality-preserving accelerations for V3-AUTHRUNNER-001 and the release campaign
+
+Operator-side analysis, not evidence. Every item below reduces **cycle count and diagnosis time**, not
+verification depth. None relaxes a fail-closed check, weakens the evidence model, or changes what is
+proved. Ordered by expected value.
+
+### Context: why the ticket has been slow
+
+59 commits since the 2026-08-20 restart, 22 on the AUTHRUNNER path, **10 re-pins of
+`config/models.selection-plan.json`**, **14 discovery re-freezes across 14 model/route combinations** —
+still `PARTIAL`. Roughly sixteen defects, nearly all of one shape: *a constraint the runtime enforces
+that the selection plan did not filter on*. Each was correct fail-closed behaviour; collectively they
+mean the plan is validated by trial rather than by construction, and each trial costs a full
+multi-actor round trip.
+
+### 1. Make plan-time constraint enforcement exhaustive — highest value
+
+`src/mmaudit/models/candidate_selection.py` reference counts today:
+
+| constraint | refs | enforced at plan time? |
+|---|---|---|
+| lineage | 25 | yes |
+| `status` | 5 | yes |
+| `structured_outputs` | 5 | yes |
+| `max_completion_tokens` | 3 | yes |
+| zdr | 2 | yes |
+| **`response_format`** | **0** | **no — runtime only** |
+| **`supported_efforts`** | **0** | **no — runtime only** |
+| **`display_name`** uniqueness | **0** | **no — runtime only** |
+
+Those three zeros are exactly what caused the last three round trips (`tencent/hy3=novita`,
+`gemma-4-26b`, and the display-name exclusions). All three are present in discovery metadata and are
+checkable when the plan is built. **This cannot reduce quality** — it applies identical checks earlier;
+a plan failing them was always going to fail at runtime, just later and after a charge.
+
+### 2. Extend `models check` into a route-qualification sweep
+
+`models check` already exists and already covers "exact models, endpoint capabilities, ZDR, duplicates,
+and independence". Extending it to take the candidate set and report, per model, which routes satisfy
+**all** constraints simultaneously would replace ad-hoc analysis. The monitoring session has been doing
+this by hand and **produced three wrong recommendations** (`novita`, `gemma-4-26b`, `wafer`) by
+filtering incrementally rather than against the full set. Metadata-only, $0, and it removes an entire
+class of operator error.
+
+### 3. Multi-endpoint allowlists for every role
+
+Already done for the replay judge (`['modal/mxfp4', 'phala']`). Extending it to candidate and primary
+means a dead or drifted route no longer forces a plan edit, commit, and round trip. Quality-neutral —
+the runtime still pins exactly one route into frozen evidence; only the *candidate set* widens.
+
+### 4. Fuse discovery → live-route gate → launch into one adjacent operator command
+
+Observed drift: `wafer` went `status=0` → `status=-5` in **~15 minutes**; candidate evidence has gone
+stale in as little as 7 hours and reliably overnight. Cycles have repeatedly outlived their own inputs.
+Same checks, far less wall-clock exposure between them. This matters more for the 24-case campaign than
+for the smoke.
+
+### 5. Surface typed errors instead of generic ones
+
+`benchmark/models.py:1619` discards the typed result of `_successful_usage_error` and conflates it with
+the separate `case_id` mismatch condition. Precedent: adding observed values to the token-detail message
+in `8e1581d` settled a two-day-old open question in a single run
+(`reasoning_tokens=1307 > completion_tokens=1280`). Pure diagnostic speed, zero quality cost.
+
+### 6. Widen the smoke corpus to 2–3 cases
+
+One case proves transport but structurally cannot exercise cross-judge adjudication, aggregation, or
+multi-case sealing. At ~$0.005 per run, finding those defects now is far cheaper than finding them
+inside the 24-case campaign, where each failure costs the whole run.
+
+### Explicitly NOT recommended
+
+- Relaxing any fail-closed check
+- Granting codex credential or provider access — this would collapse the author/executor separation the
+  evidence model depends on, and is precisely what `V3-AUTONOMY-001` exists to solve properly
+- Skipping the live-route gate
+- Reusing stale or aged evidence
+- Treating any smoke output as crediting
+
+## 2026-08-23T07:10Z — SMOKE #5 and #6 after `8e1581d` — cost fix WORKS; **subset assumption CONFIRMED violated**
+
+Both runs executed by the monitoring session directly (a scoped permission rule now allows the paid
+smoke command). Gate was VALID immediately before each.
+
+### Ledger — the cost-preservation fix works
+
+| run | actual | accounted | status |
+|---|---|---|---|
+| r1 (08-21) | 0.01680888 | 0.01680888 | reconciled |
+| r2 (08-23) | **null** | 0.05225616 | **uncertain_accounted** ← pre-fix |
+| r3 (08-23) | 0.00554796 | 0.00554796 | **reconciled** ← post-fix |
+| r4 (08-23) | 0.00537768 | 0.00537768 | **reconciled** |
+
+**Total accounted: $0.07999068.** `8e1581d` resolved the `uncertain_accounted` state — token-detail
+failures now reconcile the real cost instead of conservatively charging the full reservation.
+
+The provider-free ledger guard also works: attempting index 2 again was rejected at the **live-route
+gate**, before any charge — `smoke run index 2 is already present in the cumulative ledger`.
+
+### Run 3 (`--smoke-run-index 3`) — passed token validation, failed later
+
+```
+mmaudit failed safely: model benchmark smoke completion is not exact successful REAL evidence
+```
+
+Raised at `benchmark/models.py:1619`. **Diagnostic gap:** `_successful_usage_error`
+(`models.py:2160`) computes a *typed* error — `UsageProvenanceError`, `UsageTargetBindingError`,
+`UsageResponseBindingError`, `UsageValidationError`, `UsageOutputModeBindingError`,
+`UsagePromptBindingError`, schema-binding — and the caller discards it, raising a generic message that
+also conflates the separate `case_id` mismatch condition. **Please include `usage_error` and which of
+the two conditions fired.** Same class of fix as the token-detail message, which paid for itself
+immediately (below).
+
+### Run 4 (`--smoke-run-index 4`) — the new error message settled the question
+
+```
+mmaudit failed safely: model response token details are inconsistent
+  (prompt_tokens=234, completion_tokens=1280, reasoning_tokens=1307, cached_tokens=0)
+```
+
+**`reasoning_tokens (1307) > completion_tokens (1280)`.** The OpenAI subset assumption is violated on
+`deepseek/deepseek-v4-pro-0813` via `parasail/fp8`. Reasoning tokens are not contained in the
+completion count on this route.
+
+**The check is intermittent, which matters more than the failure itself.** Run 3 passed token
+validation and failed later; run 4 failed at this check. With `effort = "high"` the two counts are
+nearly equal (1307 vs 1280, ~2% apart), so whether the invariant holds depends on sampling. A gate
+that passes or fails at random on identical configuration will be far harder to diagnose in the
+24-case campaign than in a 1-case smoke.
+
+### Recommendation
+
+Treat `reasoning_tokens > completion_tokens` as **additive reporting**, not corruption: bill
+`prompt_tokens + completion_tokens + reasoning_tokens` when the sum semantics are ambiguous, or
+require a per-route declared convention captured at discovery. Failing after a charge on a routine,
+sampling-dependent condition is the wrong trade — especially now that cost is correctly preserved, so
+each failed attempt still spends real money (~$0.005 per run).
+
+If the subset invariant is genuinely required, it must become a **plan-time constraint** — but no
+discovery metadata field currently exposes reasoning-token accounting semantics, so it would not be
+checkable in advance.
+
+## 2026-08-23T06:33Z — PAID SMOKE #4 (`--smoke-run-index 2`) — run-index fix WORKS; new failure on token accounting
+
+Executed from the main checkout at `3d4a43a`, with `candidate-registry-r10` substituted for the
+drifted r9 evidence (re-frozen at $0:
+`66b620665f4c8911c38b280b36b70eeab9fe4a0ae44259a608ede271f207dd5c`, run dir
+`authrunner-candidate-20260823-r10`). Live-route gate was VALID immediately before, reporting
+`Smoke run index: 2`.
+
+```
+Structured model request failed
+Configured model failed; considering the next explicit fallback
+mmaudit failed safely: model response token details are inconsistent
+```
+
+### The `--smoke-run-index` fix works
+
+A second ledger entry was created under the `r2` namespace with no collision:
+
+```
+request_id:         authrunner.smoke.r2.candidate.primary:721f058726cf9509c07cb2aae662fb6a…
+reservation_id:     bec758dc72d74ebebdd32bcd4c1efbd1
+reserved_usd:       0.05225616
+accounted_cost_usd: 0.05225616
+actual_cost_usd:    null
+status:             uncertain_accounted
+```
+
+### Spend
+
+| entry | actual | accounted | status |
+|---|---|---|---|
+| `smoke.r1…` (2026-08-21) | 0.01680888 | 0.01680888 | reconciled |
+| `smoke.r2…` (2026-08-23) | **null** | 0.05225616 | **uncertain_accounted** |
+
+**Total accounted exposure: $0.06906504.** The r2 call charged but its actual cost could not be
+determined, so the full reservation was conservatively accounted — correct fail-safe behaviour, but it
+leaves an unresolved ledger entry.
+
+### Root cause — reasoning-token subset assumption
+
+`openrouter.py:14304`:
+
+```python
+if reasoning_tokens > fields["completion_tokens"] or cached_tokens > fields["prompt_tokens"]:
+    raise OpenRouterSchemaError("model response token details are inconsistent")
+```
+
+This requires `completion_tokens_details.reasoning_tokens <= completion_tokens` and
+`prompt_tokens_details.cached_tokens <= prompt_tokens` — i.e. it assumes OpenAI's schema semantics
+where reasoning tokens are a **subset** of the completion count. Not all providers report that way;
+some report reasoning tokens **additively**, excluded from `completion_tokens`. With
+`effort = "high"` on a reasoning-heavy candidate, reasoning tokens are large, so the subset check is
+very likely what tripped.
+
+**Cannot confirm which of the two conditions fired** — the exception carries no values. Suggest
+including the observed `reasoning_tokens/completion_tokens` and `cached_tokens/prompt_tokens` in the
+error message; that single change would have made this self-diagnosing.
+
+### Questions for codex
+
+1. Is the subset assumption intended to be universal? If some providers report additively, this
+   rejects otherwise-valid responses from any such route — a silent constraint on model selection
+   that is not currently enforced at plan time.
+2. If the semantics genuinely vary by provider, the accounting needs either a provider-declared
+   convention or a tolerant path that treats `reasoning_tokens > completion_tokens` as additive and
+   bills accordingly, rather than failing after a charge.
+3. What resolves the `uncertain_accounted` r2 entry? It is neither reconciled nor released, and the
+   actual cost is unknown.
+
+**A retry requires `--smoke-run-index 3`** — index 2 is now permanently recorded.
+
+## 2026-08-22T05:30Z — PAID SMOKE #3 blocked by request-ID collision — **the smoke run is single-use by construction**
+
+Sequence this morning, after `7ca1558` emitted the r8 pair:
+
+1. Live-route gate on r8 **FAILED** — `candidate=endpoint exact-model identity inventory`. Candidate
+   evidence drifted overnight (~7h). Primary and replay were unaffected.
+2. Candidate re-frozen at $0 — `candidate-registry-r9.json`, frozen
+   `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`, run dir
+   `authrunner-candidate-20260822-r9`.
+3. Live-route gate on r9/r8/r8 — **VALID**, all three routes validated, 15 logical GETs.
+4. Paid launch executed with the r9 candidate substituted — **FAILED**:
+
+```
+Structured model request failed
+mmaudit failed safely: request ID already recorded:
+  authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497
+```
+
+**No new spend.** Ledger still holds exactly one entry — last night's `$0.01680888`, `reconciled`. No
+bundle published. Guard at `cost_ledger.py:252`.
+
+### Cause — deterministic request IDs plus a permanent ledger make the smoke run one-shot
+
+The request ID is derived from the case content hash, and the smoke corpus is a fixed single case, so
+**every** smoke attempt produces the identical ID. Last night's attempt recorded it permanently; the
+ledger's uniqueness guard now rejects all future attempts against that ledger.
+
+The run index `r1` is hardcoded in both the ID construction and the namespace validator, so nothing
+increments it:
+
+- `authenticated_runner_smoke.py:125,127,266` — `f"authrunner.smoke.r1.candidate.{...}"` / `...judge...`
+- `usage.py:60,64` — `re.compile(r"^authrunner\.smoke\.r1\.candidate\.(?:primary|replay):[0-9a-f]{64}$")`
+
+The `r1` naming anticipated repeat runs; the mechanism to advance it was never wired.
+
+### Suggested fix — make the run index explicit
+
+Add an operator-supplied smoke run index (e.g. `--smoke-run-index 2`), thread it through the ID
+construction, and widen the namespace regexes to `r(?:[1-9][0-9]*)` while keeping the smoke and release
+namespaces disjoint. That preserves every custody property, keeps IDs deterministic **within** a run,
+and makes the smoke test repeatable — which is its whole purpose during debugging.
+
+Do **not** release or supersede the existing reconciled entry: that $0.0168 was genuinely charged and
+the record should stand.
+
+A separate ledger per attempt would also unblock it, but discards the cumulative spend cap that the
+ledger exists to enforce — not recommended.
+
+### Note
+
+This is the first defect found *after* a green live-route gate on a fully constraint-filtered
+composition. The pre-transport path is now clean; this failure is in run lifecycle management, not
+selection.
+
+## 2026-08-21T23:14Z — **LIVE-ROUTE GATE VALID on r8/r8/r8** — paid command must be re-emitted
+
+`dcabe31` adopted `modal/mxfp4` with `phala` as a second allowlist entry (the multi-endpoint
+suggestion). Replay discovery then succeeded and the full gate passed. All **$0** — ledger unchanged at
+the single $0.01680888 entry.
+
+```
+AUTHRUNNER smoke live-route preflight: VALID / NONCREDITING / NONAUTHORIZING /
+                                        METADATA EGRESS ONLY / NO MODEL COMPLETION
+Validated exact routes: candidate=deepseek/deepseek-v4-pro-0813; primary_judge=z-ai/glm-5.2;
+                        replay_judge=moonshotai/kimi-k3
+Metadata request inventory: logical_gets=15; maximum_provider_attempts=30
+Runtime state: usage_records=0; budget=UNCHANGED; atomic_cost_ledger=UNCHANGED; output=NOT_PUBLISHED
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+### The complete validated composition
+
+| role | model | route | registry | frozen sha256 | discovery run |
+|---|---|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `parasail/fp8` | `candidate-registry-r8.json` | `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306` | `authrunner-candidate-20260821-r8` |
+| primary judge | `z-ai/glm-5.2` | `sail-research/fp8` | `primary-judge-registry-r8.json` | `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26` | `authrunner-primary-judge-20260821-r8` |
+| replay judge | `moonshotai/kimi-k3` | `modal/mxfp4` | `replay-judge-registry-r8.json` | `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8` | `authrunner-replay-judge-20260822-r8` |
+
+Three distinct providers (Parasail / Sail Research / Modal), three distinct lineages (DeepSeek / Zhipu /
+Moonshot), all lineage-CONFIRMED in the 17-source / 11-root sealed bundle.
+
+### ACTION NEEDED — emitted commands are two route generations stale
+
+The two smoke commands at HEAD still reference `registry-r2.json` and `registry-r6.json`. **Re-emit
+both the live-route preflight and the paid smoke launch against the r8/r8/r8 paths above.**
+
+**Time-sensitivity:** `wafer` went from operational to `status=-5` inside fifteen minutes earlier
+tonight. The gate is green as of 2026-08-21T23:14Z but that is not durable. Suggested sequence to
+minimise the window: emit both commands in one checkpoint, operator side re-runs the live-route gate
+immediately, and the paid launch follows without an intervening round-trip.
+
+Suggested output path for the fresh run: `authenticated-runner-smoke-evidence-20260822-s3.json`
+(currently absent; `s1` was never published as the two earlier attempts failed closed).
+
+## 2026-08-21T23:00Z — r8: candidate OK; replay route `wafer` went non-operational within ~15 minutes
+
+Routes from `3975d2e` adopted as recommended. Discovery run metadata-only, **$0** (ledger unchanged at
+$0.01680888).
+
+| role | route | result |
+|---|---|---|
+| candidate `deepseek/deepseek-v4-pro-0813` | `parasail/fp8` | **SUCCESS** — `candidate-registry-r8.json`, frozen `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, run dir `authrunner-candidate-20260821-r8` |
+| primary `z-ai/glm-5.2` | `sail-research/fp8` | already done — `primary-judge-registry-r8.json`, frozen `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26` |
+| replay `moonshotai/kimi-k3` | `wafer` | **FAILED** — `configured endpoint is not operational` |
+
+### `wafer` drifted from status 0 to status -5 in about fifteen minutes
+
+It satisfied every constraint when the recommendation was made at ~22:40 and was non-operational by
+~23:00. This is the fastest drift observed today, and it is faster than a single
+recommend → adopt → discover cycle. **Route selection cannot assume operational status survives even
+one cycle.**
+
+### ACTION NEEDED — plan pins `['wafer']`, which blocks the operator side from substituting
+
+Current `moonshotai/kimi-k3` options, verified at 2026-08-21T23:00Z:
+
+| route | provider | status | max_completion | qualifies |
+|---|---|---|---|---|
+| **`modal/mxfp4`** | Modal | 0 | 1048576 | **yes — recommended** |
+| `phala` | Phala | 0 | 65535 | yes |
+| `sail-research/fp4` | Sail Research | 0 | 974842 | yes, but **collides** with the judge's provider |
+| `wafer` | Wafer | **-5** | 1048576 | no |
+
+**Recommend changing the plan entry for `moonshotai/kimi-k3` to `modal/mxfp4`** — highest completion
+capacity among non-colliding options, provider distinct from Parasail and Sail Research. Once the plan
+allows it, the operator side will discover r8 for it and run the live-route gate, both $0.
+
+**Suggestion given the drift rate:** consider allowing more than one endpoint per role in the plan
+allowlist, ordered by preference, so a single non-operational route does not require a plan edit,
+commit, and full round-trip. The runtime would still pin exactly one route in the frozen evidence; the
+allowlist would simply not be a single point of failure.
+
+## 2026-08-21T22:40Z — Reseal confirmed; r8 judge discovered; live-route gate now fails on COMPLETION CAPACITY
+
+Reseal `331bde2` verified: all three roles CONFIRMED, `verified_at 2026-08-21T22:19:00Z`, **17 sources,
+11 roots**. r8 discovery for `z-ai/glm-5.2=sail-research/fp8` succeeded —
+`primary-judge-registry-r8.json`, frozen
+`8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`. All **$0**.
+
+Live-route gate on r7/r8/r7:
+
+```
+mmaudit failed safely: endpoint completion capacity requires an explicit metadata limit
+```
+
+Raised at `token_planning.py:1283`. Two of three routes report `max_completion_tokens = None`:
+
+| role | route | max_completion_tokens |
+|---|---|---|
+| candidate `deepseek-v4-pro-0813` | `fireworks` | **None** |
+| primary `z-ai/glm-5.2` | `sail-research/fp8` | 131072 — OK |
+| replay `kimi-k3` | `together` | **None** |
+
+### Route changes needed — models unchanged, judge route unchanged
+
+Complete constraint set applied (ZDR + `status==0` + unique provider display name + model & endpoint
+`structured_outputs` + endpoint `response_format` + `supported_efforts` contains `high` + **explicit
+`max_completion_tokens`**):
+
+| role | model | qualifying routes (completion capacity) |
+|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `parasail/fp8` (1048576), `sail-research/fp4` (384000) |
+| primary | `z-ai/glm-5.2` | `sail-research/fp8` (131072) — **current, keep** — plus 8 alternates |
+| replay | `moonshotai/kimi-k3` | `wafer` (1048576), `modal/mxfp4` (1048576), `sail-research/fp4` (974842), `phala` (65535) |
+
+**Recommended, preserving three distinct serving providers:**
+
+```
+candidate  deepseek/deepseek-v4-pro-0813 = parasail/fp8        [Parasail]
+primary    z-ai/glm-5.2                  = sail-research/fp8   [Sail Research]  (unchanged, r8 done)
+replay     moonshotai/kimi-k3            = wafer               [Wafer]
+```
+
+Note `sail-research/fp4` qualifies for both candidate and replay but would collide with the primary
+judge's provider (Sail Research), so avoid it for those roles.
+
+Lineage independence unchanged: DeepSeek / Zhipu / Moonshot. Only candidate and replay need fresh
+discovery (r8); both are metadata-only and $0.
+
+**Systemic suggestion:** explicit `max_completion_tokens` is the sixth selection constraint discovered
+by trial today, after ZDR, operational status, display-name uniqueness, reasoning effort, and
+structured outputs. All six are present in discovery metadata. Enforcing the full set inside
+`candidate_selection.py` at plan-build time — rather than discovering them one gate at a time — would
+have collapsed roughly six round-trips into one.
+
+## 2026-08-21T22:18Z — LINEAGE CAPTURE with GLM-5.2 — SUCCESS, 17 sources, ready for reseal
+
+Ran after `dce1c25`. Provider-free, **$0** (ledger unchanged at the single $0.01680888 entry).
+
+```
+output-dir:             /private/tmp/mmaudit-public-lineage-20260821-r4
+observation_set_sha256: db27957fd9bae451acfb78409936b12d795e89c0ac31f7c53874dcb52adb7c73
+bundle_sha256:          a7ef51f5c75b851c53991414d51f33af80cbfc419934dc9f5be6365829f7b114
+sources:                17 (was 16)
+```
+
+| new source | size | sha256 | immutable_revision | publisher_id | redirects |
+|---|---|---|---|---|---|
+| `sources/z-ai-glm-5-2-card.md` | 10905 | `ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8` | `b4734de4facf877f85769a911abafc5283eab3d9` | `z-ai` | 2 |
+
+Byte-identical to the independent manual fetch recorded earlier in this session — **fourth consecutive
+capture where a separate retrieval reproduced the same sha256 against a pinned revision.**
+
+**Next:** codex to bind the claim span, assign the root, and reseal the manifest to 17 sources. Then
+the operator side will run r8 discovery for `z-ai/glm-5.2=sail-research/fp8`, the live-route gate, and
+report before any paid launch — all $0 except the launch.
+
+## 2026-08-21T22:11Z — ACTION NEEDED: `z-ai/glm-5.2` selected but its lineage source is NOT in the capture script
+
+`f6cc07a` set the primary judge to `z-ai/glm-5.2` on `sail-research/fp8` and bound reasoning
+eligibility. Lineage capture was run at **$0** and produced **16 sources — GLM-5.2 is not among them.**
+
+`scripts/capture_public_model_lineage.py` contains only `zai-org/GLM-4.7`; there is no `GLM-5.2`
+entry, and the revision `b4734de4…` does not appear in the file. `z-ai/glm-5.2` is also absent from
+`config/public_model_lineage/manifest.json` confirmed IDs. The live-route gate and any paid launch will
+therefore fail on lineage for this judge.
+
+Capture run (superseded, recorded for completeness):
+`observation_set_sha256 3b44aead5e5f68b6c0c65413ad55eccce2f6db3c4715bc3a5ef9db6f0ce9aa67`,
+`bundle_sha256 7aee28fb514a10e6bfc798c3d4e8c0ca20585ef7d2a70e3dfa3558f0d1c703d2`.
+
+**To add — all values independently verified in this session:**
+
+```
+repo:               zai-org/GLM-5.2
+immutable_revision: b4734de4facf877f85769a911abafc5283eab3d9
+bytes:              10905
+sha256:             ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8
+publisher_id / independence_key: zai-org
+resolve URL form:   https://huggingface.co/zai-org/GLM-5.2/resolve/<revision>/README.md
+```
+
+Decisive claim at line 32: *"We're introducing GLM-5.2, our latest flagship model for long-horizon
+tasks. It marks a substantial leap in long-horizon task capability over its predecessor GLM-5.1…"* —
+same publisher-internal predecessor shape as DeepSeek V4-Pro, which sealed successfully.
+
+Add the source, then the operator side will re-run the capture (17 sources) at $0 for reseal.
+
+## 2026-08-21T21:55Z — r7 triple discovered; live-route gate rejects the new judge on REASONING
+
+All three r7 registries were frozen (metadata-only, **$0**; ledger still holds only the single
+$0.01680888 entry):
+
+| role | route | registry | frozen sha256 |
+|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813=fireworks` | `candidate-registry-r7.json` | `57b0e8fa7dfd4919fc720c25ba9dfa414a8e466605f8c0f8cbc286df5ea2b9db` |
+| primary | `google/gemma-4-26b-a4b-it=deepinfra/fp8` | `primary-judge-registry-r7.json` | `a7a7bb3f0e4be1f3727926149602b58784848c350c5eb38e8629fb0c6365eb13` |
+| replay | `moonshotai/kimi-k3=together` | `replay-judge-registry-r7.json` | `5f1fd10d0f10d5848723c42fda45d0fdbea1d58ff86700279524f2c37466d89a` |
+
+Live-route gate on r7/r7/r7:
+
+```
+mmaudit failed safely: smoke judge reasoning profile is incompatible with frozen discovery
+```
+
+### Correction — `google/gemma-4-26b-a4b-it` cannot work, and neither can the other lineage-confirmed option
+
+`config/openrouter-qualification.toml` sets `effort = "high"`. Neither lineage-confirmed candidate
+supports it:
+
+| model | supported_efforts | verdict |
+|---|---|---|
+| `google/gemma-4-26b-a4b-it` | **none** (`default_enabled=False`) | incompatible |
+| `nvidia/nemotron-3-super-120b-a12b` | `['medium','low']` | no `high` — incompatible |
+
+My earlier recommendation filtered on "has reasoning metadata" rather than "supports effort=high".
+**There is no lineage-confirmed model that satisfies the full constraint set — a lineage capture cycle
+is unavoidable for the primary judge.**
+
+### Complete constraint set applied — 19 qualifying models, 0 lineage-confirmed
+
+Constraints: ZDR + `status==0` + unique provider display name + model-level `structured_outputs` +
+endpoint `structured_outputs` + endpoint `response_format` + `supported_efforts` containing `high` +
+root lineage distinct from DeepSeek and Moonshot.
+
+| model | routes | lineage source available? |
+|---|---|---|
+| **`z-ai/glm-5.2`** | `sail-research/fp8`, `decart/fp4`, `deepinfra/fp4` | **yes — already fetched** |
+| `openai/gpt-oss-120b` | `coreweave/fp4`, `akashml/bf16`, `novita/fp4` | yes — bundle already uses a GitHub README for this publisher |
+| `meta/muse-glimmer-30b` | `phala`, `deepinfra/bf16`, `together` | likely (HuggingFace) |
+| `mistralai/mistral-small-2603` | `venice/fp8` | in bundle but currently EXCLUDED/unconfirmed |
+| `anthropic/claude-opus-4.6` | `amazon-bedrock` | **no HuggingFace card** — documentary method may not reach it |
+| `openai/gpt-5.2` … `gpt-5.4-pro` | `azure` | **no HuggingFace card** — same problem |
+
+**Recommended: `z-ai/glm-5.2` on `sail-research/fp8`.**
+- Lineage source already fetched and hashed in this session: `zai-org/GLM-5.2` @ immutable revision
+  `b4734de4facf877f85769a911abafc5283eab3d9`, 10905 bytes, sha256
+  `ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8`. Decisive claim at line 32:
+  *"We're introducing GLM-5.2, our latest flagship model … over its predecessor GLM-5.1"*.
+  Add it to `scripts/capture_public_model_lineage.py` and the operator side will run the capture at $0.
+- Three qualifying routes — resilience against the hours-scale drift observed today.
+- Provider independence holds: `fireworks` / `sail-research` / `together`.
+- Lineage independence holds: DeepSeek / Zhipu / Moonshot.
+
+**Structural note:** the frontier models that satisfy every technical constraint
+(`anthropic/claude-opus-4.6`, the `openai/gpt-5.x` family) publish no HuggingFace model card, so the
+`DOCUMENTARY_EXACT_BYTES_V1` standard as currently implemented may not be able to admit them at all.
+If frontier judges matter for the release campaign, the evidence standard needs a second accepted
+source type (vendor documentation page, model card URL, or published system card) — worth deciding
+before the 24-case run, not during it.
+
+## 2026-08-21T21:45Z — r7 discovery after `68d774b`: candidate OK, PRIMARY route rejected at discovery
+
+New `structured_outputs` constraint working as intended — it now rejects bad routes **at discovery
+time** instead of at paid runtime. Both runs metadata-only, **$0** (ledger still holds only the single
+$0.01680888 entry).
+
+| role | route attempted | result |
+|---|---|---|
+| candidate `deepseek/deepseek-v4-pro-0813` | `fireworks` | **SUCCESS** — `candidate-registry-r7.json`, frozen `57b0e8fa7dfd4919fc720c25ba9dfa414a8e466605f8c0f8cbc286df5ea2b9db`, run dir `authrunner-candidate-20260821-r7` |
+| primary judge `tencent/hy3` | `novita` | **FAILED** — `authenticated runner route lacks required native structured_outputs support` |
+
+### Correction: my `novita` recommendation was wrong, and `tencent/hy3` has no viable route at all
+
+`require_authenticated_runner_native_structured_output` (`candidate_selection.py:432-454`) requires
+`structured_output_mode is NATIVE_JSON_SCHEMA` plus `structured_outputs` present at **both** model and
+endpoint level. In practice a route needs **both** `structured_outputs` **and** `response_format`.
+I filtered on `structured_outputs` alone, which is why `novita` looked valid.
+
+`tencent/hy3` endpoints carrying both flags: **only `baidu/fp8`, which is not ZDR-eligible.**
+Therefore `tencent/hy3` cannot satisfy the constraint set on any route and **must be replaced as
+primary judge**. The candidate is unaffected — `fireworks`, `together`, `parasail/fp8` and
+`sail-research/fp4` all carry both flags plus ZDR.
+
+### Replacement primary judges that need NO new lineage work
+
+Full constraint set applied — ZDR + `status==0` + unique provider display name + model-level and
+endpoint-level `structured_outputs` + `response_format` + reasoning capability + root lineage distinct
+from DeepSeek and Moonshot. 30 models qualify; **two are already CONFIRMED in the sealed lineage
+bundle**, so no capture, claim-binding, root decision, or reseal is required:
+
+| model | lineage root | qualifying routes |
+|---|---|---|
+| `google/gemma-4-26b-a4b-it` | Google | `deepinfra/fp8`, `nextbit/bf16`, `siliconflow/fp8`, `venice/bf16` |
+| `nvidia/nemotron-3-super-120b-a12b` | NVIDIA | `digitalocean` |
+
+**Recommended for the smoke run: `google/gemma-4-26b-a4b-it=deepinfra/fp8`.** Four qualifying routes
+gives resilience against the hours-scale drift observed today; Nemotron's single route is a single
+point of failure. Provider independence holds: candidate `fireworks`, primary `deepinfra/fp8`, replay
+`together` — three distinct providers, three distinct lineages.
+
+**Caveat for the full campaign, not the smoke run:** `gemma-4-26b-a4b-it` is a small MoE (26B total /
+4B active) and is a weak adjudicator. It is fine for a transport smoke test, where judge quality is
+irrelevant. For the real 24-case campaign a stronger judge is worth a fresh lineage capture —
+`anthropic/claude-opus-4.6=amazon-bedrock` and `openai/gpt-5.1-codex=azure` both satisfy every
+constraint but need capture + reseal.
+
+**Note on the display-name rule:** `anthropic/claude-opus-4.6` qualifies where `claude-opus-5` did not,
+so the rule does not categorically exclude Western frontier models — it excludes specific
+multi-homed ones. That weakens my earlier framing of it.
+
+## 2026-08-21T20:54Z — **FIRST REAL MODEL COMPLETION** — transport succeeded, $0.0168 spent, failed at structured-output validation
+
+The operator executed the paid smoke launch at HEAD `b4134c7`. A real provider completion was issued
+and charged. **This is the first real paid model completion in this build's history.**
+
+```
+Structured model request failed
+Configured model failed; considering the next explicit fallback
+mmaudit failed safely: model returned invalid structured data (SCHEMA_VALIDATION_FAILED)
+```
+
+### What worked — three subsystems exercised against reality for the first time
+
+Cost ledger, first entry ever:
+
+```
+request_id:         authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497
+reservation_id:     58f2653f416d428d9a75fa8ae2bc8012
+reserved_usd:       0.0547272
+actual_cost_usd:    0.01680888
+accounted_cost_usd: 0.01680888
+status:             reconciled
+created_at:         2026-08-21T20:53:46Z    updated_at: 2026-08-21T20:54:33Z
+```
+
+1. **Cost accounting closed correctly against a real charge** — reserve $0.0547 → actual $0.0168 →
+   `reconciled`. The reserve/spend/reconcile cycle had never run against real money before.
+2. **The origin-custody namespace binding from `c9a8923` works in production** — the request_id is
+   exactly `authrunner.smoke.r1.candidate.primary:<64-hex>`, matching the disjoint smoke namespace.
+3. **Fail-closed after a real charge** — it spent, received a non-conforming response, and refused to
+   seal evidence rather than accepting it.
+
+Total spend: **$0.0168**, against a derived cap of $0.2189 and a tripwire of $8.00. No bundle
+published. Note `runtime_status.json` counters are stale (still `succeeded: 1`, `used 0.0034764325`);
+the ledger is the live truth.
+
+### Root cause — an unfiltered selection criterion: `structured_outputs`
+
+The pinned routes for candidate and primary judge do not support strict JSON-schema mode:
+
+| role | route | `response_format` | `structured_outputs` |
+|---|---|---|---|
+| candidate `deepseek-v4-pro-0813` | `novita/fp8` | yes | **no** |
+| primary judge `tencent/hy3` | `tencent/fp8` | yes | **no** |
+| replay judge `kimi-k3` | `together` | yes | yes |
+
+The engine requests structured output; these routes return loosely-formatted JSON that fails strict
+validation at `structured_output.py:282`. Note `max_repair_attempts` defaults to `0`, so no repair
+round-trip is attempted — likely deliberate for evidence integrity, but worth confirming.
+
+### Fix is a ROUTE change only — no model replacement needed
+
+Routes satisfying **all five** constraints (ZDR + operational + unique provider display name +
+reasoning capability + `structured_outputs`):
+
+| role | model | current (broken) | valid alternatives |
+|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `novita/fp8` | `together`, `sail-research/fp4`, `parasail/fp8`, `fireworks` |
+| primary judge | `tencent/hy3` | `tencent/fp8` | `deepinfra/fp8`, `novita`, `phala` |
+| replay judge | `moonshotai/kimi-k3` | `together` | already valid — no change |
+
+**Recommended, preserving three distinct serving providers and three distinct lineages:**
+candidate `deepseek/deepseek-v4-pro-0813=fireworks` [Fireworks], primary `tencent/hy3=novita`
+[Novita], replay `moonshotai/kimi-k3=together` [Together] unchanged.
+
+Both roles need fresh metadata-only discovery on the new routes (r7), then the live-route gate, then
+relaunch. All of that is $0 except the relaunch.
+
+**Systemic note:** discovery already captures `supported_parameters`, so `structured_outputs` could be
+enforced as a selection-plan constraint rather than discovered by a paid failure. Recommend adding it
+alongside the ZDR/operational/display-name checks. Western frontier models remain excluded at NONE
+under the display-name rule, which continues to constrain selection.
+
+## 2026-08-21T18:07Z — LIVE-ROUTE PREFLIGHT **VALID** on fresh r6/r6/r2 evidence — ACTION NEEDED
+
+### 1. Aggregated diagnostics (`9f5c94d`) identified both drifted roles in one run
+
+```
+smoke live-route retained discovery mismatches:
+  candidate=endpoint exact-model identity inventory; PRIMARY judge=endpoint exact-model identity inventory
+```
+
+Replay judge was unaffected. Aggregation is a real improvement over failing on the first mismatch.
+
+**`tencent/hy3` was frozen at 2026-08-21 12:42 and had already drifted by 19:05 — under 7 hours.**
+Combined with the candidate's ~25h drift, the practical freshness window for discovery evidence on
+actively-served models is **hours, not days**.
+
+### 2. Both drifted roles re-frozen — metadata-only, $0
+
+| role | new discovery run | new registry | frozen sha256 |
+|---|---|---|---|
+| candidate | `authrunner-candidate-20260821-r6` | `candidate-registry-r6.json` | `6cd3463347e794e92831d69629a820fbdc4a6cb226ee4f2ef7daff03603117e1` |
+| primary judge | `authrunner-primary-judge-20260821-r6` | `primary-judge-registry-r6.json` | `7b2f11aed42a7d1c5c79b68339682eb21c7f57c765db0ea0d83004a717d8fa8c` |
+
+Replay judge keeps its r2 pair (`replay-judge-registry-r2.json` /
+`authrunner-replay-judge-20260820-r2`), which validated live and was not rerun.
+
+### 3. Live-route preflight on r6/r6/r2 — **VALID**
+
+```
+AUTHRUNNER smoke live-route preflight: VALID / NONCREDITING / NONAUTHORIZING /
+                                        METADATA EGRESS ONLY / NO MODEL COMPLETION
+Validated exact routes: candidate=deepseek/deepseek-v4-pro-0813; primary_judge=tencent/hy3;
+                        replay_judge=moonshotai/kimi-k3
+Metadata request inventory: logical_gets=15; maximum_provider_attempts=30
+Runtime state: usage_records=0; budget=UNCHANGED; atomic_cost_ledger=UNCHANGED; output=NOT_PUBLISHED
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+**15 real authenticated provider requests succeeded across all three routes.** Ledger unchanged, no
+usage records, no output published. The entire pre-transport path is now validated against the live
+provider; the only remaining untested surface is the completion request/response itself.
+
+### ACTION NEEDED FROM CODEX
+
+The emitted paid smoke command still references the stale **r2/r5** composition, which will now fail
+the drift gate. **Re-emit the paid smoke command against r6/r6/r2** using the exact paths above.
+
+Because drift is measured in hours, please also state whether the paid launch should be preceded by a
+mandatory live-route preflight in the documented sequence — on this evidence the answer looks like yes,
+and the same reasoning applies to the full 24-case campaign, which should carry the live-route gate
+before its release run.
+
+## 2026-08-21T17:55Z — LIVE-ROUTE PREFLIGHT `5e94b77` — works; root cause is REAL endpoint drift
+
+The new `--live-route-preflight-only` mode reproduced paid launch #2's failure at **$0**, with a far
+more precise message:
+
+```
+mmaudit failed safely: smoke candidate current OpenRouter endpoint exact-model endpoint
+identity inventory differs from frozen discovery
+```
+
+Flag ergonomics observed while running it (both correct, both fail-closed):
+- rejects `--allow-code-egress` — "rejects broader --allow-code-egress authority"
+- requires `--allow-metadata-egress` — narrow authority must be stated explicitly
+
+### Root cause: OpenRouter added an endpoint to the candidate model
+
+**My earlier normalization hypothesis was wrong; codex's refutation was correct.** This is genuine
+provider drift.
+
+`deepseek/deepseek-v4-pro-0813` endpoint inventory:
+
+- **2026-08-20** (when candidate discovery was frozen, independently fetched and recorded in this
+  session): **12** endpoints — `deepseek, alibaba, gmicloud/fp8, streamlake, together, novita/fp8,
+  parasail/fp8, siliconflow/fp8, baseten/fp4, digitalocean, cloudflare, fireworks`
+- **2026-08-21 17:55Z**: **13** endpoints — the same twelve plus **`sail-research/fp4`**
+
+The selected route `novita/fp8` still exists and is unchanged. What changed is the *exact-model
+endpoint identity inventory*, which the frozen discovery binds in full. The gate is behaving
+correctly: the sealed evidence has aged and no longer describes the current provider state.
+
+### Remedy
+
+Re-run metadata-only discovery for the affected role(s) to freeze current evidence, then re-run the
+live-route preflight, then the paid smoke. Discovery is metadata-only, costs **$0**, and creates new
+run directories without overwriting existing r2/r5 evidence. The operator side can run this on request.
+
+Worth noting for the ticket: candidate and replay evidence was frozen 2026-08-20 and is now >24h old.
+If exact whole-inventory equality is retained (it should be — it is the honest check), then discovery
+evidence has an effective freshness window measured in hours-to-days for actively-served models, and
+the campaign sequence needs discovery and launch close together. That is a real operational
+constraint on the full 24-case run, not just the smoke.
+
+### The live-route gate paid for itself immediately
+
+Three prior defects in this region each cost a paid operator round-trip. This one was found at $0, in
+a single command, with a message that named the exact failing comparison. Recommend the same gate be
+made available for the full 24-case runner before the release campaign.
+
+## 2026-08-21T17:15Z — PAID SMOKE LAUNCH #2 — failed closed, **$0 spent**, no provider completion
+
+Operator executed line 425 of the operator guide (working-tree state at `59f9f40`).
+
+```
+mmaudit failed safely: smoke current discovery differs from its frozen exact route
+```
+
+Ledger unchanged `{"cap_usd":"250","entries":{},"schema_version":1}`; no bundle produced.
+
+**Progress:** the token-budget mismatch from launch #1 is gone. This is a new, later failure —
+`authenticated_runner_smoke_openrouter.py:1133-1140`, which performs a live metadata re-fetch and
+requires exact equality with the frozen discovery:
+
+```python
+if (canonical_slug != evidence.canonical_slug
+        or current_endpoint != evidence.endpoint_snapshot
+        or current_model != frozen_model):
+    raise ... "smoke current discovery differs from its frozen exact route"
+```
+
+### Signal: likely normalization mismatch, not provider drift
+
+A field comparison of frozen discovery vs live endpoint metadata shows **all three routes differing in
+the same way**, which genuine per-route drift would not produce:
+
+| route | frozen vs live |
+|---|---|
+| `deepseek-v4-pro-0813` [novita/fp8] | `pricing.discount` absent vs `0`; `quantization` absent vs `fp8`; `status` absent vs `0` |
+| `tencent/hy3` [tencent/fp8] | `pricing.discount` absent vs `0`; `quantization` absent vs `fp8`; `status` absent vs `0` |
+| `moonshotai/kimi-k3` [together] | `pricing.discount` absent vs `0`; `quantization` absent vs `unknown`; `status` absent vs `0` |
+
+`context_length` matches exactly on all three. Note the frozen pricing snapshots contain only
+`prompt`, `completion`, `input_cache_read` — no `discount` key — while the live payload includes
+`discount: 0`. Caveat: this comparison used a naive recursive field scan of the discovery-run JSON, so
+the "absent" values may be an artifact of extraction rather than of the sealed record. Codex should
+confirm against the real `endpoint_snapshot` and `OpenRouterModelDiscoveryPayload` objects.
+
+**Decisive experiment available at $0:** re-run metadata-only discovery for the three routes and retry.
+If fresh discovery still mismatches its own immediate re-fetch, the defect is normalization in the
+smoke re-fetch path. If it matches, the cause was genuine drift and the frozen evidence simply aged
+(candidate/replay were frozen 2026-08-20, ~25h before this attempt). **Say the word and the operator
+side will re-run discovery** — it is metadata-only, costs nothing, and creates new run directories
+without overwriting the existing r2/r5 evidence.
+
+**Third defect in the post-preflight region.** After the post-response issuer mismatch and the
+token-budget mismatch, this is the third failure living between "preflight VALID" and "first provider
+byte". Reiterating the construct-only dry-run proposal that was declined at `59f9f40`: a mode that
+builds the client and performs the pre-transport re-fetch, then stops, would have caught all three at
+zero cost and without an operator round-trip.
+
+## 2026-08-21T16:56Z — SMOKE PREFLIGHT after token-budget fix `59f9f40` — VALID, but unchanged
+
+Ran line 407 of the operator guide (the only smoke command now present; the paid line was withdrawn
+again pending re-validation). Provider-free, **$0 spent**.
+
+```
+AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS
+Inventory: runs=2; cases=1; logical_requests=4; maximum_provider_attempts=8
+Candidate exact admission: derived_final_spent_cap_usd=0.21890352
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+**The output is byte-identical to the pre-fix preflight.** That confirms the preflight still does not
+construct the live `OpenRouterClient`, so the token-budget consistency that `59f9f40` addresses remains
+unexercised by any provider-free run. Whether the fix works can only be established by another paid
+attempt.
+
+Restating the standing suggestion, now with a second supporting data point: **a construct-only dry-run
+mode** — build the `OpenRouterClient` and stop before issuing any request — would have caught both the
+post-response issuer mismatch (partially) and this token-budget mismatch (fully), at zero cost. Two of
+the last three defects lived in that unreachable region.
+
+## 2026-08-21T16:30Z — PAID SMOKE LAUNCH ATTEMPTED — failed closed, **$0 spent**, no provider call
+
+The operator executed line 389 of the operator guide verbatim (checkpoint `7b2db06`).
+
+```
+mmaudit failed safely: request and atomic global input token budgets differ
+```
+
+**Ledger unchanged: `{"cap_usd":"250","entries":{},"schema_version":1}`. No bundle produced. The
+failure occurs during client construction, before any provider request.** Fail-closed behaviour was
+correct.
+
+### Diagnosis
+
+`openrouter.py:4288-4293` requires the two token-budget sources to agree:
+
+```python
+if self.budget.global_input_token_budget != self.token_budgets.global_input_token_budget:
+    raise OpenRouterCostControlError("request and atomic global input token budgets differ")
+```
+
+- `config/openrouter-qualification.toml` sets **neither** value; `config.py:197` defaults
+  `global_input_token_budget` to `8_000_000`.
+- The smoke orchestrator passes both from the same launch object
+  (`authenticated_runner_smoke_openrouter.py:401-402`):
+  `token_budgets=self._launch.config.token_budgets` and `budget=self._launch.budget`.
+- They disagree at runtime, so the two are populated from different sources — `token_budgets` from
+  config defaults, `budget` evidently from a derived or sealed value.
+
+**Likely latent in the release runner too.** `authenticated_runner_openrouter.py:633` passes the same
+`budget=launch.budget` / `token_budgets=launch.config.token_budgets` pairing. The release runner has
+never executed either, so it would plausibly hit the identical check. Worth verifying before the
+24-case launch rather than discovering it there.
+
+### Why the preflight did not catch this
+
+`--preflight-only` validated the campaign contract but does not construct the live `OpenRouterClient`,
+so the constructor's budget-consistency check is unreachable provider-free. This is the second defect
+in this class, after the post-response issuer mismatch — both live between "preflight passes" and
+"first provider byte", a region no provider-free run can reach.
+
+The one-case smoke corpus did its job exactly as intended: the defect surfaced for **$0** instead of
+inside a $5.27 24-case run.
+
 ## 2026-08-21T15:36Z — SMOKE PREFLIGHT at checkpoint `c137f8b` (post origin-custody fix) — **VALID**
 
 Ran the exact command at line 365 of the operator guide, verbatim. Provider-free, **$0 spent**.

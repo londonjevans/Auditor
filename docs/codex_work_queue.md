@@ -1102,6 +1102,116 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
 
+### V3-RETRY-001 — Bounded same-route retry for schema-invalid structured output
+
+- **Objective:** Honour the operator's `2026-08-25` decision to retry schema-invalid candidate
+  responses by adding a bounded, explicitly configured same-route retry that is distinct from
+  transient network/status retry, without granting any new authority or invalidating frozen
+  evidence.
+- **Files/modules:** Attempt/retry classification and the per-request attempt loop in
+  `src/mmaudit/models/openrouter.py`, `authenticated_runner_execution.py` attempt limits,
+  `ExecutionConfig` in `src/mmaudit/config.py`, retry-inclusive cost planning in
+  `authenticated_runner_cost_plan.py`, and focused retry/fallback/ledger regressions.
+- **Acceptance criteria:**
+  - A `SCHEMA_VALIDATION_FAILED` response is retried on the **same** route up to an exact bounded
+    configured limit, separate from `max_model_retries`, which continues to govern transient
+    network/status retry only; the existing explicit-fallback and terminal paths remain reachable
+    once same-route retries are exhausted, and no silent success is introduced.
+  - Every retry attempt is separately reserved, spent, and reconciled; the run ledger stays closed
+    and exact, the per-attempt cost tripwire applies unchanged to each attempt, and no attempt can
+    leave an `uncertain_accounted` entry on a clean terminal path.
+  - Attempt inventory, `maximum_attempts`, attempt ordinals, and logical request identity remain
+    exact and bounded within the existing `32`-attempt ceiling; retry-inclusive cost aggregates stay
+    consistent with the staged plan.
+  - Terminal schema exhaustion raises a **typed, named** reason distinguishing it from transport
+    failure and from fallback exhaustion; no `raise ... from None` is introduced on this path.
+  - Attempt provenance is preserved in durable evidence so scoring can distinguish a first-attempt
+    success from a retried success. Per the operator decision of `2026-08-25`,
+    `structured_output_compliance` is scored on the **first attempt only**; a retried success earns
+    no compliance credit, and retry exists solely to keep a multi-case campaign from terminating on
+    a recoverable schema miss so the remaining dimensions still measure. Any retry-tolerant metric
+    must be a separately named dimension with its own derived threshold and must not overload this
+    deterministic gate.
+  - The behaviour is **off by default**: with no new configuration present, default and
+    explicit-zero serialization, canonical config bytes/hash, attempt counts, request identities,
+    and repository-owned synthetic sealed-bundle compatibility are unchanged. Operator-owned smoke
+    bundles at indices 19 and 21 are private external evidence, not repository fixtures; their bytes
+    and replay are outside this provider-free acceptance and are not claimed.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged.
+- **Tests:** Provider-free same-route schema-retry and exhaustion regressions, transient-vs-schema
+  classification negatives, closed-ledger reserve/spend/reconcile under retry, per-attempt tripwire
+  enforcement, attempt-bound and logical-request-identity invariants, default-off byte-identity
+  against the existing sealed bundles, schema drift, Ruff, and strict mypy.
+- **Dependencies:** The confirmed classification recorded at `docs/codex_worklog.md:64` — schema
+  failures bypass same-route retries, become `SCHEMA_VALIDATION_FAILED`, then use an explicit
+  fallback or terminate. Operator decision supplied `2026-08-25`. Empirical motivation: smoke run
+  index `18` failed `SCHEMA_VALIDATION_FAILED`, and `deepseek/deepseek-v4-pro-0813` via
+  `parasail/fp8` returned schema-invalid structured output on `2` of roughly `10` attempts despite
+  the route advertising `structured_outputs`, which is expected to recur across a 24-case campaign.
+- **Status:** `COMPLETE`
+- **Evidence:** `ExecutionConfig.max_schema_validation_retries` is explicit, defaults to zero, and
+  is omitted from default serialization so the canonical qualification config bytes and SHA-256
+  remain unchanged. Schema failures alone consume this quota on the same route; transient failures
+  continue to consume `max_model_retries`; both share the existing 32-attempt ceiling. Every paid
+  attempt retains its own reservation, finalization, usage, logical-request identity, ordinal, and
+  receipt classification. Exhaustion is typed, explicit fallback remains post-exhaustion, and
+  benchmark replay grants structured-output compliance only to one-attempt successes. Provider-free
+  regressions cover both mixed retry orders, fallback, exact ledger totals, tripwires, schema drift,
+  policy-sealed local synthetic trusted-REAL structural receipt assays, benchmark score-laundering
+  rejection, and staged preflight capacity. These assays are not provider execution evidence.
+- **Remaining limitation:** The operator-owned sealed bundles for smoke indices 19 and 21 are not
+  repository fixtures and were not available for independent byte replay. Default/explicit-zero
+  serialization, the canonical qualification-config hash, and repository-owned synthetic bundle
+  compatibility are unchanged; this local evidence is not a claim about private bundle contents.
+- **Next action:** None for this ticket. Stop after recording `COMPLETE`; do not launch a campaign,
+  emit an operator command, infer a run index, or claim qualification, calibration, or release
+  authority from this provider-free change.
+
+### V3-RUNTIMEADMIT-001 — Promote runtime evidence into campaign admission predicates
+
+- **Objective:** Provide the missing mechanism that lets real runtime evidence satisfy
+  `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`, which
+  `FULL_CAMPAIGN_ADMISSION` requires but which no current code path can ever set to `SATISFIED`.
+  Discovery unconditionally emits both as `_unavailable_result`
+  (`EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE`, `TOKEN_DETAIL_CONVENTION_UNAVAILABLE`), so the 24-case
+  campaign is currently unreachable by construction rather than by policy.
+- **Files/modules:** `_SEPARATE_RUNTIME_PREDICATES` handling and the purpose matrix in
+  `src/mmaudit/models/route_constraints.py`, a durable runtime-evidence carrier bound to exact route
+  identity, the authenticated-runner admission path, generated schema, and focused negatives.
+- **Acceptance criteria:**
+  - A defined, auditable path takes runtime observations from a completed authenticated run and
+    produces `SATISFIED` for both predicates, replacing the unconditional unavailable results only
+    when exact evidence is present.
+  - Evidence binds to the **exact** model id, provider endpoint, route identity, constraint profile,
+    and discovery run the campaign will use. Evidence from any other route, model, endpoint, or
+    profile is rejected; nothing is inferred across routes.
+  - Evidence carries a bounded age consistent with the existing evidence-age policy and fails closed
+    when stale, exactly as other route evidence does.
+  - No self-attestation: evidence derives from durable sealed run artifacts with their own custody,
+    never from caller-supplied assertions or locally recomputed claims.
+  - Smoke-derived evidence is admissible **only** where it exercised the same route under the same
+    constraint profile, and confers no benchmark, qualification, authority, or release credit.
+  - Fail-closed default is preserved: with no evidence present both predicates remain
+    `UNAVAILABLE` and `FULL_CAMPAIGN_ADMISSION` continues to reject, with unchanged bytes for every
+    existing sealed artifact.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free promotion and rejection regressions, route/model/endpoint/profile binding
+  negatives, evidence-age expiry, tamper and reseal negatives, the full purpose matrix across all
+  four `RouteConstraintPurpose` values, default-unavailable byte identity, schema drift, Ruff, and
+  strict mypy.
+- **Dependencies:** Confirmed `2026-08-27` by operator inspection: both predicate ids appear only in
+  `route_constraints.py`, are always produced by `_unavailable_result`, and have no satisfying code
+  path anywhere in `src/`. A campaign `--preflight-only` with a materialized qualification policy and
+  fresh `r22` evidence for all three roles fails exactly here with
+  `route predicate report does not satisfy its closed purpose`.
+- **Status:** `QUEUED`
+- **Next action:** Implement only the evidence-promotion mechanism and its negatives. Do not launch a
+  campaign, emit an operator command, infer a run index, or grant any qualification, calibration, or
+  release authority from this ticket. Surface the failing predicate ids and reasons in
+  `RoutePredicateRequirementError` so a rejected admission names its causes.
+
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
 - **Objective:** Define one typed, self-hashed route-predicate profile and make plan construction,
