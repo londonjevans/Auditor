@@ -4,21 +4,163 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-25T06:42:22Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-27T07:21:08Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
-OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_NO_LAUNCH_NONAUTHORIZING
-LAST_RECONCILED_OPERATOR_RESULTS: `e158c955f7ba89c374013a7fa5ccbae0acad0258942492f95da55117854805e0` / 127656 bytes / 2316 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
-CURRENT_TICKET: V3-COVERAGE-001
-CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING
-LAST_COMPLETED_TICKET: V3-COVERAGE-001
-NEXT_ACTION: STOP after closing V3-COVERAGE-001. V3-CALIBRATE-001 is the next critical path but remains BLOCKED_TECHNICAL and is not selected or restarted in this turn. The r21 preflight failed before transport because its supplied qualification-policy path was absent; the immediate file-stage remedy is UNDETERMINED, and exact precommitted REAL calibration inputs plus the later source-pinned P2/C2 transition remain unavailable. Do not select AUTHSEAL, launch a campaign, emit a command, or infer a run index; fresh operator authorization is required after the calibration blocker clears.
-LAST_VALIDATION_COMMAND: Checkpoint `33001d12` passed separate overlapping gates of `187` scheduler-journal tests in 47.17s, `78` truncation-journal tests in 308.72s, `178` wider scheduler-unit tests, `46` scheduler integrations, `280` cost-ledger/budget/usage tests in 2.20s, `82` coverage planning/resource/wiring tests in 3.47s, `33` autonomy-inventory tests, and `48` release-schema/public-projection tests. The clean no-candidate Solidity/EVM exact-24 runtime passed `1` test in 710.96s with its pre/post 244-file digest unchanged at `634323f697cb0c8d4ed38dd04452a857c9374f5e026bc1c441122763a142198f`; the live local v1.3 released-child/resume regression passed `1` test in 105.34s. These suites overlap and their counts are not additive. Full Ruff format/check, strict mypy over all `210` source modules, canonical generator verification, py_compile, and scoped diff integrity passed. Independent final matrices passed `42` atomic, `24` portfolio/recovery, `59` schema/inventory, `12` v1.3, and `1` live test with no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
-LAST_VALIDATION_RESULT: V3_COVERAGE_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING — one durable pre-orientation portfolio preflight and atomic hold bind the exact orientation, compact, source_audit, and whole_protocol attempt scope before transport. A clean no-candidate synthetic runtime executed exactly 22 investigator roles plus invariant_review and report_quality. Crash-safe journal publication and exact transition recovery preserve v1.3 released pre-send failures as FAILED, comparison-only, noncrediting evidence with zero-transport resume. Synthetic/MOCK evidence is not REAL/provider execution.
-LAST_CHECKPOINT_COMMIT: `33001d12d62ffe54788a41ed7321a77cd9fcb05f`, direct child of `d6c7c5b05d8466a3793b3174809e1cd48b6a02e8`, owns exactly 33 source, generated-artifact, generator, integration-test, and unit-test paths; `git diff-tree --no-commit-id --name-only -r 33001d12d62ffe54788a41ed7321a77cd9fcb05f` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `4bfac51801ff5999435081ac3fda4b2fa6fe5826cc9f89afd380ee53f4e2eb48`, `6f9be06561bf1d98cbf6c5102560e20b4f8a353cd566681b44156ac73cc6040a`, `d3f7b11db48b6cccf50d058f9d46ed69efed7ea02bc3d10865ce011e553c2f7b`, and `8951ede35cacfadafdb893a89548cabaf8cb05c592b8884e42b90407a8d16b42`; counts are 3,685 sources / 3,688 occurrences / 3,642 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. The `EXPLICIT_NON_FIELD_GATE` class contains 1,945 sources; scheduler filesystem discovery contains 51 explicitly labeled loci. Prior truncation-promotion checkpoint: `e61b7d7`; recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 42 unfinished tickets. `V3-COVERAGE-001` is `COMPLETE` provider-free and nonauthorizing at `33001d12`. `V3-TRUNCATION-001` remains `PARTIAL`: direct retained-parent, specialist-role, one generic recursive level, and its full-tree live opaque promotion are checkpointed provider-free; genuine provider-backed positive promotion, deeper recursion, retained recursive-bridge surfaces, and specialist recursion remain outstanding. `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL`, but the current operator-supplied refusal establishes it as the critical path to `completed_real_audits > 0`; no next ticket is selected or started. `V3-AUTONOMY-001` is `PARTIAL` with Phase 2 paused. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its smoke path is proven twice, the next unused index is NOT_STATED, and no command or paid authority is current.
+AUTORUN_STATUS: V3_RETRY_001_COMPLETE_PROVIDER_FREE_DEFAULT_OFF_SAME_ROUTE_SCHEMA_ONLY_FIRST_ATTEMPT_SCORING_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
+OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_50D72B5_RUNTIME_ADMISSION_PREDICATES_UNSATISFIABLE_QUALIFICATION_POLICY_CLEARED_RETRY_PIN_CONFLICT_NO_NEW_SPEND_NO_LAUNCH_NONAUTHORIZING
+LAST_RECONCILED_OPERATOR_RESULTS: `50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820` / 137294 bytes / 2462 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
+CURRENT_TICKET: V3-RETRY-001
+CURRENT_LOCAL_SLICE_STATUS: COMPLETE_SCHEMA_RETRY_COST_LEDGER_RECEIPT_AND_SCORING_CUSTODY_PROVIDER_FREE_NONAUTHORIZING
+LAST_COMPLETED_TICKET: V3-RETRY-001
+NEXT_ACTION: STOP after closing V3-RETRY-001. V3-RUNTIMEADMIT-001 is queued as the next bounded provider-free ticket but is not selected or started. Preserve the default-off retry policy, qualification-config pin, and first-attempt-only compliance rule; do not launch a campaign, emit an operator command, infer a run index, or alter qualification/release authority.
+LAST_VALIDATION_COMMAND: The final provider-free retry/config/scoring/cost/runner matrix passed `583` tests in 140.09s with two existing CPython code-retarget deprecation warnings; adjacent smoke/candidate validation passed `122` in 33.34s; and the reconciled documentation/objective/release matrix passed `50` in 2.05s. Independent adversarial re-review passed `463` overlapping focused tests, Ruff, and diff integrity with no blocker. Canonical generation verification, Ruff check and format-check excluding the immutable operator record, strict mypy over 210 source files, compilation, strict JSON, and diff integrity passed. Counts overlap and are not additive. No provider, network, credential, private-ledger, operator-record mutation, campaign, spend, or run-index action occurred.
+LAST_VALIDATION_RESULT: V3_RETRY_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING — schema-invalid structured output can consume only an explicit same-route schema quota; transient retry remains separate, every paid attempt is finalized and durably classified, typed exhaustion preserves fallback/terminal semantics, and retried success cannot earn first-attempt structured-output-compliance credit.
+LAST_CHECKPOINT_COMMIT: `4f666d05c79e550af4f5fc646c5e6ffabb60dcf0`, direct child of `9a902192cae14bb14144094b3a3b3bf6dafed9a9`, owns exactly 17 source, generated-artifact, template, and unit-test paths; `git diff-tree --no-commit-id --name-only -r 4f666d05c79e550af4f5fc646c5e6ffabb60dcf0` is the exact path manifest. It excludes governance, operator results, `.gitignore`, private r19/r21 bundles, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are `5891f71e33238083d7b275e9d2346cf1f68aec89af7ecee4b0576f8df4887010`, `e2e188cff322c8e62a7ef55211100bb6c8ca3e5b23c457ee000821c87fd9225e`, `b7c9aea7736b9788a6b67c2eac221c5f4d43312576335a0409f798ea3fb6a4dd`, and `1547de1024c1a0da5c27fd4bb6aa5005ad6b352b181b2c9edb8cbc7013e05501`; schema raw hash is `6a63c33efcb816b9d0e2df0fb3862639edd1cfbe5bae68207e6c2c30cf8bff30`. Counts are 3,686 sources / 3,689 occurrences / 3,643 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual; AuditConfig has 506 unique leaf locators / 509 occurrences / 3 shared locators. The `EXPLICIT_NON_FIELD_GATE` class contains 1,945 sources; scheduler filesystem discovery contains 51 explicitly labeled loci. Historical coverage remains complete at `33001d12`; prior truncation-promotion checkpoint: `e61b7d7`; recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-RETRY-001` and `V3-COVERAGE-001` are `COMPLETE` provider-free and nonauthorizing. `V3-RUNTIMEADMIT-001` is `QUEUED` but not selected or started; it is the operator-reported immediate campaign-admission blocker. `V3-TRUNCATION-001` remains `PARTIAL`; `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL` for its broader frozen-objective proof but is no longer the immediate campaign gate; `V3-AUTONOMY-001` remains `PARTIAL` with Phase 2 paused; and `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`. No campaign, provider call, operator command, qualification, release, or run-index action is current.
+
+## 2026-08-27T07:21:08Z — latest operator result reconciled after retry closure
+
+- **Current ticket:** `V3-RETRY-001` remains `COMPLETE`; `V3-RUNTIMEADMIT-001` is queued but was not
+  selected, started, or implemented in this work unit.
+- **Operator-result custody:** User checkpoint `e8610cd6325ae599f5a725a9bf6c64da12928564`
+  added the current operator-supplied record and queued the runtime-admission ticket. The record is
+  137,294 bytes / 2,462 lines at SHA-256
+  `50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820`; its latest entry is
+  `2026-08-27T06:37Z`. It is nonauthorizing and not independently authenticated by Codex.
+- **Latest reported result:** A provider-free preflight accepted a materialized copy of the exact
+  embedded P1 qualification policy and fresh r22 route evidence, then failed closed because
+  `FULL_CAMPAIGN_ADMISSION` requires `EMPIRICAL_SCHEMA_CONFORMANCE` and
+  `TOKEN_DETAIL_REPORTING_CONVENTION`, while the current discovery implementation can emit only
+  unavailable results for both. The record reports no model-completion transport or launch and an
+  unchanged 29-entry / `0.43458261` USD ledger.
+- **Retry/config reconciliation:** The source implementation remains complete and default-off at
+  exact checkpoint `4f666d05c79e550af4f5fc646c5e6ffabb60dcf0`, now remotely preserved as the
+  direct parent of pushed user checkpoint `e8610cd6325ae599f5a725a9bf6c64da12928564`. The
+  operator-reported attempt to
+  set `max_schema_validation_retries = 3` in the hash-pinned qualification config failed two
+  regressions and was reverted. Enabling retry for that campaign therefore requires a deliberate
+  re-pin or a separate non-pinned continuity path; neither occurred here. First-attempt-only
+  structured-output-compliance scoring remains unchanged.
+- **Selection-plan/operator-guide reconciliation:** The active schema-v1.4 selection plan remains
+  byte-unchanged and nonauthorizing at self-hash
+  `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`; it already marks both
+  campaign-only predicate dispositions `UNAVAILABLE`. The model-selection guide now isolates the
+  old `4616c5a...` r1–r19 accounting as historical, records the exact current operator digest and
+  r22/P1/runtime-admission boundary, and withholds any command or index. Both operator-prerequisite
+  guides now state the required frozen `--qualification-policy` input and that no operator action
+  can substitute for the missing `V3-RUNTIMEADMIT-001` source mechanism.
+- **Governance files changed:** `docs/models/model_selection.md`, both operator-prerequisite guides,
+  both queue/worklog mirrors, runtime status, review traceability, and the focused documentation/
+  objective regressions. `config/models.selection-plan.json`,
+  `config/openrouter-qualification.toml`, `docs/remediation/v3/operator_results.md`, private
+  evidence, and the user-owned `.gitignore` were not edited.
+- **Validation:** The final seven-file retry/config/scoring/cost/runner matrix passed `583` tests in
+  `140.09s` with two existing CPython code-retarget deprecation warnings. Adjacent smoke/candidate
+  validation passed `122` tests in `33.34s`; documentation/objective/release validation passed `50`
+  tests in `2.05s`. Canonical generation verification, Ruff check and format-check excluding the
+  immutable operator record, strict mypy over `210` source files, compilation, strict JSON, and diff
+  integrity passed. Counts overlap and are not additive; no repository-wide pass is claimed.
+- **External effects:** Codex made no provider/network call, read no credential or private artifact,
+  mutated no private ledger, and emitted no operator command. The operator evidence reports only
+  provider-free preflight and metadata discovery, not a campaign model completion.
+- **Exact next safe action:** Stop this work unit. At a separate ticket boundary, select only
+  `V3-RUNTIMEADMIT-001` for a provider-free runtime-evidence promotion mechanism and diagnostic
+  rejection detail. Do not infer a campaign command or run index, and do not grant qualification,
+  runtime, campaign, or release authority.
+
+## 2026-08-27T06:05:45Z — V3-RETRY-001 complete provider-free
+
+- **Current ticket:** `V3-RETRY-001` is `COMPLETE`; no successor ticket is selected or started.
+- **Completed changes:** Added an explicit default-zero same-route schema-validation retry quota,
+  independent transient/schema counters under the existing 32-attempt ceiling, retry-inclusive
+  provider-free planning, typed schema exhaustion, exact paid-attempt finalization and provenance,
+  policy-sealed trusted receipt replay, and first-attempt-only structured-output-compliance scoring.
+  Default and explicit-zero config serialization omit the new field and preserve the canonical
+  qualification-config bytes and SHA-256.
+- **Files changed:** Retry/config/scoring/runtime planning under `src/mmaudit/`; the example config;
+  focused unit regressions; generated autonomy inventory/schema; and the queue, worklog, runtime,
+  traceability, and documentation-test governance mirrors. The user-owned `.gitignore` and
+  `docs/remediation/v3/operator_results.md` changes were not edited.
+- **Validation:** The consolidated retry/config/scoring/cost/runner matrix passed `550` tests in
+  `91.11s`, with two existing CPython code-retarget deprecation warnings. Independent adversarial
+  review passed `463` overlapping focused tests plus Ruff and diff integrity and found no blocker.
+  Final generation, schema/inventory, documentation, formatting, Ruff, strict mypy, compilation,
+  and diff-integrity results are reconciled in this entry after execution; counts overlap and are
+  not additive.
+- **Baseline-only observation:** A broader refresh-runtime matrix produced `238` passes and `16`
+  failures; the representative deterministic failure reproduced identically in a clean detached
+  `HEAD` worktree, so no repository-wide pass is claimed and the unrelated baseline was not changed
+  in this bounded ticket.
+- **Operator-result custody:** The current operator-supplied record is 131,729 bytes / 2,374 lines
+  at SHA-256 `7115740fca9ebed66d988af4ea20ea58233038b5151d7f3b6e841780bcc03d02`;
+  its latest entry is `2026-08-25T09:30Z`. It reports no command or new spend and an unchanged
+  29-entry / `0.43458261` USD ledger. It supplies the retry and first-attempt-scoring decisions only;
+  it is nonauthorizing and not independently authenticated by Codex.
+- **Remaining limitation:** The operator-owned sealed bundles for smoke indices 19 and 21 were not
+  available as repository fixtures and were not independently byte-replayed. Repository-owned
+  default/explicit-zero serialization, canonical hash, and synthetic bundle compatibility pass;
+  this does not authenticate or make claims about private bundle contents.
+- **External effects:** None. All execution was local and provider-free. No provider/network,
+  credential, private-ledger, operator-record mutation, command, campaign, spend, or run-index
+  action occurred.
+- **Exact next safe action:** Stop. Keep `V3-CALIBRATE-001` blocked and every external authority
+  false; select any successor only as a separate bounded work unit.
+
+## 2026-08-27T05:08:22Z — V3-RETRY-001 core implementation and focused regressions complete
+
+- **Current ticket:** `V3-RETRY-001` remains the sole `IN_PROGRESS` ticket.
+- **Completed changes:** Added a default-zero, serialization-omitted
+  `max_schema_validation_retries` policy separate from transient `max_model_retries`, with one
+  combined 32-attempt ceiling used by provider-free request previews, staged AUTHRUNNER cost plans,
+  completion resource plans, and runtime admission. The completion loop now retries only
+  `SCHEMA_VALIDATION_FAILED` on the same route, finalizes every paid attempt before retry, preserves
+  independent transient/schema quotas, raises typed schema exhaustion with explicit quota-versus-
+  total-cap provenance, and reaches explicit host-model fallback only after same-route exhaustion.
+- **Evidence and scoring:** Existing exact attempt ordinals, logical request IDs, retry counts, and
+  atomic reservation inventory distinguish first-attempt from retried success. Benchmark scoring
+  now grants `structured_output_compliance` only when the successful usage record proves one
+  attempt, while still scoring semantic dimensions from a valid retried response. Structural replay
+  recomputes that rule and rejects score laundering. Trusted REAL receipt grants now seal both retry
+  class limits and reject same-total policy drift.
+- **Defensive repair during testing:** A schema-generation drift regression exposed an opportunistic
+  failed-response hash decode replacing the original terminal schema-drift error and interrupting
+  usage custody. The branch now preserves the original terminal error and still records its failed
+  usage evidence.
+- **Focused validation:** Core existing OpenRouter behavior passed `7` selected tests; new schema
+  retry/fallback/tripwire/schema-drift tests passed `8`; new benchmark scoring tests passed `3`; the
+  complete config and request-cost-preview files passed `62`; two affected isolated provider receipt
+  tests passed. Focused Ruff and strict mypy over the changed source modules pass. These counts
+  overlap and are not a repository-wide result.
+- **External effects:** None. All tests are synthetic/provider-free. No provider, network,
+  credential, private-ledger, operator-record, campaign, spend, or run-index action occurred.
+- **Next exact action:** Finish the persistent two-attempt ledger and receipt policy-drift
+  regressions, regenerate deterministic schemas/inventory, run the affected and full validation
+  gates, reconcile governance, and close only `V3-RETRY-001` if every gate remains green.
+
+## 2026-08-27T04:30:43Z — V3-RETRY-001 selected for bounded provider-free implementation
+
+- **Current ticket:** `V3-RETRY-001` is `IN_PROGRESS`; no other major ticket is opened by this
+  selection.
+- **Defensive objective:** Add an explicitly configured, default-off same-route retry for
+  `SCHEMA_VALIDATION_FAILED` while keeping transient `max_model_retries`, explicit host-model
+  fallback, cost custody, and terminal failure semantics distinct.
+- **Operator-result custody:** The exact current operator-supplied record is 131,729 bytes / 2,374
+  lines at SHA-256 `7115740fca9ebed66d988af4ea20ea58233038b5151d7f3b6e841780bcc03d02`.
+  Its latest entry is `2026-08-25T09:30Z`; it reports no command, no new spend, and an unchanged
+  29-entry / `0.43458261` USD ledger. The record is nonauthorizing and not independently
+  authenticated by Codex.
+- **Binding scoring rule:** `structured_output_compliance` measures the first attempt only. A
+  retried success receives no compliance credit; retry exists only to preserve measurement of the
+  remaining campaign dimensions. Any later retry-tolerant metric must be separately named and
+  separately thresholded.
+- **Planned implementation:** Add the separate bounded configuration and exact combined attempt
+  plan, retry only the named schema-validation failure on the same exact route, preserve every
+  paid attempt and logical identity in durable evidence, distinguish typed schema exhaustion, and
+  regress default-off byte compatibility plus fallback/transport separation.
+- **External effects:** None authorized or required. No provider, network, credential,
+  private-ledger, operator-record, campaign, or run-index action may occur.
 
 ## 2026-08-25T06:42:22Z — current operator result reconciled without launch authority
 

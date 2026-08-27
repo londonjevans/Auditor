@@ -165,20 +165,22 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "pins three package resources" in autonomy_evidence
     assert "leaves 25 external roles unresolved" in autonomy_evidence
     assert "paused V3-AUTONOMY-001" in requirements["U"]["remaining_proof"]
-    assert (
-        "complete V3-CALIBRATE-001 before any campaign claim"
-        in (requirements["U"]["remaining_proof"])
-    )
+    assert "V3-RUNTIMEADMIT-001" in requirements["U"]["remaining_proof"]
+    assert "EMPIRICAL_SCHEMA_CONFORMANCE" in requirements["U"]["remaining_proof"]
+    assert "TOKEN_DETAIL_REPORTING_CONVENTION" in requirements["U"]["remaining_proof"]
+    assert "V3-CALIBRATE-001" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
+    assert runtime_status["candidate_commit"] == "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
+    assert runtime_status["candidate_commit_parent"] == ("9a902192cae14bb14144094b3a3b3bf6dafed9a9")
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
+        "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
     )
-    assert runtime_status["candidate_commit_pushed"] is False
-    assert runtime_status["candidate_commit_remote_resolved"] is False
+    assert runtime_status["candidate_commit_pushed"] is True
+    assert runtime_status["candidate_commit_remote_resolved"] is True
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
     assert "V3-AUTHLINEAGE-RECEIPT-001" not in requirements["L"]["tickets"]
     assert "V3-PLANCONSTRAINTS-001" in requirements["L"]["tickets"]
+    assert "V3-RUNTIMEADMIT-001" in requirements["L"]["tickets"]
     assert "V3-HUMANCMP-001" not in requirements["R"]["tickets"]
     assert (
         "The optional human-comparison tier is not required"
@@ -186,9 +188,10 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     )
     assert "OBJECTIVE_OUT_OF_SCOPE" in runtime_status["blocked_tickets"]["V3-LINEAGE-001"]
     calibration_block = runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
-    assert "current critical path" in calibration_block
-    assert "no calibrated P2 frozen qualification-policy artifact" in calibration_block
-    assert "stat failure does not prove the missing standalone input stage" in calibration_block
+    assert "V3-CALIBRATE-001 remains BLOCKED_TECHNICAL" in calibration_block
+    assert "calibrated P2 plus successor C2" in calibration_block
+    assert "cleared the immediate standalone qualification-policy input gate" in calibration_block
+    assert "V3-RUNTIMEADMIT-001" in calibration_block
     assert "completed real audits remain zero" in calibration_block
     assert "No current command or run index is authorized or inferred" in calibration_block
 
@@ -231,7 +234,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 69
+    assert len(ticket_id_list) == len(ticket_ids) == 71
     assert len(historical_id_list) == len(historical_ids) == 46
     assert ticket_ids - historical_ids == {
         "V3-AUTHLINEAGE-001",
@@ -252,6 +255,8 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-OUTPUT-001",
         "V3-PLANCONSTRAINTS-001",
         "V3-PRIVACY-001",
+        "V3-RETRY-001",
+        "V3-RUNTIMEADMIT-001",
         "V3-SHARD-001",
         "V3-SMOKE-001",
         "V3-TESTQUALITY-001",

@@ -19,6 +19,8 @@ RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
 README_PATH = ROOT / "README.md"
 MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
 SELECTION_PLAN_PATH = ROOT / "config/models.selection-plan.json"
+OPERATOR_PREREQUISITES_PATH = ROOT / "docs/remediation/operator_prerequisites.md"
+V3_OPERATOR_PREREQUISITES_PATH = ROOT / "docs/remediation/v3/operator_prerequisites.md"
 PRODUCT_VISION_PATH = ROOT / "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 CONFIG_PATH = ROOT / "src/mmaudit/config.py"
 AUTONOMY_INVENTORY_PATH = ROOT / "docs/remediation/v3/autonomy_gate_inventory.json"
@@ -84,7 +86,13 @@ CURRENT_TRUNCATION_PROMOTION_CHECKPOINT = "e61b7d7d168488bea8f27f40b31c4db4a0bf8
 CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT = "ea85af3849db30c9832624c675594541a698ab06"
 CURRENT_COVERAGE_CHECKPOINT = "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
 CURRENT_COVERAGE_PARENT_CHECKPOINT = "d6c7c5b05d8466a3793b3174809e1cd48b6a02e8"
-CURRENT_OPERATOR_RESULTS_SHA256 = "e158c955f7ba89c374013a7fa5ccbae0acad0258942492f95da55117854805e0"
+CURRENT_RETRY_CHECKPOINT = "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
+CURRENT_RETRY_PARENT_CHECKPOINT = "9a902192cae14bb14144094b3a3b3bf6dafed9a9"
+CURRENT_OPERATOR_RESULTS_SHA256 = "50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820"
+CURRENT_OPERATOR_RESULTS_BYTES = 137_294
+CURRENT_OPERATOR_RESULTS_LINES = 2_462
+CURRENT_OPERATOR_RESULTS_LATEST_ENTRY = "2026-08-27T06:37Z"
+CURRENT_OPERATOR_RESULTS_CHECKPOINT = "e8610cd6325ae599f5a725a9bf6c64da12928564"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
 )
@@ -98,12 +106,27 @@ HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
 )
 AUTONOMY_INVENTORY_RAW_SHA256 = "827b3fb3153366efdd4f59ac30b439612c26523675d134cf502d6d36b3094fec"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "6a63c33efcb816b9d0e2df0fb3862639edd1cfbe5bae68207e6c2c30cf8bff30"
+)
+HISTORICAL_COVERAGE_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
 )
 AUTONOMY_INVENTORY_SHA256 = "1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda"
 AUTONOMY_SOURCE_UNIVERSE_SHA256 = "6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
     "4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99"
+)
+CURRENT_RETRY_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "5891f71e33238083d7b275e9d2346cf1f68aec89af7ecee4b0576f8df4887010"
+)
+CURRENT_RETRY_AUTONOMY_INVENTORY_SHA256 = (
+    "e2e188cff322c8e62a7ef55211100bb6c8ca3e5b23c457ee000821c87fd9225e"
+)
+CURRENT_RETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "b7c9aea7736b9788a6b67c2eac221c5f4d43312576335a0409f798ea3fb6a4dd"
+)
+CURRENT_RETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "1547de1024c1a0da5c27fd4bb6aa5005ad6b352b181b2c9edb8cbc7013e05501"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -393,6 +416,27 @@ CURRENT_COVERAGE_SOURCE_PATHS = frozenset(
         "tests/unit/test_usage.py",
     }
 )
+V3_RETRY_SOURCE_PATHS = frozenset(
+    {
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/autonomy_gate_inventory.schema.json",
+        "src/mmaudit/benchmark/models.py",
+        "src/mmaudit/config.py",
+        "src/mmaudit/models/authenticated_runner_execution.py",
+        "src/mmaudit/models/candidate_benchmark.py",
+        "src/mmaudit/models/openrouter.py",
+        "src/mmaudit/orchestration/authenticated_runner_smoke_openrouter.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "src/mmaudit/templates/mmaudit.example.toml",
+        "tests/unit/test_authenticated_runner_execution.py",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_config.py",
+        "tests/unit/test_model_benchmark.py",
+        "tests/unit/test_openrouter.py",
+        "tests/unit/test_openrouter_qualification_config.py",
+        "tests/unit/test_openrouter_request_cost_preview.py",
+    }
+)
 AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS = (
     AUTHRUNNER_SMOKE_INDEX_IMPLEMENTATION_PATHS - AUTONOMY_WORKTREE_INDEPENDENCE_PATHS
 )
@@ -401,6 +445,12 @@ PHASE_ONE_CORE_SUCCESSOR_PATHS = PHASE_ONE_CORE_PATHS & (
 )
 PHASE_ONE_UNCHANGED_CORE_PATHS = PHASE_ONE_CORE_PATHS - PHASE_ONE_CORE_SUCCESSOR_PATHS
 OPERATOR_RESULTS_RELATIVE_PATH = "docs/remediation/v3/operator_results.md"
+CURRENT_OPERATOR_RESULTS_CHECKPOINT_PATHS = frozenset(
+    {
+        "docs/codex_work_queue.md",
+        OPERATOR_RESULTS_RELATIVE_PATH,
+    }
+)
 HISTORICAL_INELIGIBLE_GEMMA_PLAN_SHA256 = (
     "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58"
 )
@@ -471,6 +521,7 @@ MODEL_WORK_TICKETS = frozenset(
 EXPECTED_REQUIREMENT_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUV")
 
 _LEVEL_TWO_HEADING = re.compile(r"^## (?P<title>[^\n]+)$", re.MULTILINE)
+_LEVEL_THREE_HEADING = re.compile(r"^### (?P<title>[^\n]+)$", re.MULTILINE)
 _QUEUE_TICKET_HEADING = re.compile(r"^#{2,3} (?P<title>[^\n]+)$", re.MULTILINE)
 _TICKET_TITLE = re.compile(r"^(?P<ticket>V3-[A-Z0-9]+(?:-[A-Z0-9]+)*)\b")
 _ANY_TICKET_TITLE = re.compile(r"^(?P<ticket>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)\b")
@@ -543,6 +594,14 @@ def _isolated_level_two_section(document: str, heading: str) -> str:
     assert document.count(marker) == 1, f"expected exactly one {heading!r} section"
     _, _, remainder = document.partition(marker)
     next_heading = _LEVEL_TWO_HEADING.search(remainder)
+    return remainder if next_heading is None else remainder[: next_heading.start()]
+
+
+def _isolated_level_three_section(document: str, heading: str) -> str:
+    marker = f"{heading}\n"
+    assert document.count(marker) == 1, f"expected exactly one {heading!r} section"
+    _, _, remainder = document.partition(marker)
+    next_heading = _LEVEL_THREE_HEADING.search(remainder)
     return remainder if next_heading is None else remainder[: next_heading.start()]
 
 
@@ -1205,14 +1264,81 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         capture_output=True,
         text=True,
     )
-    coverage_current_match = subprocess.run(
+    retry_resolved = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_RETRY_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    retry_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_RETRY_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    retry_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_RETRY_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    retry_current_match = subprocess.run(
         [
             "git",
             "diff",
             "--quiet",
-            CURRENT_COVERAGE_CHECKPOINT,
+            CURRENT_RETRY_CHECKPOINT,
             "--",
-            *sorted(CURRENT_COVERAGE_SOURCE_PATHS),
+            *sorted(V3_RETRY_SOURCE_PATHS),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+    operator_results_checkpoint_resolved = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_OPERATOR_RESULTS_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    operator_results_checkpoint_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_OPERATOR_RESULTS_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    operator_results_checkpoint_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_OPERATOR_RESULTS_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    operator_results_remote_ancestry = subprocess.run(
+        [
+            "git",
+            "merge-base",
+            "--is-ancestor",
+            CURRENT_OPERATOR_RESULTS_CHECKPOINT,
+            "origin/agent/v3-wip-checkpoint",
         ],
         cwd=ROOT,
         check=False,
@@ -1415,7 +1541,22 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert len(CURRENT_COVERAGE_SOURCE_PATHS) == 33
     assert OPERATOR_RESULTS_RELATIVE_PATH not in CURRENT_COVERAGE_SOURCE_PATHS
     assert not (CURRENT_COVERAGE_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
-    assert coverage_current_match.returncode == 0
+    assert retry_resolved.stdout.strip() == CURRENT_RETRY_CHECKPOINT
+    assert retry_parent.stdout.strip() == CURRENT_RETRY_PARENT_CHECKPOINT
+    assert frozenset(retry_changed.stdout.splitlines()) == V3_RETRY_SOURCE_PATHS
+    assert len(V3_RETRY_SOURCE_PATHS) == 17
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in V3_RETRY_SOURCE_PATHS
+    assert not (V3_RETRY_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+    assert retry_current_match.returncode == 0
+    assert (
+        operator_results_checkpoint_resolved.stdout.strip() == CURRENT_OPERATOR_RESULTS_CHECKPOINT
+    )
+    assert operator_results_checkpoint_parent.stdout.strip() == CURRENT_RETRY_CHECKPOINT
+    assert (
+        frozenset(operator_results_checkpoint_changed.stdout.splitlines())
+        == CURRENT_OPERATOR_RESULTS_CHECKPOINT_PATHS
+    )
+    assert operator_results_remote_ancestry.returncode == 0
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -1426,11 +1567,58 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
     combined = codex | canonical
     unfinished = sum(status != "COMPLETE" for status in combined.values())
 
-    assert unfinished == 42
+    assert unfinished == 43
     assert (
         "REMAINING_ACTIONABLE_TICKETS: The combined queues contain "
         f"{unfinished} unfinished tickets."
     ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
+
+
+def test_retry_ticket_is_mirrored_complete_and_has_an_exact_source_manifest() -> None:
+    for document in (
+        QUEUE_PATH.read_text(encoding="utf-8"),
+        CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
+    ):
+        match = re.search(
+            r"^#{2,3} V3-RETRY-001\b.*?(?=^#{2,3} V3-[A-Z0-9-]+\b|\Z)",
+            document,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        section = " ".join(match.group().split())
+        assert "**Status:** `COMPLETE`" in section
+        assert "same-route" in section
+        assert "default" in section and "zero" in section
+        assert "first-attempt" in section
+        assert "32-attempt" in section
+        assert "private" in section.lower() and "19" in section and "21" in section
+        assert "authority" in section.lower()
+
+    assert len(V3_RETRY_SOURCE_PATHS) == 17
+    assert all((ROOT / path).is_file() for path in V3_RETRY_SOURCE_PATHS)
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in V3_RETRY_SOURCE_PATHS
+    assert not (V3_RETRY_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+
+
+def test_runtime_admission_ticket_is_mirrored_queued_and_not_started() -> None:
+    for document in (
+        QUEUE_PATH.read_text(encoding="utf-8"),
+        CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
+    ):
+        match = re.search(
+            r"^#{2,3} V3-RUNTIMEADMIT-001\b.*?(?=^#{2,3} V3-[A-Z0-9-]+\b|\Z)",
+            document,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        section = " ".join(match.group().split())
+        assert "**Status:** `QUEUED`" in section
+        assert "EMPIRICAL_SCHEMA_CONFORMANCE" in section
+        assert "TOKEN_DETAIL_REPORTING_CONVENTION" in section
+        assert "exact model" in section.replace("*", "").lower()
+        assert "route" in section.lower()
+        assert "self-attestation" in section
+        assert "not selected or started" in section
 
 
 def test_truncation_promotion_custody_remains_partial_after_planconstraints_repair() -> None:
@@ -1513,38 +1701,73 @@ def test_coverage_portfolio_checkpoint_meets_provider_free_acceptance() -> None:
         assert "do not select AUTHSEAL" in section
 
 
-def test_coverage_checkpoint_is_current_without_external_authority() -> None:
+def test_retry_closure_preserves_the_exact_coverage_runtime_portfolio() -> None:
+    parent_runtime = json.loads(
+        subprocess.run(
+            [
+                "git",
+                "show",
+                (f"{CURRENT_RETRY_PARENT_CHECKPOINT}:docs/remediation/v3/runtime_status.json"),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    current_runtime = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+
+    assert (
+        current_runtime["coverage_provider_free_portfolio"]
+        == parent_runtime["coverage_provider_free_portfolio"]
+    )
+
+
+def test_retry_closure_is_current_and_preserves_historical_coverage_evidence() -> None:
     worklogs = (
         CODEX_WORKLOG_PATH.read_text(encoding="utf-8"),
         (ROOT / "docs/remediation/v3/worklog.md").read_text(encoding="utf-8"),
     )
     for raw_worklog in worklogs:
         worklog = " ".join(raw_worklog.split())
+        current_header = " ".join(raw_worklog.split("\n## ", maxsplit=1)[0].split())
+        newest_entry = " ".join(
+            raw_worklog.split("## 2026-08-27T07:21:08Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
         assert (
-            "AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
-            "EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_"
+            "AUTORUN_STATUS: V3_RETRY_001_COMPLETE_PROVIDER_FREE_DEFAULT_OFF_SAME_ROUTE_SCHEMA_"
+            "ONLY_FIRST_ATTEMPT_SCORING_NONAUTHORIZING_"
             "ZERO_CURRENT_EXTERNAL_COMMANDS"
-        ) in worklog
+        ) in current_header
         assert (
-            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
-            "EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING"
-        ) in worklog
-        assert "CURRENT_TICKET: V3-COVERAGE-001" in worklog
-        assert "LAST_COMPLETED_TICKET: V3-COVERAGE-001" in worklog
+            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_SCHEMA_RETRY_COST_LEDGER_RECEIPT_AND_SCORING_"
+            "CUSTODY_PROVIDER_FREE_NONAUTHORIZING"
+        ) in current_header
+        assert "CURRENT_TICKET: V3-RETRY-001" in current_header
+        assert "LAST_COMPLETED_TICKET: V3-RETRY-001" in current_header
         assert (
             "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: "
-            "RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_"
-            "NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_"
-            "NO_LAUNCH_NONAUTHORIZING"
-        ) in worklog
-        assert CURRENT_OPERATOR_RESULTS_SHA256 in worklog
-        assert "127656 bytes / 2316 lines" in worklog
-        assert "127,656 bytes / 2,316" in worklog
-        assert "latest entry is `2026-08-25T05:16Z`" in worklog
+            "RECONCILED_EXACT_50D72B5_RUNTIME_ADMISSION_PREDICATES_UNSATISFIABLE_"
+            "QUALIFICATION_POLICY_CLEARED_RETRY_PIN_CONFLICT_NO_NEW_SPEND_NO_LAUNCH_"
+            "NONAUTHORIZING"
+        ) in current_header
+        assert CURRENT_OPERATOR_RESULTS_SHA256 in current_header
+        assert "137294 bytes / 2462 lines" in current_header
+        assert "137,294 bytes / 2,462" in newest_entry
+        assert "latest entry" in newest_entry and "2026-08-27T06:37Z" in newest_entry
+        assert "max_schema_validation_retries" in worklog
+        assert "first-attempt-only" in worklog
+        assert "indices 19 and 21" in worklog
+        assert "V3-RUNTIMEADMIT-001" in newest_entry
+        assert "queued but was not selected" in newest_entry
+        assert "failed two regressions and was reverted" in newest_entry
         assert CURRENT_COVERAGE_CHECKPOINT in worklog
         assert CURRENT_COVERAGE_PARENT_CHECKPOINT in worklog
-        assert "owns exactly 33" in worklog
-        assert "orientation, compact, source_audit, and whole_protocol attempt scope" in worklog
+        assert (
+            "orientation" in worklog and "source_audit" in worklog and "whole_protocol" in worklog
+        )
         assert "clean no-candidate synthetic" in worklog.lower()
         assert "22 investigator roles plus `invariant_review` and `report_quality`" in worklog
         assert "journal publication" in worklog.lower()
@@ -1818,14 +2041,12 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "Synthetic REAL attestations" in autonomy_evidence
     assert "not provider execution" in autonomy_evidence
     autonomy_remaining = requirements_by_id["U"]["remaining_proof"]
-    assert "Genuine provider-backed promotion" in autonomy_remaining
+    assert "genuine provider-backed promotion" in autonomy_remaining.lower()
     assert "terminal maximum assurance" in autonomy_remaining
-    assert "Embedded P1/C1" in autonomy_remaining
-    assert "precommitted constructed/public frozen truth" in autonomy_remaining
-    assert "automated cross-lineage adjudication" in autonomy_remaining
-    assert "exact REAL calibration custody" in autonomy_remaining
-    assert "legacy/optional bridge" in autonomy_remaining
-    assert "insufficient for current production eligibility" in autonomy_remaining
+    assert "V3-RUNTIMEADMIT-001" in autonomy_remaining
+    assert "EMPIRICAL_SCHEMA_CONFORMANCE" in autonomy_remaining
+    assert "TOKEN_DETAIL_REPORTING_CONVENTION" in autonomy_remaining
+    assert "fail-closed mismatch, age, tamper, and self-attestation negatives" in autonomy_remaining
     assert "V3-CALIBRATE-001" in autonomy_remaining
     assert "No current command or run index exists" in autonomy_remaining
     for requirement in requirements:
@@ -1878,6 +2099,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     model_selection = MODEL_SELECTION_PATH.read_text(encoding="utf-8")
     normalized_model_selection = " ".join(model_selection.split())
     selection_plan = json.loads(SELECTION_PLAN_PATH.read_text(encoding="utf-8"))
+    operator_prerequisite_guides = (
+        OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
+        V3_OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
+    )
     operator_result_bytes = subprocess.run(
         [
             "git",
@@ -1900,60 +2125,193 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         (ROOT / "docs/remediation/v3/worklog.md").read_text(encoding="utf-8"),
     )
     for worklog in worklogs:
+        current_header = worklog.split("\n## ", maxsplit=1)[0]
         assert (
-            "AUTORUN_STATUS: V3_COVERAGE_001_COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
-            "EXACT_24_ROLE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING_"
+            "AUTORUN_STATUS: V3_RETRY_001_COMPLETE_PROVIDER_FREE_DEFAULT_OFF_SAME_ROUTE_SCHEMA_"
+            "ONLY_FIRST_ATTEMPT_SCORING_NONAUTHORIZING_"
             "ZERO_CURRENT_EXTERNAL_COMMANDS"
-        ) in worklog
-        assert "CURRENT_TICKET: V3-COVERAGE-001" in worklog
+        ) in current_header
+        assert "CURRENT_TICKET: V3-RETRY-001" in current_header
         assert (
-            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_DURABLE_PREORIENTATION_PORTFOLIO_HOLD_"
-            "EXACT_24_ROLE_CLEAN_NO_CANDIDATE_FULL_RUNTIME_PROVIDER_FREE_NONAUTHORIZING"
-        ) in worklog
+            "CURRENT_LOCAL_SLICE_STATUS: COMPLETE_SCHEMA_RETRY_COST_LEDGER_RECEIPT_AND_SCORING_"
+            "CUSTODY_PROVIDER_FREE_NONAUTHORIZING"
+        ) in current_header
         assert CURRENT_COVERAGE_CHECKPOINT in worklog
-        assert "V3-CALIBRATE-001 is the next critical path" in worklog
-        assert "not selected or restarted in this turn" in worklog
+        assert "V3-RUNTIMEADMIT-001" in current_header
+        assert "queued" in current_header and "not selected or started" in current_header
+        assert "V3-CALIBRATE-001" in current_header and "BLOCKED_TECHNICAL" in current_header
         assert (
-            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_E158C955_"
-            "LIVE_METADATA_PROBES_ZERO_NEW_SPEND_NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_"
-            "QUALIFICATION_POLICY_BLOCK_NO_LAUNCH_NONAUTHORIZING"
-        ) in worklog
+            "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_50D72B5_RUNTIME_"
+            "ADMISSION_PREDICATES_UNSATISFIABLE_QUALIFICATION_POLICY_CLEARED_RETRY_PIN_"
+            "CONFLICT_NO_NEW_SPEND_NO_LAUNCH_NONAUTHORIZING"
+        ) in current_header
         assert (
             f"LAST_RECONCILED_OPERATOR_RESULTS: `{CURRENT_OPERATOR_RESULTS_SHA256}` / "
-            "127656 bytes / 2316 lines"
-        ) in worklog
+            f"{CURRENT_OPERATOR_RESULTS_BYTES} bytes / {CURRENT_OPERATOR_RESULTS_LINES} lines"
+        ) in current_header
     normalized_queues = tuple(" ".join(queue.split()) for queue in queues)
     for raw_queue, normalized_queue in zip(queues, normalized_queues, strict=True):
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-COVERAGE-001"] == "COMPLETE"
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-RETRY-001"] == "COMPLETE"
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-RUNTIMEADMIT-001"] == "QUEUED"
         assert "V3-CALIBRATE-001" in normalized_queue
-        assert "not reopened by this closure" in normalized_queue
-        assert "Stop after recording this ticket `COMPLETE`" in normalized_queue
+        assert "Stop after" in normalized_queue and "`COMPLETE`" in normalized_queue
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     assert runtime_status["operator_results_current_worktree_status"] == (
-        "RECONCILED_EXACT_E158C955_LIVE_METADATA_PROBES_ZERO_NEW_SPEND_"
-        "NO_24_CASE_CAMPAIGN_COMPLETION_TRANSPORT_QUALIFICATION_POLICY_BLOCK_"
-        "NO_LAUNCH_NONAUTHORIZING"
+        "RECONCILED_EXACT_50D72B5_RUNTIME_ADMISSION_PREDICATES_UNSATISFIABLE_"
+        "QUALIFICATION_POLICY_CLEARED_RETRY_PIN_CONFLICT_NO_NEW_SPEND_NO_LAUNCH_"
+        "NONAUTHORIZING"
     )
-    assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
+    assert runtime_status["operator_results_current_worktree_required_for_ticket"] is True
     assert (
         runtime_status["last_reconciled_operator_results_sha256"] == CURRENT_OPERATOR_RESULTS_SHA256
     )
-    assert runtime_status["last_reconciled_operator_results_bytes"] == 127_656
-    assert runtime_status["last_reconciled_operator_results_lines"] == 2_316
+    assert (
+        runtime_status["last_reconciled_operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
+    )
+    assert (
+        runtime_status["last_reconciled_operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
+    )
     assert (
         hashlib.sha256(current_operator_result_bytes).hexdigest() == CURRENT_OPERATOR_RESULTS_SHA256
     )
-    assert len(current_operator_result_bytes) == 127_656
-    assert len(current_operator_results.splitlines()) == 2_316
-    assert "## 2026-08-25T05:16Z" in current_operator_results
-    assert "qualification input is unavailable" in current_operator_results
+    assert len(current_operator_result_bytes) == CURRENT_OPERATOR_RESULTS_BYTES
+    assert len(current_operator_results.splitlines()) == CURRENT_OPERATOR_RESULTS_LINES
+    assert f"## {CURRENT_OPERATOR_RESULTS_LATEST_ENTRY}" in current_operator_results
+    latest_operator_entry = current_operator_results.split("## 2026-08-25T09:30Z", maxsplit=1)[0]
+    assert "CAMPAIGN BLOCKER FULLY TRACED" in latest_operator_entry
+    assert "The qualification-policy blocker" in latest_operator_entry
+    assert "is **cleared**" in latest_operator_entry
+    assert "EMPIRICAL_SCHEMA_CONFORMANCE" in latest_operator_entry
+    assert "TOKEN_DETAIL_REPORTING_CONVENTION" in latest_operator_entry
+    assert "V3-RUNTIMEADMIT-001" in latest_operator_entry
+    assert "first-attempt-only structured-output scoring" in current_operator_results
+    assert "Retry itself remains authorized" in current_operator_results
+    assert "failed two regressions" in latest_operator_entry
+    assert "was reverted" in latest_operator_entry
     assert "ledger unchanged at 29" in current_operator_results
     assert "0.43458261" in current_operator_results
-    assert runtime_status["candidate_commit"] == CURRENT_COVERAGE_CHECKPOINT
-    assert runtime_status["current_ticket"] == "V3-COVERAGE-001"
+    current_guide_reconciliation = _isolated_level_three_section(
+        model_selection,
+        "### Current operator-result reconciliation — 2026-08-27T06:37Z",
+    )
+    normalized_current_guide_reconciliation = " ".join(current_guide_reconciliation.split())
+    assert CURRENT_OPERATOR_RESULTS_SHA256 in current_guide_reconciliation
+    assert "137,294 bytes / 2,462 lines" in current_guide_reconciliation
+    assert "nonauthorizing" in normalized_current_guide_reconciliation
+    assert "not independently authenticated by Codex" in normalized_current_guide_reconciliation
+    assert "qualification-policy input gate" in normalized_current_guide_reconciliation
+    assert "r22 metadata discovery" in normalized_current_guide_reconciliation
+    for expected_r22_registry_sha256 in (
+        "d828e6b77fb16fbc4bd980f2fcd6e610394b915e33915864714b68d2ce205bc7",
+        "db75dcbcfcdde75b95d64e0e66be224a650896ba5b4829e25b04f1effda0d0f4",
+        "73550667098aa0b96bfd35019a52fdd8b30c91ff680068a1f2b6ccfce45416a9",
+    ):
+        assert expected_r22_registry_sha256 in current_guide_reconciliation
+    assert selection_plan["plan_sha256"] in current_guide_reconciliation
+    assert "EMPIRICAL_SCHEMA_CONFORMANCE" in current_guide_reconciliation
+    assert "TOKEN_DETAIL_REPORTING_CONVENTION" in current_guide_reconciliation
+    assert "V3-RUNTIMEADMIT-001" in current_guide_reconciliation
+    assert "queued but not selected or started" in normalized_current_guide_reconciliation
+    assert "max_schema_validation_retries = 0" in current_guide_reconciliation
+    assert "trial value `3` failed two canonical-hash regressions and was reverted" in (
+        normalized_current_guide_reconciliation
+    )
+    assert "No operator command or run index is current or inferred" in (
+        normalized_current_guide_reconciliation
+    )
+    assert "0.43458261" in current_guide_reconciliation
+    assert LAST_RECONCILED_OPERATOR_RESULTS_SHA256 not in current_guide_reconciliation
+    assert "### Historical r1\u2013r19 accounting and canonical-replay boundary" in model_selection
+    assert "### Last reconciled r1\u2013r19 accounting and canonical-replay boundary" not in (
+        model_selection
+    )
+    assert "no successful current provider snapshot" not in normalized_model_selection
+    assert "Fresh all-role r22 discovery is operator-reported" in model_selection
+    assert "includes the exact r22 routes" in normalized_model_selection
+    assert "retaining `phala` as a non-selected REPLAY policy alternative" in (
+        normalized_model_selection
+    )
+    route_profile = selection_plan["authenticated_runner_selection"]["route_predicate_profile"]
+    assert route_profile["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
+    assert route_profile["token_detail_convention_disposition"] == "UNAVAILABLE"
+    assert selection_plan["status"] == "NONAUTHORIZING"
+    for authority_field in (
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "benchmark_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "documentary_lineage_identity_authorized",
+        "serialized_authority",
+    ):
+        assert selection_plan[authority_field] is False
+    for operator_prerequisites in operator_prerequisite_guides:
+        normalized_operator_prerequisites = " ".join(operator_prerequisites.split())
+        assert "--qualification-policy" in operator_prerequisites
+        assert "EMPIRICAL_SCHEMA_CONFORMANCE" in operator_prerequisites
+        assert "TOKEN_DETAIL_REPORTING_CONVENTION" in operator_prerequisites
+        assert "V3-RUNTIMEADMIT-001" in operator_prerequisites
+        assert "queued but not selected or started" in normalized_operator_prerequisites
+        assert "no operator" in normalized_operator_prerequisites.lower()
+        assert "run index" in normalized_operator_prerequisites
+    assert runtime_status["candidate_commit"] == CURRENT_RETRY_CHECKPOINT
+    assert runtime_status["candidate_commit_parent"] == CURRENT_RETRY_PARENT_CHECKPOINT
+    assert runtime_status["current_ticket"] == "V3-RETRY-001"
     assert runtime_status["completed_real_audits"] == 0
+    retry_policy = runtime_status["retry_provider_free_policy"]
+    assert retry_policy["ticket"] == "V3-RETRY-001"
+    assert retry_policy["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    assert retry_policy["default_schema_validation_retries"] == 0
+    assert retry_policy["default_field_omitted_from_serialization"] is True
+    assert retry_policy["retry_quotas_independent"] is True
+    assert retry_policy["combined_maximum_model_attempts"] == 32
+    assert retry_policy["schema_retryable_failure_codes"] == ["SCHEMA_VALIDATION_FAILED"]
+    assert retry_policy["same_route_only"] is True
+    assert retry_policy["structured_output_compliance_scope"] == "FIRST_ATTEMPT_ONLY"
+    assert retry_policy["retried_success_receives_structured_output_compliance_credit"] is False
+    assert retry_policy["private_smoke_r19_r21_replay_independently_proven"] is False
+    assert retry_policy["source_checkpoint_commit"] == CURRENT_RETRY_CHECKPOINT
+    assert retry_policy["source_checkpoint_parent"] == CURRENT_RETRY_PARENT_CHECKPOINT
+    assert retry_policy["source_checkpoint_committed"] is True
+    assert retry_policy["source_checkpoint_pushed"] is True
+    assert retry_policy["source_checkpoint_remote_resolved"] is True
+    assert retry_policy["source_checkpoint_exact_path_count"] == len(V3_RETRY_SOURCE_PATHS)
+    assert frozenset(retry_policy["source_checkpoint_exact_paths"]) == V3_RETRY_SOURCE_PATHS
+    for authority_key in (
+        "provider_or_network_accessed",
+        "credential_or_secret_material_read",
+        "operator_private_ledger_accessed_or_mutated",
+        "operator_command_emitted",
+        "campaign_or_run_index_selected",
+        "runtime_authority",
+        "qualification_authority",
+        "release_authority",
+    ):
+        assert retry_policy[authority_key] is False
+    operator_reconciliation = runtime_status["current_operator_result_reconciliation"]
+    assert operator_reconciliation["operator_results_repository_commit"] == (
+        CURRENT_OPERATOR_RESULTS_CHECKPOINT
+    )
+    assert operator_reconciliation["critical_path_ticket"] == "V3-RUNTIMEADMIT-001"
+    assert operator_reconciliation["critical_path_ticket_status"] == (
+        "QUEUED_NOT_SELECTED_OR_STARTED"
+    )
+    assert operator_reconciliation["runtime_admission_required_predicates"] == [
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION",
+    ]
+    assert operator_reconciliation["qualification_campaign_schema_validation_retry_count"] == 0
+    assert operator_reconciliation["qualification_config_retry_trial_count_operator_reported"] == 3
     assert (
-        "V3-CALIBRATE-001 is therefore the current critical path"
+        operator_reconciliation["qualification_config_retry_trial_reverted_operator_reported"]
+        is True
+    )
+    assert (
+        "V3-CALIBRATE-001 remains BLOCKED_TECHNICAL"
         in (runtime_status["blocked_tickets"]["V3-CALIBRATE-001"])
     )
     assert (
@@ -1968,6 +2326,31 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     managed_toolchain = json.loads(managed_toolchain_bytes)
     managed_toolchain_schema_bytes = MANAGED_TOOLCHAIN_SCHEMA_PATH.read_bytes()
     managed_toolchain_schema = json.loads(managed_toolchain_schema_bytes)
+    current_phase_zero = runtime_status["autonomy_phase_zero_inventory"]
+    assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == (
+        CURRENT_RETRY_AUTONOMY_INVENTORY_RAW_SHA256
+    )
+    assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == (
+        AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    )
+    assert autonomy_inventory["inventory_sha256"] == CURRENT_RETRY_AUTONOMY_INVENTORY_SHA256
+    assert autonomy_inventory["source_discovery_semantics_sha256"] == (
+        CURRENT_RETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+    )
+    assert autonomy_inventory["source_universe_sha256"] == (
+        CURRENT_RETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256
+    )
+    assert current_phase_zero["artifact_raw_sha256"] == (
+        CURRENT_RETRY_AUTONOMY_INVENTORY_RAW_SHA256
+    )
+    assert current_phase_zero["schema_raw_sha256"] == AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    assert current_phase_zero["inventory_sha256"] == CURRENT_RETRY_AUTONOMY_INVENTORY_SHA256
+    assert current_phase_zero["source_count"] == 3_686
+    assert current_phase_zero["source_occurrence_count"] == 3_689
+    assert current_phase_zero["gate_source_count"] == 3_643
+    assert current_phase_zero["audit_config_leaf_locator_count"] == 506
+    assert current_phase_zero["audit_config_leaf_occurrence_count"] == 509
+    assert current_phase_zero["audit_config_shared_locator_count"] == 3
     assert runtime_status["real_model_calls"] == {
         "attempted": None,
         "succeeded": None,
@@ -2783,7 +3166,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
         "artifact_reconciled_for_slice": "V3_TRUNCATION_SPECIALIST_ROLE_RECOVERY",
         "artifact_raw_sha256": historical_autonomy_inventory_raw_sha256,
-        "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
+        "schema_raw_sha256": HISTORICAL_COVERAGE_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
         "source_discovery_semantics_sha256": historical_autonomy_discovery_semantics_sha256,
         "source_universe_sha256": historical_autonomy_source_universe_sha256,
         "source_semantics_sha256": None,

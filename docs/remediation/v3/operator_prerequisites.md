@@ -18,6 +18,8 @@ Real provider tests require all of the following:
 - a fresh absolute private JSON evidence destination beneath an existing
   operator-controlled directory;
 - a committed synthetic local Solidity source scope for smoke and qualification;
+- the exact frozen release-pinned policy supplied as `--qualification-policy PATH` for candidate
+  campaigns;
 - fallback routing disabled for certification.
 
 The secret file is never target input and its contents must not be displayed,
@@ -26,8 +28,18 @@ logged, hashed, copied, or persisted.
 The dedicated `models authenticated-runner` command does not use the test-harness
 `MMAUDIT_RUN_REAL_PROVIDER_TESTS` switch. It requires the same
 `SYNTHETIC_BENCHMARK`/ZDR/no-fallback policy, the explicit `--allow-code-egress` CLI opt-in,
-three fresh singleton discovery registries, and same-process runner custody. Its
-`--preflight-only` mode deliberately stops before secret selection or provider access.
+three fresh singleton discovery registries, the exact frozen `--qualification-policy PATH`, and
+same-process runner custody. Its `--preflight-only` mode deliberately stops before secret selection
+or provider access.
+
+### Current campaign-admission boundary
+
+The `2026-08-27T06:37Z` operator-supplied record reports that exact policy materialization and fresh
+r22 metadata clear the external-input stages, after which `FULL_CAMPAIGN_ADMISSION` fails closed on
+`EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`. The current source has no
+satisfying promotion path for either predicate. `V3-RUNTIMEADMIT-001` is queued but not selected or
+started, so no operator action, campaign command, run index, provider launch, qualification, or
+release authority is current.
 
 ## Endpoint-aware token planning
 

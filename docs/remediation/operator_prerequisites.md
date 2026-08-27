@@ -20,12 +20,23 @@ the operator-controlled environment.
   campaign cap. A missing, deleted, moved, malformed, active-reservation, or
   cap-mismatched ledger fails before secret loading and provider access.
 - Candidate qualification requires the exact private `--campaign-journal` and
-  `--portfolio` emitted by `models benchmark`, plus the same dedicated existing
-  `--cost-ledger`. Keep that ledger frozen after campaign sealing: `models qualify`
-  and `models verify-qualification` reopen the journal and ledger and reject any
-  binding, report, diagnostic, usage, snapshot, reservation, or cost drift.
+  `--portfolio` emitted by `models benchmark`, the same dedicated existing
+  `--cost-ledger`, and the exact frozen release-pinned policy supplied as
+  `--qualification-policy <absolute-path>`. Keep that ledger frozen after campaign
+  sealing: `models qualify` and `models verify-qualification` reopen the policy,
+  journal, and ledger and reject any binding, report, diagnostic, usage, snapshot,
+  reservation, or cost drift.
 - Real tests additionally require `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`, an exact
   model allowlist, and a numeric cost cap. The normal suite never spends money.
+
+### Current campaign-admission boundary
+
+The current operator-supplied record reports that the exact qualification policy and fresh r22
+metadata reach evaluation of `FULL_CAMPAIGN_ADMISSION`, which then fails because the repository has
+no satisfying promotion path for `EMPIRICAL_SCHEMA_CONFORMANCE` or
+`TOKEN_DETAIL_REPORTING_CONVENTION`. No operator-side prerequisite or command can substitute for
+that missing source mechanism. `V3-RUNTIMEADMIT-001` is queued but not selected or started; no
+campaign command, run index, provider launch, qualification, or release authority is current.
 
 ## Model lineage approval
 

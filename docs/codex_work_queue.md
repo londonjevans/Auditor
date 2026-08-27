@@ -339,18 +339,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Remaining limitation:** The clean runtime and retained recovery evidence are synthetic/MOCK,
   not REAL/provider execution, and grant no qualification, campaign, benchmark, AUTHSEAL, audit,
   completion, or release authority. `V3-TRUNCATION-001` remains `PARTIAL` with its separately
-  recorded provider and recursive limitations. The current operator-supplied result separately
-  records a provider-free `$0` authenticated-runner preflight refusing because the supplied
+  recorded provider and recursive limitations. The operator-supplied result current at this
+  coverage-closure boundary recorded a provider-free `$0` authenticated-runner preflight refusing
+  because the supplied
   `--qualification-policy` path was absent; that stat failure does not establish the artifact stage,
   reopen this ticket, or prove a REAL audit.
-- **Next critical path:** `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL` and is not reopened by this
-  closure. The immediate missing-file remedy is `UNDETERMINED`: current C1 pins schema-v1 P1, a
+- **Historical next critical path at closure:** `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL` and
+  is not reopened by this closure. The immediate missing-file remedy was `UNDETERMINED`: current C1
+  pins schema-v1 P1, a
   standalone P1 bootstrap has no repository CLI materializer, and derived P2 would require a
   reviewed successor C2. The implemented legacy/optional J1-to-A/P2-to-C2-to-J2 bridge remains
   insufficient for frozen current-objective completion; precommitted constructed/public frozen
   truth, cross-lineage automated adjudication, and exact REAL calibration custody remain absent.
   Stop after recording this ticket `COMPLETE`: do not select AUTHSEAL, launch a campaign, emit a
   command, or infer a run index.
+- **Current reconciliation:** The later `2026-08-27T06:37Z` operator record reports that exact P1
+  materialization cleared the immediate qualification-input gate and the next preflight failed on
+  `EMPIRICAL_SCHEMA_CONFORMANCE` plus `TOKEN_DETAIL_REPORTING_CONVENTION`. That nonauthorizing
+  record queues `V3-RUNTIMEADMIT-001`; it does not reopen this completed coverage ticket.
 
 ### V3-BENCHMARK-001 — Blind contamination-controlled benchmark harness
 
@@ -1041,7 +1047,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. Last-reconciled operator evidence reports outcomes through
+  candidate endpoint-inventory drift. Historical c627f2d-boundary operator evidence reports outcomes through
   index 19 and a
   25-entry global ledger totaling `$0.396223`; the next unused index is not stated. Historical
   r14/r15/r16 cost `$0.004044`/`$0.008478`/`$0.006281`, while exact r16 terminal status and
@@ -1069,7 +1075,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   checkpoint `d2364f6` closed that classifier bypass before metadata GET, usage replacement, origin,
   or capability. Historical AUTHRUNNER replay checkpoint `c627f2d` repairs the datetime asymmetry
   provider-free,
-  and the last-reconciled operator record reports that the unchanged index-19 bundle verifies offline as
+  and the historical c627f2d-boundary operator record reports that the unchanged index-19 bundle verifies offline as
   `VALID / NONCREDITING / NONAUTHORIZING` without another provider call or new spend. That one-case
   evidence does not establish 24-case aggregation/scoring, audit quality, calibration, qualification,
   benchmark, AUTHSEAL, release, broad provider compatibility, or either complete production
@@ -1094,11 +1100,14 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   exact closed code `IDENTITY_REQUIRED_PROVIDER_PARAMETERS`; historical `03d6e8a` closes that
   construction asymmetry provider-free; and historical AUTHRUNNER replay checkpoint `c627f2d`
   completes the provider-free replay
-  repair. The last-reconciled operator record reports the unchanged index-19 bundle offline-valid,
+  repair. Historical c627f2d-boundary operator evidence reports the unchanged index-19 bundle offline-valid,
   noncrediting, and nonauthorizing. No operator action is authorized, no next index is stated, and no
   command is current. `V3-PLANCONSTRAINTS-001` is complete provider-free at repair checkpoint
   `425502c`; the unresolved empirical
   schema and token-detail gates still prohibit any campaign.
+  Current operator record `50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820`
+  reports that exact P1 and fresh r22 evidence reach those two gates; `V3-RUNTIMEADMIT-001` is queued
+  but not selected or started. The record is nonauthorizing and supplies no current command or index.
   `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
 
@@ -1164,6 +1173,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   repository fixtures and were not available for independent byte replay. Default/explicit-zero
   serialization, the canonical qualification-config hash, and repository-owned synthetic bundle
   compatibility are unchanged; this local evidence is not a claim about private bundle contents.
+  The later operator-reported attempt to enable `3` retries in the hash-pinned qualification config
+  failed the canonical-hash regressions and was reverted. Using retries in that campaign requires a
+  deliberate release re-pin or a separate non-pinned continuity path; neither is part of this ticket.
 - **Next action:** None for this ticket. Stop after recording `COMPLETE`; do not launch a campaign,
   emit an operator command, infer a run index, or claim qualification, calibration, or release
   authority from this provider-free change.
@@ -1207,6 +1219,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   fresh `r22` evidence for all three roles fails exactly here with
   `route predicate report does not satisfy its closed purpose`.
 - **Status:** `QUEUED`
+- **Selection state:** not selected or started.
 - **Next action:** Implement only the evidence-promotion mechanism and its negatives. Do not launch a
   campaign, emit an operator command, infer a run index, or grant any qualification, calibration, or
   release authority from this ticket. Surface the failing predicate ids and reasons in
@@ -1297,9 +1310,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   bounded typed successful-usage errors preserve the cause, keep case mismatch separate, and do not
   fetch generation evidence prematurely. Items 2, 3, 4, and 6 remain
   `OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`; none grants command or launch authority.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY` until separately authorized,
-  authoritative evidence resolves both runtime-only dispositions. No operator action, provider
-  access, inferred index, command, or campaign is current; `V3-AUTONOMY-001` Phase 2 remains paused.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Implement the missing
+  provider-free route-bound evidence mechanism only under queued `V3-RUNTIMEADMIT-001`; separately
+  authorized runtime evidence may be evaluated only after that mechanism exists. No operator action,
+  provider access, inferred index, command, or campaign is current; `V3-AUTONOMY-001` Phase 2 remains
+  paused.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -2072,7 +2087,15 @@ and report serialization.
 - **Dependencies:** `RELEASE-001`.
 - **Status:** `COMPLETE`
 
-## Next action
+## Current next action
+
+`V3-RUNTIMEADMIT-001` is the next queued bounded provider-free ticket and is not selected or started
+in this work unit. Its scope is the missing exact route-bound runtime-evidence promotion for
+`EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`, plus diagnostic predicate
+ids/reasons on rejection. No provider call, campaign launch, command, run index, qualification,
+runtime authority, or release action is current.
+
+## Historical next action — c627 replay boundary (superseded)
 
 ### V3-AUTHRUNNER-001 — provider-free canonical-replay datetime continuation complete
 
@@ -2112,7 +2135,8 @@ and report serialization.
   or new spend. This is not runner or release authority. `V3-AUTONOMY-001` remains
   `IN_PROGRESS`, but its Phase 2 working bytes are paused. The exact 28-role bundle pins three
   reviewed package resources and explicitly leaves 25 external roles unresolved.
-- **Next action:** Preserve `c627f2d`, the operator-owned bundle, and ledger state. No operator action
+- **Historical next action at that boundary:** Preserve `c627f2d`, the operator-owned bundle, and
+  ledger state. No operator action
   is authorized; do not infer another run index or grant runner/release authority.
   `V3-PLANCONSTRAINTS-001` is complete provider-free, while FULL admission remains blocked by its
   two typed `UNAVAILABLE` runtime-only gates.
