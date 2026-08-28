@@ -3,6 +3,63 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-28T07:56Z — **REGRESSION: candidate revocation deadlocks ALL candidate discovery; reselection sweep cannot run**
+
+The operator authorized a candidate reselection sweep. **It cannot run.** Candidate revocation landed
+correctly but was not reconciled with the pinned selection plan, and the combination now refuses every
+candidate discovery, including replacements. All provider-free; ledger unchanged at 57 entries /
+`0.68118684` USD.
+
+### 1. The revocation itself is correct
+
+`src/mmaudit/resources/candidate-selection-revocations.json` holds exactly **one** entry:
+`role=candidate`, `deepseek/deepseek-v4-pro-0813`, `parasail/fp8`, reason
+`EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`. That is precisely the route that failed the campaign at
+~`37%` structured-output nonconformance. Surgical and right.
+
+### 2. But the pinned plan still names that exact route
+
+`config/models.selection-plan.json` (`plan_sha256 bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`)
+carries four `authenticated_runner_selection.route_constraints`, the first of which is:
+
+```
+role=candidate  exact_model_id=deepseek/deepseek-v4-pro-0813  provider_endpoint=parasail/fp8
+```
+
+`_require_unrevoked_routes` iterates **every** route in the validated set, so validating the plan trips
+the revoked entry regardless of which candidate the operator actually requested.
+
+### 3. Observed effect — every candidate is refused
+
+| requested candidate | result |
+|---|---|
+| `minimax/minimax-m3=coreweave/fp4` | `candidate selection plan is not currently eligible: candidate selection route is revoked` |
+| `google/gemma-4-26b-a4b-it=deepinfra/fp8` | same |
+| `tencent/hy3=novita` | same |
+| `deepseek/deepseek-v4-pro-0813=parasail/fp8` | `candidate discovery candidate assignment is ineligible: candidate selection assignment is revoked` |
+
+The incumbent is correctly refused by assignment. **Every alternative is incorrectly refused by the
+plan's route set.** Candidate reselection — the one action the campaign failure made mandatory — is
+therefore impossible, and so is any further discovery, smoke, or campaign.
+
+### 4. Why the operator cannot work around it
+
+The plan is hash-pinned via `plan_sha256`, so hand-editing `route_constraints` invalidates it, and no
+repository CLI emits or regenerates a selection plan (`--candidate-selection-plan` only consumes one).
+This needs product code.
+
+### 5. Requested
+
+Reconcile revocation with plan selection. Suggested shape, but the design is yours: revocation should
+disqualify a route **from being selected**, not invalidate a plan that merely lists it — e.g. evaluate
+revocation against the route actually being assigned rather than the plan's full constraint set, and/or
+provide a supported path to emit a successor plan whose candidate constraint names a live route.
+Whichever way, the acceptance test is: with `deepseek=parasail/fp8` revoked, a discovery for a
+different, unrevoked candidate must succeed.
+
+Until then the build cannot progress: `completed_real_audits` stays `0`, and every downstream item
+(campaign, calibration, AUTHSEAL, benchmark, release) is gated behind candidate selection.
+
 ## 2026-08-27T17:22Z — **FIRST REAL 24-CASE CAMPAIGN LAUNCHED AND FAILED CLOSED — candidate reselection required**
 
 The 24-case campaign was operator-authorized and launched against live providers. It **failed closed**
