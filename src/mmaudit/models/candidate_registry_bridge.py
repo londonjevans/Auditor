@@ -5,8 +5,14 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
+import mmaudit.models.candidate_revocation as candidate_revocation_module
+from mmaudit.models.candidate_revocation import (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     OpenRouterModelDiscoveryEvidence,
@@ -27,16 +33,43 @@ from mmaudit.reporting.json_report import stable_json
 _MAX_CANDIDATE_REGISTRY_BYTES = 50_000_000
 _PRIVATE_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
+type _CandidateRevocationCallRoots = tuple[Callable[[], bool], Callable[..., None]]
+_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 
 
 def validate_candidate_registry_template_selection(
     *,
     template: CandidateRegistry,
     routes: tuple[DiscoveryCandidateRoute, ...],
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
 ) -> CandidateRegistry:
     """Validate one exact selected subset without trusting stale discovery fields."""
 
-    canonical_template = CandidateRegistry.model_validate(template.model_dump(mode="python"))
+    function_defaults = validate_candidate_registry_template_selection.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 2:
+        raise ValueError("candidate registry revocation boundary changed")
+    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_revocation_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or not trusted_revocation_pristine()
+    ):
+        raise ValueError("candidate registry revocation boundary changed")
     canonical_routes = tuple(
         DiscoveryCandidateRoute.model_validate(route.model_dump(mode="python")) for route in routes
     )
@@ -52,6 +85,13 @@ def validate_candidate_registry_template_selection(
         raise ValueError(
             "candidate registry selection routes must be non-empty, unique, and sorted"
         )
+    for route in canonical_routes:
+        trusted_assignment_gate(
+            exact_model_id=route.exact_model_id,
+            provider_endpoint=route.approved_provider_endpoint,
+        )
+
+    canonical_template = CandidateRegistry.model_validate(template.model_dump(mode="python"))
 
     template_by_id = {
         candidate.exact_model_id: candidate for candidate in canonical_template.candidates
@@ -65,6 +105,14 @@ def validate_candidate_registry_template_selection(
         if template_candidate.approved_provider_endpoint != route.approved_provider_endpoint:
             raise ValueError(
                 "candidate discovery route differs from its operator-approved template endpoint"
+            )
+        for model_id in {
+            template_candidate.exact_model_id,
+            template_candidate.canonical_model_slug,
+        }:
+            trusted_assignment_gate(
+                exact_model_id=model_id,
+                provider_endpoint=route.approved_provider_endpoint,
             )
 
     selected_reviews: dict[str, OperatorLineageReview] = {}
@@ -91,9 +139,32 @@ def derive_candidate_registry_from_discovery(
     template: CandidateRegistry,
     run_manifest: OpenRouterModelDiscoveryRunManifest,
     evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
 ) -> CandidateRegistry:
     """Seal a pending registry from fresh facts plus exact operator policy metadata."""
 
+    function_defaults = derive_candidate_registry_from_discovery.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 2:
+        raise ValueError("candidate registry revocation boundary changed")
+    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_revocation_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or not trusted_revocation_pristine()
+    ):
+        raise ValueError("candidate registry revocation boundary changed")
     manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
         run_manifest.model_dump(mode="python")
     )
@@ -101,6 +172,12 @@ def derive_candidate_registry_from_discovery(
         OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="python"))
         for item in evidence
     )
+    for item in records:
+        for model_id in {item.exact_model_id, item.canonical_slug}:
+            trusted_assignment_gate(
+                exact_model_id=model_id,
+                provider_endpoint=item.approved_provider_endpoint,
+            )
     record_ids = tuple(item.exact_model_id for item in records)
     route_ids = tuple(route.exact_model_id for route in manifest.run_provenance.candidate_routes)
     if record_ids != route_ids or record_ids != tuple(sorted(set(record_ids))):

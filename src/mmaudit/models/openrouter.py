@@ -35,11 +35,25 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic_core import SchemaValidator
 
+import mmaudit.config as config_module
+import mmaudit.models.candidate_revocation as candidate_revocation_module
 import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.route_constraints as route_constraints_module
 import mmaudit.models.usage as usage_module
-from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
+import mmaudit.orchestration.budgets as budgets_module
+from mmaudit.config import (
+    ExecutionConfig,
+    ModelRetryPolicy,
+    PrivacyConfig,
+    TokenBudgetConfig,
+    model_family,
+)
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationError,
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     OPENROUTER_API_IDENTITY,
@@ -194,6 +208,7 @@ from mmaudit.models.token_planning import (
     TokenPlanningError,
     build_output_token_allocations,
     build_request_token_plan,
+    request_token_plan_projection_sha256,
 )
 from mmaudit.models.truncation import (
     _CANONICAL_JSON_DUMPS as _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS,
@@ -291,6 +306,10 @@ type _ProviderCompositeCallRoots = tuple[
     Callable[..., object],
     Callable[..., bool],
 ]
+type _CandidateRevocationCallRoots = tuple[
+    Callable[[], bool],
+    Callable[..., None],
+]
 
 _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS: _UsageOriginCallRoots = (
     _attest_authrunner_owned_real_usage_origin,
@@ -301,6 +320,10 @@ _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS: _GenerationOriginCallRoots = (
     _attest_authrunner_generation_origin,
     _has_authrunner_generation_origin,
     revoke_trusted_generation_verification,
+)
+_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
 )
 
 _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE = CandidateReviewFramedDocument
@@ -1979,6 +2002,10 @@ class OpenRouterRequestLimitError(OpenRouterError):
     pass
 
 
+class OpenRouterRetryPolicyDriftError(OpenRouterRequestLimitError):
+    """The split transient/schema retry policy changed during one logical request."""
+
+
 class _OpenRouterRoutePlanningError(OpenRouterRequestLimitError):
     """Frozen route evidence cannot support token planning."""
 
@@ -2073,34 +2100,33 @@ def _require_exact_openrouter_request_body(
     return body_sha256
 
 
-def _candidate_review_request_token_plan_projection_sha256(
-    plan: RequestTokenPlan,
-) -> str:
-    """Commit the request-local plan while excluding only live budget-position counters."""
+def _build_candidate_review_request_token_plan_projection_sha256() -> Callable[
+    [RequestTokenPlan], str
+]:
+    """Seal the shared projector into the provider request boundary."""
 
-    if type(plan) is not RequestTokenPlan:
-        raise OpenRouterCandidateReviewBoundaryError(
-            "candidate-review token-plan projection requires exact typed evidence"
-        )
-    plan_payload = plan.model_dump(
-        mode="json",
-        exclude={"global_budget", "plan_sha256"},
-    )
-    global_budget = plan.global_budget
-    plan_payload["global_budget"] = {
-        "schema_version": global_budget.schema_version,
-        "global_input_token_budget": global_budget.global_input_token_budget,
-        "global_output_token_budget": global_budget.global_output_token_budget,
-        "request_input_tokens": global_budget.request_input_tokens,
-        "request_output_tokens": global_budget.request_output_tokens,
-    }
-    material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(
-        {
-            "domain": "mmaudit.openrouter.candidate-review-token-plan-projection.v1",
-            "request_token_plan": plan_payload,
-        }
-    )
-    return _TRUSTED_HASHLIB_SHA256(material.encode("utf-8")).hexdigest()
+    trusted_projection = request_token_plan_projection_sha256
+    plan_type = RequestTokenPlan
+    boundary_error = OpenRouterCandidateReviewBoundaryError
+
+    def _candidate_review_request_token_plan_projection_sha256(
+        plan: RequestTokenPlan,
+    ) -> str:
+        """Commit request-local semantics without live budget-position counters."""
+
+        if type(plan) is not plan_type:
+            raise boundary_error(
+                "candidate-review token-plan projection requires exact typed evidence"
+            )
+        return trusted_projection(plan)
+
+    return _candidate_review_request_token_plan_projection_sha256
+
+
+_candidate_review_request_token_plan_projection_sha256 = (
+    _build_candidate_review_request_token_plan_projection_sha256()
+)
+del _build_candidate_review_request_token_plan_projection_sha256
 
 
 def _candidate_review_request_material_projection(
@@ -3720,7 +3746,11 @@ def preview_openrouter_structured_request_cost(
         raise OpenRouterRequestCostPreviewError(
             "provider-free request-cost preview discovery manifest does not bind the evidence"
         )
-    configured_attempts = sealed_execution.maximum_model_attempts
+    configured_attempts = _require_current_model_retry_policy(
+        sealed_execution,
+        None,
+        phase="during provider-free request-cost preview",
+    ).maximum_attempts
     attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
     if (
         type(attempt_limit) is not int
@@ -9317,6 +9347,188 @@ def _revalidate_openrouter_discovery_payload(
     )
 
 
+_MODEL_RETRY_ATTEMPT_OUTCOMES = frozenset(
+    {
+        "SUCCESS",
+        "TRANSIENT_NETWORK",
+        "TRANSIENT_STATUS",
+        "SCHEMA_VALIDATION_FAILED",
+        "TERMINAL_HTTP_STATUS",
+        "TERMINAL_TRANSPORT_ERROR",
+        "TERMINAL_OTHER_ERROR",
+        "RETRY_POLICY_DRIFT",
+    }
+)
+_SEALED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY: property = cast(
+    property,
+    vars(ExecutionConfig).get("model_retry_policy"),
+)
+_SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET = cast(
+    FunctionType,
+    _property_getter(ExecutionConfig, "model_retry_policy"),
+)
+_SEALED_MODEL_RETRY_POLICY_BUILD = cast(
+    FunctionType,
+    _classmethod_function(ModelRetryPolicy, "build"),
+)
+_SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE = cast(
+    FunctionType,
+    getattr(ModelRetryPolicy.model_validate, "__func__", None),
+)
+
+
+def _require_current_model_retry_policy(
+    execution: ExecutionConfig,
+    expected: ModelRetryPolicy | None,
+    *,
+    phase: str,
+    _config_module: ModuleType = config_module,
+    _execution_config_type: type[ExecutionConfig] = ExecutionConfig,
+    _model_retry_policy_type: type[ModelRetryPolicy] = ModelRetryPolicy,
+    _model_retry_policy_property: property = _SEALED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY,
+    _model_retry_policy_fget: FunctionType = _SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET,
+    _model_retry_policy_fget_code: CodeType = _SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET.__code__,
+    _model_retry_policy_fget_defaults: tuple[object, ...]
+    | None = _SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET.__defaults__,
+    _model_retry_policy_fget_kwdefaults: dict[str, object]
+    | None = _SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET.__kwdefaults__,
+    _model_retry_policy_build: FunctionType = _SEALED_MODEL_RETRY_POLICY_BUILD,
+    _model_retry_policy_build_code: CodeType = _SEALED_MODEL_RETRY_POLICY_BUILD.__code__,
+    _model_retry_policy_build_defaults: tuple[object, ...]
+    | None = _SEALED_MODEL_RETRY_POLICY_BUILD.__defaults__,
+    _model_retry_policy_build_kwdefaults: dict[str, object]
+    | None = _SEALED_MODEL_RETRY_POLICY_BUILD.__kwdefaults__,
+    _model_retry_policy_model_validate: FunctionType = (_SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE),
+    _model_retry_policy_model_validate_code: CodeType = (
+        _SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE.__code__
+    ),
+    _model_retry_policy_model_validate_defaults: tuple[object, ...]
+    | None = _SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE.__defaults__,
+    _model_retry_policy_model_validate_kwdefaults: dict[str, object]
+    | None = _SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE.__kwdefaults__,
+    _model_retry_policy_validator: object = ModelRetryPolicy.__pydantic_validator__,
+    _model_retry_policy_core_schema: object = ModelRetryPolicy.__pydantic_core_schema__,
+) -> ModelRetryPolicy:
+    """Fail closed if equal-total retry quotas are swapped in-process."""
+
+    if (
+        config_module is not _config_module
+        or ExecutionConfig is not _execution_config_type
+        or _config_module.ExecutionConfig is not _execution_config_type
+        or ModelRetryPolicy is not _model_retry_policy_type
+        or _config_module.ModelRetryPolicy is not _model_retry_policy_type
+        or _execution_config_type.model_retry_policy is not _model_retry_policy_property
+        or _model_retry_policy_property.fget is not _model_retry_policy_fget
+        or _model_retry_policy_fget.__code__ is not _model_retry_policy_fget_code
+        or _model_retry_policy_fget.__defaults__ is not _model_retry_policy_fget_defaults
+        or _model_retry_policy_fget.__kwdefaults__ is not _model_retry_policy_fget_kwdefaults
+        or getattr(
+            vars(_model_retry_policy_type).get("build"),
+            "__func__",
+            None,
+        )
+        is not _model_retry_policy_build
+        or _model_retry_policy_build.__code__ is not _model_retry_policy_build_code
+        or _model_retry_policy_build.__defaults__ is not _model_retry_policy_build_defaults
+        or _model_retry_policy_build.__kwdefaults__ is not _model_retry_policy_build_kwdefaults
+        or getattr(_model_retry_policy_type.model_validate, "__func__", None)
+        is not _model_retry_policy_model_validate
+        or _model_retry_policy_model_validate.__code__
+        is not _model_retry_policy_model_validate_code
+        or _model_retry_policy_model_validate.__defaults__
+        is not _model_retry_policy_model_validate_defaults
+        or _model_retry_policy_model_validate.__kwdefaults__
+        is not _model_retry_policy_model_validate_kwdefaults
+        or _model_retry_policy_type.__pydantic_validator__ is not _model_retry_policy_validator
+        or _model_retry_policy_type.__pydantic_core_schema__ is not _model_retry_policy_core_schema
+        or type(execution) is not _execution_config_type
+        or (expected is not None and type(expected) is not _model_retry_policy_type)
+    ):
+        raise OpenRouterRetryPolicyDriftError("model retry policy custody has an invalid type")
+    try:
+        current = _model_retry_policy_fget(execution)
+    except (TypeError, ValueError):
+        raise OpenRouterRetryPolicyDriftError(
+            f"model retry policy became invalid {phase}"
+        ) from None
+    if type(current) is not _model_retry_policy_type:
+        raise OpenRouterRetryPolicyDriftError(f"model retry policy has an invalid type {phase}")
+    if expected is not None and (
+        current != expected or current.policy_sha256 != expected.policy_sha256
+    ):
+        raise OpenRouterRetryPolicyDriftError(f"model retry policy changed {phase}")
+    return cast(ModelRetryPolicy, current)
+
+
+def _terminal_model_retry_attempt_outcome(error: Exception) -> str:
+    if isinstance(error, OpenRouterRetryPolicyDriftError):
+        return "RETRY_POLICY_DRIFT"
+    if isinstance(error, OpenRouterStructuredOutputError) and error.failure_code is (
+        StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    ):
+        return "SCHEMA_VALIDATION_FAILED"
+    if isinstance(error, OpenRouterTransientError):
+        return "TRANSIENT_STATUS"
+    return "TERMINAL_OTHER_ERROR"
+
+
+def _model_retry_routing_evidence(
+    policy: ModelRetryPolicy,
+    *,
+    maximum_attempts_for_request: int,
+    attempts: int,
+    attempt_outcomes: Sequence[str],
+) -> dict[str, Any]:
+    """Build ordered, raw-output-free retry evidence for one exact route."""
+
+    exact_integers = (maximum_attempts_for_request, attempts)
+    if (
+        type(policy) is not ModelRetryPolicy
+        or any(type(value) is not int for value in exact_integers)
+        or not 1 <= maximum_attempts_for_request <= policy.maximum_attempts
+        or not 1 <= attempts <= maximum_attempts_for_request
+        or len(attempt_outcomes) != attempts
+        or any(
+            type(outcome) is not str or outcome not in _MODEL_RETRY_ATTEMPT_OUTCOMES
+            for outcome in attempt_outcomes
+        )
+    ):
+        raise OpenRouterRetryPolicyDriftError("model retry attempt evidence is inconsistent")
+    ordered_attempts = [
+        {"attempt_ordinal": ordinal, "outcome": outcome}
+        for ordinal, outcome in enumerate(attempt_outcomes, start=1)
+    ]
+    admitted_retry_outcomes = tuple(attempt_outcomes[:-1])
+    if any(
+        outcome not in {"TRANSIENT_NETWORK", "TRANSIENT_STATUS", "SCHEMA_VALIDATION_FAILED"}
+        for outcome in admitted_retry_outcomes
+    ):
+        raise OpenRouterRetryPolicyDriftError("model retry attempt sequence is inconsistent")
+    transient_retries_used = sum(
+        outcome in {"TRANSIENT_NETWORK", "TRANSIENT_STATUS"} for outcome in admitted_retry_outcomes
+    )
+    schema_validation_retries_used = admitted_retry_outcomes.count("SCHEMA_VALIDATION_FAILED")
+    if (
+        transient_retries_used > policy.transient_retry_limit
+        or schema_validation_retries_used > policy.schema_validation_retry_limit
+    ):
+        raise OpenRouterRetryPolicyDriftError("model retry attempt quota is inconsistent")
+    values = {
+        "model_retry_policy": policy.model_dump(mode="json"),
+        "model_retry_policy_sha256": policy.policy_sha256,
+        "maximum_attempts_for_request": maximum_attempts_for_request,
+        "transient_retries_used": transient_retries_used,
+        "schema_validation_retries_used": schema_validation_retries_used,
+        "model_retry_attempts": ordered_attempts,
+    }
+    return {
+        **values,
+        "model_retry_evidence_sha256": _canonical_sha256(
+            {"domain": "mmaudit.model-retry-evidence.v1", **values}
+        ),
+    }
+
+
 class OpenRouterClient:
     """Minimal client that never enables tools, web access, or random model routing."""
 
@@ -10021,6 +10233,62 @@ class OpenRouterClient:
         ):
             self._owned_client_identity.headers.pop("Authorization", None)
 
+    def _require_candidate_revocation_preflight(
+        self,
+        *,
+        model_ids: tuple[str, ...],
+        provider_endpoints: tuple[str | None, ...] | None = None,
+        _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+            _CANDIDATE_REVOCATION_CALL_ROOTS
+        ),
+    ) -> None:
+        """Reject selected tombstones before request construction or mutable state."""
+
+        method_defaults = OpenRouterClient._require_candidate_revocation_preflight.__kwdefaults__
+        if (
+            type(_candidate_revocation_call_roots) is not tuple
+            or len(_candidate_revocation_call_roots) != 2
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        trusted_pristine, trusted_gate = _candidate_revocation_call_roots
+        if (
+            type(method_defaults) is not dict
+            or method_defaults.get("_candidate_revocation_call_roots")
+            is not _candidate_revocation_call_roots
+            or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+            or candidate_revocation_callables_are_pristine is not trusted_pristine
+            or require_candidate_assignment_eligible is not trusted_gate
+            or candidate_revocation_module.candidate_revocation_callables_are_pristine
+            is not trusted_pristine
+            or candidate_revocation_module.require_candidate_assignment_eligible is not trusted_gate
+            or OpenRouterClient._require_candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or not trusted_pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        endpoints: tuple[str | None, ...]
+        if provider_endpoints is not None:
+            if (
+                type(provider_endpoints) is not tuple
+                or not provider_endpoints
+                or any(
+                    endpoint is not None and type(endpoint) is not str
+                    for endpoint in provider_endpoints
+                )
+            ):
+                raise OpenRouterModelError("candidate revocation endpoint boundary changed")
+            endpoints = provider_endpoints
+        elif self.provider_policy.allow_fallbacks or not self.provider_policy.configured_endpoints:
+            endpoints = (None,)
+        else:
+            endpoints = tuple(self.provider_policy.configured_endpoints)
+        try:
+            for model_id in sorted(set(model_ids)):
+                for endpoint in endpoints:
+                    trusted_gate(exact_model_id=model_id, provider_endpoint=endpoint)
+        except CandidateSelectionRevocationError as exc:
+            raise OpenRouterModelError("selected model route is revoked") from exc
+
     async def validate_authentication(self) -> None:
         """Validate the current bearer credential without returning key metadata."""
 
@@ -10064,9 +10332,30 @@ class OpenRouterClient:
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
         return response
 
-    async def get_refresh_model_endpoint_metadata(self, model: str) -> dict[str, Any]:
+    async def get_refresh_model_endpoint_metadata(
+        self,
+        model: str,
+        *,
+        _candidate_revocation_preflight: Callable[..., None] = (
+            _require_candidate_revocation_preflight
+        ),
+    ) -> dict[str, Any]:
         """Return exact endpoint metadata while preserving an empty withdrawn set."""
 
+        method_defaults = OpenRouterClient.get_refresh_model_endpoint_metadata.__kwdefaults__
+        if (
+            type(method_defaults) is not dict
+            or method_defaults.get("_candidate_revocation_preflight")
+            is not _candidate_revocation_preflight
+            or _candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or OpenRouterClient._require_candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or _candidate_revocation_preflight.__code__
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        _candidate_revocation_preflight(self, model_ids=(model,))
         _require_exact_model_id(model)
         response = await self._request_metadata(openrouter_endpoint_query(model))
         data = response.get("data")
@@ -10083,9 +10372,30 @@ class OpenRouterClient:
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
         return response
 
-    async def get_model_metadata(self, exact_model_id: str) -> dict[str, Any]:
+    async def get_model_metadata(
+        self,
+        exact_model_id: str,
+        *,
+        _candidate_revocation_preflight: Callable[..., None] = (
+            _require_candidate_revocation_preflight
+        ),
+    ) -> dict[str, Any]:
         """Resolve one exact catalog ID and validate the returned canonical identity."""
 
+        method_defaults = OpenRouterClient.get_model_metadata.__kwdefaults__
+        if (
+            type(method_defaults) is not dict
+            or method_defaults.get("_candidate_revocation_preflight")
+            is not _candidate_revocation_preflight
+            or _candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or OpenRouterClient._require_candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or _candidate_revocation_preflight.__code__
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        _candidate_revocation_preflight(self, model_ids=(exact_model_id,))
         _require_exact_model_id(exact_model_id)
         response = await self._request_metadata(openrouter_model_query(exact_model_id))
         data = response.get("data")
@@ -10105,6 +10415,10 @@ class OpenRouterClient:
             raise OpenRouterModelError(
                 "OpenRouter single-model metadata has an invalid canonical identity"
             )
+        _candidate_revocation_preflight(
+            self,
+            model_ids=(exact_model_id, observed_id, canonical_slug),
+        )
         return response
 
     async def list_model_endpoints(self, model: str) -> list[dict[str, Any]]:
@@ -10326,6 +10640,9 @@ class OpenRouterClient:
         ) = None,
         _request_semaphore: asyncio.Semaphore | None = None,
         _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
+        _candidate_revocation_preflight: Callable[..., None] = (
+            _require_candidate_revocation_preflight
+        ),
     ) -> OpenRouterGenerationEvidence:
         """Poll boundedly for one eventual, content-free generation attestation."""
 
@@ -10344,6 +10661,25 @@ class OpenRouterClient:
         ):
             raise OpenRouterRequestLimitError(
                 "generation reconciliation request does not bind the requested generation"
+            )
+        method_defaults = OpenRouterClient.get_generation_evidence.__kwdefaults__
+        if (
+            type(method_defaults) is not dict
+            or method_defaults.get("_candidate_revocation_preflight")
+            is not _candidate_revocation_preflight
+            or _candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or OpenRouterClient._require_candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or _candidate_revocation_preflight.__code__
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE
+        ):
+            raise OpenRouterPrivacyError("candidate revocation boundary changed")
+        if expectation is not None:
+            _candidate_revocation_preflight(
+                self,
+                model_ids=(expectation.exact_model_id, expectation.canonical_model_id),
+                provider_endpoints=(expectation.usage_record.actual_provider_endpoint,),
             )
         if _request_semaphore is not None and not isinstance(
             _request_semaphore,
@@ -10733,6 +11069,9 @@ class OpenRouterClient:
             _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
         ),
         _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
+        _candidate_revocation_preflight: Callable[..., None] = (
+            _require_candidate_revocation_preflight
+        ),
     ) -> TrustedGenerationVerification:
         """Authenticate and freshly re-fetch an exact generation set without completions."""
 
@@ -10762,6 +11101,25 @@ class OpenRouterClient:
             )
             for request in requests
         )
+        method_kwdefaults = OpenRouterClient.create_trusted_generation_verification.__kwdefaults__
+        if (
+            type(method_kwdefaults) is not dict
+            or method_kwdefaults.get("_candidate_revocation_preflight")
+            is not _candidate_revocation_preflight
+            or _candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or OpenRouterClient._require_candidate_revocation_preflight
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or _candidate_revocation_preflight.__code__
+            is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE
+        ):
+            raise OpenRouterPrivacyError("candidate revocation boundary changed")
+        for request in normalized:
+            _candidate_revocation_preflight(
+                self,
+                model_ids=(request.exact_model_id, request.canonical_model_id),
+                provider_endpoints=(request.usage_record.actual_provider_endpoint,),
+            )
         generation_ids = tuple(
             request.usage_record.openrouter_generation_id for request in normalized
         )
@@ -10830,7 +11188,6 @@ class OpenRouterClient:
                 "NONCREDITING_SMOKE generation verification rejects mixed or invalid requests "
                 f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
             )
-        method_kwdefaults = OpenRouterClient.create_trusted_generation_verification.__kwdefaults__
         if exact_smoke and (
             type(method_kwdefaults) is not dict
             or method_kwdefaults.get("_authrunner_origin_call_roots")
@@ -14063,7 +14420,11 @@ class OpenRouterClient:
                 "scheduler task lacks the exact framed candidate-review contract"
             )
 
-        maximum_attempts = self.execution.maximum_model_attempts
+        maximum_attempts = _require_current_model_retry_policy(
+            self.execution,
+            None,
+            phase="before candidate-review resource preview",
+        ).maximum_attempts
         if self.budget.max_requests_per_agent < maximum_attempts:
             raise OpenRouterRequestLimitError(
                 "candidate-review retry attempts exceed the configured request limit"
@@ -14627,7 +14988,11 @@ class OpenRouterClient:
             raise OpenRouterRequestCostPreviewError(
                 "portfolio resource preview scheduler task lacks an exact model"
             )
-        maximum_attempts = self.execution.maximum_model_attempts
+        maximum_attempts = _require_current_model_retry_policy(
+            self.execution,
+            None,
+            phase="before portfolio resource preview",
+        ).maximum_attempts
         if self.budget.max_requests_per_agent < maximum_attempts:
             raise OpenRouterRequestLimitError(
                 "portfolio retry attempts exceed the configured request limit"
@@ -15034,6 +15399,9 @@ class OpenRouterClient:
         _maximum_attempts: int | None = None,
         _expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
         _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
+        _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+            _CANDIDATE_REVOCATION_CALL_ROOTS
+        ),
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
@@ -15104,7 +15472,12 @@ class OpenRouterClient:
             _expected_resource_preview = sealed_expected_resource_preview
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
-        configured_attempts = self.execution.maximum_model_attempts
+        retry_policy = _require_current_model_retry_policy(
+            self.execution,
+            None,
+            phase="before logical request planning",
+        )
+        configured_attempts = retry_policy.maximum_attempts
         maximum_attempts = configured_attempts if _maximum_attempts is None else _maximum_attempts
         if type(maximum_attempts) is not int or not 1 <= maximum_attempts <= configured_attempts:
             raise OpenRouterRequestLimitError(
@@ -15119,6 +15492,53 @@ class OpenRouterClient:
             )
         for model in models:
             _require_exact_model_id(model)
+        completion_kwdefaults = OpenRouterClient.complete_with_evidence.__kwdefaults__
+        if (
+            type(_candidate_revocation_call_roots) is not tuple
+            or len(_candidate_revocation_call_roots) != 2
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+        if (
+            type(completion_kwdefaults) is not dict
+            or completion_kwdefaults.get("_candidate_revocation_call_roots")
+            is not _candidate_revocation_call_roots
+            or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+            or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+            or require_candidate_assignment_eligible is not trusted_assignment_gate
+            or candidate_revocation_module.candidate_revocation_callables_are_pristine
+            is not trusted_revocation_pristine
+            or candidate_revocation_module.require_candidate_assignment_eligible
+            is not trusted_assignment_gate
+            or not trusted_revocation_pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        try:
+            configured_endpoints = self.provider_policy.configured_endpoints
+            for model in models:
+                identity = self._model_identities.get(model)
+                candidate_model_ids = {model}
+                if identity is not None:
+                    candidate_model_ids.add(identity.canonical_slug)
+                for candidate_model_id in candidate_model_ids:
+                    if self.provider_policy.allow_fallbacks:
+                        trusted_assignment_gate(
+                            exact_model_id=candidate_model_id,
+                            provider_endpoint=None,
+                        )
+                    elif configured_endpoints:
+                        for endpoint in configured_endpoints:
+                            trusted_assignment_gate(
+                                exact_model_id=candidate_model_id,
+                                provider_endpoint=endpoint,
+                            )
+                    else:
+                        trusted_assignment_gate(
+                            exact_model_id=candidate_model_id,
+                            provider_endpoint=None,
+                        )
+        except CandidateSelectionRevocationError as exc:
+            raise OpenRouterModelError("configured model route is revoked") from exc
         if self.provider_policy.certification and len(models) != 1:
             raise OpenRouterModelError(
                 "certification requires exactly one explicitly qualified model"
@@ -15534,6 +15954,7 @@ class OpenRouterClient:
                             qualification_bound_reasoning_plans.get(model)
                         ),
                         maximum_attempts=maximum_attempts,
+                        retry_policy=retry_policy,
                         expected_resource_preview=_expected_resource_preview,
                         expected_request_cost_preview=expected_request_cost_preview,
                         _authrunner_operation_grant=transport_operation_grant,
@@ -16120,12 +16541,18 @@ class OpenRouterClient:
         refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None = None,
         qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
         maximum_attempts: int | None = None,
+        retry_policy: ModelRetryPolicy | None = None,
         expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
         expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
         _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
     ) -> StructuredCompletion[ResponseT]:
         paid_controls_required = _trusted_paid_controls_required(self)
-        configured_attempts = self.execution.maximum_model_attempts
+        sealed_retry_policy = _require_current_model_retry_policy(
+            self.execution,
+            retry_policy,
+            phase="before route request planning",
+        )
+        configured_attempts = sealed_retry_policy.maximum_attempts
         attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
         if type(attempt_limit) is not int or not 1 <= attempt_limit <= configured_attempts:
             raise OpenRouterRequestLimitError(
@@ -16727,6 +17154,7 @@ class OpenRouterClient:
         attempts = 0
         transient_retries = 0
         schema_validation_retries = 0
+        attempt_outcomes: list[str] = []
         usage_recorded = False
         accounted_cost_usd = 0.0
         accounted_cost_usd_exact = Decimal(0)
@@ -16913,9 +17341,13 @@ class OpenRouterClient:
                             framed_document,
                             request_id=request_id,
                         )
-                    except CandidateReviewTruncationError:
+                    except CandidateReviewTruncationError as exc:
+                        if exc.structured_output_failure_code is None:
+                            raise OpenRouterCandidateReviewBoundaryError(
+                                "candidate-review complete document violated a raw bound"
+                            ) from None
                         raise OpenRouterStructuredOutputError(
-                            failure_code=(StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED),
+                            failure_code=exc.structured_output_failure_code,
                         ) from None
                     decoded_output = cast(
                         StructuredOutputDecodeResult[ResponseT],
@@ -17008,6 +17440,11 @@ class OpenRouterClient:
             nonlocal active_network_attempted
             nonlocal active_reservation_committed
             nonlocal last_dispatched_refresh_pricing_routing_evidence
+            _require_current_model_retry_policy(
+                self.execution,
+                sealed_retry_policy,
+                phase="inside provider transport lock",
+            )
             if expected_resource_preview is not None and (
                 not _candidate_review_protocol_boundary_is_pristine()
                 or not _openrouter_client_callables_are_pristine()
@@ -17153,6 +17590,11 @@ class OpenRouterClient:
 
         try:
             while True:
+                _require_current_model_retry_policy(
+                    self.execution,
+                    sealed_retry_policy,
+                    phase="before attempt reservation",
+                )
                 # Every reservation is a distinct provider-attempt state machine.
                 # Reset transport/commit and observed accounting state before any
                 # per-attempt host check so a retry that fails before transport is
@@ -17262,6 +17704,7 @@ class OpenRouterClient:
                         planned_reasoning_tokens=(request_token_plan.reserved_reasoning_tokens),
                         planned_completion_tokens=(request_token_plan.requested_completion_tokens),
                         request_token_plan_sha256=request_token_plan.plan_sha256,
+                        model_retry_policy_sha256=sealed_retry_policy.policy_sha256,
                         request_limit_scope=request_limit_scope,
                     )
                     # Retain exact attempt custody immediately after the durable
@@ -17591,9 +18034,15 @@ class OpenRouterClient:
                     if paid_controls_required:
                         _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
                 except (httpx.TimeoutException, httpx.NetworkError):
+                    _require_current_model_retry_policy(
+                        self.execution,
+                        sealed_retry_policy,
+                        phase="after transient network failure",
+                    )
+                    attempt_outcomes.append("TRANSIENT_NETWORK")
                     await finalize_active(None)
                     if (
-                        transient_retries >= self.execution.max_model_retries
+                        transient_retries >= sealed_retry_policy.transient_retry_limit
                         or attempts >= attempt_limit
                     ):
                         raise OpenRouterTimeoutError("model request timed out") from None
@@ -17601,8 +18050,19 @@ class OpenRouterClient:
                     await self._backoff(transient_retries, None)
                     continue
                 except httpx.HTTPError:
+                    _require_current_model_retry_policy(
+                        self.execution,
+                        sealed_retry_policy,
+                        phase="after terminal transport failure",
+                    )
+                    attempt_outcomes.append("TERMINAL_TRANSPORT_ERROR")
                     await finalize_active(None)
                     raise OpenRouterSchemaError("model transport response was invalid") from None
+                _require_current_model_retry_policy(
+                    self.execution,
+                    sealed_retry_policy,
+                    phase="after provider transport",
+                )
                 response_headers = response.headers
                 try:
                     response_value = json.loads(
@@ -17615,18 +18075,22 @@ class OpenRouterClient:
                     _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, response_value)
                     raw_payload = response_value
                 if response.status_code in {401, 403}:
+                    attempt_outcomes.append("TERMINAL_HTTP_STATUS")
                     await finalize_active(None)
                     raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
                 if response.status_code == 402:
+                    attempt_outcomes.append("TERMINAL_HTTP_STATUS")
                     await finalize_active(None)
                     raise BudgetExhaustedError("OpenRouter account budget rejected the request")
                 if response.status_code == 404:
+                    attempt_outcomes.append("TERMINAL_HTTP_STATUS")
                     await finalize_active(None)
                     raise OpenRouterModelError(f"configured model is unavailable: {model}")
                 if is_retryable_status(response.status_code):
+                    attempt_outcomes.append("TRANSIENT_STATUS")
                     await finalize_active(None)
                     if (
-                        transient_retries >= self.execution.max_model_retries
+                        transient_retries >= sealed_retry_policy.transient_retry_limit
                         or attempts >= attempt_limit
                     ):
                         if response.status_code == 429:
@@ -17647,6 +18111,7 @@ class OpenRouterClient:
                     )
                     continue
                 if response.status_code >= 400:
+                    attempt_outcomes.append("TERMINAL_HTTP_STATUS")
                     await finalize_active(None)
                     raise OpenRouterModelError(
                         f"model request rejected with HTTP {response.status_code}"
@@ -17660,7 +18125,14 @@ class OpenRouterClient:
                     if output_error.failure_code is not (
                         StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
                     ):
+                        attempt_outcomes.append("TERMINAL_OTHER_ERROR")
                         raise
+                    attempt_outcomes.append("SCHEMA_VALIDATION_FAILED")
+                    _require_current_model_retry_policy(
+                        self.execution,
+                        sealed_retry_policy,
+                        phase="after schema-validation failure classification",
+                    )
                     response_schema_generation.require_current(
                         response_model,
                         phase="after schema-validation failure classification",
@@ -17673,14 +18145,15 @@ class OpenRouterClient:
                             "candidate-review completion boundary changed after decoding failure"
                         ) from output_error
                     if (
-                        schema_validation_retries >= self.execution.max_schema_validation_retries
+                        schema_validation_retries
+                        >= sealed_retry_policy.schema_validation_retry_limit
                         or attempts >= attempt_limit
                     ):
-                        if self.execution.max_schema_validation_retries == 0:
+                        if sealed_retry_policy.schema_validation_retry_limit == 0:
                             raise
                         raise OpenRouterSchemaValidationRetryExhaustedError(
                             attempts=attempts,
-                            configured_retries=(self.execution.max_schema_validation_retries),
+                            configured_retries=(sealed_retry_policy.schema_validation_retry_limit),
                             retries_used=schema_validation_retries,
                             attempt_limit=attempt_limit,
                             repair_evidence=output_error.repair_evidence,
@@ -17696,6 +18169,7 @@ class OpenRouterClient:
                         },
                     )
                     continue
+                attempt_outcomes.append("SUCCESS")
                 break
 
             assert response_hash is not None
@@ -17734,6 +18208,14 @@ class OpenRouterClient:
                 refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
                 refresh_pricing_reservation_checks=refresh_pricing_reservation_checks,
                 refresh_pricing_transport_checks=refresh_pricing_transport_checks,
+            )
+            routing.update(
+                _model_retry_routing_evidence(
+                    sealed_retry_policy,
+                    maximum_attempts_for_request=attempt_limit,
+                    attempts=attempts,
+                    attempt_outcomes=attempt_outcomes,
+                )
             )
             if expected_request_cost_preview is not None:
                 routing.update(
@@ -17966,6 +18448,51 @@ class OpenRouterClient:
                     if request_token_plan.reasoning_plan is not None and active_network_attempted
                     else None
                 )
+                if len(attempt_outcomes) < attempts:
+                    attempt_outcomes.extend(
+                        _terminal_model_retry_attempt_outcome(terminal_error)
+                        for _ in range(attempts - len(attempt_outcomes))
+                    )
+                failed_routing = _TRUSTED_FAILURE_ROUTING_EVIDENCE(
+                    self,
+                    payload=raw_payload,
+                    response_headers=response_headers,
+                    schema_hash=schema_hash,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    latency_ms=latency_ms,
+                    error=terminal_error,
+                    structured_output_plan=structured_output_plan,
+                    request_body_sha256=request_body_hash,
+                    response_sha256=response_hash,
+                    validated_response_sha256=validated_response_hash,
+                    qualification_binding=qualification_binding,
+                    provider_policy=request_provider_policy,
+                    requested_model=model,
+                    model_identity=self._model_identities.get(model),
+                    request_token_plan=request_token_plan,
+                    token_reservations=attempt_reservations,
+                    context_request_evidence=context_request_evidence,
+                    audit_routing_evidence=(
+                        last_dispatched_audit_routing_evidence or audit_routing_evidence
+                    ),
+                    refresh_routing_evidence=(
+                        last_dispatched_refresh_routing_evidence or refresh_routing_evidence
+                    ),
+                    refresh_pricing_routing_evidence=(refresh_pricing_routing_evidence),
+                    refresh_pricing_control=refresh_pricing_control,
+                    refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
+                    refresh_pricing_reservation_checks=(refresh_pricing_reservation_checks),
+                    refresh_pricing_transport_checks=refresh_pricing_transport_checks,
+                )
+                failed_routing.update(
+                    _model_retry_routing_evidence(
+                        sealed_retry_policy,
+                        maximum_attempts_for_request=attempt_limit,
+                        attempts=attempts,
+                        attempt_outcomes=attempt_outcomes,
+                    )
+                )
                 failed_usage = UsageRecord(
                     request_id=request_id,
                     role=role,
@@ -17989,38 +18516,7 @@ class OpenRouterClient:
                         format(initial_cost, "f") if initial_cost is not None else None
                     ),
                     accounted_cost_usd_exact=format(accounted_cost_usd_exact, "f"),
-                    routing=_TRUSTED_FAILURE_ROUTING_EVIDENCE(
-                        self,
-                        payload=raw_payload,
-                        response_headers=response_headers,
-                        schema_hash=schema_hash,
-                        started_at=started_at,
-                        ended_at=ended_at,
-                        latency_ms=latency_ms,
-                        error=terminal_error,
-                        structured_output_plan=structured_output_plan,
-                        request_body_sha256=request_body_hash,
-                        response_sha256=response_hash,
-                        validated_response_sha256=validated_response_hash,
-                        qualification_binding=qualification_binding,
-                        provider_policy=request_provider_policy,
-                        requested_model=model,
-                        model_identity=self._model_identities.get(model),
-                        request_token_plan=request_token_plan,
-                        token_reservations=attempt_reservations,
-                        context_request_evidence=context_request_evidence,
-                        audit_routing_evidence=(
-                            last_dispatched_audit_routing_evidence or audit_routing_evidence
-                        ),
-                        refresh_routing_evidence=(
-                            last_dispatched_refresh_routing_evidence or refresh_routing_evidence
-                        ),
-                        refresh_pricing_routing_evidence=(refresh_pricing_routing_evidence),
-                        refresh_pricing_control=refresh_pricing_control,
-                        refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
-                        refresh_pricing_reservation_checks=(refresh_pricing_reservation_checks),
-                        refresh_pricing_transport_checks=refresh_pricing_transport_checks,
-                    ),
+                    routing=failed_routing,
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
                     response_sha256=response_hash,
@@ -19370,6 +19866,352 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError("operator credential appeared in provider data")
 
 
+def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
+    """Seal candidate revocation roots around every selected provider read.
+
+    The public wrappers retain their expected preflight in closure custody. A
+    coordinated replacement of the class helper, its module pins, and method
+    keyword defaults therefore fails before the original method can construct a
+    provider request.
+    """
+
+    client_type = OpenRouterClient
+    helper = client_type._require_candidate_revocation_preflight
+    endpoint_metadata_implementation = client_type.get_model_endpoint_metadata
+    refresh_implementation = client_type.get_refresh_model_endpoint_metadata
+    model_implementation = client_type.get_model_metadata
+    list_endpoints_implementation = client_type.list_model_endpoints
+    generation_implementation = client_type.get_generation_evidence
+    verification_implementation = client_type.create_trusted_generation_verification
+    trusted_candidate_pristine = candidate_revocation_callables_are_pristine
+    trusted_candidate_gate = require_candidate_assignment_eligible
+    trusted_candidate_module = candidate_revocation_module
+    candidate_call_roots = _CANDIDATE_REVOCATION_CALL_ROOTS
+    module_globals = globals()
+    empty_cell = object()
+    trusted_object_getattribute = object.__getattribute__
+    selected_instance_names = frozenset(
+        {
+            "get_model_endpoint_metadata",
+            "get_refresh_model_endpoint_metadata",
+            "get_model_metadata",
+            "list_model_endpoints",
+            "get_generation_evidence",
+            "create_trusted_generation_verification",
+        }
+    )
+
+    def function_state(function: FunctionType) -> tuple[object, ...]:
+        closure = function.__closure__
+        closure_values: list[tuple[object, object]] = []
+        for cell in closure or ():
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                contents = empty_cell
+            closure_values.append((cell, contents))
+        kwdefaults = function.__kwdefaults__
+        attributes = function.__dict__
+        return (
+            function,
+            function.__code__,
+            function.__defaults__,
+            kwdefaults,
+            tuple(sorted((name, value) for name, value in (kwdefaults or {}).items())),
+            function.__globals__,
+            closure,
+            tuple(closure_values),
+            attributes,
+            tuple(sorted(attributes.items())),
+        )
+
+    def function_state_is_current(state: tuple[object, ...]) -> bool:
+        function = state[0]
+        if type(function) is not FunctionType:
+            return False
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        current_closure = function.__closure__
+        expected_kwdefaults = cast(tuple[tuple[str, object], ...], state[4])
+        expected_closure = cast(tuple[tuple[object, object], ...], state[7])
+        expected_attributes = cast(tuple[tuple[str, object], ...], state[9])
+        if function is verification:
+            expected_kwdefault_map = dict(expected_kwdefaults)
+            cleanup_roots = (
+                current_kwdefaults.get("_authrunner_cleanup_call_roots")
+                if type(current_kwdefaults) is dict
+                else None
+            )
+            kwdefaults_are_current = (
+                type(current_kwdefaults) is dict
+                and set(current_kwdefaults)
+                == {
+                    "_authrunner_origin_call_roots",
+                    "_authrunner_cleanup_call_roots",
+                    "_candidate_revocation_preflight",
+                }
+                and current_kwdefaults.get("_authrunner_origin_call_roots")
+                is expected_kwdefault_map["_authrunner_origin_call_roots"]
+                and current_kwdefaults.get("_candidate_revocation_preflight") is helper
+                and (
+                    cleanup_roots is None
+                    or (
+                        type(cleanup_roots) is tuple
+                        and len(cleanup_roots) == 3
+                        and all(type(item) is FunctionType for item in cleanup_roots)
+                    )
+                )
+            )
+        else:
+            kwdefaults_are_current = (
+                type(current_kwdefaults) in {dict, type(None)}
+                and current_kwdefaults is state[3]
+                and len(current_kwdefaults or {}) == len(expected_kwdefaults)
+                and all(
+                    (current_kwdefaults or {}).get(name) is value
+                    for name, value in expected_kwdefaults
+                )
+            )
+        if (
+            function.__code__ is not state[1]
+            or function.__defaults__ is not state[2]
+            or not kwdefaults_are_current
+            or function.__globals__ is not state[5]
+            or current_closure is not state[6]
+            or current_attributes is not state[8]
+            or type(current_attributes) is not dict
+            or len(current_attributes) != len(expected_attributes)
+            or any(current_attributes.get(name) is not value for name, value in expected_attributes)
+            or len(current_closure or ()) != len(expected_closure)
+        ):
+            return False
+        for current_cell, (expected_cell, expected_value) in zip(
+            current_closure or (), expected_closure, strict=True
+        ):
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = empty_cell
+            if current_value is not expected_value:
+                return False
+        return True
+
+    def pristine() -> bool:
+        try:
+            return (
+                module_globals is module_globals_seal
+                and states is states_seal
+                and wrappers is wrappers_seal
+                and module_globals.get("_openrouter_candidate_selected_read_boundary_is_pristine")
+                is pristine
+                and module_globals.get("candidate_revocation_module") is trusted_candidate_module
+                and module_globals.get("candidate_revocation_callables_are_pristine")
+                is trusted_candidate_pristine
+                and module_globals.get("require_candidate_assignment_eligible")
+                is trusted_candidate_gate
+                and module_globals.get("_CANDIDATE_REVOCATION_CALL_ROOTS") is candidate_call_roots
+                and trusted_candidate_module.candidate_revocation_callables_are_pristine
+                is trusted_candidate_pristine
+                and trusted_candidate_module.require_candidate_assignment_eligible
+                is trusted_candidate_gate
+                and client_type._require_candidate_revocation_preflight is helper
+                and client_type.get_model_endpoint_metadata is endpoint_metadata
+                and client_type.get_refresh_model_endpoint_metadata is refresh
+                and client_type.get_model_metadata is model
+                and client_type.list_model_endpoints is list_endpoints
+                and client_type.get_generation_evidence is generation
+                and client_type.create_trusted_generation_verification is verification
+                and trusted_candidate_pristine()
+                and all(function_state_is_current(state) for state in states)
+            )
+        except BaseException:
+            return False
+
+    def instance_selected_surface_is_pristine(self: OpenRouterClient) -> bool:
+        try:
+            instance_state = trusted_object_getattribute(self, "__dict__")
+        except (AttributeError, TypeError):
+            return False
+        return type(instance_state) is dict and not selected_instance_names.intersection(
+            instance_state
+        )
+
+    async def endpoint_metadata(
+        self: OpenRouterClient,
+        model_id: str,
+    ) -> dict[str, Any]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await endpoint_metadata_implementation(self, model_id)
+
+    async def refresh(
+        self: OpenRouterClient,
+        model_id: str,
+        *,
+        _candidate_revocation_preflight: Callable[..., None] = helper,
+    ) -> dict[str, Any]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or _candidate_revocation_preflight is not helper
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await refresh_implementation(
+            self,
+            model_id,
+            _candidate_revocation_preflight=helper,
+        )
+
+    async def model(
+        self: OpenRouterClient,
+        exact_model_id: str,
+        *,
+        _candidate_revocation_preflight: Callable[..., None] = helper,
+    ) -> dict[str, Any]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or _candidate_revocation_preflight is not helper
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await model_implementation(
+            self,
+            exact_model_id,
+            _candidate_revocation_preflight=helper,
+        )
+
+    async def list_endpoints(
+        self: OpenRouterClient,
+        model_id: str,
+    ) -> list[dict[str, Any]]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await list_endpoints_implementation(self, model_id)
+
+    async def generation(
+        self: OpenRouterClient,
+        generation_id: str,
+        *,
+        reconciliation_request: (
+            GenerationReconciliationExpectation | GenerationVerificationRequest | None
+        ) = None,
+        _request_semaphore: asyncio.Semaphore | None = None,
+        _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
+        _candidate_revocation_preflight: Callable[..., None] = helper,
+    ) -> OpenRouterGenerationEvidence:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or _candidate_revocation_preflight is not helper
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterPrivacyError("candidate revocation boundary changed")
+        return await generation_implementation(
+            self,
+            generation_id,
+            reconciliation_request=reconciliation_request,
+            _request_semaphore=_request_semaphore,
+            _authrunner_operation_grant=_authrunner_operation_grant,
+            _candidate_revocation_preflight=helper,
+        )
+
+    async def verification(
+        self: OpenRouterClient,
+        requests: tuple[GenerationVerificationRequest, ...],
+        *,
+        _authrunner_origin_call_roots: _GenerationOriginCallRoots = (
+            _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
+        ),
+        _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
+        _candidate_revocation_preflight: Callable[..., None] = helper,
+    ) -> TrustedGenerationVerification:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or _candidate_revocation_preflight is not helper
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterPrivacyError("candidate revocation boundary changed")
+        return await verification_implementation(
+            self,
+            requests,
+            _authrunner_origin_call_roots=_authrunner_origin_call_roots,
+            _authrunner_cleanup_call_roots=_authrunner_cleanup_call_roots,
+            _candidate_revocation_preflight=helper,
+        )
+
+    endpoint_metadata.__name__ = "get_model_endpoint_metadata"
+    endpoint_metadata.__qualname__ = "OpenRouterClient.get_model_endpoint_metadata"
+    refresh.__name__ = "get_refresh_model_endpoint_metadata"
+    refresh.__qualname__ = "OpenRouterClient.get_refresh_model_endpoint_metadata"
+    model.__name__ = "get_model_metadata"
+    model.__qualname__ = "OpenRouterClient.get_model_metadata"
+    list_endpoints.__name__ = "list_model_endpoints"
+    list_endpoints.__qualname__ = "OpenRouterClient.list_model_endpoints"
+    generation.__name__ = "get_generation_evidence"
+    generation.__qualname__ = "OpenRouterClient.get_generation_evidence"
+    verification.__name__ = "create_trusted_generation_verification"
+    verification.__qualname__ = "OpenRouterClient.create_trusted_generation_verification"
+    wrappers = (
+        endpoint_metadata,
+        refresh,
+        model,
+        list_endpoints,
+        generation,
+        verification,
+    )
+    pristine_code = pristine.__code__
+    states = tuple(
+        function_state(cast(FunctionType, function))
+        for function in (
+            helper,
+            endpoint_metadata_implementation,
+            refresh_implementation,
+            model_implementation,
+            list_endpoints_implementation,
+            generation_implementation,
+            verification_implementation,
+            instance_selected_surface_is_pristine,
+            endpoint_metadata,
+            refresh,
+            model,
+            list_endpoints,
+            generation,
+            verification,
+        )
+    )
+    module_globals_seal = module_globals
+    states_seal = states
+    wrappers_seal = wrappers
+    type.__setattr__(client_type, "get_model_endpoint_metadata", endpoint_metadata)
+    type.__setattr__(client_type, "get_refresh_model_endpoint_metadata", refresh)
+    type.__setattr__(client_type, "get_model_metadata", model)
+    type.__setattr__(client_type, "list_model_endpoints", list_endpoints)
+    type.__setattr__(client_type, "get_generation_evidence", generation)
+    type.__setattr__(client_type, "create_trusted_generation_verification", verification)
+    return pristine
+
+
+_openrouter_candidate_selected_read_boundary_is_pristine = (
+    _install_candidate_selected_read_boundary()
+)
+del _install_candidate_selected_read_boundary
+if not _openrouter_candidate_selected_read_boundary_is_pristine():
+    raise RuntimeError("candidate selected-read boundary failed its initial integrity check")
+
+
 def _identity_snapshot_from_discovery(
     evidence: OpenRouterModelDiscoveryEvidence,
     *,
@@ -20073,6 +20915,12 @@ _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = (
 _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES = (
     OpenRouterClient.preview_model_portfolio_task_resources
 )
+_TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT = (
+    OpenRouterClient._require_candidate_revocation_preflight
+)
+_TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE = (
+    _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT.__code__
+)
 _TRUSTED_COMPLETE_WITH_EVIDENCE = OpenRouterClient.complete_with_evidence
 _TRUSTED_COMPLETE_ONE = OpenRouterClient._complete_one
 _TRUSTED_BIND_REAL_COMPLETION_IDENTITY = OpenRouterClient._bind_real_completion_identity
@@ -20100,6 +20948,28 @@ _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT = BudgetManager.reconciled_cost_usd_ex
 _TRUSTED_BUDGET_RELEASE = BudgetManager.release
 _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT = BudgetManager.commit_active_reservation_for_transport
 _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER = BudgetManager._current_atomic_ledger
+_TRUSTED_BUDGETS_MODULE = budgets_module
+_TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD = budgets_module._require_accepted_quote_request
+_TRUSTED_CONFIG_MODULE = config_module
+_TRUSTED_EXECUTION_CONFIG_TYPE = ExecutionConfig
+_TRUSTED_MODEL_RETRY_POLICY_TYPE = ModelRetryPolicy
+_TRUSTED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY = _SEALED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY
+_TRUSTED_EXECUTION_MODEL_RETRY_POLICY_FGET = _SEALED_EXECUTION_MODEL_RETRY_POLICY_FGET
+_TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_PROPERTY: property = cast(
+    property,
+    vars(ExecutionConfig).get("maximum_model_attempts"),
+)
+_TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_FGET: FunctionType = cast(
+    FunctionType,
+    _property_getter(ExecutionConfig, "maximum_model_attempts"),
+)
+_TRUSTED_MODEL_RETRY_POLICY_BUILD = _SEALED_MODEL_RETRY_POLICY_BUILD
+_TRUSTED_MODEL_RETRY_POLICY_MODEL_VALIDATE = _SEALED_MODEL_RETRY_POLICY_MODEL_VALIDATE
+_TRUSTED_MODEL_RETRY_POLICY_VALIDATOR: object = ModelRetryPolicy.__pydantic_validator__
+_TRUSTED_MODEL_RETRY_POLICY_CORE_SCHEMA = ModelRetryPolicy.__pydantic_core_schema__
+_TRUSTED_REQUIRE_CURRENT_MODEL_RETRY_POLICY = _require_current_model_retry_policy
+_TRUSTED_TERMINAL_MODEL_RETRY_ATTEMPT_OUTCOME = _terminal_model_retry_attempt_outcome
+_TRUSTED_MODEL_RETRY_ROUTING_EVIDENCE = _model_retry_routing_evidence
 _TRUSTED_ATOMIC_LEDGER_RESERVE = AtomicCostLedger.reserve
 _TRUSTED_ATOMIC_LEDGER_RECONCILE = AtomicCostLedger.reconcile
 _TRUSTED_ATOMIC_LEDGER_RELEASE = AtomicCostLedger.release
@@ -20237,6 +21107,8 @@ def _build_provider_authority_function_graph_guard() -> tuple[
                     untracked_snapshot_cell
                     if name
                     in {
+                        "consumer_state",
+                        "consumer_state_seal",
                         "issuer_callable_states",
                         "issuer_callable_states_seal",
                     }
@@ -20413,6 +21285,9 @@ def _openrouter_client_callables_are_pristine(
     _generation_origin_call_roots: _GenerationOriginCallRoots = (
         _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
     ),
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
     _usage_result_method: Callable[..., UsageRecord] = OpenRouterClient._usage_with_identity_result,
     _bind_method: Callable[..., object] = OpenRouterClient._bind_real_completion_identity,
     _complete_method: Callable[..., object] = OpenRouterClient.complete_with_evidence,
@@ -20464,6 +21339,28 @@ def _openrouter_client_callables_are_pristine(
     _discovery_json_mapping_detacher: Callable[..., object] = (
         _detach_exact_discovery_json_mapping
     ),
+    _retry_policy_guard: Callable[..., object] = _require_current_model_retry_policy,
+    _retry_outcome_classifier: Callable[..., object] = (_terminal_model_retry_attempt_outcome),
+    _retry_evidence_builder: Callable[..., object] = _model_retry_routing_evidence,
+    _budgets_module: ModuleType = budgets_module,
+    _accepted_quote_request_guard: Callable[..., object] = (_TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD),
+    _config_module: ModuleType = config_module,
+    _execution_config_type: type[ExecutionConfig] = ExecutionConfig,
+    _model_retry_policy_type: type[ModelRetryPolicy] = ModelRetryPolicy,
+    _execution_model_retry_policy_property: property = (
+        _TRUSTED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY
+    ),
+    _execution_model_retry_policy_fget: FunctionType = (_TRUSTED_EXECUTION_MODEL_RETRY_POLICY_FGET),
+    _execution_maximum_model_attempts_property: property = (
+        _TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_PROPERTY
+    ),
+    _execution_maximum_model_attempts_fget: FunctionType = (
+        _TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_FGET
+    ),
+    _model_retry_policy_build: Callable[..., object] = _TRUSTED_MODEL_RETRY_POLICY_BUILD,
+    _model_retry_policy_model_validate: FunctionType = (_TRUSTED_MODEL_RETRY_POLICY_MODEL_VALIDATE),
+    _model_retry_policy_validator: object = _TRUSTED_MODEL_RETRY_POLICY_VALIDATOR,
+    _model_retry_policy_core_schema: object = _TRUSTED_MODEL_RETRY_POLICY_CORE_SCHEMA,
     _route_admission_pristine: Callable[[], bool] | None = None,
     _route_admission_single: Callable[..., object] | None = None,
     _route_admission_three: Callable[..., object] | None = None,
@@ -20475,7 +21372,24 @@ def _openrouter_client_callables_are_pristine(
     complete_kwdefaults = _complete_method.__kwdefaults__
     fetch_kwdefaults = _fetch_method.__kwdefaults__
     create_verification_kwdefaults = _create_verification_method.__kwdefaults__
+    budget_reserve_kwdefaults = _TRUSTED_BUDGET_RESERVE.__kwdefaults__
+    retry_guard_kwdefaults = _retry_policy_guard.__kwdefaults__
     pristine_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+    projection_closure = _candidate_review_request_token_plan_projection_sha256.__closure__
+    projection_closure_names = (
+        _candidate_review_request_token_plan_projection_sha256.__code__.co_freevars
+    )
+    if len(projection_closure or ()) != len(projection_closure_names):
+        return False
+    projection_closure_by_name = dict(
+        zip(projection_closure_names, projection_closure or (), strict=True)
+    )
+    try:
+        sealed_token_plan_projection = projection_closure_by_name[
+            "trusted_projection"
+        ].cell_contents
+    except (KeyError, ValueError):
+        return False
     guard_closure = _provider_authority_graph_is_pristine.__closure__
     guard_closure_names = _provider_authority_graph_is_pristine.__code__.co_freevars
     if len(guard_closure or ()) != len(guard_closure_names):
@@ -20529,6 +21443,17 @@ def _openrouter_client_callables_are_pristine(
         and (_TRUSTED_HAS_STRUCTURED_COMPLETION_GENERATION_EVIDENCE is _carrier_contains)
         and _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS is _usage_origin_call_roots
         and _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS is _generation_origin_call_roots
+        and _CANDIDATE_REVOCATION_CALL_ROOTS is _candidate_revocation_call_roots
+        and _candidate_revocation_call_roots
+        == (
+            candidate_revocation_callables_are_pristine,
+            require_candidate_assignment_eligible,
+        )
+        and candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is _candidate_revocation_call_roots[0]
+        and candidate_revocation_module.require_candidate_assignment_eligible
+        is _candidate_revocation_call_roots[1]
+        and _candidate_revocation_call_roots[0]()
         and _usage_origin_call_roots
         == (
             _attest_authrunner_owned_real_usage_origin,
@@ -20621,6 +21546,8 @@ def _openrouter_client_callables_are_pristine(
         and create_verification_kwdefaults.get("_authrunner_cleanup_call_roots")
         is _provider_cleanup_call_roots
         and type(complete_kwdefaults) is dict
+        and complete_kwdefaults.get("_candidate_revocation_call_roots")
+        is _candidate_revocation_call_roots
         and complete_kwdefaults.get("_authrunner_cleanup_call_roots")
         is _provider_cleanup_call_roots
         and type(fetch_kwdefaults) is dict
@@ -20669,6 +21596,67 @@ def _openrouter_client_callables_are_pristine(
             is _TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE
         )
         and _attempt_request_id is _TRUSTED_ATTEMPT_REQUEST_ID
+        and _require_current_model_retry_policy is _retry_policy_guard
+        and _retry_policy_guard is _TRUSTED_REQUIRE_CURRENT_MODEL_RETRY_POLICY
+        and _terminal_model_retry_attempt_outcome is _retry_outcome_classifier
+        and _retry_outcome_classifier is _TRUSTED_TERMINAL_MODEL_RETRY_ATTEMPT_OUTCOME
+        and _model_retry_routing_evidence is _retry_evidence_builder
+        and _retry_evidence_builder is _TRUSTED_MODEL_RETRY_ROUTING_EVIDENCE
+        and budgets_module is _budgets_module
+        and _budgets_module is _TRUSTED_BUDGETS_MODULE
+        and _budgets_module._require_accepted_quote_request is _accepted_quote_request_guard
+        and _accepted_quote_request_guard is _TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD
+        and type(budget_reserve_kwdefaults) is dict
+        and budget_reserve_kwdefaults.get("_accepted_quote_request_guard")
+        is _accepted_quote_request_guard
+        and config_module is _config_module
+        and _config_module is _TRUSTED_CONFIG_MODULE
+        and ExecutionConfig is _execution_config_type
+        and _execution_config_type is _TRUSTED_EXECUTION_CONFIG_TYPE
+        and _config_module.ExecutionConfig is _execution_config_type
+        and ModelRetryPolicy is _model_retry_policy_type
+        and _model_retry_policy_type is _TRUSTED_MODEL_RETRY_POLICY_TYPE
+        and _config_module.ModelRetryPolicy is _model_retry_policy_type
+        and _execution_config_type.model_retry_policy is _execution_model_retry_policy_property
+        and _execution_model_retry_policy_property is _TRUSTED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY
+        and _execution_model_retry_policy_property.fget is _execution_model_retry_policy_fget
+        and _execution_model_retry_policy_fget is _TRUSTED_EXECUTION_MODEL_RETRY_POLICY_FGET
+        and _execution_config_type.maximum_model_attempts
+        is _execution_maximum_model_attempts_property
+        and _execution_maximum_model_attempts_property
+        is _TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_PROPERTY
+        and _execution_maximum_model_attempts_property.fget
+        is _execution_maximum_model_attempts_fget
+        and _execution_maximum_model_attempts_fget is _TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_FGET
+        and getattr(
+            vars(_model_retry_policy_type).get("build"),
+            "__func__",
+            None,
+        )
+        is _model_retry_policy_build
+        and _model_retry_policy_build is _TRUSTED_MODEL_RETRY_POLICY_BUILD
+        and getattr(_model_retry_policy_type.model_validate, "__func__", None)
+        is _model_retry_policy_model_validate
+        and _model_retry_policy_model_validate is _TRUSTED_MODEL_RETRY_POLICY_MODEL_VALIDATE
+        and _model_retry_policy_type.__pydantic_validator__ is _model_retry_policy_validator
+        and _model_retry_policy_validator is _TRUSTED_MODEL_RETRY_POLICY_VALIDATOR
+        and _model_retry_policy_type.__pydantic_core_schema__ is _model_retry_policy_core_schema
+        and _model_retry_policy_core_schema is _TRUSTED_MODEL_RETRY_POLICY_CORE_SCHEMA
+        and type(retry_guard_kwdefaults) is dict
+        and retry_guard_kwdefaults.get("_config_module") is _config_module
+        and retry_guard_kwdefaults.get("_execution_config_type") is _execution_config_type
+        and retry_guard_kwdefaults.get("_model_retry_policy_type") is _model_retry_policy_type
+        and retry_guard_kwdefaults.get("_model_retry_policy_property")
+        is _execution_model_retry_policy_property
+        and retry_guard_kwdefaults.get("_model_retry_policy_fget")
+        is _execution_model_retry_policy_fget
+        and retry_guard_kwdefaults.get("_model_retry_policy_build") is _model_retry_policy_build
+        and retry_guard_kwdefaults.get("_model_retry_policy_model_validate")
+        is _model_retry_policy_model_validate
+        and retry_guard_kwdefaults.get("_model_retry_policy_validator")
+        is _model_retry_policy_validator
+        and retry_guard_kwdefaults.get("_model_retry_policy_core_schema")
+        is _model_retry_policy_core_schema
         and CostEntryStatus is _TRUSTED_COST_ENTRY_STATUS_TYPE
         and tuple(CostEntryStatus) == _TRUSTED_COST_ENTRY_STATUS_VALUES
         and CostEntryStatus.RECONCILED is _TRUSTED_COST_ENTRY_RECONCILED
@@ -20866,6 +21854,8 @@ def _openrouter_client_callables_are_pristine(
             _candidate_review_request_token_plan_projection_sha256
             is _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256
         )
+        and (request_token_plan_projection_sha256 is sealed_token_plan_projection)
+        and (_TRUSTED_REQUEST_TOKEN_PLAN_PROJECTION_SHA256 is sealed_token_plan_projection)
         and (
             _candidate_review_request_material_projection
             is _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION
@@ -21379,6 +22369,7 @@ _TRUSTED_GENERATION_VERIFICATION_REQUEST_SHA256 = _generation_verification_reque
 _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256 = (
     _candidate_review_request_token_plan_projection_sha256
 )
+_TRUSTED_REQUEST_TOKEN_PLAN_PROJECTION_SHA256 = request_token_plan_projection_sha256
 _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION = (
     _candidate_review_request_material_projection
 )
@@ -22963,8 +23954,19 @@ _install_provider_authority_function_graph(
         _detach_exact_discovery_json_object,
         _detach_exact_discovery_json_mapping,
         _revalidate_openrouter_discovery_payload,
+        _require_current_model_retry_policy,
+        _terminal_model_retry_attempt_outcome,
+        _model_retry_routing_evidence,
+        _TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD,
+        _TRUSTED_EXECUTION_MODEL_RETRY_POLICY_FGET,
+        _TRUSTED_EXECUTION_MAXIMUM_MODEL_ATTEMPTS_FGET,
+        _TRUSTED_MODEL_RETRY_POLICY_BUILD,
+        _TRUSTED_MODEL_RETRY_POLICY_MODEL_VALIDATE,
+        BudgetManager.reserve,
         OpenRouterClient.seal_real_model_discovery_run,
         _assemble_structured_request_body,
+        _candidate_review_request_token_plan_projection_sha256,
+        request_token_plan_projection_sha256,
         _routing_max_price,
         project_route_emitted_request_parameters,
         normalize_exact_route_pricing,

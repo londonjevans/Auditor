@@ -1,0 +1,215 @@
+{
+  "$defs": {
+    "CandidateSelectionRevocationEntry": {
+      "additionalProperties": false,
+      "description": "One exact negative-only candidate assignment tombstone.",
+      "properties": {
+        "canonical_model_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "REVOKED",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "entry_authority": {
+          "const": false,
+          "title": "Entry Authority",
+          "type": "boolean"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "exact_route_constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exact Route Constraint Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/CandidateSelectionRevocationReason"
+        },
+        "role": {
+          "$ref": "#/$defs/ExactRouteRole"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selection Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "selection_plan_sha256",
+        "role",
+        "exact_model_id",
+        "canonical_model_slug",
+        "provider_endpoint",
+        "exact_route_constraint_sha256",
+        "effective_at",
+        "reason",
+        "disposition",
+        "entry_authority",
+        "entry_sha256"
+      ],
+      "title": "CandidateSelectionRevocationEntry",
+      "type": "object"
+    },
+    "CandidateSelectionRevocationReason": {
+      "description": "Closed reasons that can only narrow candidate execution eligibility.",
+      "enum": [
+        "EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE"
+      ],
+      "title": "CandidateSelectionRevocationReason",
+      "type": "string"
+    },
+    "ExactRouteRole": {
+      "enum": [
+        "candidate",
+        "primary_judge",
+        "replay_judge"
+      ],
+      "title": "ExactRouteRole",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/candidate_selection_revocation_registry.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Pinned, self-hashed registry that can only revoke candidate execution.",
+  "properties": {
+    "artifact_kind": {
+      "const": "CANDIDATE_SELECTION_REVOCATION_REGISTRY",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "benchmark_authorized": {
+      "const": false,
+      "title": "Benchmark Authorized",
+      "type": "boolean"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/CandidateSelectionRevocationEntry"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+    },
+    "operator_evidence_authenticity": {
+      "const": "OPERATOR_SUPPLIED_UNVERIFIED",
+      "title": "Operator Evidence Authenticity",
+      "type": "string"
+    },
+    "operator_evidence_authority": {
+      "const": false,
+      "title": "Operator Evidence Authority",
+      "type": "boolean"
+    },
+    "operator_evidence_sha256": {
+      "const": "f3569e3eac39391a9b09566ccc5a2b83a5eed6e963fb8ce417c03c850166e617",
+      "title": "Operator Evidence Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "qualification_authorized": {
+      "const": false,
+      "title": "Qualification Authorized",
+      "type": "boolean"
+    },
+    "registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Registry Sha256",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "runner_authority_authorized": {
+      "const": false,
+      "title": "Runner Authority Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seal_publication_authorized": {
+      "const": false,
+      "title": "Seal Publication Authorized",
+      "type": "boolean"
+    },
+    "serialized_authority": {
+      "const": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "status": {
+      "const": "NONAUTHORIZING_NEGATIVE_ONLY",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "status",
+    "operator_evidence_sha256",
+    "operator_evidence_authenticity",
+    "operator_evidence_authority",
+    "entries",
+    "provider_call_authorized",
+    "source_egress_authorized",
+    "qualification_authorized",
+    "production_selection_authorized",
+    "runner_authority_authorized",
+    "benchmark_authorized",
+    "seal_publication_authorized",
+    "release_authorized",
+    "serialized_authority",
+    "registry_sha256"
+  ],
+  "title": "mmaudit negative-only candidate selection revocation registry",
+  "type": "object"
+}

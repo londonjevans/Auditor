@@ -69,6 +69,7 @@ from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
     AuditRunOptions,
+    LearningCaptureScope,
     canonical_audit_config_json,
     configured_model_ids,
     model_lineage_index,
@@ -135,6 +136,12 @@ from mmaudit.models.policy_selection import (
     AuditModelSelectionEvidenceBundle,
     VerifiedAuditModelSelection,
 )
+from mmaudit.models.prepurchase_quote import (
+    AcceptedPrepurchaseQuote,
+    PrepurchaseQuote,
+    PrepurchaseQuoteReconciliation,
+    reconcile_prepurchase_quote,
+)
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.refresh_runtime import (
     AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
@@ -195,15 +202,16 @@ from mmaudit.models.schemas import (
     CandidateReproductionResolution,
     CandidateReviewBatch,
     CompilationStatus,
+    ConsensusQuorumOutcome,
+    ConsensusReviewArtifact,
+    ConsensusReviewerSlot,
     ContextPackage,
     ContextRequestEvidence,
     DependencyPreparationStatus,
     EconomicSimulationKind,
     EconomicSimulationPlan,
-    Evidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
-    FalsificationVerdict,
     Finding,
     FindingOriginKind,
     FindingStatus,
@@ -261,7 +269,6 @@ from mmaudit.models.schemas import (
     UsageRecord,
     VerificationBatch,
     VerificationDecision,
-    VerificationVerdict,
 )
 from mmaudit.models.sharding import (
     SolidityCoverageArtifact,
@@ -318,6 +325,7 @@ from mmaudit.orchestration.assurance import (
     ProviderSessionProvenance,
     _issue_provider_session_provenance,
     is_qualifying_real_foundry_portfolio,
+    is_qualifying_real_scanner_run,
 )
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
@@ -327,7 +335,16 @@ from mmaudit.orchestration.budgets import (
     PortfolioTaskSlot,
 )
 from mmaudit.orchestration.candidate_enrichment import (
+    apply_reproduction_results as _apply_candidate_reproduction_results,
+)
+from mmaudit.orchestration.candidate_enrichment import (
+    attach_cross_examination_votes as _attach_candidate_cross_examination_votes,
+)
+from mmaudit.orchestration.candidate_enrichment import (
     attach_formal_counterexamples as _attach_formal_counterexamples,
+)
+from mmaudit.orchestration.candidate_enrichment import (
+    attach_verification_votes as _attach_candidate_verification_votes,
 )
 from mmaudit.orchestration.ci import (
     CI_STATE_FILENAME,
@@ -349,6 +366,13 @@ from mmaudit.orchestration.consensus import (
     group_candidates,
     merge_group,
     preliminary_status,
+    publication_groups,
+    status_bearing_candidate_ids,
+)
+from mmaudit.orchestration.consensus_evidence import (
+    ConsensusEvidenceError,
+    ConsensusReviewerEvidenceRecord,
+    build_consensus_review_artifact,
 )
 from mmaudit.orchestration.context import (
     ContextBoundaryError,
@@ -378,6 +402,12 @@ from mmaudit.orchestration.execution_candidates import (
     ExecutionCandidateBuildResult,
     build_invariant_execution_candidates,
 )
+from mmaudit.orchestration.learning import (
+    TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH,
+    build_terminal_learning_capture,
+    persist_terminal_learning_capture,
+    terminal_learning_capture_is_eligible,
+)
 from mmaudit.orchestration.manifest import (
     SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME,
     ManifestFileBinding,
@@ -399,6 +429,9 @@ from mmaudit.orchestration.model_coverage import (
     plan_model_surface_review_assignments,
 )
 from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
+from mmaudit.orchestration.prepurchase_quote import (
+    validate_accepted_prepurchase_quote_for_run,
+)
 from mmaudit.orchestration.prior_audit import (
     build_prior_audit_comparison,
     prior_audit_quality_gate,
@@ -544,6 +577,56 @@ from mmaudit.traceability import (
 _TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT = 700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS + 1
 _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = trusted_preview_candidate_review_task_resources
 _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES = trusted_preview_model_portfolio_task_resources
+_LATEST_ARTIFACT_FILENAMES = (
+    "metadata.json",
+    "prepurchase-quote-acceptance.json",
+    "prepurchase-quote-reconciliation.json",
+    "repository-map.json",
+    "language-capability.json",
+    "privacy-source-provenance.json",
+    "privacy-policy.json",
+    AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
+    AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
+    "privacy-fork-rpc-egress.json",
+    "scanner-results.json",
+    "repository-suite-differential.json",
+    "candidate-findings.json",
+    "execution-origin-dispositions.json",
+    "verification-results.json",
+    "final-findings.json",
+    "findings.json",
+    "client-report.md",
+    "forensic-report.md",
+    "audit-report.md",
+    "audit-results.sarif",
+    "coverage.json",
+    "model-execution.json",
+    "solidity-projects.json",
+    "dependency-preparation.json",
+    "dependency-sbom.json",
+    "solidity-compilation.json",
+    "solidity-index.json",
+    "solidity-graphs.json",
+    "solidity-shards.json",
+    "solidity-invariants.json",
+    "invariant-review.json",
+    "invariant-harness-plan.json",
+    "property-corpus.json",
+    "invariant-execution-results.json",
+    "economic-simulation-plan.json",
+    "formal-results.json",
+    "solidity-coverage.json",
+    "model-review-coverage.json",
+    "context-manifest.json",
+    "model-qualification-runtime.json",
+    "scheduler-state.json",
+    "scope-assessment.json",
+    "prior-audit-comparison.json",
+    "reproduction-results.json",
+    CI_STATE_FILENAME,
+    "maximum_assurance_traceability.json",
+    "run-evidence-manifest.json",
+)
 
 
 def _exact_completed_usage(
@@ -1314,6 +1397,27 @@ def _candidate_source_paths(candidate: CandidateFinding) -> frozenset[str]:
     if candidate.sink is not None:
         paths.add(candidate.sink.path)
     return frozenset(paths)
+
+
+def _require_candidate_run_bound(
+    candidates: Sequence[CandidateFinding],
+    *,
+    max_candidates_per_run: int,
+) -> None:
+    """Refuse candidate-driven paid passes when the exact run inventory is unbounded."""
+
+    if (
+        type(max_candidates_per_run) is not int
+        or max_candidates_per_run < 1
+        or max_candidates_per_run > 2_000
+    ):
+        raise ValueError("candidate run bound must be an integer from 1 through 2000")
+    candidate_count = len(candidates)
+    if candidate_count > max_candidates_per_run:
+        raise ValueError(
+            "candidate inventory exceeds configured per-run bound: "
+            f"{candidate_count} > {max_candidates_per_run}"
+        )
 
 
 def _candidate_payload_sha256s(
@@ -2459,6 +2563,18 @@ def _build_cross_shard_integration(
         "semantic_inventory_sha256": inventory.inventory_sha256 if inventory is not None else None,
         "candidate_ids": sorted(candidate_ids),
         "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+        "candidate_records": [
+            {
+                "candidate_id": candidate.candidate_id,
+                "candidate_sha256": scheduler_canonical_sha256(candidate.model_dump(mode="json")),
+                "location_validation": {
+                    "valid": validations[candidate.candidate_id].valid,
+                    "content_hash": validations[candidate.candidate_id].content_hash,
+                    "errors": list(validations[candidate.candidate_id].errors),
+                },
+            }
+            for candidate in sorted(candidates, key=lambda item: item.candidate_id)
+        ],
         "shard_ids": sorted(shard_ids),
         "semantic_relationship_ids": [
             relationship["relationship_id"] for relationship in relationships
@@ -2500,6 +2616,7 @@ def _validate_cross_shard_integration(
         "semantic_inventory_sha256",
         "candidate_ids",
         "candidate_payload_sha256s",
+        "candidate_records",
         "shard_ids",
         "semantic_relationship_ids",
         "boundary_review_artifact_sha256s",
@@ -2529,6 +2646,29 @@ def _validate_cross_shard_integration(
         )
     ):
         raise ValueError("cross-shard integration lacks exact candidate payload hashes")
+    records = integration["candidate_records"]
+    if not isinstance(records, list):
+        raise ValueError("cross-shard integration lacks exact candidate validation records")
+    record_ids = [
+        str(record["candidate_id"])
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("candidate_id"), str)
+    ]
+    if record_ids != sorted(expected_candidate_ids) or any(
+        not isinstance(record, dict)
+        or record.get("candidate_sha256") != payload_hashes.get(record.get("candidate_id"))
+        for record in records
+    ):
+        raise ValueError("cross-shard integration candidate records are not exact")
+    expected_valid_ids = [
+        str(record["candidate_id"])
+        for record in records
+        if isinstance(record, dict)
+        and isinstance(record.get("location_validation"), dict)
+        and record["location_validation"].get("valid") is True
+    ]
+    if integration["validation_candidate_ids"] != expected_valid_ids:
+        raise ValueError("cross-shard integration validation subset is not record-derived")
     relationships = integration["relationships"]
     decisions = integration["decisions"]
     if not isinstance(relationships, list) or not isinstance(decisions, list):
@@ -2614,6 +2754,7 @@ class AuditPipeline:
         audit_model_refresh_pricing_authority: (
             VerifiedAuditModelRefreshPricingAuthority | None
         ) = None,
+        accepted_prepurchase_quote: AcceptedPrepurchaseQuote | None = None,
         privacy_consent_observation: PrivacyRetentionConsentObservation | None = None,
         privacy_source_classification: PrivacySourceClassification = (
             PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
@@ -2642,6 +2783,19 @@ class AuditPipeline:
         self.cost_ledger = cost_ledger
         self.api_key = api_key or ""
         self.production_qualification = production_qualification
+        self.accepted_prepurchase_quote: AcceptedPrepurchaseQuote | None
+        if accepted_prepurchase_quote is not None:
+            if type(accepted_prepurchase_quote) is not AcceptedPrepurchaseQuote:
+                raise ValueError("accepted pre-purchase quote has an invalid exact type")
+            canonical_quote = AcceptedPrepurchaseQuote.model_validate_json(
+                accepted_prepurchase_quote.model_dump_json(),
+                strict=True,
+            )
+            if canonical_quote != accepted_prepurchase_quote:
+                raise ValueError("accepted pre-purchase quote is not canonical")
+            self.accepted_prepurchase_quote = canonical_quote
+        else:
+            self.accepted_prepurchase_quote = None
         if (audit_model_selection_evidence is None) != (verified_audit_model_selection is None):
             raise ValueError(
                 "audit model selection evidence and live authority must be supplied together"
@@ -3198,6 +3352,7 @@ class AuditPipeline:
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
+        learning_capture_scope: LearningCaptureScope | None = None,
         ci_mode: bool = False,
         ci_baseline: LoadedCIBaseline | None = None,
     ) -> PipelineResult:
@@ -3218,6 +3373,7 @@ class AuditPipeline:
                 allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_git_commit,
+                learning_capture_scope=learning_capture_scope,
                 ci_mode=ci_mode,
                 ci_baseline=ci_baseline,
             )
@@ -3255,9 +3411,18 @@ class AuditPipeline:
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
+        learning_capture_scope: LearningCaptureScope | None = None,
         ci_mode: bool = False,
         ci_baseline: LoadedCIBaseline | None = None,
     ) -> PipelineResult:
+        frozen_learning_scope: LearningCaptureScope | None = None
+        if learning_capture_scope is not None:
+            if type(learning_capture_scope) is not LearningCaptureScope:
+                raise ValueError("terminal learning tenant scope has an invalid exact type")
+            frozen_learning_scope = LearningCaptureScope.model_validate(
+                learning_capture_scope.model_dump(mode="python"),
+                strict=True,
+            )
         # A pipeline object may be reused for a later scanner-only run.  Derived
         # privacy state is run-local and must never survive that boundary.
         self.privacy_source_provenance = None
@@ -3283,6 +3448,7 @@ class AuditPipeline:
                 if self.privacy_consent_observation is not None
                 else None
             ),
+            learning_capture_scope=frozen_learning_scope,
         )
         resume_scheduler_journal = (
             _resolve_scheduler_resume_journal(self.output, resume_run_dir)
@@ -3291,6 +3457,13 @@ class AuditPipeline:
         )
         if resume_scheduler_journal is not None and scanner_only:
             raise ValueError("scheduler resume is unavailable for scanner-only execution")
+        if scanner_only and self.accepted_prepurchase_quote is not None:
+            raise ValueError("accepted pre-purchase quotes are unavailable for scanner-only runs")
+        if (
+            self.accepted_prepurchase_quote is not None
+            and self.accepted_prepurchase_quote.accepted_at > datetime.now(UTC)
+        ):
+            raise ValueError("accepted pre-purchase quote timestamp is in the future")
         if ci_mode and (
             not scanner_only
             or allow_code_egress
@@ -3374,6 +3547,15 @@ class AuditPipeline:
         effective_cost_ledger = self._effective_cost_ledger()
         if not scanner_only and effective_cost_ledger is None:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
+        if (
+            paid_audit_policy_required
+            and self.privacy_source_classification
+            is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+            and frozen_learning_scope is None
+        ):
+            raise ValueError(
+                "private provider audit requires an explicit terminal learning tenant scope"
+            )
         if (
             paid_audit_policy_required
             and type(self.production_qualification) is VerifiedProductionQualification
@@ -3486,6 +3668,8 @@ class AuditPipeline:
         )
         verifications = VerificationBatch(decisions=[])
         decisions: dict[str, VerificationDecision] = {}
+        consensus_review: ConsensusReviewArtifact | None = None
+        deterministically_rejected_candidate_ids: frozenset[str] = frozenset()
         cross_examinations: list[CandidateCrossExaminationDecision] = []
         final_findings: list[Finding] = []
         rejected_findings: list[Finding] = []
@@ -3525,6 +3709,8 @@ class AuditPipeline:
         model_surface_coverage_plan: ModelSurfaceCoveragePlan | None = None
         model_surface_resource_preflight: ModelSurfaceResourcePreflight | None = None
         model_portfolio_resource_preflight: ModelPortfolioResourcePreflight | None = None
+        validated_prepurchase_quote: PrepurchaseQuote | None = None
+        prepurchase_quote_reconciliation: PrepurchaseQuoteReconciliation | None = None
         model_portfolio_scheduler_tasks: tuple[SchedulerTaskPlan, ...] = ()
         model_portfolio_reservation: BudgetPortfolioReservation | None = None
         provider_session: ProviderSessionProvenance | None = None
@@ -4292,10 +4478,11 @@ class AuditPipeline:
                         terminal_code = ExitCode.INCOMPLETE
         scanner_runs = [_annotate_scanner_locations(discovery.root, run) for run in scanner_runs]
         all_scanner_findings = [finding for run in scanner_runs for finding in run.findings]
+        consensus_scanner_findings = _qualifying_consensus_scanner_findings(scanner_runs)
         allowed_scanner_paths = {discovered.relative_path for discovered in discovery.files}
         scanner_findings = _scanner_findings_for_context(
             discovery.root,
-            all_scanner_findings,
+            consensus_scanner_findings,
             allowed_scanner_paths,
         )
         write_json(
@@ -4491,8 +4678,40 @@ class AuditPipeline:
                     role: str(cap)
                     for role, cap in self.config.token_budgets.per_role_cost_budget_usd.items()
                 },
+                accepted_quote=(None if scanner_only else self.accepted_prepurchase_quote),
             )
         )
+        if not scanner_only:
+            expected_quote_sha256 = (
+                self.accepted_prepurchase_quote.quote_sha256
+                if self.accepted_prepurchase_quote is not None
+                else None
+            )
+            expected_acceptance_sha256 = (
+                self.accepted_prepurchase_quote.acceptance_sha256
+                if self.accepted_prepurchase_quote is not None
+                else None
+            )
+            expected_run_ceiling = (
+                Decimal(self.accepted_prepurchase_quote.run_hard_ceiling_usd_exact)
+                if self.accepted_prepurchase_quote is not None
+                else None
+            )
+            expected_effective_total = (
+                Decimal(self.accepted_prepurchase_quote.quote.ledger_baseline.spent_usd_exact)
+                + expected_run_ceiling
+                if expected_run_ceiling is not None and self.accepted_prepurchase_quote is not None
+                else Decimal(str(budget.total_usd))
+            )
+            if (
+                budget.accepted_quote_sha256 != expected_quote_sha256
+                or budget.accepted_quote_acceptance_sha256 != expected_acceptance_sha256
+                or budget.accepted_quote_run_hard_ceiling_usd_exact != expected_run_ceiling
+                or budget.effective_total_usd_exact != expected_effective_total
+            ):
+                raise ValueError(
+                    "provider budget differs from the pipeline pre-purchase quote acceptance"
+                )
         model_surface_requests = build_model_surface_requests(
             index=solidity_index,
             graphs=solidity_graphs,
@@ -5053,6 +5272,21 @@ class AuditPipeline:
                                 for code in model_portfolio_resource_preflight.failure_codes
                             )
                         )
+                    if self.accepted_prepurchase_quote is not None:
+                        if solidity_shards is None:
+                            raise ValueError(
+                                "accepted pre-purchase quote requires a Solidity shard inventory"
+                            )
+                        validated_prepurchase_quote = validate_accepted_prepurchase_quote_for_run(
+                            self.config,
+                            acceptance=self.accepted_prepurchase_quote,
+                            campaign_manifest=scheduler.manifest,
+                            solidity_shard_inventory=solidity_shards,
+                            portfolio_preflight=model_portfolio_resource_preflight,
+                            selected_model_ids=(
+                                policy_selected_model_ids if paid_audit_policy_required else None
+                            ),
+                        )
                     portfolio_slots = tuple(
                         PortfolioTaskSlot(
                             task_id=envelope.scheduler_task_id,
@@ -5175,6 +5409,13 @@ class AuditPipeline:
                     )
                     for record in recovered_usage:
                         usage.add(record)
+                if (
+                    self.accepted_prepurchase_quote is not None
+                    and validated_prepurchase_quote is None
+                ):
+                    raise ValueError(
+                        "accepted pre-purchase quote lacks a complete bounded portfolio"
+                    )
             except SecretSafetyError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.PRIVACY_REFUSAL
@@ -8666,6 +8907,23 @@ class AuditPipeline:
                     ),
                     "candidate_ids": sorted(candidate.candidate_id for candidate in candidates),
                     "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+                    "candidate_records": [
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "candidate_sha256": scheduler_canonical_sha256(
+                                candidate.model_dump(mode="json")
+                            ),
+                            "location_validation": {
+                                "valid": validations[candidate.candidate_id].valid,
+                                "content_hash": (validations[candidate.candidate_id].content_hash),
+                                "errors": list(validations[candidate.candidate_id].errors),
+                            },
+                        }
+                        for candidate in sorted(
+                            candidates,
+                            key=lambda item: item.candidate_id,
+                        )
+                    ],
                     "high_critical_candidate_ids": sorted(
                         candidate.candidate_id
                         for candidate in candidates
@@ -8775,6 +9033,17 @@ class AuditPipeline:
             if not formal_counterexamples_attached:
                 candidates = _attach_formal_counterexamples(candidates, formal_runs)
                 formal_counterexamples_attached = True
+            try:
+                _require_candidate_run_bound(
+                    candidates,
+                    max_candidates_per_run=(self.config.execution.max_candidates_per_run),
+                )
+            except ValueError as exc:
+                incomplete.append(str(exc))
+                scheduler_halted = True
+                budget_halted = True
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
             cross_examination_candidates = [
                 candidate
                 for candidate in candidates
@@ -9415,6 +9684,8 @@ class AuditPipeline:
                     )
             verifier_context = None
             candidate_falsifier_contexts: dict[int, ContextPackage] = {}
+            verifier_review_usage: UsageRecord | None = None
+            verifier_review_raw_batch: VerificationBatch | None = None
             verifier_agent = VerifierAgent(scheduler_agent_config, self.client)
             prepared_verification_input = verifier_agent.prepare_input(validation_candidates)
             candidate_falsifier_agents = {
@@ -9509,6 +9780,14 @@ class AuditPipeline:
                             )
                         )
                     verifications = verifier_result.value
+                    verifier_review_usage = verifier_result.completion_usage
+                    if type(verifier_result.raw_response) is not VerificationBatch:
+                        raise OpenRouterSchemaError(
+                            "verifier completion lacks its exact raw response batch"
+                        )
+                    verifier_review_raw_batch = VerificationBatch.model_validate(
+                        verifier_result.raw_response
+                    )
                     omitted_verifications = [
                         decision.candidate_id
                         for decision in verifications.decisions
@@ -9560,6 +9839,7 @@ class AuditPipeline:
                         )
                     )
             candidate_falsifier_vote_batches: list[tuple[VerificationBatch, UsageRecord, int]] = []
+            candidate_falsifier_raw_batches: dict[int, VerificationBatch] = {}
             for falsifier_index, candidate_falsifier_agent in sorted(
                 candidate_falsifier_agents.items()
             ):
@@ -9614,6 +9894,15 @@ class AuditPipeline:
                                 )
                             )
                         candidate_falsifier_verifications = candidate_falsifier_result.value
+                        if type(candidate_falsifier_result.raw_response) is not VerificationBatch:
+                            raise OpenRouterSchemaError(
+                                "candidate falsifier completion lacks its exact raw response batch"
+                            )
+                        candidate_falsifier_raw_batches[falsifier_index] = (
+                            VerificationBatch.model_validate(
+                                candidate_falsifier_result.raw_response
+                            )
+                        )
                         omitted_falsifications = [
                             decision.candidate_id
                             for decision in candidate_falsifier_verifications.decisions
@@ -9675,6 +9964,12 @@ class AuditPipeline:
                 candidates,
                 decisions,
                 self.client,
+                usage_record=verifier_review_usage,
+                root_lineage=(
+                    verifier_scheduler_task.root_lineage
+                    if verifier_scheduler_task is not None
+                    else None
+                ),
             )
             for (
                 falsifier_batch,
@@ -9687,6 +9982,9 @@ class AuditPipeline:
                     self.client,
                     role=f"candidate_falsifier:{falsifier_index}",
                     usage_record=falsifier_usage,
+                    root_lineage=(
+                        candidate_falsifier_scheduler_tasks[falsifier_index].root_lineage
+                    ),
                 )
             verifier_task_result = next(
                 (
@@ -9711,6 +10009,65 @@ class AuditPipeline:
                 )
                 if result is not None
             )
+            if validation_candidates and validation_candidate_workset is not None:
+                review_records: list[ConsensusReviewerEvidenceRecord] = []
+                if (
+                    verifier_scheduler_task is not None
+                    and verifier_task_result is not None
+                    and verifier_review_usage is not None
+                    and verifier_review_raw_batch is not None
+                ):
+                    review_records.append(
+                        ConsensusReviewerEvidenceRecord(
+                            slot=ConsensusReviewerSlot.VERIFIER,
+                            task=verifier_scheduler_task,
+                            result=verifier_task_result,
+                            usage=verifier_review_usage,
+                            raw_batch=verifier_review_raw_batch,
+                        )
+                    )
+                for (
+                    _falsifier_batch,
+                    falsifier_usage,
+                    falsifier_index,
+                ) in candidate_falsifier_vote_batches:
+                    falsifier_task = candidate_falsifier_scheduler_tasks[falsifier_index]
+                    falsifier_task_result = next(
+                        (
+                            result
+                            for result in candidate_falsifier_task_results
+                            if result.task_id == falsifier_task.task_id
+                        ),
+                        None,
+                    )
+                    if falsifier_task_result is None:
+                        continue
+                    raw_batch = candidate_falsifier_raw_batches.get(falsifier_index)
+                    if raw_batch is None:
+                        continue
+                    review_records.append(
+                        ConsensusReviewerEvidenceRecord(
+                            slot=(
+                                ConsensusReviewerSlot.FALSIFIER_1
+                                if falsifier_index == 1
+                                else ConsensusReviewerSlot.FALSIFIER_2
+                            ),
+                            task=falsifier_task,
+                            result=falsifier_task_result,
+                            usage=falsifier_usage,
+                            raw_batch=raw_batch,
+                        )
+                    )
+                try:
+                    consensus_review = build_consensus_review_artifact(
+                        candidate_workset=validation_candidate_workset,
+                        reviewers=review_records,
+                    )
+                except ConsensusEvidenceError as exc:
+                    consensus_review = None
+                    incomplete.append(f"pass-six consensus review is incomplete: {exc}")
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.MODEL_FAILURE
             if len(validation_upstream_results) == 3:
                 for planner_task in planner_scheduler_tasks.values():
                     scheduler.set_upstream_results(
@@ -9719,7 +10076,7 @@ class AuditPipeline:
                     )
             eligible_for_reproduction = _eligible_reproduction_candidates(
                 candidates,
-                decisions,
+                consensus_review,
                 validations,
                 limit=self.config.reproduction.max_candidates,
             )
@@ -10083,9 +10440,8 @@ class AuditPipeline:
                                 ContextBudgetError("falsifier context was not produced"),
                             )
                         )
-                candidates, decisions = _apply_reproduction_results(
+                candidates, deterministically_rejected_candidate_ids = _apply_reproduction_results(
                     candidates,
-                    decisions,
                     reproductions,
                     falsifications,
                 )
@@ -10199,10 +10555,21 @@ class AuditPipeline:
                     conclude_scheduler_pass()
                 else:
                     conclude_scheduler_result(completed_pass_six)
-            groups = group_candidates(candidates)
+            groups = publication_groups(candidates)
             candidate_groups_count = len(groups)
             group_payloads = [
-                _group_payload(group, decisions, validations, scanner_findings) for group in groups
+                _group_payload(
+                    group,
+                    decisions,
+                    validations,
+                    scanner_findings,
+                    consensus_review=consensus_review,
+                    cross_examinations=cross_examinations,
+                    deterministically_rejected_candidate_ids=(
+                        deterministically_rejected_candidate_ids
+                    ),
+                )
+                for group in groups
             ]
             if not scheduler_halted:
                 judgment_host_task = scheduler.host_task(
@@ -10358,12 +10725,28 @@ class AuditPipeline:
                 for candidate in candidates
             }
             for group in groups:
+                group_status_bearing_candidate_ids = status_bearing_candidate_ids(
+                    group,
+                    decisions=decisions,
+                    validations=validations,
+                    scanner_findings=scanner_findings,
+                    consensus_review=consensus_review,
+                    cross_examinations=cross_examinations,
+                    deterministically_rejected_candidate_ids=(
+                        deterministically_rejected_candidate_ids
+                    ),
+                )
                 finding = merge_group(
                     group,
                     decisions=decisions,
                     validations=validations,
                     scanner_findings=scanner_findings,
                     judge=judge_decisions.get(group.group_id),
+                    consensus_review=consensus_review,
+                    cross_examinations=cross_examinations,
+                    deterministically_rejected_candidate_ids=(
+                        deterministically_rejected_candidate_ids
+                    ),
                 )
                 finding = enforce_critical_evidence_cap(
                     finding,
@@ -10380,6 +10763,7 @@ class AuditPipeline:
                     finding=finding,
                     judge=judge_decisions.get(group.group_id),
                     pre_judgment_high_critical_ids=pre_judgment_high_critical_ids,
+                    status_bearing_candidate_ids=group_status_bearing_candidate_ids,
                 )
                 if post_judge_limitation is not None:
                     incomplete.append(post_judge_limitation)
@@ -10466,6 +10850,7 @@ class AuditPipeline:
                 def evidence_payload_binding(
                     *,
                     kind: Literal[
+                        "consensus_review",
                         "judge",
                         "verification",
                         "cross_examination",
@@ -10485,7 +10870,13 @@ class AuditPipeline:
                 judgment_reproduction_resolutions = build_candidate_reproduction_resolutions(
                     candidates=candidates,
                     results=reproductions,
-                    forced_candidate_ids=set(post_judge_execution_severity_candidates),
+                    forced_candidate_ids={
+                        candidate_id
+                        for candidate_id, candidate in (
+                            post_judge_execution_severity_candidates.items()
+                        )
+                        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+                    },
                 )
                 terminal_finding_records = [
                     {
@@ -10514,12 +10905,32 @@ class AuditPipeline:
                     "schema_version": "2.0",
                     "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
                     "severity_threshold": severity_threshold.value,
+                    "critical_confirmation_requires_execution": (
+                        self.config.maximum_assurance.require_formal_or_reproduction_for_confirmed_critical
+                    ),
                     "group_ids": sorted(group.group_id for group in groups),
                     "judge_decision_ids": sorted(judge_decisions),
                     "candidate_ids": sorted(
                         candidate.candidate_id for candidate in pass_four_candidates
                     ),
                     "candidate_payload_sha256s": _candidate_payload_sha256s(pass_four_candidates),
+                    "terminal_candidate_records": [
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "candidate_sha256": scheduler_canonical_sha256(
+                                candidate.model_dump(mode="json")
+                            ),
+                            "location_validation": {
+                                "valid": validations[candidate.candidate_id].valid,
+                                "content_hash": validations[candidate.candidate_id].content_hash,
+                                "errors": list(validations[candidate.candidate_id].errors),
+                            },
+                        }
+                        for candidate in sorted(
+                            pass_four_candidates,
+                            key=lambda item: item.candidate_id,
+                        )
+                    ],
                     "candidate_grouping_sha256": scheduler_canonical_sha256(
                         [
                             {
@@ -10612,6 +11023,12 @@ class AuditPipeline:
                         key=lambda item: (item["subject_id"], item["record_id"]),
                     ),
                 }
+                if consensus_review is not None:
+                    judgment_body["consensus_review"] = evidence_payload_binding(
+                        kind="consensus_review",
+                        subject_id=consensus_review.campaign_id,
+                        payload=consensus_review,
+                    )
                 judgment_summary = {
                     **judgment_body,
                     "judgment_sha256": scheduler_canonical_sha256(judgment_body),
@@ -10717,7 +11134,11 @@ class AuditPipeline:
         reproduction_resolutions = build_candidate_reproduction_resolutions(
             candidates=candidates,
             results=reproductions,
-            forced_candidate_ids=set(post_judge_execution_severity_candidates),
+            forced_candidate_ids={
+                candidate_id
+                for candidate_id, candidate in post_judge_execution_severity_candidates.items()
+                if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+            },
         )
         unchanged = _repository_unchanged(discovery)
         if not unchanged:
@@ -11067,6 +11488,8 @@ class AuditPipeline:
             )
         ]
         if self._active_scheduler is not None:
+            if not _repository_unchanged(discovery):
+                raise ValueError("audited source changed before terminal authority sealing")
             scheduler.seal_terminal_report_authority(
                 severity_threshold=severity_threshold,
                 candidates=public_candidate_projection,
@@ -11079,6 +11502,7 @@ class AuditPipeline:
                 falsification_decisions=falsifications.decisions,
                 reproduction_results=reproductions,
                 reproduction_resolutions=reproduction_resolutions,
+                consensus_review=consensus_review,
             )
             scheduler_artifact = scheduler.artifact()
             scheduler_report_binding = scheduler.report_binding().model_dump(mode="json")
@@ -11723,7 +12147,23 @@ class AuditPipeline:
                     item.logical_request_id for item in scheduler_artifact.recovery_model_requests
                 ),
                 usage_records=usage.records,
+                campaign_id=scheduler_artifact.summary.manifest.campaign_id,
+                campaign_manifest_sha256=(scheduler_artifact.summary.manifest.manifest_sha256),
             )
+        if self.accepted_prepurchase_quote is not None:
+            if validated_prepurchase_quote is None:
+                if usage.records:
+                    raise ValueError(
+                        "accepted pre-purchase quote was not validated before provider usage"
+                    )
+            elif cost_ledger_evidence is None:
+                raise ValueError("validated pre-purchase quote lacks terminal cost-ledger evidence")
+            else:
+                prepurchase_quote_reconciliation = reconcile_prepurchase_quote(
+                    self.accepted_prepurchase_quote,
+                    cost_ledger_evidence,
+                    reconciled_at=datetime.now(UTC),
+                )
         exact_accounted_cost = (
             Decimal(cost_ledger_evidence.run_accounted_cost_usd_exact)
             if cost_ledger_evidence is not None
@@ -11788,6 +12228,7 @@ class AuditPipeline:
             generated_tests=generated_tests,
             reproductions=reproductions,
             verifications=verifications,
+            consensus_review=consensus_review,
             cross_examinations=cross_examinations,
             falsifications=falsifications,
             quality_gates=quality_gates,
@@ -11912,6 +12353,8 @@ class AuditPipeline:
             ),
             cost_ledger=effective_cost_ledger,
             cost_ledger_evidence=cost_ledger_evidence,
+            accepted_prepurchase_quote=self.accepted_prepurchase_quote,
+            prepurchase_quote_reconciliation=prepurchase_quote_reconciliation,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -12043,6 +12486,20 @@ class AuditPipeline:
         qualification_preflight: ProductionQualificationValidation | None = None,
     ) -> None:
         assert self.client is not None
+        candidate_preflight = OpenRouterClient._require_candidate_revocation_preflight
+        trusted_candidate_preflight = (
+            openrouter_models._TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+        )
+        if (
+            candidate_preflight is not trusted_candidate_preflight
+            or candidate_preflight.__code__
+            is not openrouter_models._TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE
+        ):
+            raise OpenRouterError("candidate revocation boundary changed before model validation")
+        candidate_preflight(
+            self.client,
+            model_ids=tuple(configured_model_ids(self.config, include_fallbacks=True)),
+        )
         cache_dir = _safe_output_directory(self.output, "cache")
         registry = ModelRegistry(cache_dir / "openrouter-models.json")
         provider_policy = self.client.provider_policy
@@ -12344,6 +12801,7 @@ class AuditPipeline:
         generated_tests: list[GeneratedFoundryTestSpec],
         reproductions: list[ReproductionResult],
         verifications: VerificationBatch,
+        consensus_review: ConsensusReviewArtifact | None,
         cross_examinations: list[CandidateCrossExaminationDecision],
         falsifications: FalsificationBatch,
         quality_gates: list[QualityGateResult],
@@ -12418,6 +12876,7 @@ class AuditPipeline:
             ),
             audit_model_refresh_evidence=self.audit_model_refresh_evidence,
             maximum_assurance=maximum_assurance,
+            consensus_review=consensus_review,
             verification_decisions=verifications.decisions,
             cross_examination_decisions=cross_examinations,
             falsification_decisions=falsifications.decisions,
@@ -12747,7 +13206,23 @@ class AuditPipeline:
         scheduler_runtime_journal: SchedulerJournal | None,
         cost_ledger: AtomicCostLedger | None,
         cost_ledger_evidence: RunCostLedgerEvidence | None,
+        accepted_prepurchase_quote: AcceptedPrepurchaseQuote | None,
+        prepurchase_quote_reconciliation: PrepurchaseQuoteReconciliation | None,
     ) -> None:
+        if prepurchase_quote_reconciliation is not None and accepted_prepurchase_quote is None:
+            raise ValueError("quote reconciliation requires its accepted quote")
+        if accepted_prepurchase_quote is not None:
+            write_json(
+                run_dir / "prepurchase-quote-acceptance.json",
+                accepted_prepurchase_quote,
+            )
+        if prepurchase_quote_reconciliation is not None:
+            if prepurchase_quote_reconciliation.acceptance != accepted_prepurchase_quote:
+                raise ValueError("quote reconciliation differs from its accepted quote")
+            write_json(
+                run_dir / "prepurchase-quote-reconciliation.json",
+                prepurchase_quote_reconciliation,
+            )
         status_metadata = report_status_metadata(report)
         if scheduler_artifact is not None:
             write_json(run_dir / "scheduler-state.json", scheduler_artifact)
@@ -13069,6 +13544,24 @@ class AuditPipeline:
         )
         write_json(terminal_authority_path, terminal_report_authority)
         terminal_authority_path.chmod(0o600)
+        learning_scope = run_options.learning_capture_scope
+        if terminal_learning_capture_is_eligible(
+            report=report,
+            scanner_only=run_options.scanner_only,
+            privacy_source_classification=run_options.privacy_source_classification,
+            tenant_scope_id=(
+                learning_scope.tenant_scope_id if learning_scope is not None else None
+            ),
+        ):
+            assert learning_scope is not None
+            learning_record = build_terminal_learning_capture(
+                tenant_id=learning_scope.tenant_scope_id,
+                report=report,
+                candidate_projection=candidate_projection,
+                terminal_report_authority=terminal_report_authority,
+                scheduler_artifact=scheduler_artifact,
+            )
+            persist_terminal_learning_capture(run_dir=run_dir, record=learning_record)
         if ci_state is not None:
             write_json(run_dir / CI_STATE_FILENAME, ci_state)
         traceability = build_traceability_matrix(report.repository.git_commit)
@@ -13108,55 +13601,29 @@ class AuditPipeline:
             scheduler_runtime_journal=scheduler_runtime_journal,
         )
         latest = _safe_output_directory(self.output, "latest")
-        for filename in (
-            "metadata.json",
-            "repository-map.json",
-            "language-capability.json",
-            "privacy-source-provenance.json",
-            "privacy-policy.json",
-            AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
-            AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
-            "privacy-fork-rpc-egress.json",
-            "scanner-results.json",
-            "repository-suite-differential.json",
-            "candidate-findings.json",
-            "execution-origin-dispositions.json",
-            "verification-results.json",
-            "final-findings.json",
-            "findings.json",
-            "client-report.md",
-            "forensic-report.md",
-            "audit-report.md",
-            "audit-results.sarif",
-            "coverage.json",
-            "model-execution.json",
-            "solidity-projects.json",
-            "dependency-preparation.json",
-            "dependency-sbom.json",
-            "solidity-compilation.json",
-            "solidity-index.json",
-            "solidity-graphs.json",
-            "solidity-shards.json",
-            "solidity-invariants.json",
-            "invariant-review.json",
-            "invariant-harness-plan.json",
-            "property-corpus.json",
-            "invariant-execution-results.json",
-            "economic-simulation-plan.json",
-            "formal-results.json",
-            "solidity-coverage.json",
-            "model-review-coverage.json",
-            "context-manifest.json",
-            "model-qualification-runtime.json",
-            "scheduler-state.json",
-            "scope-assessment.json",
-            "prior-audit-comparison.json",
-            "reproduction-results.json",
-            CI_STATE_FILENAME,
-            "maximum_assurance_traceability.json",
-            "run-evidence-manifest.json",
-        ):
-            _refresh_latest_artifact(run_dir=run_dir, latest=latest, filename=filename)
+        _refresh_latest_artifacts(run_dir=run_dir, latest=latest)
+
+
+def _refresh_latest_artifacts(*, run_dir: Path, latest: Path) -> None:
+    """Refresh public latest projections while purging stale private learning payloads."""
+
+    private_dir = latest / "private"
+    learning_destination = latest / TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH
+    if private_dir.is_symlink() or private_dir.is_junction():
+        raise ValueError("refusing linked latest private directory")
+    if private_dir.exists() and not private_dir.is_dir():
+        raise ValueError("refusing non-directory latest private path")
+    if learning_destination.is_symlink() or learning_destination.is_junction():
+        raise ValueError("refusing linked latest terminal learning artifact")
+    if learning_destination.exists():
+        if not learning_destination.is_file():
+            raise ValueError("refusing non-file latest terminal learning artifact")
+        learning_destination.unlink()
+    if private_dir.is_dir() and not any(private_dir.iterdir()):
+        private_dir.rmdir()
+
+    for filename in _LATEST_ARTIFACT_FILENAMES:
+        _refresh_latest_artifact(run_dir=run_dir, latest=latest, filename=filename)
 
 
 def _refresh_latest_artifact(*, run_dir: Path, latest: Path, filename: str) -> None:
@@ -13569,6 +14036,19 @@ def _scanner_findings_for_context(
     return selected
 
 
+def _qualifying_consensus_scanner_findings(
+    scanner_runs: Sequence[ScannerRun],
+) -> list[ScannerFinding]:
+    """Flatten only structurally qualified REAL scanner runs for consensus credit."""
+
+    return [
+        finding
+        for run in scanner_runs
+        if is_qualifying_real_scanner_run(run)
+        for finding in run.findings
+    ]
+
+
 def _scanner_secret_paths(
     scanner_findings: list[ScannerFinding],
     allowed_paths: set[str],
@@ -13608,6 +14088,7 @@ def _attach_verifier_votes(
     *,
     role: str = "verifier",
     usage_record: UsageRecord | None = None,
+    root_lineage: str | None = None,
 ) -> list[CandidateFinding]:
     usage = usage_record or next(
         (
@@ -13619,22 +14100,14 @@ def _attach_verifier_votes(
     )
     if usage is None:
         return candidates
-    result: list[CandidateFinding] = []
-    for candidate in candidates:
-        decision = decisions.get(candidate.candidate_id)
-        if decision is None:
-            result.append(candidate)
-            continue
-        vote = ModelVote(
-            role=role,
-            requested_model=usage.requested_model,
-            returned_model=usage.returned_model,
-            family=usage.model_family,
-            verdict=decision.verdict.value,
-            rationale=decision.rationale,
-        )
-        result.append(candidate.model_copy(update={"model_votes": [*candidate.model_votes, vote]}))
-    return result
+    return _attach_candidate_verification_votes(
+        candidates,
+        decisions,
+        role=role,
+        requested_model=usage.requested_model,
+        returned_model=usage.returned_model,
+        family=root_lineage or usage.model_family,
+    )
 
 
 def _attach_cross_examination_votes(
@@ -13643,30 +14116,7 @@ def _attach_cross_examination_votes(
 ) -> list[CandidateFinding]:
     """Retain every independent supporting, disputing, or inconclusive vote."""
 
-    by_candidate: dict[str, list[CandidateCrossExaminationDecision]] = {}
-    for decision in cross_examinations:
-        by_candidate.setdefault(decision.candidate_id, []).append(decision)
-    result: list[CandidateFinding] = []
-    for candidate in candidates:
-        decisions = sorted(
-            by_candidate.get(candidate.candidate_id, []),
-            key=lambda item: item.reviewer_index,
-        )
-        votes = [
-            ModelVote(
-                role=f"specialist:falsifier:{decision.reviewer_index}",
-                requested_model=decision.requested_model,
-                returned_model=decision.returned_model,
-                family=decision.root_lineage,
-                verdict=decision.verdict.value,
-                rationale=decision.rationale,
-            )
-            for decision in decisions
-        ]
-        result.append(
-            candidate.model_copy(update={"model_votes": [*candidate.model_votes, *votes]})
-        )
-    return result
+    return _attach_candidate_cross_examination_votes(candidates, cross_examinations)
 
 
 def _judge_vote(
@@ -13697,7 +14147,7 @@ def _judge_vote(
 
 def _eligible_reproduction_candidates(
     candidates: list[CandidateFinding],
-    decisions: dict[str, VerificationDecision],
+    consensus_review: ConsensusReviewArtifact | None,
     validations: dict[str, LocationValidation],
     *,
     limit: int,
@@ -13709,8 +14159,10 @@ def _eligible_reproduction_candidates(
         and any(location.path.endswith(".sol") for location in candidate.locations)
         and (validation := validations.get(candidate.candidate_id)) is not None
         and validation.valid
-        and (decision := decisions.get(candidate.candidate_id)) is not None
-        and decision.verdict in {VerificationVerdict.VERIFIED, VerificationVerdict.PLAUSIBLE}
+        and consensus_review is not None
+        and candidate.candidate_id in consensus_review.candidate_ids
+        and consensus_review.quorum_for(candidate.candidate_id).outcome
+        is ConsensusQuorumOutcome.SUPPORTED
     ]
     return sorted(
         eligible,
@@ -13894,78 +14346,10 @@ def _unique_generated_tests(
 
 def _apply_reproduction_results(
     candidates: list[CandidateFinding],
-    decisions: dict[str, VerificationDecision],
     results: list[ReproductionResult],
     falsifications: FalsificationBatch,
-) -> tuple[list[CandidateFinding], dict[str, VerificationDecision]]:
-    falsification_by_test = {
-        (decision.candidate_id, decision.test_name): decision
-        for decision in falsifications.decisions
-    }
-    evidence_by_candidate: dict[str, list[Evidence]] = {}
-    updated_decisions = dict(decisions)
-    for result in results:
-        falsification = falsification_by_test.get((result.candidate_id, result.test_name))
-        if (
-            result.state
-            in {
-                ReproductionState.REPRODUCED,
-                ReproductionState.REPRODUCED_AND_MINIMIZED,
-            }
-            and result.integrity is not None
-            and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
-            and falsification is not None
-            and falsification.verdict is FalsificationVerdict.ACCEPTED
-            and falsification.test_matches_claim
-            and falsification.assumptions_validated
-        ):
-            evidence_by_candidate.setdefault(result.candidate_id, []).append(
-                Evidence(
-                    type="reproduction",
-                    source="mmaudit-local-fork-reproduction",
-                    rule_id=result.state.value,
-                    description=(
-                        f"Typed Foundry fork test {result.test_name} passed "
-                        f"{result.successful_attempts}/{result.attempts} bounded attempts "
-                        "and survived independent falsification"
-                    ),
-                    fingerprint=result.generated_test_sha256 or result.specification_sha256,
-                )
-            )
-        if (
-            result.state is ReproductionState.NOT_REPRODUCED
-            and result.integrity is not None
-            and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
-            and falsification is not None
-            and falsification.verdict is FalsificationVerdict.FALSIFIED
-            and falsification.test_matches_claim
-            and falsification.assumptions_validated
-            and (decision := updated_decisions.get(result.candidate_id)) is not None
-        ):
-            updated_decisions[result.candidate_id] = decision.model_copy(
-                update={
-                    "verdict": VerificationVerdict.REJECTED,
-                    "rationale": (
-                        f"{decision.rationale}; complete local fork test disproved the claim: "
-                        f"{falsification.rationale}"
-                    ),
-                    "confidence": min(decision.confidence, 0.2),
-                }
-            )
-    return (
-        [
-            candidate.model_copy(
-                update={
-                    "evidence": [
-                        *candidate.evidence,
-                        *evidence_by_candidate.get(candidate.candidate_id, []),
-                    ]
-                }
-            )
-            for candidate in candidates
-        ],
-        updated_decisions,
-    )
+) -> tuple[list[CandidateFinding], frozenset[str]]:
+    return _apply_candidate_reproduction_results(candidates, results, falsifications)
 
 
 def _enforce_post_judge_execution_severity_accounting(
@@ -13974,17 +14358,18 @@ def _enforce_post_judge_execution_severity_accounting(
     finding: Finding,
     judge: JudgeDecision | None,
     pre_judgment_high_critical_ids: set[str],
+    status_bearing_candidate_ids: frozenset[str],
 ) -> tuple[Finding, tuple[CandidateFinding, ...], str | None]:
-    """Fail closed when judgment first raises an execution observation to high impact.
+    """Fail closed when judgment first raises any candidate group to high impact.
 
     The judge may assess impact severity, but it runs after candidate cross-examination
-    and reproduction planning. A newly high/critical execution-origin finding therefore
-    cannot retain an accepted status or disappear from downstream assurance denominators.
+    and reproduction planning. A newly high/critical finding therefore cannot retain an
+    accepted status or disappear from downstream assurance denominators, regardless of
+    whether its originating candidate was deterministic or model-authored.
     """
 
     if (
         judge is None
-        or finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
         or finding.status is FindingStatus.REJECTED
         or finding.severity not in {Severity.HIGH, Severity.CRITICAL}
     ):
@@ -13993,17 +14378,38 @@ def _enforce_post_judge_execution_severity_accounting(
     # Preserve the exact candidate artifact (including its pre-judgment severity).
     # The final finding owns the judge's impact assessment; downstream gates use
     # the provenance-derived candidate ID as an additional required denominator.
+    complete_candidate_scope = (
+        group.execution_candidates
+        if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+        else group.candidates
+    )
+    complete_candidate_ids = {candidate.candidate_id for candidate in complete_candidate_scope}
+    if (
+        not status_bearing_candidate_ids
+        or not status_bearing_candidate_ids <= complete_candidate_ids
+    ):
+        raise ValueError("post-judge accounting lacks the exact status-bearing candidate scope")
+    candidate_scope = tuple(
+        candidate
+        for candidate in complete_candidate_scope
+        if candidate.candidate_id in status_bearing_candidate_ids
+    )
     accounting_candidates = tuple(
         candidate
-        for candidate in group.execution_candidates
+        for candidate in candidate_scope
         if candidate.candidate_id not in pre_judgment_high_critical_ids
     )
     if not accounting_candidates:
         return finding, (), None
 
     candidate_ids = ", ".join(candidate.candidate_id for candidate in accounting_candidates)
+    origin_label = (
+        "execution-origin"
+        if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+        else "model-review"
+    )
     limitation = (
-        f"execution-origin group {group.group_id} received {finding.severity.value} impact "
+        f"{origin_label} group {group.group_id} received {finding.severity.value} impact "
         "severity only after the pre-judgment high/critical phases; provenance-bound "
         f"candidate(s) {candidate_ids} did not receive candidate-specific cross-examination "
         "or reproduction planning, so the finding requires manual review and the run is "
@@ -14366,17 +14772,57 @@ def _group_payload(
     decisions: dict[str, VerificationDecision],
     validations: dict[str, LocationValidation],
     scanner_findings: list[ScannerFinding],
+    *,
+    consensus_review: ConsensusReviewArtifact | None = None,
+    cross_examinations: Sequence[CandidateCrossExaminationDecision] = (),
+    deterministically_rejected_candidate_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
+    group_candidate_ids = {candidate.candidate_id for candidate in group.candidates}
     return {
         "group_id": group.group_id,
         "consensus_status_cap": preliminary_status(
-            group, decisions, validations, scanner_findings
+            group,
+            decisions,
+            validations,
+            scanner_findings,
+            consensus_review=consensus_review,
+            cross_examinations=cross_examinations,
+            deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
         ).value,
         "candidates": [candidate.model_dump(mode="json") for candidate in group.candidates],
-        "verifier_decisions": [
-            decisions[candidate.candidate_id].model_dump(mode="json")
-            for candidate in group.candidates
-            if candidate.candidate_id in decisions
+        "consensus_review_artifact_sha256": (
+            consensus_review.artifact_sha256 if consensus_review is not None else None
+        ),
+        "consensus_quorums": [
+            consensus_review.quorum_for(candidate_id).model_dump(mode="json")
+            for candidate_id in sorted(group_candidate_ids)
+            if consensus_review is not None and candidate_id in consensus_review.candidate_ids
+        ],
+        "reviewer_decisions": [
+            {
+                "slot": reviewer.slot.value,
+                "scheduler_task_id": reviewer.scheduler_task_id,
+                "logical_request_id": reviewer.logical_request_id,
+                "requested_model": reviewer.requested_model,
+                "returned_model": reviewer.returned_model,
+                "root_lineage": reviewer.root_lineage,
+                "model_completion_evidence_sha256": (reviewer.model_completion_evidence_sha256),
+                "decision": reviewer.decision_for(candidate_id).model_dump(mode="json"),
+            }
+            for candidate_id in sorted(group_candidate_ids)
+            for reviewer in (() if consensus_review is None else consensus_review.reviewers)
+            if candidate_id in (() if consensus_review is None else consensus_review.candidate_ids)
+        ],
+        "cross_examination_decisions": [
+            decision.model_dump(mode="json")
+            for decision in sorted(
+                (
+                    decision
+                    for decision in cross_examinations
+                    if decision.candidate_id in group_candidate_ids
+                ),
+                key=lambda decision: (decision.candidate_id, decision.reviewer_index),
+            )
         ],
         "location_validation": {
             candidate.candidate_id: validations[candidate.candidate_id].model_dump(mode="json")

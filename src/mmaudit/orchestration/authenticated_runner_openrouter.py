@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Never, SupportsIndex, cast
+from typing import TYPE_CHECKING, Never, SupportsIndex, cast
 
 import mmaudit.models.authenticated_runner as _runner_authority_module
 import mmaudit.models.authenticated_runner_execution as _runner_execution_module
@@ -119,7 +119,10 @@ from mmaudit.repository.privacy_provenance import (
     prove_release_pinned_model_benchmark_source,
 )
 
-AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_CONTRACT_VERSION = "2.0"
+if TYPE_CHECKING:
+    from mmaudit.models.route_runtime_evidence import VerifiedThreeRouteRuntimeEvidence
+
+AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_CONTRACT_VERSION = "2.1"
 AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_FIELDS = (
     "config",
     "explicitly_allow_synthetic_egress",
@@ -133,6 +136,7 @@ AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_FIELDS = (
     "budget",
     "usage",
     "run_plans",
+    "runtime_route_evidence",
 )
 _TRUSTED_GROUND_TRUTH_REQUIRE_FOR = VerifiedFrozenGroundTruth.require_for
 _TRUSTED_EXECUTION_PREFLIGHT = _runner_execution_module._preflight_execution
@@ -163,6 +167,7 @@ class AuthenticatedRunnerOpenRouterLaunch:
     budget: BudgetManager
     usage: UsageLedger
     run_plans: tuple[AuthenticatedRunnerRunPlan, ...]
+    runtime_route_evidence: VerifiedThreeRouteRuntimeEvidence | None = None
 
     def __reduce__(self) -> Never:
         raise TypeError("authenticated OpenRouter runner launch cannot be serialized")
@@ -388,6 +393,7 @@ class _OpenRouterExecutionAdapter:
             pre_dispatch_rejection_observer=_raise_candidate_pre_dispatch_rejection,
             authenticated_runner_run_kind=run_kind.value,
             expected_request_cost_previews=request_cost_plan.request_previews,
+            runtime_route_evidence=launch.runtime_route_evidence,
         )
         if type(result) is not CandidateBenchmarkExecutionResult or len(result.reports) != 1:
             raise AuthenticatedRunnerOpenRouterError(
@@ -459,6 +465,12 @@ class _OpenRouterExecutionAdapter:
                         ExactRouteRole.PRIMARY_JUDGE
                         if plan.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
                         else ExactRouteRole.REPLAY_JUDGE
+                    ),
+                    runtime_route_evidence=launch.runtime_route_evidence,
+                    qualification_policy=(
+                        launch.qualification_policy
+                        if launch.runtime_route_evidence is not None
+                        else None
                     ),
                 )
         except BaseException:
@@ -885,6 +897,10 @@ def preflight_authenticated_openrouter_launch(
             replay_plan.judge_discovery_evidence,
         ),
         purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+        runtime_evidence=launch.runtime_route_evidence,
+        qualification_policy=(
+            launch.qualification_policy if launch.runtime_route_evidence is not None else None
+        ),
         runtime_required_output_tokens=launch.config.effective_reserved_output_tokens,
     )
     inventory, ledger, snapshot, candidate_cost_plans = _TRUSTED_EXECUTION_PREFLIGHT(
@@ -962,6 +978,8 @@ async def _refresh_and_register_judge_discovery(
     evidence: OpenRouterModelDiscoveryEvidence,
     manifest: OpenRouterModelDiscoveryRunManifest,
     expected_role: ExactRouteRole,
+    runtime_route_evidence: VerifiedThreeRouteRuntimeEvidence | None = None,
+    qualification_policy: QualificationPolicy | None = None,
 ) -> None:
     """Re-observe one exact judge route before registering it for paid requests."""
 
@@ -977,6 +995,7 @@ async def _refresh_and_register_judge_discovery(
         or type(evidence) is not OpenRouterModelDiscoveryEvidence
         or type(manifest) is not OpenRouterModelDiscoveryRunManifest
         or type(expected_role) is not ExactRouteRole
+        or (runtime_route_evidence is None) != (qualification_policy is None)
         or expected_role is ExactRouteRole.CANDIDATE
         or client.provider_policy != expected_policy
         or evidence.exact_model_id != judge.exact_model_id
@@ -1059,6 +1078,9 @@ async def _refresh_and_register_judge_discovery(
         evidence=evidence,
         expected_role=expected_role,
         purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+        discovery_manifest=manifest,
+        runtime_evidence=runtime_route_evidence,
+        qualification_policy=qualification_policy,
         frozen_live_equivalent=True,
         runtime_required_output_tokens=config.effective_reserved_output_tokens,
     )

@@ -880,8 +880,8 @@ def render_markdown(
         [
             "## Status semantics",
             "",
-            "- **Confirmed:** passed the deterministic evidence gate through a validated "
-            "execution/proof, or through verifier-backed corroborating evidence.",
+            "- **Confirmed:** passed the deterministic evidence gate through validated "
+            "execution, or through verifier-backed qualifying analyzer evidence.",
             "- **Strongly supported:** complete validated attack path and independent support, "
             "but no reproduction or deterministic proof strong enough for confirmation.",
             "- **High-confidence:** strong validated evidence accepted by the verifier, without "
@@ -893,8 +893,9 @@ def render_markdown(
             (
                 "For Solidity findings, model agreement alone cannot produce `confirmed`; "
                 "confirmation requires a replay-confirmed deterministic invariant "
-                "counterexample, local reproduction, formal proof/counterexample, or strong "
-                "deterministic analyzer evidence plus verifier acceptance."
+                "counterexample, local reproduction, or strong deterministic analyzer evidence "
+                "plus verifier acceptance. Source-overlapping formal counterexamples remain "
+                "nonconfirming until exact candidate-to-property custody is available."
                 if report.language_capability is not None
                 and report.language_capability.evm_portfolio_applicable
                 else (

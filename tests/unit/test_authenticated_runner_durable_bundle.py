@@ -23,6 +23,7 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
     build_cross_lineage_adjudication_report,
 )
 from mmaudit.benchmark.models import ModelBenchmarkReport
+from mmaudit.config import ModelRetryPolicy
 from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageCaseExecutionEvidence,
     AuthenticatedCrossLineageLedgerEntryEvidence,
@@ -44,6 +45,7 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
     authenticated_runner_durable_bundle_bytes,
     build_authenticated_runner_durable_bundle,
     load_authenticated_runner_durable_bundle,
+    require_authenticated_runner_durable_config_binding,
     revalidate_authenticated_runner_durable_bundle,
 )
 from mmaudit.models.evidence_seal_authority import (
@@ -62,7 +64,10 @@ from mmaudit.models.ground_truth_authority import (
 from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.reasoning import ReasoningExecutionEvidence, ReasoningRequestPlanEvidence
 from mmaudit.models.schemas import UsageRecord
-from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.models.token_planning import (
+    RequestTokenPlan,
+    request_token_plan_projection_sha256,
+)
 from mmaudit.orchestration.budgets import EndpointRequestCostBound
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import JsonEvidenceObservation
@@ -77,6 +82,31 @@ from tests.unit.test_authenticated_runner_cost_plan import _preview as _cost_pre
 from tests.unit.test_openrouter_request_cost_preview import _disabled_reasoning_policy
 
 _LIVE_INPUTS_FACTORY = cast(Callable[[], _LiveInputs], runner_fixtures.live_inputs.__wrapped__)
+_EFFECTIVE_CONFIG_SHA256 = "e81516464de46b3b10d4533b1c0f792ae895e09c43cafc2d01f60cc2ad5bc438"
+_EXECUTION_CONFIG_SHA256 = "2e19ab801f4f18ce66beb757a7009a7cb0a1d5959f8ed199db3a50b9cf1a4a5f"
+_CONTINUITY_EFFECTIVE_CONFIG_SHA256 = (
+    "c848ab89d2ecce2c182c635eb2f4825ece82ef39f30907fa3ce0cb63937c8b20"
+)
+_CONTINUITY_EXECUTION_CONFIG_SHA256 = (
+    "5abc674bbd119ec4b1705265b9b7b7ccb178eb07712a995d860e9cfe358c18f1"
+)
+_RETRY_OFF_POLICY = ModelRetryPolicy.build(
+    transient_retry_limit=1,
+    schema_validation_retry_limit=0,
+)
+_CONTINUITY_POLICY = ModelRetryPolicy.build(
+    transient_retry_limit=1,
+    schema_validation_retry_limit=3,
+)
+_MODEL_RETRY_ROUTING_KEYS = {
+    "maximum_attempts_for_request",
+    "model_retry_attempts",
+    "model_retry_evidence_sha256",
+    "model_retry_policy",
+    "model_retry_policy_sha256",
+    "schema_validation_retries_used",
+    "transient_retries_used",
+}
 
 
 @cache
@@ -92,6 +122,81 @@ def _routing_sha256(usage: UsageRecord, key: str, fallback: str) -> str:
 def _decimal_text(value: Decimal) -> str:
     rendered = format(value, "f")
     return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
+
+
+def _model_retry_routing() -> dict[str, Any]:
+    policy = ModelRetryPolicy.build(
+        transient_retry_limit=1,
+        schema_validation_retry_limit=1,
+    )
+    values = {
+        "model_retry_policy": policy.model_dump(mode="json"),
+        "model_retry_policy_sha256": policy.policy_sha256,
+        "maximum_attempts_for_request": 3,
+        "transient_retries_used": 1,
+        "schema_validation_retries_used": 1,
+        "model_retry_attempts": [
+            {"attempt_ordinal": 1, "outcome": "TRANSIENT_STATUS"},
+            {"attempt_ordinal": 2, "outcome": "SCHEMA_VALIDATION_FAILED"},
+            {"attempt_ordinal": 3, "outcome": "SUCCESS"},
+        ],
+    }
+    return {
+        **values,
+        "model_retry_evidence_sha256": canonical_sha256(
+            {"domain": "mmaudit.model-retry-evidence.v1", **values}
+        ),
+    }
+
+
+def _successful_model_retry_routing(policy: ModelRetryPolicy) -> dict[str, Any]:
+    values = {
+        "model_retry_policy": policy.model_dump(mode="json"),
+        "model_retry_policy_sha256": policy.policy_sha256,
+        "maximum_attempts_for_request": policy.maximum_attempts,
+        "transient_retries_used": 0,
+        "schema_validation_retries_used": 0,
+        "model_retry_attempts": [
+            {"attempt_ordinal": 1, "outcome": "SUCCESS"},
+        ],
+    }
+    return {
+        **values,
+        "model_retry_evidence_sha256": canonical_sha256(
+            {"domain": "mmaudit.model-retry-evidence.v1", **values}
+        ),
+    }
+
+
+def test_retry_policy_routing_evidence_is_durable_and_raw_output_free() -> None:
+    routing = _model_retry_routing()
+
+    durable_bundle_module._require_safe_routing_value(routing, attempts=3)
+    assert set(routing) == _MODEL_RETRY_ROUTING_KEYS
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ("partial", "policy_hash", "counter", "ordinal", "evidence_hash"),
+)
+def test_durable_retry_policy_routing_rejects_semantic_tamper(tamper: str) -> None:
+    routing = json.loads(json.dumps(_model_retry_routing()))
+    if tamper == "partial":
+        routing.pop("model_retry_attempts")
+    elif tamper == "policy_hash":
+        routing["model_retry_policy"]["policy_sha256"] = "f" * 64
+    elif tamper == "counter":
+        routing["schema_validation_retries_used"] = 0
+    elif tamper == "ordinal":
+        routing["model_retry_attempts"][1]["attempt_ordinal"] = 3
+    else:
+        routing["model_retry_evidence_sha256"] = "f" * 64
+
+    with pytest.raises(
+        AuthenticatedRunnerDurableBundleError,
+        match="model retry evidence is inconsistent",
+    ):
+        durable_bundle_module._require_safe_routing_value(routing, attempts=3)
 
 
 def _v2_token_plan_for_usage(
@@ -176,8 +281,14 @@ def _cost_preview_for_usage(
     *,
     index: int,
     drift: str | None = None,
+    maximum_attempts: int = 2,
+    execution_config_sha256: str = _EXECUTION_CONFIG_SHA256,
 ) -> OpenRouterStructuredRequestCostPreview:
-    template = _cost_preview_fixture(index)
+    template = _cost_preview_fixture(
+        index,
+        maximum_attempts=maximum_attempts,
+        execution_config_sha256=execution_config_sha256,
+    )
     payload = template.model_dump(mode="json", exclude={"preview_sha256"})
     token_plan = _v2_token_plan_for_usage(
         usage,
@@ -311,7 +422,9 @@ def _cost_preview_for_usage(
             "reasoning_profile_sha256": reasoning_plan.control_profile.profile_sha256,
             "reasoning_capability_sha256": reasoning_plan.endpoint_capability_sha256,
             "reasoning_qualification_sha256": reasoning_plan.qualification_binding_sha256,
-            "request_token_plan_projection_sha256": token_plan.plan_sha256,
+            "request_token_plan_projection_sha256": (
+                request_token_plan_projection_sha256(token_plan)
+            ),
             "request_material_projection_utf8_bytes": prompt_units,
             "endpoint_cost_bound_pricing_sha256": bound.pricing_snapshot_sha256,
             "prompt_byte_upper_bound_tokens": prompt_units,
@@ -340,13 +453,21 @@ def _cost_plan_for_usages(
     case_ids: tuple[str, ...],
     usages: tuple[UsageRecord, ...],
     drift: str | None = None,
+    maximum_attempts: int = 2,
+    execution_config_sha256: str = _EXECUTION_CONFIG_SHA256,
 ) -> AuthenticatedRunnerStagedCostPlan:
     return build_authenticated_runner_staged_cost_plan(
         run_kind=run_kind,
         stage=stage,
         case_ids=case_ids,
         request_previews=tuple(
-            _cost_preview_for_usage(usage, index=index, drift=drift)
+            _cost_preview_for_usage(
+                usage,
+                index=index,
+                drift=drift,
+                maximum_attempts=maximum_attempts,
+                execution_config_sha256=execution_config_sha256,
+            )
             for index, usage in enumerate(usages)
         ),
     )
@@ -490,6 +611,7 @@ def _runner_evidence(
     reports: tuple[CrossLineageAdjudicationReport, ...] | None = None,
     candidate_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...] | None = None,
     judge_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...] | None = None,
+    effective_config_sha256: str = _EFFECTIVE_CONFIG_SHA256,
 ) -> AuthenticatedCrossLineageRunnerEvidence:
     if (candidate_cost_plans is None) != (judge_cost_plans is None):
         raise AssertionError("test fixture requires both cost-plan inventories together")
@@ -584,7 +706,8 @@ def _runner_evidence(
     ground = _ground_truth_projection(live)
     first_target = adjudications[0].target
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
+        "effective_config_sha256": effective_config_sha256,
         "objective_sha256": ground.objective_sha256,
         "frozen_ground_truth_provenance_sha256": ground.provenance_sha256,
         "frozen_source_revision": ground.source_revision,
@@ -661,20 +784,32 @@ def _complete_authseal_inputs(
     return collision, decisions
 
 
-def _bound_stage_usages(usages: tuple[UsageRecord, ...]) -> tuple[UsageRecord, ...]:
+def _bound_stage_usages(
+    usages: tuple[UsageRecord, ...],
+    *,
+    retry_policy: ModelRetryPolicy | None,
+) -> tuple[UsageRecord, ...]:
     anchor = usages[0]
     assert anchor.started_at is not None
     assert anchor.ended_at is not None
     reasoning_capability_sha256 = _cost_preview_fixture(0).reasoning_capability_sha256
-    return tuple(
-        _usage_with_singleton_identity_and_reasoning(
+    retained: list[UsageRecord] = []
+    for usage in usages:
+        bound = _usage_with_singleton_identity_and_reasoning(
             usage,
             started_at=anchor.started_at,
             ended_at=anchor.ended_at,
             endpoint_capability_sha256=reasoning_capability_sha256,
         )
-        for usage in usages
-    )
+        assert bound.attempts == 1
+        payload = bound.model_dump(mode="python")
+        if retry_policy is not None:
+            payload["routing"] = {
+                **payload["routing"],
+                **_successful_model_retry_routing(retry_policy),
+            }
+        retained.append(reattest_synthetic_real_usage(UsageRecord.model_validate(payload)))
+    return tuple(retained)
 
 
 @dataclass(frozen=True, slots=True)
@@ -686,8 +821,21 @@ class _V11Inputs:
 
 
 @cache
-def _v11_inputs() -> _V11Inputs:
+def _v11_inputs(
+    maximum_attempts: int = 2,
+    execution_config_sha256: str = _EXECUTION_CONFIG_SHA256,
+    effective_config_sha256: str = _EFFECTIVE_CONFIG_SHA256,
+    routing_transient_retries: int | None = 1,
+) -> _V11Inputs:
     original = _live_inputs()
+    retry_policy = (
+        None
+        if routing_transient_retries is None
+        else ModelRetryPolicy.build(
+            transient_retry_limit=routing_transient_retries,
+            schema_validation_retry_limit=(maximum_attempts - 1 - routing_transient_retries),
+        )
+    )
     candidate_plans: list[AuthenticatedRunnerStagedCostPlan] = []
     judge_plans: list[AuthenticatedRunnerStagedCostPlan] = []
     retained_runs = []
@@ -696,13 +844,16 @@ def _v11_inputs() -> _V11Inputs:
         maybe_candidate_usages = tuple(case.usage_record for case in candidate_cases)
         assert all(usage is not None for usage in maybe_candidate_usages)
         candidate_usages = _bound_stage_usages(
-            cast(tuple[UsageRecord, ...], maybe_candidate_usages)
+            cast(tuple[UsageRecord, ...], maybe_candidate_usages),
+            retry_policy=retry_policy,
         )
         candidate_plan = _cost_plan_for_usages(
             run_kind=custody.run_kind,
             stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
             case_ids=tuple(case.case_id for case in candidate_cases),
             usages=candidate_usages,
+            maximum_attempts=maximum_attempts,
+            execution_config_sha256=execution_config_sha256,
         )
         candidate_seed = custody.candidate_report.model_copy(
             update={
@@ -735,13 +886,16 @@ def _v11_inputs() -> _V11Inputs:
             request_offset=index * 1_000,
         )
         judge_usages = _bound_stage_usages(
-            tuple(case.usage_record for case in provisional_adjudication.cases)
+            tuple(case.usage_record for case in provisional_adjudication.cases),
+            retry_policy=retry_policy,
         )
         judge_plan = _cost_plan_for_usages(
             run_kind=custody.run_kind,
             stage=AuthenticatedRunnerCostPlanStage.JUDGE,
             case_ids=tuple(case.case_id for case in provisional_adjudication.cases),
             usages=judge_usages,
+            maximum_attempts=maximum_attempts,
+            execution_config_sha256=execution_config_sha256,
         )
         adjudication_seed = provisional_adjudication.model_copy(
             update={
@@ -778,6 +932,7 @@ def _v11_inputs() -> _V11Inputs:
         live,
         candidate_cost_plans=exact_candidate_plans,
         judge_cost_plans=exact_judge_plans,
+        effective_config_sha256=effective_config_sha256,
     )
     return _V11Inputs(
         live=live,
@@ -787,10 +942,14 @@ def _v11_inputs() -> _V11Inputs:
     )
 
 
-def _rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
-    inputs = _v11_inputs()
+def _rejected_bundle_from_inputs(
+    inputs: _V11Inputs,
+    *,
+    effective_config_sha256: str,
+) -> AuthenticatedRunnerDurableEvidenceBundle:
     live = inputs.live
     return build_authenticated_runner_durable_bundle(
+        effective_config_sha256=effective_config_sha256,
         runner_evidence=inputs.evidence,
         candidate_cost_plans=inputs.candidate_cost_plans,
         judge_cost_plans=inputs.judge_cost_plans,
@@ -803,9 +962,50 @@ def _rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
     )
 
 
+def _rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
+    return _rejected_bundle_from_inputs(
+        _v11_inputs(),
+        effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
+    )
+
+
+@cache
+def _continuity_rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
+    inputs = _v11_inputs(
+        5,
+        _CONTINUITY_EXECUTION_CONFIG_SHA256,
+        _CONTINUITY_EFFECTIVE_CONFIG_SHA256,
+    )
+    return _rejected_bundle_from_inputs(
+        inputs,
+        effective_config_sha256=_CONTINUITY_EFFECTIVE_CONFIG_SHA256,
+    )
+
+
+@cache
+def _legacy_v11_rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
+    payload = _rejected_bundle().model_dump(mode="json")
+    payload["schema_version"] = "1.1"
+    payload.pop("effective_config_sha256")
+    runner_evidence = payload["runner_evidence"]
+    assert isinstance(runner_evidence, dict)
+    runner_evidence["schema_version"] = "1.0"
+    runner_evidence.pop("effective_config_sha256")
+    runner_evidence["evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in runner_evidence.items() if key != "evidence_sha256"}
+    )
+    payload["runner_evidence_sha256"] = runner_evidence["evidence_sha256"]
+    payload["bundle_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "bundle_sha256"}
+    )
+    return AuthenticatedRunnerDurableEvidenceBundle.model_validate_json(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    )
+
+
 @cache
 def _legacy_rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
-    payload = _rejected_bundle().model_dump(mode="json")
+    payload = _legacy_v11_rejected_bundle().model_dump(mode="json")
     payload["schema_version"] = "1.0"
     for retained in payload["runs"]:
         retained["schema_version"] = "1.0"
@@ -903,7 +1103,10 @@ def test_rejected_bundle_round_trips_canonically_without_authority() -> None:
     replay = revalidate_authenticated_runner_durable_bundle(raw)
 
     assert replay == bundle
-    assert replay.schema_version == "1.1"
+    assert replay.schema_version == "1.2"
+    assert replay.effective_config_sha256 == _EFFECTIVE_CONFIG_SHA256
+    assert replay.runner_evidence.schema_version == "1.1"
+    assert replay.runner_evidence.effective_config_sha256 == _EFFECTIVE_CONFIG_SHA256
     assert all(item.schema_version == "1.1" for item in replay.runs)
     assert all(item.candidate_cost_plan is not None for item in replay.runs)
     assert all(item.judge_cost_plan is not None for item in replay.runs)
@@ -937,6 +1140,191 @@ def test_legacy_v10_bundle_remains_loadable_but_has_no_cost_admission() -> None:
     assert all(item.schema_version == "1.0" for item in replay.runs)
     assert all(item.candidate_cost_plan is None for item in replay.runs)
     assert all(item.judge_cost_plan is None for item in replay.runs)
+
+
+def test_legacy_v11_bundle_remains_canonical_but_is_not_current_config_evidence() -> None:
+    bundle = _legacy_v11_rejected_bundle()
+    raw = authenticated_runner_durable_bundle_bytes(bundle)
+
+    replay = revalidate_authenticated_runner_durable_bundle(raw)
+
+    assert replay == bundle
+    assert replay.schema_version == "1.1"
+    assert replay.effective_config_sha256 is None
+    assert replay.runner_evidence.schema_version == "1.0"
+    assert replay.runner_evidence.effective_config_sha256 is None
+    assert b'"effective_config_sha256"' not in raw
+    with pytest.raises(
+        AuthenticatedRunnerDurableBundleError,
+        match="legacy and lacks effective config custody",
+    ):
+        require_authenticated_runner_durable_config_binding(
+            replay,
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
+            execution_config_sha256=_EXECUTION_CONFIG_SHA256,
+            maximum_attempts_per_logical_request=2,
+            model_retry_policy_sha256=_RETRY_OFF_POLICY.policy_sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    (
+        "bundle_factory",
+        "effective_hash",
+        "execution_hash",
+        "maximum_attempts",
+        "retry_policy_sha256",
+    ),
+    (
+        (
+            _rejected_bundle,
+            _EFFECTIVE_CONFIG_SHA256,
+            _EXECUTION_CONFIG_SHA256,
+            2,
+            _RETRY_OFF_POLICY.policy_sha256,
+        ),
+        (
+            _continuity_rejected_bundle,
+            _CONTINUITY_EFFECTIVE_CONFIG_SHA256,
+            _CONTINUITY_EXECUTION_CONFIG_SHA256,
+            5,
+            _CONTINUITY_POLICY.policy_sha256,
+        ),
+    ),
+    ids=("retry-off", "retry-continuity"),
+)
+def test_current_bundle_requires_exact_full_execution_and_attempt_config_binding(
+    bundle_factory: Callable[[], AuthenticatedRunnerDurableEvidenceBundle],
+    effective_hash: str,
+    execution_hash: str,
+    maximum_attempts: int,
+    retry_policy_sha256: str,
+) -> None:
+    bundle = bundle_factory()
+
+    assert (
+        require_authenticated_runner_durable_config_binding(
+            bundle,
+            effective_config_sha256=effective_hash,
+            execution_config_sha256=execution_hash,
+            maximum_attempts_per_logical_request=maximum_attempts,
+            model_retry_policy_sha256=retry_policy_sha256,
+        )
+        == bundle
+    )
+
+
+@pytest.mark.parametrize(
+    "routing_transient_retries",
+    (None, 0),
+    ids=("retry-evidence-omitted", "equal-total-split-swapped"),
+)
+def test_current_bundle_rejects_missing_or_wrong_split_retry_policy_custody(
+    routing_transient_retries: int | None,
+) -> None:
+    inputs = _v11_inputs(routing_transient_retries=routing_transient_retries)
+    bundle = _rejected_bundle_from_inputs(
+        inputs,
+        effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerDurableBundleError,
+        match="differs from the selected effective configuration",
+    ):
+        require_authenticated_runner_durable_config_binding(
+            bundle,
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
+            execution_config_sha256=_EXECUTION_CONFIG_SHA256,
+            maximum_attempts_per_logical_request=2,
+            model_retry_policy_sha256=_RETRY_OFF_POLICY.policy_sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    ("effective_hash", "execution_hash", "maximum_attempts"),
+    (
+        (
+            _CONTINUITY_EFFECTIVE_CONFIG_SHA256,
+            _EXECUTION_CONFIG_SHA256,
+            2,
+        ),
+        (
+            _EFFECTIVE_CONFIG_SHA256,
+            _CONTINUITY_EXECUTION_CONFIG_SHA256,
+            2,
+        ),
+        (
+            _EFFECTIVE_CONFIG_SHA256,
+            _EXECUTION_CONFIG_SHA256,
+            5,
+        ),
+        (
+            _CONTINUITY_EFFECTIVE_CONFIG_SHA256,
+            _CONTINUITY_EXECUTION_CONFIG_SHA256,
+            5,
+        ),
+    ),
+    ids=(
+        "old-full-hash-as-continuity",
+        "wrong-execution-subtree",
+        "wrong-attempt-capacity",
+        "coherent-continuity-claim-over-retry-off-bundle",
+    ),
+)
+def test_retry_off_bundle_cannot_substitute_for_continuity_evidence(
+    effective_hash: str,
+    execution_hash: str,
+    maximum_attempts: int,
+) -> None:
+    with pytest.raises(
+        AuthenticatedRunnerDurableBundleError,
+        match="differs from the selected effective configuration",
+    ):
+        require_authenticated_runner_durable_config_binding(
+            _rejected_bundle(),
+            effective_config_sha256=effective_hash,
+            execution_config_sha256=execution_hash,
+            maximum_attempts_per_logical_request=maximum_attempts,
+            model_retry_policy_sha256=(
+                _CONTINUITY_POLICY.policy_sha256
+                if maximum_attempts == 5
+                else _RETRY_OFF_POLICY.policy_sha256
+            ),
+        )
+
+
+def test_current_bundle_rejects_free_full_hash_assertion_against_runner_evidence() -> None:
+    inputs = _v11_inputs()
+    live = inputs.live
+
+    with pytest.raises(AuthenticatedRunnerDurableBundleError, match="bundle is invalid"):
+        build_authenticated_runner_durable_bundle(
+            effective_config_sha256="f" * 64,
+            runner_evidence=inputs.evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
+            candidate_reports=tuple(item.candidate_report for item in live.runs),
+            prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
+            adjudication_reports=tuple(item.adjudication_report for item in live.runs),
+            authseal_collision_map=None,
+            authseal_decision_projections=(),
+            authseal_rejection_kind="EvidenceSealAuthorityError",
+        )
+
+
+def test_v12_bundle_rejects_historical_runner_evidence_even_when_resealed() -> None:
+    payload = _legacy_v11_rejected_bundle().model_dump(mode="json")
+    payload["schema_version"] = "1.2"
+    payload["effective_config_sha256"] = _EFFECTIVE_CONFIG_SHA256
+    payload["bundle_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "bundle_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="lacks exact effective config custody"):
+        AuthenticatedRunnerDurableEvidenceBundle.model_validate_json(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def _run_cost_plan_join_fixture(
@@ -1078,6 +1466,7 @@ def test_complete_bundle_exactly_joins_authseal_inputs() -> None:
     evidence = inputs.evidence
     collision, decisions = _complete_authseal_inputs(live, evidence)
     bundle = build_authenticated_runner_durable_bundle(
+        effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
         runner_evidence=evidence,
         candidate_cost_plans=inputs.candidate_cost_plans,
         judge_cost_plans=inputs.judge_cost_plans,
@@ -1283,6 +1672,7 @@ def test_bundle_rejects_sensitive_routing_even_when_report_is_resealed() -> None
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
             runner_evidence=evidence,
             candidate_cost_plans=inputs.candidate_cost_plans,
             judge_cost_plans=inputs.judge_cost_plans,
@@ -1306,6 +1696,7 @@ def test_bundle_rejects_access_token_in_candidate_routing() -> None:
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
             runner_evidence=evidence,
             candidate_cost_plans=inputs.candidate_cost_plans,
             judge_cost_plans=inputs.judge_cost_plans,
@@ -1350,6 +1741,7 @@ def test_bundle_rejects_nested_access_token_in_judge_routing() -> None:
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
             runner_evidence=evidence,
             candidate_cost_plans=inputs.candidate_cost_plans,
             judge_cost_plans=inputs.judge_cost_plans,
@@ -1371,6 +1763,7 @@ def test_bundle_rejects_runtime_shape_below_frozen_release_protocol() -> None:
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="two-run 24-case protocol"):
         build_authenticated_runner_durable_bundle(
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
             runner_evidence=evidence,
             candidate_cost_plans=inputs.candidate_cost_plans,
             judge_cost_plans=inputs.judge_cost_plans,
@@ -1411,6 +1804,7 @@ def test_complete_bundle_rejects_resealed_authseal_scoring_tamper() -> None:
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="bundle is invalid"):
         build_authenticated_runner_durable_bundle(
+            effective_config_sha256=_EFFECTIVE_CONFIG_SHA256,
             runner_evidence=evidence,
             candidate_cost_plans=inputs.candidate_cost_plans,
             judge_cost_plans=inputs.judge_cost_plans,
@@ -1428,6 +1822,7 @@ def test_authseal_rejection_is_bounded_type_only() -> None:
     live = inputs.live
     evidence = inputs.evidence
     common = {
+        "effective_config_sha256": _EFFECTIVE_CONFIG_SHA256,
         "runner_evidence": evidence,
         "candidate_cost_plans": inputs.candidate_cost_plans,
         "judge_cost_plans": inputs.judge_cost_plans,
@@ -1512,6 +1907,7 @@ def test_durable_bundle_release_schema_is_closed_bounded_and_non_authorizing() -
     }
     allowed_routing_keys = set(routing["propertyNames"]["allOf"][-1]["enum"])
     assert "access_token" not in allowed_routing_keys
+    assert allowed_routing_keys >= _MODEL_RETRY_ROUTING_KEYS
     bundle_payload = json.loads(authenticated_runner_durable_bundle_bytes(_rejected_bundle()))
     assert len(bundle_payload["runs"]) == schema["properties"]["runs"]["minItems"]
     assert len(bundle_payload["runner_evidence"]["case_ids"]) == 24

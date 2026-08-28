@@ -73,6 +73,7 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
     CandidateFinding,
     CandidateReproductionResolution,
+    ConsensusReviewArtifact,
     ContextPackage,
     EconomicSimulationPlan,
     FalsificationDecision,
@@ -2259,6 +2260,7 @@ class PipelineScheduler:
         falsification_decisions: Iterable[FalsificationDecision],
         reproduction_results: Iterable[ReproductionResult],
         reproduction_resolutions: Iterable[CandidateReproductionResolution],
+        consensus_review: ConsensusReviewArtifact | None = None,
     ) -> SchedulerTerminalReportAuthority:
         """Seal or exactly revalidate the terminal report projection before issuance."""
 
@@ -2276,6 +2278,7 @@ class PipelineScheduler:
             falsification_decisions=falsification_decisions,
             reproduction_results=reproduction_results,
             reproduction_resolutions=reproduction_resolutions,
+            consensus_review=consensus_review,
         )
 
     def artifact(self) -> SchedulerArtifact:

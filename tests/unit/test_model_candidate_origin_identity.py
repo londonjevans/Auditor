@@ -4,7 +4,8 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -21,11 +22,17 @@ from mmaudit.models.candidate_review_stamping import (
     stamp_candidate_review_findings,
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
+from mmaudit.models.scheduler import (
+    SchedulerPassKind,
+    SchedulerTaskOutput,
+    SchedulerTerminalStatus,
+)
 from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReviewBatch,
     ContextPackage,
     ContextRequestEvidence,
+    Evidence,
     ModelRequestValidationStatus,
     UsageRecord,
 )
@@ -37,7 +44,15 @@ from mmaudit.models.usage import (
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.consensus import group_candidates
 from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.manifest import (
+    _scheduler_accepted_candidate_authority,
+    _scheduler_report_authority_snapshot,
+)
 from tests.fake_openrouter import _candidate
+from tests.scheduler_support import (
+    build_complete_scheduler_fixture,
+    build_scheduler_test_model_surface_review_custody,
+)
 from tests.unit.test_model_review_evidence import (
     _context,
     _record,
@@ -309,6 +324,95 @@ def test_pure_stamping_binds_request_role_and_model_projection() -> None:
     assert model_drift.candidate_id == baseline.candidate_id
     assert model_drift.model_family != baseline.model_family
     assert model_drift.model_votes != baseline.model_votes
+
+
+def test_detached_manifest_restamps_scanner_evidence_against_trusted_inventory() -> None:
+    fixture = build_complete_scheduler_fixture(seed="detached-scanner-stamping")
+    plan = next(
+        item for item in fixture.plans if item.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+    )
+    task = plan.tasks[0]
+    activation = next(item for item in fixture.activations if item.task_id == task.task_id)
+    old_output = next(item for item in fixture.outputs if item.task_id == task.task_id)
+    old_batch = CandidateReviewBatch.model_validate(old_output.payload)
+    forged_fingerprint = "f" * 64
+    raw = _raw_candidate("raw-forged-scanner").model_copy(
+        update={
+            "evidence": [
+                Evidence(
+                    type="scanner",
+                    source="model-claimed",
+                    description="Forged scanner evidence without qualifying runtime custody.",
+                    fingerprint=forged_fingerprint,
+                )
+            ]
+        }
+    )
+    batch = CandidateReviewBatch(findings=[raw], surface_reviews=old_batch.surface_reviews)
+    payload = batch.model_dump(mode="json")
+    validated_response_sha256 = hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+    usage = next(
+        item for item in fixture.usage_records if item.request_id == task.logical_request_id
+    ).model_copy(
+        update={
+            "validated_response_sha256": validated_response_sha256,
+            "response_sha256": "b" * 64,
+        }
+    )
+    accepted = stamp_candidate_review_findings(
+        request_role=task.role,
+        usage_record=usage,
+        trusted_scanner_fingerprints=(forged_fingerprint,),
+        raw_findings=batch.findings,
+    )
+    surface_requests, surface_artifact = build_scheduler_test_model_surface_review_custody(
+        plan,
+        task,
+        activation,
+        usage,
+        payload,
+    )
+    output = SchedulerTaskOutput.build(
+        plan=plan,
+        task=task,
+        activation=activation,
+        payload=payload,
+        usage_record=usage,
+        model_surface_review_requests=surface_requests,
+        model_surface_review_artifact=surface_artifact,
+        accepted_candidates=accepted,
+    )
+    assert SchedulerTaskOutput.model_validate(output.model_dump(mode="python")) == output
+    result = SimpleNamespace(
+        task_id=task.task_id,
+        terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+        output_sha256=output.output_sha256,
+        output_artifact_sha256=output.output_artifact_sha256,
+    )
+    pass_result = SimpleNamespace(plan=plan, task_results=(result,))
+
+    class DetachedJournal:
+        outputs = (output,)
+        pass_results = (pass_result,)
+
+        def reconstruct_output(self, task_id: str, output_type: type[Any]) -> Any:
+            assert task_id == task.task_id
+            return output_type.model_validate(output.payload)
+
+    snapshot = _scheduler_report_authority_snapshot(cast(Any, DetachedJournal()))
+    with pytest.raises(ValueError, match="differ from trusted host stamping"):
+        _scheduler_accepted_candidate_authority(
+            snapshot,
+            trusted_scanner_fingerprints=frozenset(),
+        )
 
 
 def test_structurally_accountable_truncated_usage_stamps_without_granting_credit() -> None:

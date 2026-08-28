@@ -23,6 +23,7 @@ from mmaudit.models.route_admission import (
     route_admission_callables_are_pristine,
 )
 from mmaudit.models.route_constraints import (
+    ExactRouteRole,
     RouteConstraintPurpose,
     RoutePredicateDisposition,
     RoutePredicateId,
@@ -31,6 +32,7 @@ from mmaudit.models.route_constraints import (
     route_constraint_callables_are_pristine,
 )
 from tests.unit import test_authenticated_runner_execution as execution_fixtures
+from tests.unit import test_candidate_benchmark as benchmark_fixtures
 
 
 @pytest.mark.parametrize(
@@ -287,6 +289,30 @@ def test_route_admission_import_orders_install_the_same_pristine_boundary(import
     assert completed.stdout.strip() == "True True"
 
 
+def test_runtime_consumer_late_registration_preserves_transitive_guards() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import mmaudit.models.route_admission as r; "
+                "import mmaudit.models.openrouter as o; "
+                "print('mmaudit.models.route_runtime_evidence' in sys.modules, "
+                "r.route_admission_callables_are_pristine(), "
+                "o._openrouter_client_callables_are_pristine()); "
+                "import mmaudit.models.route_runtime_evidence; "
+                "print(r.route_admission_callables_are_pristine(), "
+                "o._openrouter_client_callables_are_pristine())"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.splitlines() == ["False True True", "True True"]
+
+
 def _routes(
     harness: Any,
 ) -> tuple[
@@ -311,6 +337,49 @@ def _routes(
             harness.plans[1].judge_discovery_evidence,
         ),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_id",
+    (
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-pro-20260813",
+    ),
+)
+async def test_route_admission_rejects_tombstoned_candidate_under_new_plan(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    model_id: str,
+) -> None:
+    config = benchmark_fixtures._config(config_factory)
+    manifest, evidence, registry = benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+        selection_plan_sha256="0" * 64,
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerRouteAdmissionError,
+        match="candidate assignment is revoked",
+    ):
+        require_authenticated_runner_route_admission(
+            model=registry.candidates[0],
+            evidence=evidence[0],
+            expected_role=ExactRouteRole.CANDIDATE,
+            purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
+            discovery_manifest=manifest,
+        )
 
 
 @pytest.mark.asyncio
@@ -366,6 +435,48 @@ async def test_registry_and_noncrediting_admission_preserve_separate_runtime_fac
             assert live_results[predicate].reason is reason
     assert harness.usage.records == []
     assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "purpose",
+    (
+        RouteConstraintPurpose.DISCOVERY_PUBLICATION,
+        RouteConstraintPurpose.REGISTRY_PUBLICATION,
+        RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+    ),
+)
+async def test_runtime_evidence_is_rejected_for_every_nonfull_purpose(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    purpose: RouteConstraintPurpose,
+) -> None:
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
+    candidate, primary, replay = _routes(harness)
+
+    with pytest.raises(
+        AuthenticatedRunnerRouteAdmissionError,
+        match="accepted only for full campaign admission",
+    ):
+        require_authenticated_runner_three_route_admission(
+            candidate=candidate,
+            primary_judge=primary,
+            replay_judge=replay,
+            purpose=purpose,
+            runtime_evidence=object(),  # type: ignore[arg-type]
+            frozen_live_equivalent=(
+                True if purpose is RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION else None
+            ),
+            runtime_required_output_tokens=(
+                harness.config.effective_reserved_output_tokens
+                if purpose is RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION
+                else None
+            ),
+        )
 
 
 @pytest.mark.asyncio

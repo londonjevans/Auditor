@@ -16,6 +16,7 @@ from mmaudit.models.candidate_selection import (
     authenticated_runner_route_constraint,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
+    require_candidate_selection_plan_currently_eligible,
     seal_authenticated_runner_route_predicate_profile,
     seal_authenticated_runner_selection,
     seal_candidate_selection_entry,
@@ -545,7 +546,6 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
                     ),
                 ),
             )
-
     assert (
         validate_candidate_selection_routes(
             plan,
@@ -558,6 +558,46 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         )
         == plan
     )
+
+
+def test_committed_selection_plan_stays_historical_but_is_revoked_for_current_action() -> None:
+    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+    historical_route = (
+        DiscoveryCandidateRoute(
+            exact_model_id="deepseek/deepseek-v4-pro-0813",
+            approved_provider_endpoint="parasail/fp8",
+        ),
+    )
+
+    assert validate_candidate_selection_routes(plan, routes=historical_route) == plan
+    with pytest.raises(CandidateSelectionError, match="candidate selection route is revoked"):
+        require_candidate_selection_plan_currently_eligible(plan)
+
+
+def test_pending_registry_derivation_rejects_revoked_historical_plan(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    manifest, evidence, _template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id=MODEL_A,
+                provider_endpoint=ENDPOINT_A,
+                provider_name="Provider Alpha",
+            ),
+        ),
+    )
+    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+
+    with pytest.raises(CandidateSelectionError, match="candidate selection route is revoked"):
+        derive_pending_candidate_registry_from_selection_plan(
+            plan=plan,
+            run_manifest=manifest,
+            evidence=evidence,
+        )
 
 
 def test_committed_runner_selection_has_three_documented_independent_roots() -> None:

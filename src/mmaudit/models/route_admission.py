@@ -12,6 +12,10 @@ from collections.abc import Callable
 from types import CellType, CodeType, FunctionType
 from typing import TYPE_CHECKING, Any, cast
 
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationError,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
@@ -32,10 +36,12 @@ from mmaudit.models.route_constraints import (
     evaluate_route_predicates,
     require_route_predicates,
     route_constraint_callables_are_pristine,
+    transition_full_campaign_runtime_predicates,
 )
 
 if TYPE_CHECKING:
-    from mmaudit.models.qualification import CandidateModel, CandidateRegistry
+    from mmaudit.models.qualification import CandidateModel, CandidateRegistry, QualificationPolicy
+    from mmaudit.models.route_runtime_evidence import VerifiedThreeRouteRuntimeEvidence
 
 type AuthenticatedRunnerRouteArtifacts = tuple[
     CandidateRegistry,
@@ -380,6 +386,9 @@ def require_authenticated_runner_route_admission(
     evidence: OpenRouterModelDiscoveryEvidence,
     expected_role: ExactRouteRole,
     purpose: RouteConstraintPurpose,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+    runtime_evidence: VerifiedThreeRouteRuntimeEvidence | None = None,
+    qualification_policy: QualificationPolicy | None = None,
     frozen_live_equivalent: bool | None = None,
     runtime_required_output_tokens: int | None = None,
 ) -> RoutePredicateReport:
@@ -392,6 +401,24 @@ def require_authenticated_runner_route_admission(
     if type(purpose) is not RouteConstraintPurpose:
         raise AuthenticatedRunnerRouteAdmissionError(
             "authenticated runner route purpose has the wrong exact type"
+        )
+    if (
+        runtime_evidence is not None
+        and purpose is not RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
+    ):
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "runtime route evidence is accepted only for full campaign admission"
+        )
+    if (
+        runtime_evidence is not None
+        and type(discovery_manifest) is not OpenRouterModelDiscoveryRunManifest
+    ):
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "runtime route evidence requires the exact discovery manifest"
+        )
+    if (runtime_evidence is None) != (qualification_policy is None):
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "runtime route evidence and qualification policy must be supplied together"
         )
     if purpose in {
         RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
@@ -412,6 +439,9 @@ def require_authenticated_runner_route_admission(
         model=model,
         evidence=evidence,
         expected_role=expected_role,
+        discovery_manifest=discovery_manifest,
+        runtime_evidence=runtime_evidence,
+        qualification_policy=qualification_policy,
         frozen_live_equivalent=frozen_live_equivalent,
         runtime_required_output_tokens=runtime_required_output_tokens,
     )
@@ -424,6 +454,8 @@ def require_authenticated_runner_three_route_admission(
     primary_judge: AuthenticatedRunnerRouteArtifacts,
     replay_judge: AuthenticatedRunnerRouteArtifacts,
     purpose: RouteConstraintPurpose,
+    runtime_evidence: VerifiedThreeRouteRuntimeEvidence | None = None,
+    qualification_policy: QualificationPolicy | None = None,
     frozen_live_equivalent: bool | None = None,
     runtime_required_output_tokens: int | None = None,
 ) -> tuple[RoutePredicateReport, RoutePredicateReport, RoutePredicateReport]:
@@ -436,6 +468,17 @@ def require_authenticated_runner_three_route_admission(
     if type(purpose) is not RouteConstraintPurpose:
         raise AuthenticatedRunnerRouteAdmissionError(
             "authenticated runner route purpose has the wrong exact type"
+        )
+    if (
+        runtime_evidence is not None
+        and purpose is not RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
+    ):
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "runtime route evidence is accepted only for full campaign admission"
+        )
+    if (runtime_evidence is None) != (qualification_policy is None):
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "runtime route evidence and qualification policy must be supplied together"
         )
     if frozen_live_equivalent is not None and type(frozen_live_equivalent) is not bool:
         raise AuthenticatedRunnerRouteAdmissionError(
@@ -467,18 +510,24 @@ def require_authenticated_runner_three_route_admission(
         _evaluate_singleton_route_artifacts(
             artifacts=candidate,
             expected_role=ExactRouteRole.CANDIDATE,
+            runtime_evidence=runtime_evidence,
+            qualification_policy=qualification_policy,
             frozen_live_equivalent=frozen_live_equivalent,
             runtime_required_output_tokens=runtime_required_output_tokens,
         ),
         _evaluate_singleton_route_artifacts(
             artifacts=primary_judge,
             expected_role=ExactRouteRole.PRIMARY_JUDGE,
+            runtime_evidence=runtime_evidence,
+            qualification_policy=qualification_policy,
             frozen_live_equivalent=frozen_live_equivalent,
             runtime_required_output_tokens=runtime_required_output_tokens,
         ),
         _evaluate_singleton_route_artifacts(
             artifacts=replay_judge,
             expected_role=ExactRouteRole.REPLAY_JUDGE,
+            runtime_evidence=runtime_evidence,
+            qualification_policy=qualification_policy,
             frozen_live_equivalent=frozen_live_equivalent,
             runtime_required_output_tokens=runtime_required_output_tokens,
         ),
@@ -492,6 +541,8 @@ def _evaluate_singleton_route_artifacts(
     *,
     artifacts: AuthenticatedRunnerRouteArtifacts,
     expected_role: ExactRouteRole,
+    runtime_evidence: VerifiedThreeRouteRuntimeEvidence | None,
+    qualification_policy: QualificationPolicy | None,
     frozen_live_equivalent: bool | None,
     runtime_required_output_tokens: int | None,
 ) -> RoutePredicateReport:
@@ -536,6 +587,9 @@ def _evaluate_singleton_route_artifacts(
         model=registry.candidates[0],
         evidence=evidence[0],
         expected_role=expected_role,
+        discovery_manifest=manifest,
+        runtime_evidence=runtime_evidence,
+        qualification_policy=qualification_policy,
         frozen_live_equivalent=frozen_live_equivalent,
         runtime_required_output_tokens=runtime_required_output_tokens,
     )
@@ -546,6 +600,9 @@ def _evaluate_authenticated_runner_route_admission(
     model: CandidateModel,
     evidence: OpenRouterModelDiscoveryEvidence,
     expected_role: ExactRouteRole,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest | None,
+    runtime_evidence: VerifiedThreeRouteRuntimeEvidence | None,
+    qualification_policy: QualificationPolicy | None,
     frozen_live_equivalent: bool | None,
     runtime_required_output_tokens: int | None,
 ) -> RoutePredicateReport:
@@ -568,6 +625,16 @@ def _evaluate_authenticated_runner_route_admission(
         raise AuthenticatedRunnerRouteAdmissionError(
             "authenticated runner route admission has the wrong exact input type"
         )
+    try:
+        for model_id in {model.exact_model_id, model.canonical_model_slug}:
+            require_candidate_assignment_eligible(
+                exact_model_id=model_id,
+                provider_endpoint=model.approved_provider_endpoint,
+            )
+    except CandidateSelectionRevocationError as exc:
+        raise AuthenticatedRunnerRouteAdmissionError(
+            "authenticated runner candidate assignment is revoked"
+        ) from exc
     if frozen_live_equivalent is not None and type(frozen_live_equivalent) is not bool:
         raise AuthenticatedRunnerRouteAdmissionError(
             "authenticated runner live-equivalence result has the wrong exact type"
@@ -649,11 +716,27 @@ def _evaluate_authenticated_runner_route_admission(
                 admission_facts,
                 required_output_tokens=runtime_required_output_tokens,
             )
-        return evaluate_route_predicates(
+        report = evaluate_route_predicates(
             profile=profile,
             constraint=constraint,
             facts=admission_facts,
         )
+        if runtime_evidence is not None:
+            if type(discovery_manifest) is not OpenRouterModelDiscoveryRunManifest:
+                raise AuthenticatedRunnerRouteAdmissionError(
+                    "runtime route evidence requires the exact discovery manifest"
+                )
+            report = transition_full_campaign_runtime_predicates(
+                report,
+                runtime_evidence=runtime_evidence,
+                qualification_policy=qualification_policy,
+                role=expected_role,
+                model=model,
+                discovery_manifest=discovery_manifest,
+                discovery_evidence=evidence,
+                facts=admission_facts,
+            )
+        return report
     except (TypeError, ValueError) as exc:
         raise AuthenticatedRunnerRouteAdmissionError(
             "authenticated runner live route report is invalid"
@@ -797,7 +880,13 @@ def _build_route_admission_callable_guard() -> Callable[[], bool]:
             try:
                 value = (
                     late_registered_state
-                    if name in {"issuer_callable_states", "issuer_callable_states_seal"}
+                    if name
+                    in {
+                        "consumer_state",
+                        "consumer_state_seal",
+                        "issuer_callable_states",
+                        "issuer_callable_states_seal",
+                    }
                     else cell.cell_contents
                 )
             except ValueError:

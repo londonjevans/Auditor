@@ -21,6 +21,7 @@ from mmaudit.privacy import PrivacyProfile
 
 ROOT = Path(__file__).parents[2]
 QUALIFICATION_CONFIG = ROOT / "config" / "openrouter-qualification.toml"
+RETRY_CONTINUITY_CONFIG = ROOT / "config" / "openrouter-authenticated-runner-retry-continuity.toml"
 ROLE_MODEL_ID = "qwen/qwen3.6-35b-a3b"
 
 
@@ -78,6 +79,28 @@ def test_unbound_qualification_config_cannot_qualify_an_ordinary_audit() -> None
         source_egress_requested=True,
     )
     assert any("no immutable lineage record" in error for error in errors)
+    with pytest.raises(ConfigError, match="endpoint allowlist"):
+        build_openrouter_runtime_controls(config, certification=True)
+
+
+def test_authenticated_runner_retry_continuity_profile_is_explicit_and_nonauthorizing() -> None:
+    raw = RETRY_CONTINUITY_CONFIG.read_text(encoding="utf-8")
+    config = load_config(RETRY_CONTINUITY_CONFIG, environ={})
+
+    assert "OPENROUTER_API_KEY" not in raw
+    assert "sk-or-" not in raw
+    assert config.execution.max_model_retries == 1
+    assert config.execution.max_schema_validation_retries == 3
+    assert config.execution.maximum_model_attempts == 5
+    assert config.execution.max_requests_per_agent == 576
+    assert 96 * config.execution.maximum_model_attempts <= (config.execution.max_requests_per_agent)
+    assert config.execution.cost_ledger_path is None
+    assert config.privacy.allow_code_egress is False
+    assert config.privacy.approved_model_lineages == ()
+    assert config.models.registry == ()
+    assert config.models.provider_policy.only == ()
+    assert config.models.provider_policy.allow_fallbacks is False
+    assert model_lineage_index(config) == {}
     with pytest.raises(ConfigError, match="endpoint allowlist"):
         build_openrouter_runtime_controls(config, certification=True)
 

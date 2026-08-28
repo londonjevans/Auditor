@@ -297,7 +297,12 @@ class AuthenticatedCrossLineageRunnerRunEvidence(_StrictFrozenEvidence):
 class AuthenticatedCrossLineageRunnerEvidence(_StrictFrozenEvidence):
     """Serializable runner evidence that deliberately grants no runtime authority."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
+    effective_config_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     objective_sha256: str = Field(pattern=_SHA256_PATTERN)
     frozen_ground_truth_provenance_sha256: str = Field(pattern=_SHA256_PATTERN)
     frozen_source_revision: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -349,6 +354,10 @@ class AuthenticatedCrossLineageRunnerEvidence(_StrictFrozenEvidence):
 
     @model_validator(mode="after")
     def exact_sets_and_hash_are_consistent(self) -> AuthenticatedCrossLineageRunnerEvidence:
+        if (self.schema_version == "1.0") != (self.effective_config_sha256 is None):
+            raise ValueError(
+                "authenticated runner evidence version and effective config custody differ"
+            )
         if self.case_ids != tuple(sorted(set(self.case_ids))):
             raise ValueError("authenticated runner case IDs must be unique and sorted")
         kinds = tuple(item.run_kind for item in self.runs)
@@ -443,6 +452,7 @@ class VerifiedCrossLineageRunnerProjection:
     """Fresh PID-local projection after every retained authority has replayed."""
 
     evidence_sha256: str
+    effective_config_sha256: str | None
     objective_sha256: str
     frozen_ground_truth_provenance_sha256: str
     frozen_source_revision: str
@@ -1997,6 +2007,11 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                 "authenticated runner retained run ordering or structure drifted"
             )
         runs = fresh_runs
+        effective_config_hashes = {run.candidate_campaign_effective_config_sha256 for run in runs}
+        if len(effective_config_hashes) != 1:
+            raise AuthenticatedCrossLineageRunnerError(
+                "runner runs do not share one effective configuration"
+            )
         validated_suite = validated_model(suite, ModelBenchmarkSuite, label="benchmark suite")
         ground_truth = replay_ground_truth(ground_truth_capability, validated_suite)
         case_ids = tuple(item.case_id for item in validated_suite.cases)
@@ -2056,7 +2071,8 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                     "runner usage cost differs from its reconciled ledger attempts"
                 )
         provisional = AuthenticatedCrossLineageRunnerEvidence.model_construct(
-            schema_version="1.0",
+            schema_version="1.1",
+            effective_config_sha256=next(iter(effective_config_hashes)),
             objective_sha256=ground_truth.objective_sha256,
             frozen_ground_truth_provenance_sha256=ground_truth.provenance_sha256,
             frozen_source_revision=ground_truth.source_revision,
@@ -2095,6 +2111,7 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     ) -> VerifiedCrossLineageRunnerProjection:
         return VerifiedCrossLineageRunnerProjection(
             evidence_sha256=evidence.evidence_sha256,
+            effective_config_sha256=evidence.effective_config_sha256,
             objective_sha256=evidence.objective_sha256,
             frozen_ground_truth_provenance_sha256=(evidence.frozen_ground_truth_provenance_sha256),
             frozen_source_revision=evidence.frozen_source_revision,

@@ -324,6 +324,20 @@ def test_group_identity_and_origin_do_not_change_under_model_commentary() -> Non
         model_votes=[_vote(role="business_logic", verdict="proposed")],
         execution_candidate=annotated_execution,
     )
+    commentary = commentary.model_copy(
+        update={
+            "cwe": ["CWE-284"],
+            "preconditions": ["Model-only precondition."],
+            "evidence": [
+                *commentary.evidence,
+                Evidence(
+                    type="model",
+                    source="model-only-taxonomy",
+                    description="This evidence belongs only to model commentary.",
+                ),
+            ],
+        }
+    )
     execution_group_id = group_candidates([bare_execution])[0].group_id
     group = group_candidates([commentary, annotated_execution])[0]
 
@@ -355,11 +369,11 @@ def test_group_identity_and_origin_do_not_change_under_model_commentary() -> Non
     assert finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
     assert finding.execution_provenance == (provenance,)
     assert finding.evidence_strength is EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE
-    assert {vote.role for vote in finding.model_votes} == {
-        "business_logic",
-        "judge",
-        "verifier",
-    }
+    assert finding.cwe == annotated_execution.cwe
+    assert "Model-only precondition." not in finding.preconditions
+    assert all(evidence.source != "model-only-taxonomy" for evidence in finding.evidence)
+    assert {vote.role for vote in finding.model_votes} == {"judge", "verifier"}
+    assert commentary.candidate_id in finding.contributing_candidate_ids
 
 
 def test_transitive_model_bridge_cannot_absorb_unrelated_model_candidate() -> None:
@@ -553,7 +567,7 @@ def test_execution_finding_validation_state_is_bound_to_execution_anchor() -> No
     assert finding.status is FindingStatus.REJECTED
 
 
-def test_model_only_consensus_cap_remains_strong_support() -> None:
+def test_model_only_consensus_without_exact_three_review_fails_closed() -> None:
     location = Location(
         path="src/SyntheticVault.sol",
         start_line=30,
@@ -583,7 +597,7 @@ def test_model_only_consensus_cap_remains_strong_support() -> None:
         for candidate, marker in ((left, "a"), (right, "b"))
     }
 
-    assert preliminary_status(group, decisions, validations, []) is FindingStatus.STRONGLY_SUPPORTED
+    assert preliminary_status(group, decisions, validations, []) is FindingStatus.NEEDS_REVIEW
 
     finding = merge_group(
         group,
@@ -593,7 +607,7 @@ def test_model_only_consensus_cap_remains_strong_support() -> None:
         judge=_judge(group.group_id, status=FindingStatus.CONFIRMED),
     )
 
-    assert finding.status is FindingStatus.STRONGLY_SUPPORTED
+    assert finding.status is FindingStatus.NEEDS_REVIEW
     assert finding.origin_kind is FindingOriginKind.MODEL_REVIEW
     assert finding.execution_provenance == ()
     assert finding.evidence_strength is EvidenceStrength.VALIDATED_ATTACK_PATH
@@ -602,11 +616,11 @@ def test_model_only_consensus_cap_remains_strong_support() -> None:
             finding,
             require_formal_or_reproduction=True,
         ).status
-        is FindingStatus.STRONGLY_SUPPORTED
+        is FindingStatus.NEEDS_REVIEW
     )
 
 
-def test_model_only_confirmed_critical_still_requires_executable_proof() -> None:
+def test_model_only_scanner_support_without_exact_three_review_fails_closed() -> None:
     location = Location(
         path="src/SyntheticVault.sol",
         start_line=40,
@@ -642,12 +656,13 @@ def test_model_only_confirmed_critical_still_requires_executable_proof() -> None
         judge=_judge(group.group_id, status=FindingStatus.CONFIRMED),
     )
 
-    assert finding.status is FindingStatus.CONFIRMED
-    assert finding.evidence_strength is EvidenceStrength.DETERMINISTIC_ANALYZER
+    assert finding.status is FindingStatus.NEEDS_REVIEW
+    assert finding.evidence_strength is EvidenceStrength.VALIDATED_ATTACK_PATH
+    assert all(item.type != "scanner" for item in finding.evidence)
     capped = enforce_critical_evidence_cap(
         finding,
         require_formal_or_reproduction=True,
     )
-    assert capped.status is FindingStatus.STRONGLY_SUPPORTED
+    assert capped.status is FindingStatus.NEEDS_REVIEW
     assert capped.origin_kind is FindingOriginKind.MODEL_REVIEW
     assert capped.execution_provenance == ()

@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
@@ -175,6 +176,9 @@ class RoutePredicateReason(StrEnum):
     REGISTRY_CONSTRAINT_CUSTODY_MISMATCH = "REGISTRY_CONSTRAINT_CUSTODY_MISMATCH"
     EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE = "EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE"
     TOKEN_DETAIL_CONVENTION_UNAVAILABLE = "TOKEN_DETAIL_CONVENTION_UNAVAILABLE"
+    RUNTIME_EVIDENCE_INVALID = "RUNTIME_EVIDENCE_INVALID"
+    RUNTIME_EVIDENCE_BINDING_MISMATCH = "RUNTIME_EVIDENCE_BINDING_MISMATCH"
+    RUNTIME_EVIDENCE_STALE = "RUNTIME_EVIDENCE_STALE"
 
 
 class RouteConstraintPurpose(StrEnum):
@@ -720,7 +724,13 @@ class RoutePredicateRequirementError(RouteConstraintError):
     ) -> None:
         self.purpose = purpose
         self.failures = failures
-        super().__init__("route predicate report does not satisfy its closed purpose")
+        rendered = ",".join(
+            f"{failure.predicate_id.value}={failure.reason.value}" for failure in failures
+        )
+        super().__init__(
+            "route predicate report does not satisfy its closed purpose: "
+            f"purpose={purpose.value}; failures={rendered}"
+        )
 
 
 _FAILURE_REASONS_BY_PREDICATE: Mapping[
@@ -848,10 +858,20 @@ _FAILURE_REASONS_BY_PREDICATE: Mapping[
             }
         ),
         RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE: frozenset(
-            {RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE}
+            {
+                RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,
+                RoutePredicateReason.RUNTIME_EVIDENCE_INVALID,
+                RoutePredicateReason.RUNTIME_EVIDENCE_BINDING_MISMATCH,
+                RoutePredicateReason.RUNTIME_EVIDENCE_STALE,
+            }
         ),
         RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION: frozenset(
-            {RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE}
+            {
+                RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE,
+                RoutePredicateReason.RUNTIME_EVIDENCE_INVALID,
+                RoutePredicateReason.RUNTIME_EVIDENCE_BINDING_MISMATCH,
+                RoutePredicateReason.RUNTIME_EVIDENCE_STALE,
+            }
         ),
     }
 )
@@ -1294,6 +1314,330 @@ def bind_registry_route_facts(
     )
 
 
+def _build_runtime_predicate_consumer_authority() -> tuple[
+    Callable[..., None],
+    Callable[
+        [],
+        Callable[..., tuple[RoutePredicateReason | None, RoutePredicateReason | None]],
+    ],
+    Callable[[], bool],
+]:
+    """Install the runtime predicate consumer once its import cycle has completed."""
+
+    empty_cell = object()
+    late_registered_state = object()
+    consumer_state: tuple[object, ...] | None = None
+    consumer_state_seal: tuple[object, ...] | None = None
+
+    def snapshot(function: FunctionType) -> _RouteConstraintFunctionState:
+        closure = function.__closure__
+        closure_values: list[tuple[CellType, object]] = []
+        for name, cell in zip(
+            function.__code__.co_freevars,
+            closure or (),
+            strict=True,
+        ):
+            try:
+                value = (
+                    late_registered_state
+                    if name in {"consumer_state", "consumer_state_seal"}
+                    else cell.cell_contents
+                )
+            except ValueError:
+                value = empty_cell
+            closure_values.append((cell, value))
+        attributes = function.__dict__
+        return _RouteConstraintFunctionState(
+            function=function,
+            code=function.__code__,
+            defaults=function.__defaults__,
+            kwdefaults=function.__kwdefaults__,
+            kwdefault_items=tuple(sorted((function.__kwdefaults__ or {}).items())),
+            function_globals=function.__globals__,
+            closure=closure,
+            closure_values=tuple(closure_values),
+            attributes=attributes,
+            attribute_items=tuple(sorted(attributes.items())),
+        )
+
+    def function_state_is_current(state: _RouteConstraintFunctionState) -> bool:
+        function = state.function
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        if (
+            type(function) is not FunctionType
+            or type(current_kwdefaults) not in {dict, type(None)}
+            or type(current_attributes) is not dict
+            or function.__code__ is not state.code
+            or function.__defaults__ is not state.defaults
+            or current_kwdefaults is not state.kwdefaults
+            or function.__globals__ is not state.function_globals
+            or function.__closure__ is not state.closure
+            or current_attributes is not state.attributes
+            or len(current_kwdefaults or {}) != len(state.kwdefault_items)
+            or any(
+                (current_kwdefaults or {}).get(name) is not value
+                for name, value in state.kwdefault_items
+            )
+            or len(current_attributes) != len(state.attribute_items)
+            or any(
+                current_attributes.get(name) is not value for name, value in state.attribute_items
+            )
+        ):
+            return False
+        current_closure = function.__closure__ or ()
+        if len(current_closure) != len(state.closure_values):
+            return False
+        for current_cell, (expected_cell, expected_value) in zip(
+            current_closure,
+            state.closure_values,
+            strict=True,
+        ):
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = empty_cell
+            if expected_value is not late_registered_state and current_value is not expected_value:
+                return False
+        return True
+
+    def pristine_unchecked() -> bool:
+        if consumer_state is None or consumer_state_seal is None:
+            return consumer_state is None and consumer_state_seal is None
+        if (
+            type(consumer_state) is not tuple
+            or consumer_state_seal is not consumer_state
+            or len(consumer_state) != 4
+        ):
+            return False
+        module_globals, consumer, function_states, referenced_globals = consumer_state
+        runtime_module = sys.modules.get("mmaudit.models.route_runtime_evidence")
+        return bool(
+            type(module_globals) is dict
+            and type(consumer) is FunctionType
+            and type(function_states) is tuple
+            and function_states
+            and type(referenced_globals) is tuple
+            and runtime_module is not None
+            and vars(runtime_module) is module_globals
+            and module_globals.get("runtime_predicate_transition_reasons") is consumer
+            and all(
+                type(state) is _RouteConstraintFunctionState and function_state_is_current(state)
+                for state in function_states
+            )
+            and all(
+                type(binding) is tuple
+                and len(binding) == 3
+                and type(binding[0]) is dict
+                and binding[0].get(binding[1]) is binding[2]
+                for binding in referenced_globals
+            )
+        )
+
+    def pristine() -> bool:
+        try:
+            return pristine_unchecked()
+        except BaseException:
+            return False
+
+    def register(
+        *,
+        module_globals: dict[str, object],
+        consumer: FunctionType,
+    ) -> None:
+        nonlocal consumer_state, consumer_state_seal
+        runtime_module = sys.modules.get("mmaudit.models.route_runtime_evidence")
+        if (
+            consumer_state is not None
+            or consumer_state_seal is not None
+            or type(module_globals) is not dict
+            or runtime_module is None
+            or vars(runtime_module) is not module_globals
+            or type(consumer) is not FunctionType
+            or consumer.__module__ != "mmaudit.models.route_runtime_evidence"
+            or consumer.__name__ != "runtime_predicate_transition_reasons"
+            or consumer.__globals__ is not module_globals
+            or module_globals.get("runtime_predicate_transition_reasons") is not consumer
+        ):
+            raise RuntimeError("runtime predicate consumer registration is invalid")
+
+        roots = [consumer]
+        seen = {id(consumer)}
+        cursor = 0
+        referenced: dict[tuple[int, str], tuple[dict[str, Any], str, object]] = {}
+        while cursor < len(roots):
+            function = roots[cursor]
+            cursor += 1
+            for name in function.__code__.co_names:
+                if name not in function.__globals__:
+                    continue
+                value = function.__globals__[name]
+                referenced[(id(function.__globals__), name)] = (
+                    function.__globals__,
+                    name,
+                    value,
+                )
+                if type(value) is FunctionType and id(value) not in seen:
+                    seen.add(id(value))
+                    roots.append(value)
+            for value in function.__defaults__ or ():
+                if type(value) is FunctionType and id(value) not in seen:
+                    seen.add(id(value))
+                    roots.append(value)
+            for value in (function.__kwdefaults__ or {}).values():
+                if type(value) is FunctionType and id(value) not in seen:
+                    seen.add(id(value))
+                    roots.append(value)
+            for cell in function.__closure__ or ():
+                try:
+                    value = cell.cell_contents
+                except ValueError:
+                    continue
+                if type(value) is FunctionType and id(value) not in seen:
+                    seen.add(id(value))
+                    roots.append(value)
+            for value in function.__dict__.values():
+                if type(value) is FunctionType and id(value) not in seen:
+                    seen.add(id(value))
+                    roots.append(value)
+
+        installed = (
+            module_globals,
+            consumer,
+            tuple(snapshot(function) for function in roots),
+            tuple(referenced.values()),
+        )
+        consumer_state = installed
+        consumer_state_seal = installed
+        if not pristine():
+            consumer_state = None
+            consumer_state_seal = None
+            raise RuntimeError("runtime predicate consumer failed to seal")
+
+    def resolve() -> Callable[..., tuple[RoutePredicateReason | None, RoutePredicateReason | None]]:
+        if consumer_state is None:
+            __import__("mmaudit.models.route_runtime_evidence")
+        if not pristine():
+            raise RouteConstraintError("runtime predicate consumer authority changed")
+        if consumer_state is None:
+            raise RouteConstraintError("runtime predicate consumer authority is unavailable")
+        consumer = consumer_state[1]
+        if type(consumer) is not FunctionType:
+            raise RouteConstraintError("runtime predicate consumer authority is unavailable")
+        return cast(
+            Callable[..., tuple[RoutePredicateReason | None, RoutePredicateReason | None]],
+            consumer,
+        )
+
+    return register, resolve, pristine
+
+
+(
+    _register_runtime_predicate_consumer,
+    _resolve_runtime_predicate_consumer,
+    _runtime_predicate_consumer_is_pristine,
+) = _build_runtime_predicate_consumer_authority()
+del _build_runtime_predicate_consumer_authority
+
+
+def transition_full_campaign_runtime_predicates(
+    report: RoutePredicateReport,
+    *,
+    runtime_evidence: object,
+    qualification_policy: object,
+    role: ExactRouteRole,
+    model: object,
+    discovery_manifest: object,
+    discovery_evidence: object,
+    facts: NormalizedRouteFacts,
+) -> RoutePredicateReport:
+    """Promote runtime predicates only through an opaque verified evidence capability.
+
+    The imported consumer replays process-local capability custody and derives both outcomes;
+    callers cannot supply truth booleans or dispositions.  Keeping this transition separate
+    leaves the discovery evaluator and every existing sealed discovery artifact unchanged.
+    """
+
+    if not route_constraint_callables_are_pristine():
+        raise RouteConstraintError("route predicate callable boundary changed")
+    if runtime_evidence is None or type(role) is not ExactRouteRole:
+        raise RouteConstraintError("runtime predicate transition lacks verified evidence")
+    try:
+        runtime_predicate_consumer = _resolve_runtime_predicate_consumer()
+        empirical_schema_reason, token_detail_reason = runtime_predicate_consumer(
+            runtime_evidence,
+            qualification_policy=qualification_policy,
+            role=role,
+            model=model,
+            manifest=discovery_manifest,
+            evidence=discovery_evidence,
+            facts=facts,
+            report=report,
+        )
+    except RouteConstraintError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise RouteConstraintError("runtime predicate evidence validation failed") from exc
+    report = _detached(report, RoutePredicateReport, "route predicate report")
+    allowed_failure_reasons = frozenset(
+        {
+            RoutePredicateReason.RUNTIME_EVIDENCE_INVALID,
+            RoutePredicateReason.RUNTIME_EVIDENCE_BINDING_MISMATCH,
+            RoutePredicateReason.RUNTIME_EVIDENCE_STALE,
+        }
+    )
+    for reason in (empirical_schema_reason, token_detail_reason):
+        if reason is not None and (
+            type(reason) is not RoutePredicateReason or reason not in allowed_failure_reasons
+        ):
+            raise RouteConstraintError("runtime predicate transition reason is invalid")
+    by_id = {result.predicate_id: result for result in report.results}
+    expected_unavailable = {
+        RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE: (
+            RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE
+        ),
+        RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION: (
+            RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+        ),
+    }
+    if any(
+        by_id[predicate].disposition is not RoutePredicateDisposition.UNAVAILABLE
+        or by_id[predicate].reason is not reason
+        for predicate, reason in expected_unavailable.items()
+    ):
+        raise RouteConstraintError("runtime predicates were already transitioned")
+    replacements = {
+        RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE: (
+            _satisfied_result(RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE)
+            if empirical_schema_reason is None
+            else _rejected_result(
+                RoutePredicateId.EMPIRICAL_SCHEMA_CONFORMANCE,
+                empirical_schema_reason,
+            )
+        ),
+        RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION: (
+            _satisfied_result(RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION)
+            if token_detail_reason is None
+            else _rejected_result(
+                RoutePredicateId.TOKEN_DETAIL_REPORTING_CONVENTION,
+                token_detail_reason,
+            )
+        ),
+    }
+    ordered = tuple(replacements.get(result.predicate_id, result) for result in report.results)
+    values: dict[str, Any] = {
+        "schema_version": report.schema_version,
+        "profile_sha256": report.profile_sha256,
+        "constraint_sha256": report.constraint_sha256,
+        "facts_sha256": report.facts_sha256,
+        "results": ordered,
+    }
+    values["report_sha256"] = _canonical_sha256(values)
+    return RoutePredicateReport.model_validate(values)
+
+
 def bind_live_route_facts(
     facts: NormalizedRouteFacts,
     *,
@@ -1583,14 +1927,51 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
     """Freeze the complete provider-free predicate helper and policy surface."""
 
     empty_cell = object()
+    late_registered_state = object()
     module_globals = globals()
-    top_level_roots = tuple(
+    root_queue = list(
         value
         for name, value in module_globals.items()
         if type(value) is FunctionType
         and value.__module__ == __name__
         and name != "_build_route_constraint_callable_guard"
     )
+    root_queue.extend(
+        cast(
+            tuple[FunctionType, FunctionType],
+            (output_mode_request_parameters, require_exact_openrouter_model_id),
+        )
+    )
+    roots_list: list[FunctionType] = []
+    seen: set[int] = set()
+    while root_queue:
+        function = root_queue.pop()
+        if id(function) in seen:
+            continue
+        seen.add(id(function))
+        roots_list.append(function)
+        for name in function.__code__.co_names:
+            if name not in function.__globals__:
+                continue
+            value = function.__globals__[name]
+            if type(value) is FunctionType:
+                root_queue.append(value)
+        for value in function.__defaults__ or ():
+            if type(value) is FunctionType:
+                root_queue.append(value)
+        for value in (function.__kwdefaults__ or {}).values():
+            if type(value) is FunctionType:
+                root_queue.append(value)
+        for cell in function.__closure__ or ():
+            try:
+                value = cell.cell_contents
+            except ValueError:
+                continue
+            if type(value) is FunctionType:
+                root_queue.append(value)
+        for value in function.__dict__.values():
+            if type(value) is FunctionType:
+                root_queue.append(value)
     guarded_types = tuple(
         value
         for value in module_globals.values()
@@ -1616,19 +1997,11 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
             if functions:
                 descriptor_bindings.append((guarded_type, name, descriptor))
                 descriptor_functions.extend(functions)
-    roots = cast(
-        tuple[FunctionType, ...],
-        tuple(
-            dict.fromkeys(
-                (
-                    *top_level_roots,
-                    output_mode_request_parameters,
-                    require_exact_openrouter_model_id,
-                    *descriptor_functions,
-                )
-            )
-        ),
-    )
+    for function in descriptor_functions:
+        if id(function) not in seen:
+            roots_list.append(function)
+            seen.add(id(function))
+    roots = tuple(roots_list)
     aliases = tuple(
         (name, function)
         for name, function in module_globals.items()
@@ -1700,9 +2073,17 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
     def snapshot(function: FunctionType) -> _RouteConstraintFunctionState:
         closure = function.__closure__
         closure_values: list[tuple[CellType, object]] = []
-        for cell in closure or ():
+        for name, cell in zip(
+            function.__code__.co_freevars,
+            closure or (),
+            strict=True,
+        ):
             try:
-                value = cell.cell_contents
+                value = (
+                    late_registered_state
+                    if name in {"consumer_state", "consumer_state_seal"}
+                    else cell.cell_contents
+                )
             except ValueError:
                 value = empty_cell
             closure_values.append((cell, value))
@@ -1835,9 +2216,15 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
                     current_value = current_cell.cell_contents
                 except ValueError:
                     current_value = empty_cell
-                if current_value is not expected_value:
+                if (
+                    expected_value is not late_registered_state
+                    and current_value is not expected_value
+                ):
                     return False
-        return True
+        try:
+            return bool(_runtime_predicate_consumer_is_pristine())
+        except BaseException:
+            return False
 
     return pristine
 
@@ -1878,4 +2265,5 @@ __all__ = [
     "prove_provider_price_cap",
     "require_route_predicates",
     "route_constraint_callables_are_pristine",
+    "transition_full_campaign_runtime_predicates",
 ]

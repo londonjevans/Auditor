@@ -82,6 +82,7 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReproductionResolution,
     CandidateReviewBatch,
+    ConsensusReviewArtifact,
     ContextRequestEvidence,
     FalsificationDecision,
     Finding,
@@ -5578,6 +5579,7 @@ class SchedulerJournal:
         falsification_decisions: Iterable[FalsificationDecision],
         reproduction_results: Iterable[ReproductionResult],
         reproduction_resolutions: Iterable[CandidateReproductionResolution],
+        consensus_review: ConsensusReviewArtifact | None = None,
     ) -> SchedulerTerminalReportAuthority:
         """Persist the exact terminal report projection once, or verify an exact resume.
 
@@ -5602,6 +5604,7 @@ class SchedulerJournal:
             falsification_decisions=falsification_decisions,
             reproduction_results=reproduction_results,
             reproduction_resolutions=reproduction_resolutions,
+            consensus_review=consensus_review,
         )
         if self._terminal_report_authority is not None:
             if authority != self._terminal_report_authority:

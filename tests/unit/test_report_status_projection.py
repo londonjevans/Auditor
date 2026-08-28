@@ -10,8 +10,10 @@ from mmaudit.models.schemas import (
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
+    ConsensusReviewArtifact,
     Evidence,
     FalsificationVerdict,
+    Finding,
     FindingOriginKind,
     FindingStatus,
     LanguageCapabilityAssessment,
@@ -62,6 +64,7 @@ from tests.unit.test_client_forensic_reporting_adversarial import (
     _falsification,
     _verification,
 )
+from tests.unit.test_consensus import _uniform_review_evidence
 from tests.unit.test_run_status import (
     _assessment,
     _coverage,
@@ -129,6 +132,40 @@ def _inconclusive_solidity_language_capability() -> LanguageCapabilityAssessment
     )
 
 
+def _current_report_with_consensus(
+    *,
+    findings: list[Finding],
+    consensus_review: ConsensusReviewArtifact,
+) -> AuditReport:
+    coverage = _coverage()
+    floor = _assessment(coverage=coverage, required_model_roles=ANALYSIS_ROLES)
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[],
+        usage=[],
+        coverage=coverage,
+    )
+    metadata = payload["metadata"]
+    assert isinstance(metadata, dict)
+    verifier = consensus_review.reviewers[0]
+    payload.update(
+        {
+            "repository": _report().repository,
+            "findings": findings,
+            "consensus_review": consensus_review,
+            "verification_decisions": [
+                verifier.decision_for(candidate_id).as_verification_decision()
+                for candidate_id in consensus_review.candidate_ids
+            ],
+            "metadata": {
+                **metadata,
+                "severity_threshold": Severity.INFORMATIONAL.value,
+            },
+        }
+    )
+    return AuditReport.model_validate(payload)
+
+
 def test_findings_artifact_versions_bind_language_capability_presence() -> None:
     finding = _finding(FindingStatus.CONFIRMED)
     capability = matched_solidity_language_capability(
@@ -140,6 +177,7 @@ def test_findings_artifact_versions_bind_language_capability_presence() -> None:
     current = build_findings_artifact(report, candidates=[_candidate(finding)])
     assert current.schema_version == "1.2"
     assert current.language_capability == capability
+    assert "consensus_review" not in current.model_dump(mode="json")
     missing_current = current.model_dump(mode="json")
     missing_current.pop("language_capability")
     with pytest.raises(ValidationError, match="requires typed language capability"):
@@ -152,10 +190,88 @@ def test_findings_artifact_versions_bind_language_capability_presence() -> None:
     )
     legacy_payload = legacy.model_dump(mode="json")
     assert "language_capability" not in legacy_payload
+    assert "consensus_review" not in legacy_payload
     assert FindingsArtifact.model_validate(legacy_payload) == legacy
     legacy_payload["language_capability"] = capability.model_dump(mode="json")
     with pytest.raises(ValidationError, match="legacy artifact cannot carry"):
         FindingsArtifact.model_validate(legacy_payload)
+
+
+def test_findings_artifact_preserves_typed_consensus_review() -> None:
+    finding = _finding(FindingStatus.NEEDS_REVIEW)
+    candidate = _candidate(finding)
+    consensus_review, _ = _uniform_review_evidence([candidate])
+    report = _current_report_with_consensus(
+        findings=[finding],
+        consensus_review=consensus_review,
+    )
+
+    artifact = build_findings_artifact(report, candidates=[candidate])
+    round_tripped = FindingsArtifact.model_validate_json(artifact.model_dump_json())
+
+    assert artifact.consensus_review == consensus_review
+    assert round_tripped.consensus_review == consensus_review
+
+
+def test_findings_artifact_rejects_consensus_review_for_unknown_candidate() -> None:
+    finding = _finding(FindingStatus.NEEDS_REVIEW)
+    candidate = _candidate(finding)
+    consensus_review, _ = _uniform_review_evidence([candidate])
+    report = _current_report_with_consensus(
+        findings=[finding],
+        consensus_review=consensus_review,
+    )
+    artifact = build_findings_artifact(report, candidates=[candidate])
+    unknown_candidate = candidate.model_copy(update={"candidate_id": "candidate-unknown"})
+    unknown_review, _ = _uniform_review_evidence([unknown_candidate])
+    payload = artifact.model_dump(mode="python")
+    payload["consensus_review"] = unknown_review.model_dump(mode="python")
+
+    with pytest.raises(ValidationError, match="consensus review references an unknown candidate"):
+        FindingsArtifact.model_validate(payload)
+
+
+def test_findings_artifact_rejects_mismatched_consensus_primary_review() -> None:
+    finding = _finding(FindingStatus.NEEDS_REVIEW)
+    candidate = _candidate(finding)
+    consensus_review, _ = _uniform_review_evidence([candidate])
+    report = _current_report_with_consensus(
+        findings=[finding],
+        consensus_review=consensus_review,
+    )
+    artifact = build_findings_artifact(report, candidates=[candidate])
+    mismatched_review, _ = _uniform_review_evidence(
+        [candidate],
+        (
+            VerificationVerdict.PLAUSIBLE,
+            VerificationVerdict.VERIFIED,
+            VerificationVerdict.VERIFIED,
+        ),
+    )
+    payload = artifact.model_dump(mode="python")
+    payload["consensus_review"] = mismatched_review.model_dump(mode="python")
+
+    with pytest.raises(
+        ValidationError,
+        match="verification decisions differ from consensus primary reviewer",
+    ):
+        FindingsArtifact.model_validate(payload)
+
+
+def test_findings_artifact_rejects_consensus_candidate_payload_drift() -> None:
+    finding = _finding(FindingStatus.NEEDS_REVIEW)
+    candidate = _candidate(finding)
+    consensus_review, _ = _uniform_review_evidence([candidate])
+    report = _current_report_with_consensus(
+        findings=[finding],
+        consensus_review=consensus_review,
+    )
+    artifact = build_findings_artifact(report, candidates=[candidate])
+    payload = artifact.model_dump(mode="python")
+    payload["candidate_findings"][0]["summary"] = "Coherently changed after pass six."
+
+    with pytest.raises(ValidationError, match="differs from its candidate payload"):
+        FindingsArtifact.model_validate(payload)
 
 
 def test_model_execution_artifact_versions_bind_language_capability_presence() -> None:
@@ -503,6 +619,57 @@ def test_effective_finding_disposition_is_coherent_across_every_rendered_leaf(
     assert rule["properties"]["status"] == expected_disposition.value.lower()
     assert f"disposition/{expected_disposition.value.lower()}" in rule["properties"]["tags"]
     assert "status/confirmed" not in rule["properties"]["tags"]
+
+
+def test_closed_consensus_status_controls_rendered_disposition_while_preserving_dissent() -> None:
+    finding = _finding(FindingStatus.CONFIRMED).model_copy(
+        update={
+            "contributing_candidate_ids": [
+                "candidate-synthetic-001",
+                "candidate-losing-peer",
+            ]
+        }
+    )
+    primary = _candidate(finding)
+    losing_peer = _candidate(finding, "candidate-losing-peer").model_copy(
+        update={"impact": "Divergent peer impact retained only as dissent evidence."}
+    )
+    consensus_review, _ = _uniform_review_evidence(
+        [primary],
+        (
+            VerificationVerdict.REJECTED,
+            VerificationVerdict.VERIFIED,
+            VerificationVerdict.VERIFIED,
+        ),
+    )
+    report = _current_report_with_consensus(
+        findings=[finding],
+        consensus_review=consensus_review,
+    )
+    artifact = build_findings_artifact(report, candidates=[primary, losing_peer])
+
+    client = render_client_markdown(
+        report,
+        {SOURCE_PATH: SOURCE},
+        candidates=[primary, losing_peer],
+    )
+    compatibility = render_markdown(report, findings_artifact=artifact)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    sarif = generate_report_sarif(report, findings_artifact=artifact)
+    result = sarif["runs"][0]["results"][0]
+
+    assert artifact.records[0].disposition is ForensicDisposition.CONFIRMED
+    assert all(
+        decision.verdict is VerificationVerdict.REJECTED
+        for decision in artifact.records[0].verification_decisions
+    )
+    assert "> **CONFIRMED**" in client
+    assert "> **DISPUTED**" not in client
+    for rendered in (compatibility, forensic):
+        assert "**Confirmed finding**" in rendered
+        assert "**Disputed finding" not in rendered
+    assert result["properties"]["effectiveDisposition"] == ForensicDisposition.CONFIRMED.value
+    assert result["properties"]["status"] == FindingStatus.CONFIRMED.value
 
 
 @pytest.mark.parametrize(

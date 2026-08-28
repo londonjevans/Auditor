@@ -9,6 +9,7 @@ import stat
 import sys
 import tempfile
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -21,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+import mmaudit.models.candidate_revocation as candidate_revocation_module
 from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
@@ -67,6 +69,8 @@ from mmaudit.config import (
     AuditConfigOverrides,
     ConfigError,
     ExecutionConfig,
+    LearningCaptureScope,
+    ModelRetryPolicy,
     PrivacyConfig,
     audit_config_overrides,
     configured_model_ids,
@@ -87,6 +91,7 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
     authenticated_runner_durable_bundle_bytes,
     build_authenticated_runner_durable_bundle,
     load_authenticated_runner_durable_bundle,
+    require_authenticated_runner_durable_config_binding,
 )
 from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerRunPlan,
@@ -96,6 +101,7 @@ from mmaudit.models.authenticated_runner_smoke import (
     AuthenticatedRunnerSmokeError,
     AuthenticatedRunnerSmokeEvidenceBundle,
     authenticated_runner_smoke_evidence_bytes,
+    require_authenticated_runner_smoke_config_binding,
     revalidate_authenticated_runner_smoke_evidence_bytes,
 )
 from mmaudit.models.authenticated_runner_smoke_corpus import (
@@ -121,16 +127,23 @@ from mmaudit.models.candidate_registry_bridge import (
     validate_candidate_registry_template_selection,
     write_candidate_registry_json,
 )
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationError,
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.candidate_selection import (
     CandidateSelectionPlan,
     authenticated_runner_route_constraint,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
     read_candidate_selection_source,
+    require_candidate_selection_plan_currently_eligible,
     validate_candidate_selection_discovery_capability,
     validate_candidate_selection_plan_sources,
     validate_candidate_selection_routes,
 )
+from mmaudit.models.coverage_planning import ModelPortfolioResourcePreflight
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     load_model_discovery_run,
@@ -160,6 +173,7 @@ from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
     OpenRouterError,
+    OpenRouterProviderPolicy,
     OpenRouterProviderUnavailableError,
     OpenRouterRateLimitError,
     OpenRouterTimeoutError,
@@ -172,6 +186,12 @@ from mmaudit.models.policy_eligibility_refresh import (
     load_policy_eligibility_checked_routes,
     load_policy_eligibility_source_observation,
     validate_model_policy_eligibility_refresh_inputs,
+)
+from mmaudit.models.prepurchase_quote import (
+    AcceptedPrepurchaseQuote,
+    PrepurchaseQuote,
+    accept_prepurchase_quote,
+    reconcile_prepurchase_quote,
 )
 from mmaudit.models.public_lineage_authority import resolve_verified_public_model_lineage
 from mmaudit.models.qualification import (
@@ -216,11 +236,23 @@ from mmaudit.models.release_attestation import (
     observe_and_verify_qualification_release,
     write_observed_qualification_release_bindings,
 )
+from mmaudit.models.retry_continuity import (
+    RetryContinuityConfigurationError,
+    load_authenticated_runner_default_config,
+    load_authenticated_runner_retry_continuity_config,
+    require_default_authenticated_runner_retry_policy,
+)
 from mmaudit.models.route_admission import (
     require_authenticated_runner_three_route_admission,
 )
 from mmaudit.models.route_constraints import RouteConstraintPurpose
+from mmaudit.models.route_runtime_evidence import (
+    VerifiedThreeRouteRuntimeEvidence,
+    build_route_runtime_evidence_artifact,
+    verify_route_runtime_evidence,
+)
 from mmaudit.models.runtime import build_openrouter_runtime_controls
+from mmaudit.models.scheduler import SchedulerCampaignManifest
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
@@ -231,6 +263,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     Severity,
 )
+from mmaudit.models.sharding import SolidityShardsArtifact
 from mmaudit.models.usage import UsageLedger, parse_authenticated_runner_smoke_run_index
 from mmaudit.operator_secrets import (
     OperatorSecretError,
@@ -267,6 +300,10 @@ from mmaudit.orchestration.manifest import (
     load_run_evidence_manifest,
 )
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
+from mmaudit.orchestration.prepurchase_quote import (
+    PrepurchaseQuotePlanningError,
+    build_prepurchase_quote_from_frozen_inputs,
+)
 from mmaudit.orchestration.replay import (
     OfflineReplayOrchestrator,
     OfflineReplayStatus,
@@ -284,6 +321,8 @@ from mmaudit.privacy import (
     load_privacy_retention_consent,
     resolve_effective_privacy_policy,
 )
+from mmaudit.release_io import read_json_evidence, write_json_evidence
+from mmaudit.reporting.bundle import ModelExecutionArtifact, RunCostLedgerEvidence
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
 from mmaudit.repository.privacy_provenance import (
     prove_release_pinned_model_benchmark_source,
@@ -317,6 +356,8 @@ benchmark_app = typer.Typer(
 app.add_typer(benchmark_app, name="benchmark")
 snapshot_app = typer.Typer(help="Validate and import offline deployment snapshots.")
 app.add_typer(snapshot_app, name="snapshot")
+quote_app = typer.Typer(help="Create, accept, and reconcile provider-free bounded quotes.")
+app.add_typer(quote_app, name="quote")
 console = Console()
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
 
@@ -936,6 +977,15 @@ def models_discover(
                 "template or selection plan"
             )
         candidates = _parse_model_discovery_candidates(candidate)
+        for model_id, provider_endpoint in candidates:
+            _require_cli_candidate_assignments_eligible(
+                model_ids=(model_id,),
+                provider_policy=OpenRouterProviderPolicy(
+                    only=(provider_endpoint,),
+                    allow_fallbacks=False,
+                ),
+                context="candidate discovery",
+            )
         candidate_routes = tuple(
             DiscoveryCandidateRoute(
                 exact_model_id=model_id,
@@ -990,6 +1040,7 @@ def models_discover(
                 raise ConfigError("candidate selection plan inputs are incomplete")
             try:
                 selection_plan = load_candidate_selection_plan(candidate_selection_plan)
+                require_candidate_selection_plan_currently_eligible(selection_plan)
                 source_names = {
                     binding.kind: binding.filename for binding in selection_plan.source_bindings
                 }
@@ -1287,6 +1338,15 @@ def models_refresh(
         registry = load_candidate_registry(candidate_registry)
         if registry.created_at > preflight_observed_at:
             raise ConfigError("candidate registry is future-dated")
+        for candidate in registry.candidates:
+            _require_cli_candidate_assignments_eligible(
+                model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
+                provider_policy=OpenRouterProviderPolicy(
+                    only=(candidate.approved_provider_endpoint,),
+                    allow_fallbacks=False,
+                ),
+                context="models refresh",
+            )
         policy_paths = (
             policy_eligibility_artifact,
             policy_source_observation,
@@ -1566,16 +1626,21 @@ def models_check(
     async def execute() -> None:
         config = load_config(config_path)
         errors = validate_model_independence(config)
+        controls = build_openrouter_runtime_controls(
+            config,
+            certification=False,
+        )
+        _require_cli_candidate_assignments_eligible(
+            model_ids=tuple(configured_model_ids(config, include_fallbacks=True)),
+            provider_policy=controls.provider_policy,
+            context="models check",
+        )
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
                 raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
-            budget, usage = _budget_and_usage(config)
-            controls = build_openrouter_runtime_controls(
-                config,
-                certification=False,
-            )
             if not controls.provider_policy.configured_endpoints:
                 raise ConfigError("models check requires an explicit provider endpoint allowlist")
+            budget, usage = _budget_and_usage(config)
             client = OpenRouterClient(
                 api_key=operator_secrets.openrouter_api_key,
                 execution=config.execution,
@@ -1591,6 +1656,19 @@ def models_check(
                 if metadata is None:
                     metadata = await client.list_models()
                     registry.save_cache(metadata)
+                for model_id in sorted(set(configured_model_ids(config, include_fallbacks=True))):
+                    try:
+                        canonical_slug = openrouter_catalog_canonical_slug(
+                            exact_model_id=model_id,
+                            models_payload=metadata,
+                        )
+                    except ValueError:
+                        continue
+                    _require_cli_candidate_assignments_eligible(
+                        model_ids=(model_id, canonical_slug),
+                        provider_policy=controls.provider_policy,
+                        context="models check discovered canonical route",
+                    )
                 zdr_payload = await client.list_zdr_endpoints()
                 zdr_ids = extract_zdr_model_ids(zdr_payload)
                 if config.privacy.require_zdr and not zdr_ids:
@@ -1822,6 +1900,15 @@ def models_benchmark(
             now=privacy_observed_at,
         )
         targets = select_model_benchmark_targets(config, model)
+        controls = build_openrouter_runtime_controls(
+            config,
+            certification=True,
+        )
+        _require_cli_candidate_assignments_eligible(
+            model_ids=tuple(target.model_id for target in targets),
+            provider_policy=controls.provider_policy,
+            context="models benchmark",
+        )
         validate_model_benchmark_egress(
             config,
             targets,
@@ -1840,10 +1927,6 @@ def models_benchmark(
         )
         assert budget.atomic_ledger is not None
         _preflight_model_benchmark_output(output, budget.atomic_ledger)
-        controls = build_openrouter_runtime_controls(
-            config,
-            certification=True,
-        )
         effective_privacy_policy = resolve_effective_privacy_policy(
             profile=config.privacy.profile,
             require_zdr=config.privacy.require_zdr,
@@ -1873,6 +1956,19 @@ def models_benchmark(
             try:
                 await client.validate_authentication()
                 models_payload = await client.get_certification_model_metadata()
+                canonical_slugs = {
+                    target.model_id: openrouter_catalog_canonical_slug(
+                        exact_model_id=target.model_id,
+                        models_payload=models_payload,
+                    )
+                    for target in targets
+                }
+                for target in targets:
+                    _require_cli_candidate_assignments_eligible(
+                        model_ids=(target.model_id, canonical_slugs[target.model_id]),
+                        provider_policy=controls.provider_policy,
+                        context="models benchmark discovered canonical route",
+                    )
                 zdr_payload = await client.list_zdr_endpoints()
                 policy_mode: Literal["only", "order"] = (
                     "only" if controls.provider_policy.only else "order"
@@ -1881,10 +1977,6 @@ def models_benchmark(
                 endpoint_payloads: dict[str, dict[str, Any]] = {}
                 discovery_payloads = []
                 for target in targets:
-                    openrouter_catalog_canonical_slug(
-                        exact_model_id=target.model_id,
-                        models_payload=models_payload,
-                    )
                     single_model_payload = await client.get_model_metadata(target.model_id)
                     single_model_payloads[target.model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(target.model_id)
@@ -2060,6 +2152,27 @@ def models_authenticated_runner(
             help="Exact positive REPLAY judge per-attempt cost tripwire (decimal USD).",
         ),
     ],
+    runtime_evidence_smoke_bundle: Annotated[
+        Path | None,
+        typer.Option(
+            "--runtime-evidence-smoke-bundle",
+            help=(
+                "Existing absolute private canonical NONCREDITING smoke evidence used only "
+                "for exact runtime-route admission."
+            ),
+        ),
+    ] = None,
+    retry_continuity_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--retry-continuity-config",
+            help=(
+                "Explicit package-pinned authenticated-runner profile enabling exactly three "
+                "same-route schema retries; the base --config must remain the frozen retry-off "
+                "qualification profile."
+            ),
+        ),
+    ] = None,
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
     secrets_env_file: SecretsEnvFileOption = None,
     corpus: Annotated[
@@ -2117,7 +2230,18 @@ def models_authenticated_runner(
             label="REPLAY judge",
         )
 
-        config = load_config(config_path)
+        try:
+            if retry_continuity_config is None:
+                config = load_config(config_path)
+                if type(config) is AuditConfig:
+                    require_default_authenticated_runner_retry_policy(config)
+            else:
+                config = load_authenticated_runner_retry_continuity_config(
+                    default_path=config_path,
+                    continuity_path=retry_continuity_config,
+                )
+        except RetryContinuityConfigurationError as exc:
+            raise ConfigError(str(exc)) from exc
         benchmark_suite = load_model_benchmark_corpus(corpus)
         provenance = load_frozen_ground_truth_provenance(ground_truth_provenance)
         ground_truth_capability = resolve_verified_frozen_ground_truth(
@@ -2141,6 +2265,40 @@ def models_authenticated_runner(
             policy=policy,
             benchmark_suite=benchmark_suite,
         )
+        mutable_outputs = (
+            primary_campaign_journal,
+            primary_portfolio,
+            replay_campaign_journal,
+            replay_portfolio,
+            output,
+        )
+        immutable_source_paths = (
+            config_path,
+            *((retry_continuity_config,) if retry_continuity_config is not None else ()),
+            corpus,
+            ground_truth_provenance,
+            candidate_registry,
+            candidate_discovery_run,
+            primary_judge_registry,
+            primary_judge_discovery_run,
+            replay_judge_registry,
+            replay_judge_discovery_run,
+            qualification_policy,
+        )
+        runtime_route_evidence: VerifiedThreeRouteRuntimeEvidence | None = None
+        if runtime_evidence_smoke_bundle is not None:
+            _preflight_authenticated_runner_cli_paths(
+                mutable_outputs=mutable_outputs,
+                source_paths=(*immutable_source_paths, runtime_evidence_smoke_bundle),
+            )
+            smoke_bundle = _load_authenticated_runner_smoke_evidence_bundle(
+                runtime_evidence_smoke_bundle
+            )
+            runtime_artifact = build_route_runtime_evidence_artifact(
+                smoke_bundle=smoke_bundle,
+                qualification_policy=policy,
+            )
+            runtime_route_evidence = verify_route_runtime_evidence(runtime_artifact, policy)
         require_authenticated_runner_three_route_admission(
             candidate=(candidate, candidate_manifest, candidate_evidence),
             primary_judge=(
@@ -2154,6 +2312,8 @@ def models_authenticated_runner(
                 replay_judge_evidence,
             ),
             purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+            runtime_evidence=runtime_route_evidence,
+            qualification_policy=(policy if runtime_route_evidence is not None else None),
             runtime_required_output_tokens=config.effective_reserved_output_tokens,
         )
         ledger_path = _selected_cost_ledger_path(config, cost_ledger)
@@ -2206,25 +2366,11 @@ def models_authenticated_runner(
             budget=budget,
             usage=usage,
             run_plans=plans,
-        )
-        mutable_outputs = (
-            primary_campaign_journal,
-            primary_portfolio,
-            replay_campaign_journal,
-            replay_portfolio,
-            output,
+            runtime_route_evidence=runtime_route_evidence,
         )
         source_paths: tuple[Path, ...] = (
-            config_path,
-            corpus,
-            ground_truth_provenance,
-            candidate_registry,
-            candidate_discovery_run,
-            primary_judge_registry,
-            primary_judge_discovery_run,
-            replay_judge_registry,
-            replay_judge_discovery_run,
-            qualification_policy,
+            *immutable_source_paths,
+            *((runtime_evidence_smoke_bundle,) if runtime_evidence_smoke_bundle else ()),
             ledger.path,
             ledger.lock_path,
         )
@@ -2307,6 +2453,20 @@ def models_authenticated_runner(
             )
 
         durable_output = _authenticated_runner_durable_output(result)
+        selected_retry_policy = ModelRetryPolicy.build(
+            transient_retry_limit=config.execution.max_model_retries,
+            schema_validation_retry_limit=(config.execution.max_schema_validation_retries),
+        )
+        try:
+            durable_output = require_authenticated_runner_durable_config_binding(
+                durable_output,
+                effective_config_sha256=config.stable_hash(),
+                execution_config_sha256=canonical_sha256(config.execution.model_dump(mode="json")),
+                maximum_attempts_per_logical_request=(selected_retry_policy.maximum_attempts),
+                model_retry_policy_sha256=selected_retry_policy.policy_sha256,
+            )
+        except AuthenticatedRunnerDurableBundleError as exc:
+            raise ConfigError(str(exc)) from exc
         _preflight_authenticated_runner_output(output)
         _write_authenticated_runner_output_fresh(output, durable_output)
         local_console = Console(no_color=no_color)
@@ -2337,17 +2497,53 @@ def models_verify_authenticated_runner(
             help="Absolute private mode-0600 nonauthorizing AUTHRUNNER evidence bundle.",
         ),
     ],
+    config_path: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            help="Exact frozen retry-off qualification config used as the verification base.",
+        ),
+    ],
+    retry_continuity_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--retry-continuity-config",
+            help=(
+                "Explicit package-pinned authenticated-runner retry-continuity profile; omit "
+                "only for retry-off evidence."
+            ),
+        ),
+    ] = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Replay one durable AUTHRUNNER bundle offline without issuing authority."""
 
     async def execute() -> None:
-        bundle = load_authenticated_runner_durable_bundle(bundle_path)
-        if bundle.schema_version != "1.1":
-            raise ConfigError(
-                "authenticated runner durable evidence is legacy and lacks exact staged "
-                "request-cost admission"
+        try:
+            if retry_continuity_config is None:
+                config = load_authenticated_runner_default_config(config_path)
+            else:
+                config = load_authenticated_runner_retry_continuity_config(
+                    default_path=config_path,
+                    continuity_path=retry_continuity_config,
+                )
+            selected_retry_policy = ModelRetryPolicy.build(
+                transient_retry_limit=config.execution.max_model_retries,
+                schema_validation_retry_limit=(config.execution.max_schema_validation_retries),
             )
+            bundle = load_authenticated_runner_durable_bundle(bundle_path)
+            bundle = require_authenticated_runner_durable_config_binding(
+                bundle,
+                effective_config_sha256=config.stable_hash(),
+                execution_config_sha256=canonical_sha256(config.execution.model_dump(mode="json")),
+                maximum_attempts_per_logical_request=(selected_retry_policy.maximum_attempts),
+                model_retry_policy_sha256=selected_retry_policy.policy_sha256,
+            )
+        except (
+            AuthenticatedRunnerDurableBundleError,
+            RetryContinuityConfigurationError,
+        ) as exc:
+            raise ConfigError(str(exc)) from exc
         ledger = bundle.closed_ledger_evidence
         local_console = Console(no_color=no_color)
         local_console.print(
@@ -2357,6 +2553,10 @@ def models_verify_authenticated_runner(
         local_console.print(f"Bundle SHA-256: {bundle.bundle_sha256}", markup=False)
         local_console.print(
             f"Runner SHA-256: {bundle.runner_evidence_sha256}",
+            markup=False,
+        )
+        local_console.print(
+            f"Effective config SHA-256: {bundle.effective_config_sha256}",
             markup=False,
         )
         local_console.print(
@@ -2554,7 +2754,7 @@ def models_authenticated_runner_smoke(
 
         config = load_config(config_path)
         benchmark_suite = load_model_benchmark_corpus(corpus)
-        smoke_bundle = load_authenticated_runner_smoke_corpus_bundle(smoke_corpus)
+        smoke_corpus_bundle = load_authenticated_runner_smoke_corpus_bundle(smoke_corpus)
         public_lineage_capability = resolve_verified_public_model_lineage()
         candidate = load_candidate_registry(candidate_registry)
         candidate_manifest, candidate_evidence = load_model_discovery_run(candidate_discovery_run)
@@ -2562,6 +2762,23 @@ def models_authenticated_runner_smoke(
         primary_manifest, primary_evidence = load_model_discovery_run(primary_judge_discovery_run)
         replay_judge = load_candidate_registry(replay_judge_registry)
         replay_manifest, replay_evidence = load_model_discovery_run(replay_judge_discovery_run)
+        for label, registry in (
+            ("authenticated runner smoke candidate", candidate),
+            ("authenticated runner smoke primary judge", primary_judge),
+            ("authenticated runner smoke replay judge", replay_judge),
+        ):
+            for selected_model in registry.candidates:
+                _require_cli_candidate_assignments_eligible(
+                    model_ids=(
+                        selected_model.exact_model_id,
+                        selected_model.canonical_model_slug,
+                    ),
+                    provider_policy=OpenRouterProviderPolicy(
+                        only=(selected_model.approved_provider_endpoint,),
+                        allow_fallbacks=False,
+                    ),
+                    context=label,
+                )
         ledger_path = _selected_cost_ledger_path(config, cost_ledger)
         if ledger_path is None:
             raise ConfigError(
@@ -2585,7 +2802,7 @@ def models_authenticated_runner_smoke(
             ),
             public_lineage_capability=public_lineage_capability,
             benchmark_suite=benchmark_suite,
-            smoke_corpus=smoke_bundle,
+            smoke_corpus=smoke_corpus_bundle,
             candidate_discovery_manifest=candidate_manifest,
             candidate_discovery_evidence=candidate_evidence,
             candidate_registry=candidate,
@@ -2749,18 +2966,34 @@ def models_authenticated_runner_smoke(
             )
             return
 
+        selected_retry_policy = ModelRetryPolicy.build(
+            transient_retry_limit=config.execution.max_model_retries,
+            schema_validation_retry_limit=(config.execution.max_schema_validation_retries),
+        )
+        try:
+            smoke_evidence_bundle = require_authenticated_runner_smoke_config_binding(
+                result.bundle,
+                effective_config_sha256=config.stable_hash(),
+                maximum_attempts_per_logical_request=(selected_retry_policy.maximum_attempts),
+                model_retry_policy_sha256=selected_retry_policy.policy_sha256,
+            )
+        except AuthenticatedRunnerSmokeError as exc:
+            raise ConfigError(str(exc)) from exc
         _preflight_authenticated_runner_output(output)
-        _write_authenticated_runner_smoke_output_fresh(output, result.bundle)
+        _write_authenticated_runner_smoke_output_fresh(output, smoke_evidence_bundle)
         local_console = Console(no_color=no_color)
         local_console.print(
             "AUTHRUNNER smoke: COMPLETE / NONCREDITING / NONAUTHORIZING",
             markup=False,
         )
-        local_console.print(f"Smoke run index: {result.bundle.smoke_run_index}", markup=False)
-        local_console.print(f"Bundle SHA-256: {result.bundle.bundle_sha256}", markup=False)
         local_console.print(
-            f"Closed ledger: entries={len(result.bundle.closed_ledger_evidence.entries)}; "
-            f"final_spent_usd={result.bundle.closed_ledger_evidence.final_spent_usd}",
+            f"Smoke run index: {smoke_evidence_bundle.smoke_run_index}", markup=False
+        )
+        local_console.print(f"Bundle SHA-256: {smoke_evidence_bundle.bundle_sha256}", markup=False)
+        local_console.print(
+            "Closed ledger: entries="
+            f"{len(smoke_evidence_bundle.closed_ledger_evidence.entries)}; "
+            f"final_spent_usd={smoke_evidence_bundle.closed_ledger_evidence.final_spent_usd}",
             markup=False,
         )
         local_console.print(f"Result: {output}", markup=False)
@@ -2798,6 +3031,20 @@ def models_verify_authenticated_runner_smoke(
         smoke = load_authenticated_runner_smoke_corpus_bundle(smoke_corpus)
         parent = load_model_benchmark_corpus(corpus)
         config = load_config(config_path)
+        selected_retry_policy = ModelRetryPolicy.build(
+            transient_retry_limit=config.execution.max_model_retries,
+            schema_validation_retry_limit=(config.execution.max_schema_validation_retries),
+        )
+        try:
+            bundle = require_authenticated_runner_smoke_config_binding(
+                bundle,
+                effective_config_sha256=config.stable_hash(),
+                maximum_attempts_per_logical_request=(selected_retry_policy.maximum_attempts),
+                model_retry_policy_sha256=selected_retry_policy.policy_sha256,
+                allow_legacy_default_retry_evidence_omission=True,
+            )
+        except AuthenticatedRunnerSmokeError as exc:
+            raise ConfigError(str(exc)) from exc
         parent_case = {item.case_id: item for item in parent.cases}.get(bundle.selected_case_id)
         parent_truth = {item.case_id: item for item in parent.ground_truth.cases}.get(
             bundle.selected_case_id
@@ -2816,8 +3063,13 @@ def models_verify_authenticated_runner_smoke(
                 "parent, or effective configuration"
             )
         local_console = Console(no_color=no_color)
+        replay_status = (
+            "VALID"
+            if bundle.schema_version == "1.3"
+            else "LEGACY / NO SPLIT RETRY EVIDENCE / VALID"
+        )
         local_console.print(
-            "AUTHRUNNER smoke evidence: VALID / NONCREDITING / NONAUTHORIZING",
+            f"AUTHRUNNER smoke evidence: {replay_status} / NONCREDITING / NONAUTHORIZING",
             markup=False,
         )
         local_console.print(f"Smoke run index: {bundle.smoke_run_index}", markup=False)
@@ -2858,6 +3110,15 @@ async def _execute_candidate_registry_benchmark(
     """Validate, execute, and atomically publish one frozen candidate benchmark set."""
 
     registry = load_candidate_registry(candidate_registry_path)
+    for candidate in registry.candidates:
+        _require_cli_candidate_assignments_eligible(
+            model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
+            provider_policy=OpenRouterProviderPolicy(
+                only=(candidate.approved_provider_endpoint,),
+                allow_fallbacks=False,
+            ),
+            context="candidate benchmark",
+        )
     qualification_policy = load_qualification_policy(qualification_policy_path)
     _require_qualification_release_pins(
         config=config,
@@ -3498,6 +3759,267 @@ def models_init_cost_ledger(
     )
 
 
+def _read_quote_json(path: Path) -> bytes:
+    """Read one bounded quote-workflow artifact without following path links."""
+
+    return read_json_evidence(
+        evidence_root=path.parent,
+        relative_path=path.name,
+        max_bytes=MAX_JSON_ARTIFACT_BYTES,
+    ).content
+
+
+def _write_quote_json(path: Path, value: Any) -> None:
+    """Publish one stable quote-workflow artifact as a fresh private file."""
+
+    write_json_evidence(
+        evidence_root=path.parent,
+        relative_path=path.name,
+        value=value,
+        max_bytes=MAX_JSON_ARTIFACT_BYTES,
+    )
+
+
+def _require_explicit_audit_schema_retry_selection(
+    config: AuditConfig,
+    selected_retries: int | None,
+    *,
+    context: str,
+) -> None:
+    """Reject implicit or conflicting schema-retry activation on paid audit routes."""
+
+    if type(config) is not AuditConfig:
+        raise ConfigError(f"{context} configuration has the wrong exact type")
+    configured_retries = config.execution.max_schema_validation_retries
+    if selected_retries is None:
+        if configured_retries != 0:
+            raise ConfigError(
+                f"{context} schema retries require explicit --schema-validation-retries selection"
+            )
+        return
+    if type(selected_retries) is not int or not 1 <= selected_retries <= 31:
+        raise ConfigError("--schema-validation-retries must be an integer from 1 through 31")
+    if configured_retries not in {0, selected_retries}:
+        raise ConfigError(
+            f"{context} --schema-validation-retries selection conflicts with the "
+            "configured schema-retry quota"
+        )
+
+
+@quote_app.command("create")
+def quote_create(
+    campaign_manifest: Annotated[
+        Path,
+        typer.Option(
+            "--campaign-manifest",
+            help="Exact scheduler campaign manifest JSON for the target run.",
+        ),
+    ],
+    solidity_shards: Annotated[
+        Path,
+        typer.Option(
+            "--solidity-shards",
+            help="Exact SolidityShardsArtifact JSON for the target repository.",
+        ),
+    ],
+    portfolio_preflight: Annotated[
+        Path,
+        typer.Option(
+            "--portfolio-preflight",
+            help="Exact model-portfolio resource preflight JSON.",
+        ),
+    ],
+    discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--discovery-run",
+            help="Frozen local model-discovery run directory containing endpoint prices.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private output file for the bounded pre-purchase quote.",
+        ),
+    ],
+    schema_validation_retries: Annotated[
+        int | None,
+        typer.Option(
+            "--schema-validation-retries",
+            min=1,
+            max=31,
+            help=(
+                "Explicit same-route schema-validation retry quota; omitted means no "
+                "schema-invalid response is retried on the current route."
+            ),
+        ),
+    ] = None,
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Create a bounded whole-run quote from frozen local evidence only."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        base_config = load_config(config_path)
+        _require_explicit_audit_schema_retry_selection(
+            base_config,
+            schema_validation_retries,
+            context="quote creation",
+        )
+        config = base_config
+        if schema_validation_retries is not None:
+            config = audit_config_overrides(
+                {
+                    "execution.max_schema_validation_retries": schema_validation_retries,
+                }
+            ).apply(base_config)
+        manifest = SchedulerCampaignManifest.model_validate_json(
+            _read_quote_json(campaign_manifest),
+            strict=True,
+        )
+        shards_artifact = SolidityShardsArtifact.model_validate_json(
+            _read_quote_json(solidity_shards),
+            strict=True,
+        )
+        if shards_artifact.inventory is None:
+            raise ConfigError("quote creation requires a non-null Solidity shard inventory")
+        preflight = ModelPortfolioResourcePreflight.model_validate_json(
+            _read_quote_json(portfolio_preflight),
+            strict=True,
+        )
+        discovery_manifest, discovery_evidence = load_model_discovery_run(discovery_run)
+        quote = build_prepurchase_quote_from_frozen_inputs(
+            config,
+            campaign_manifest=manifest,
+            solidity_shard_inventory=shards_artifact.inventory,
+            portfolio_preflight=preflight,
+            discovery_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+        )
+        _write_quote_json(output, quote)
+    except (ConfigError, OSError, PrepurchaseQuotePlanningError, TypeError, ValueError) as exc:
+        local_console.print(f"[red]mmaudit failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        "Created bounded provider-free quote "
+        f"{quote.quote_sha256} (complete-work worst USD "
+        f"{quote.unconstrained_workflow_worst_usd_exact}; accepted spend ceiling USD "
+        f"{quote.cost_range.worst_case_usd_exact})."
+    )
+
+
+@quote_app.command("accept")
+def quote_accept(
+    quote_path: Annotated[
+        Path,
+        typer.Option("--quote", help="Exact pre-purchase quote JSON to accept."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private output file recording explicit quote acceptance.",
+        ),
+    ],
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Explicitly accept one quote ceiling without authorizing dispatch."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        quote = PrepurchaseQuote.model_validate_json(
+            _read_quote_json(quote_path),
+            strict=True,
+        )
+        acceptance = accept_prepurchase_quote(
+            quote,
+            accepted_at=datetime.now(UTC).replace(microsecond=0),
+        )
+        _write_quote_json(output, acceptance)
+    except (OSError, TypeError, ValueError) as exc:
+        local_console.print(f"[red]mmaudit failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        "Recorded nonauthorizing quote acceptance "
+        f"{acceptance.acceptance_sha256} (hard ceiling USD "
+        f"{acceptance.run_hard_ceiling_usd_exact})."
+    )
+
+
+@quote_app.command("reconcile")
+def quote_reconcile(
+    acceptance_path: Annotated[
+        Path,
+        typer.Option("--acceptance", help="Exact accepted pre-purchase quote JSON."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private output file for typed actual-versus-quote evidence.",
+        ),
+    ],
+    model_execution: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-execution",
+            help="Exact ModelExecutionArtifact JSON carrying run-scoped cost evidence.",
+        ),
+    ] = None,
+    cost_ledger_evidence: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger-evidence",
+            help="Exact standalone RunCostLedgerEvidence JSON.",
+        ),
+    ] = None,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Reconcile terminal run accounting against an accepted quote."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        if (model_execution is None) == (cost_ledger_evidence is None):
+            raise ConfigError(
+                "quote reconciliation requires exactly one of --model-execution or "
+                "--cost-ledger-evidence"
+            )
+        acceptance = AcceptedPrepurchaseQuote.model_validate_json(
+            _read_quote_json(acceptance_path),
+            strict=True,
+        )
+        if model_execution is not None:
+            execution = ModelExecutionArtifact.model_validate_json(
+                _read_quote_json(model_execution),
+            )
+            if type(execution.cost_ledger) is not RunCostLedgerEvidence:
+                raise ConfigError(
+                    "model execution does not carry exact run-scoped cost-ledger evidence"
+                )
+            ledger_evidence = execution.cost_ledger
+        else:
+            assert cost_ledger_evidence is not None
+            ledger_evidence = RunCostLedgerEvidence.model_validate_json(
+                _read_quote_json(cost_ledger_evidence),
+                strict=True,
+            )
+        reconciliation = reconcile_prepurchase_quote(
+            acceptance,
+            ledger_evidence,
+            reconciled_at=datetime.now(UTC),
+        )
+        _write_quote_json(output, reconciliation)
+    except (ConfigError, OSError, TypeError, ValueError) as exc:
+        local_console.print(f"[red]mmaudit failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        "Recorded quote reconciliation "
+        f"{reconciliation.reconciliation_sha256} ({reconciliation.status.value})."
+    )
+
+
 @app.command("scan")
 def scan_command(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
@@ -3566,7 +4088,11 @@ def scan_command(
         bool | None,
         typer.Option(
             "--require-formal-or-reproduction-for-confirmed-critical/"
-            "--no-require-formal-or-reproduction-for-confirmed-critical"
+            "--no-require-formal-or-reproduction-for-confirmed-critical",
+            help=(
+                "Legacy option name: require accepted local reproduction or typed deterministic "
+                "execution evidence; unbound formal observations do not qualify."
+            ),
         ),
     ] = None,
     benchmark_gate: Annotated[
@@ -3804,6 +4330,28 @@ def run_command(
             help="Existing operator-controlled cumulative paid-provider ledger.",
         ),
     ] = None,
+    accepted_quote: Annotated[
+        Path | None,
+        typer.Option(
+            "--accepted-quote",
+            help=(
+                "Exact accepted pre-purchase quote that constrains this provider run's "
+                "incremental spend."
+            ),
+        ),
+    ] = None,
+    schema_validation_retries: Annotated[
+        int | None,
+        typer.Option(
+            "--schema-validation-retries",
+            min=1,
+            max=31,
+            help=(
+                "Explicit same-route schema-validation retry quota for this paid audit; "
+                "independent of transient --config max_model_retries."
+            ),
+        ),
+    ] = None,
     model_qualification_bundle: Annotated[
         Path | None,
         typer.Option(
@@ -3879,6 +4427,13 @@ def run_command(
             help="Operator-declared source class bound into privacy authorization.",
         ),
     ] = PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+    learning_tenant_scope_id: Annotated[
+        str | None,
+        typer.Option(
+            "--learning-tenant-scope-id",
+            help=("Opaque tenant-scope-<sha256> partition required for private provider audits."),
+        ),
+    ] = None,
     profile: Annotated[
         AuditProfile | None,
         typer.Option(
@@ -3938,7 +4493,11 @@ def run_command(
         bool | None,
         typer.Option(
             "--require-formal-or-reproduction-for-confirmed-critical/"
-            "--no-require-formal-or-reproduction-for-confirmed-critical"
+            "--no-require-formal-or-reproduction-for-confirmed-critical",
+            help=(
+                "Legacy option name: require accepted local reproduction or typed deterministic "
+                "execution evidence; unbound formal observations do not qualify."
+            ),
         ),
     ] = None,
     benchmark_gate: Annotated[
@@ -4027,6 +4586,8 @@ def run_command(
         output=output,
         budget_usd=budget_usd,
         cost_ledger=cost_ledger,
+        accepted_quote=accepted_quote,
+        schema_validation_retries=schema_validation_retries,
         model_qualification_bundle=model_qualification_bundle,
         model_qualification_policy=model_qualification_policy,
         model_qualification_release_bindings=model_qualification_release_bindings,
@@ -4046,6 +4607,7 @@ def run_command(
         privacy_profile=privacy_profile,
         retention_consent=retention_consent,
         privacy_source_classification=privacy_source_classification,
+        learning_tenant_scope_id=learning_tenant_scope_id,
         profile=profile,
         language_profile=language_profile,
         scope=scope,
@@ -4675,6 +5237,7 @@ def _execute_audit(
     privacy_profile: PrivacyProfile | None,
     retention_consent: Path | None,
     privacy_source_classification: PrivacySourceClassification,
+    learning_tenant_scope_id: str | None = None,
     profile: AuditProfile | None,
     language_profile: LanguageCapabilityProfile | None,
     scope: AuditScope | None,
@@ -4702,10 +5265,18 @@ def _execute_audit(
     no_color: bool,
     ci_mode: bool = False,
     ci_baseline_run: Path | None = None,
+    accepted_quote: Path | None = None,
+    schema_validation_retries: int | None = None,
 ) -> None:
     operator_secrets = OperatorSecrets()
     pipeline: AuditPipeline | None = None
     try:
+        if accepted_quote is not None and (scanner_only or ci_mode):
+            raise ConfigError("accepted quotes are rejected by scanner-only and CI execution")
+        if schema_validation_retries is not None and (scanner_only or ci_mode):
+            raise ConfigError(
+                "--schema-validation-retries is accepted only by paid provider audits"
+            )
         if ci_mode and (
             not scanner_only
             or secrets_env_file is not None
@@ -4726,7 +5297,22 @@ def _execute_audit(
             raise ConfigError("CI mode requires --changed-since")
         if ci_baseline_run is not None and not ci_mode:
             raise ConfigError("--baseline-run is accepted only by CI mode")
+        learning_capture_scope: LearningCaptureScope | None = None
         loaded_config = load_config_with_provenance(config_path)
+        if not scanner_only:
+            _require_explicit_audit_schema_retry_selection(
+                loaded_config.effective_config,
+                schema_validation_retries,
+                context="provider audit",
+            )
+        accepted_prepurchase_quote = (
+            AcceptedPrepurchaseQuote.model_validate_json(
+                _read_quote_json(accepted_quote),
+                strict=True,
+            )
+            if accepted_quote is not None
+            else None
+        )
         resolved_cost_ledger = cost_ledger.resolve() if cost_ledger is not None else None
         cli_overrides = _audit_config_overrides(
             budget_usd=budget_usd,
@@ -4735,6 +5321,7 @@ def _execute_audit(
             max_file_bytes=max_file_bytes,
             max_context_bytes=max_context_bytes,
             concurrency=concurrency,
+            schema_validation_retries=schema_validation_retries,
             require_zdr=require_zdr,
             privacy_profile=privacy_profile,
             profile=profile,
@@ -4760,6 +5347,16 @@ def _execute_audit(
             ci_mode=ci_mode,
         )
         config = cli_overrides.apply(loaded_config.effective_config)
+        if not scanner_only:
+            audit_controls = build_openrouter_runtime_controls(
+                config,
+                certification=False,
+            )
+            _require_cli_candidate_assignments_eligible(
+                model_ids=tuple(configured_model_ids(config, include_fallbacks=True)),
+                provider_policy=audit_controls.provider_policy,
+                context="provider audit",
+            )
         qualification_inputs_supplied = _validate_audit_production_qualification_inputs(
             scanner_only=scanner_only,
             bundle_path=model_qualification_bundle,
@@ -4782,7 +5379,21 @@ def _execute_audit(
                 ledger_path,
                 cap_usd=Decimal(str(config.execution.budget_usd)),
             )
+            if privacy_source_classification is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE:
+                if learning_tenant_scope_id is None:
+                    raise ConfigError("private provider audit requires --learning-tenant-scope-id")
+                learning_capture_scope = LearningCaptureScope(
+                    tenant_scope_id=learning_tenant_scope_id,
+                )
+            elif learning_tenant_scope_id is not None:
+                raise ConfigError(
+                    "--learning-tenant-scope-id is accepted only for private provider audits"
+                )
             operator_secrets = load_operator_secrets(secrets_env_file, required=True)
+        elif learning_tenant_scope_id is not None:
+            raise ConfigError(
+                "--learning-tenant-scope-id is accepted only for private provider audits"
+            )
         if qualification_inputs_supplied:
             production_qualification = asyncio.run(
                 _load_audit_production_qualification(
@@ -4880,6 +5491,7 @@ def _execute_audit(
             production_qualification=production_qualification,
             privacy_consent_observation=consent_observation,
             privacy_source_classification=privacy_source_classification,
+            accepted_prepurchase_quote=accepted_prepurchase_quote,
         )
         result = asyncio.run(
             pipeline.run(
@@ -4894,6 +5506,7 @@ def _execute_audit(
                 allow_maximum_assurance_downgrade=None,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_commit,
+                learning_capture_scope=learning_capture_scope,
                 ci_mode=ci_mode,
                 ci_baseline=ci_baseline,
             )
@@ -4976,6 +5589,7 @@ def _audit_config_overrides(
     max_file_bytes: int | None,
     max_context_bytes: int | None,
     concurrency: int | None,
+    schema_validation_retries: int | None = None,
     require_zdr: bool,
     privacy_profile: PrivacyProfile | None = None,
     profile: AuditProfile | None = None,
@@ -5014,6 +5628,7 @@ def _audit_config_overrides(
             str(cost_ledger.resolve()) if cost_ledger is not None else None
         ),
         "execution.concurrency": concurrency,
+        "execution.max_schema_validation_retries": schema_validation_retries,
         "repository.max_files": max_files,
         "repository.max_file_bytes": max_file_bytes,
         "repository.max_total_context_bytes": max_context_bytes,
@@ -5858,6 +6473,7 @@ def _authenticated_runner_durable_output(
         raise ConfigError("authenticated runner returned the wrong exact result type")
     try:
         return build_authenticated_runner_durable_bundle(
+            effective_config_sha256=result.execution.inventory.effective_config_sha256,
             runner_evidence=result.runner_evidence,
             candidate_cost_plans=tuple(item.candidate_cost_plan for item in result.execution.runs),
             judge_cost_plans=tuple(item.judge_cost_plan for item in result.execution.runs),
@@ -5924,6 +6540,64 @@ def _selected_cost_ledger_path(
             )
         return override
     return Path(configured) if configured is not None else None
+
+
+type _CandidateRevocationCallRoots = tuple[
+    Callable[[], bool],
+    Callable[..., None],
+    Callable[[str], bool],
+]
+_CLI_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+    is_exact_openrouter_model_id,
+)
+
+
+def _require_cli_candidate_assignments_eligible(
+    *,
+    model_ids: tuple[str, ...],
+    provider_policy: OpenRouterProviderPolicy,
+    context: str,
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CLI_CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
+) -> None:
+    """Reject CLI-selected tombstones before local state, secrets, or provider access."""
+
+    defaults = _require_cli_candidate_assignments_eligible.__kwdefaults__
+    if (
+        type(_candidate_revocation_call_roots) is not tuple
+        or len(_candidate_revocation_call_roots) != 3
+    ):
+        raise ConfigError(f"{context} candidate revocation boundary changed")
+    trusted_pristine, trusted_gate, trusted_exact_predicate = _candidate_revocation_call_roots
+    if (
+        type(defaults) is not dict
+        or defaults.get("_candidate_revocation_call_roots") is not _candidate_revocation_call_roots
+        or _CLI_CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_pristine
+        or require_candidate_assignment_eligible is not trusted_gate
+        or is_exact_openrouter_model_id is not trusted_exact_predicate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible is not trusted_gate
+        or not trusted_pristine()
+    ):
+        raise ConfigError(f"{context} candidate revocation boundary changed")
+    endpoints: tuple[str | None, ...]
+    if provider_policy.allow_fallbacks or not provider_policy.configured_endpoints:
+        endpoints = (None,)
+    else:
+        endpoints = tuple(provider_policy.configured_endpoints)
+    try:
+        for model_id in sorted(set(model_ids)):
+            if type(model_id) is str and not trusted_exact_predicate(model_id):
+                continue
+            for endpoint in endpoints:
+                trusted_gate(exact_model_id=model_id, provider_endpoint=endpoint)
+    except CandidateSelectionRevocationError as exc:
+        raise ConfigError(f"{context} candidate assignment is ineligible: {exc}") from exc
 
 
 def _parse_model_discovery_candidates(values: list[str]) -> tuple[tuple[str, str], ...]:
@@ -6232,6 +6906,15 @@ async def _refetch_qualification_generations(
             "no output repair, and no provider fallbacks"
         )
     controls = build_openrouter_runtime_controls(config, certification=False)
+    for candidate in registry.candidates:
+        _require_cli_candidate_assignments_eligible(
+            model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
+            provider_policy=OpenRouterProviderPolicy(
+                only=(candidate.approved_provider_endpoint,),
+                allow_fallbacks=False,
+            ),
+            context="qualification generation refetch",
+        )
     budget, usage = _budget_and_usage(config)
     with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
         if not operator_secrets.openrouter_api_key_present:

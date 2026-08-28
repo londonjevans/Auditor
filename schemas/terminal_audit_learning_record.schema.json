@@ -1,0 +1,797 @@
+{
+  "$defs": {
+    "ExternalMissEstablishmentKind": {
+      "description": "Allowed post-audit ways a real miss can be independently established.",
+      "enum": [
+        "INDEPENDENT_POST_AUDIT_REVIEW",
+        "CLIENT_CONFIRMED_POST_AUDIT",
+        "PUBLIC_POST_AUDIT_DISCLOSURE"
+      ],
+      "title": "ExternalMissEstablishmentKind",
+      "type": "string"
+    },
+    "ExternallyEstablishedMiss": {
+      "additionalProperties": false,
+      "description": "A real audit miss established after completion by an allowed external path.",
+      "properties": {
+        "category": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "established_at": {
+          "format": "date-time",
+          "title": "Established At",
+          "type": "string"
+        },
+        "establishment_kind": {
+          "$ref": "#/$defs/ExternalMissEstablishmentKind"
+        },
+        "establishment_reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Establishment Reference Sha256",
+          "type": "string"
+        },
+        "expected_surface_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "minItems": 1,
+          "title": "Expected Surface Ids",
+          "type": "array"
+        },
+        "external_miss_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "External Miss Id",
+          "type": "string"
+        },
+        "finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Finding Sha256",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/LearningFindingSeverity"
+        },
+        "source_kind": {
+          "const": "LATER_EXTERNAL_ESTABLISHMENT",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "summary_excerpt": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Summary Excerpt",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "title_excerpt": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Title Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "external_miss_id",
+        "finding_sha256",
+        "title_excerpt",
+        "category",
+        "severity",
+        "summary_excerpt",
+        "established_at",
+        "establishment_kind",
+        "establishment_reference_sha256",
+        "expected_surface_ids"
+      ],
+      "title": "ExternallyEstablishedMiss",
+      "type": "object"
+    },
+    "LearningActorKind": {
+      "description": "Whether an attribution belongs to a general model role or a specialist.",
+      "enum": [
+        "MODEL",
+        "SPECIALIST"
+      ],
+      "title": "LearningActorKind",
+      "type": "string"
+    },
+    "LearningAttributionOutcome": {
+      "description": "Closed outcome vocabulary for one model/specialist contribution.",
+      "enum": [
+        "PROPOSED",
+        "VERIFIED",
+        "FALSIFIED",
+        "MISSED"
+      ],
+      "title": "LearningAttributionOutcome",
+      "type": "string"
+    },
+    "LearningAttributionTargetKind": {
+      "description": "Typed target inventories for attribution joins.",
+      "enum": [
+        "CONFIRMED_FINDING",
+        "REJECTED_CANDIDATE",
+        "EXTERNAL_MISS"
+      ],
+      "title": "LearningAttributionTargetKind",
+      "type": "string"
+    },
+    "LearningFindingSeverity": {
+      "description": "Stable severity retained as a lead attribute, never as confidence credit.",
+      "enum": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "INFORMATIONAL"
+      ],
+      "title": "LearningFindingSeverity",
+      "type": "string"
+    },
+    "LearningSourceKind": {
+      "description": "The complete admissible source inventory for Phase-1 capture.\n\nBenchmark, private-holdout, and time-split sources are deliberately absent.",
+      "enum": [
+        "TERMINAL_PRODUCTION_AUDIT",
+        "LATER_EXTERNAL_ESTABLISHMENT"
+      ],
+      "title": "LearningSourceKind",
+      "type": "string"
+    },
+    "LearningSurfaceKind": {
+      "description": "Bounded surface kinds retained from a terminal audit.",
+      "enum": [
+        "SOURCE_FILE",
+        "CONTRACT",
+        "FUNCTION",
+        "STATE",
+        "INVARIANT",
+        "CALL_PATH",
+        "OTHER"
+      ],
+      "title": "LearningSurfaceKind",
+      "type": "string"
+    },
+    "LearningSurfaceOutcome": {
+      "description": "Exact terminal disposition of one reviewed surface.",
+      "enum": [
+        "CONFIRMED_FINDINGS",
+        "REJECTED_CANDIDATES",
+        "MIXED",
+        "REVIEWED_NO_ISSUE",
+        "INCONCLUSIVE"
+      ],
+      "title": "LearningSurfaceOutcome",
+      "type": "string"
+    },
+    "TerminalConfirmedFinding": {
+      "additionalProperties": false,
+      "description": "One finding confirmed by the completed audit, retained only as a lead.",
+      "properties": {
+        "category": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "finding_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Finding Sha256",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/LearningFindingSeverity"
+        },
+        "source_kind": {
+          "const": "TERMINAL_PRODUCTION_AUDIT",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "status": {
+          "const": "confirmed",
+          "title": "Status",
+          "type": "string"
+        },
+        "summary_excerpt": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Summary Excerpt",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "title_excerpt": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Title Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "finding_id",
+        "finding_sha256",
+        "title_excerpt",
+        "category",
+        "status",
+        "severity",
+        "summary_excerpt"
+      ],
+      "title": "TerminalConfirmedFinding",
+      "type": "object"
+    },
+    "TerminalRejectedCandidate": {
+      "additionalProperties": false,
+      "description": "One terminally rejected candidate and its explicit rejection reason.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "category": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "reason_code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "reason_excerpt": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Reason Excerpt",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "TERMINAL_PRODUCTION_AUDIT",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "title_excerpt": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Title Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "candidate_id",
+        "candidate_sha256",
+        "title_excerpt",
+        "category",
+        "reason_code",
+        "reason_excerpt"
+      ],
+      "title": "TerminalRejectedCandidate",
+      "type": "object"
+    },
+    "TerminalReviewedSurface": {
+      "additionalProperties": false,
+      "description": "One canonical reviewed surface and its exact terminal outcome.",
+      "properties": {
+        "confirmed_finding_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Confirmed Finding Ids",
+          "type": "array"
+        },
+        "credited_reviewer_actor_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Credited Reviewer Actor Ids",
+          "type": "array"
+        },
+        "descriptor_excerpt": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Descriptor Excerpt",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/LearningSurfaceOutcome"
+        },
+        "rejected_candidate_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Rejected Candidate Ids",
+          "type": "array"
+        },
+        "source_kind": {
+          "const": "TERMINAL_PRODUCTION_AUDIT",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "surface_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Surface Id",
+          "type": "string"
+        },
+        "surface_kind": {
+          "$ref": "#/$defs/LearningSurfaceKind"
+        },
+        "surface_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Surface Sha256",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "surface_id",
+        "surface_sha256",
+        "surface_kind",
+        "descriptor_excerpt",
+        "outcome",
+        "credited_reviewer_actor_ids",
+        "confirmed_finding_ids",
+        "rejected_candidate_ids"
+      ],
+      "title": "TerminalReviewedSurface",
+      "type": "object"
+    },
+    "TerminalReviewerAttribution": {
+      "additionalProperties": false,
+      "description": "One exact proposed/verified/falsified/missed event for a model or specialist.",
+      "properties": {
+        "actor_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "actor_kind": {
+          "$ref": "#/$defs/LearningActorKind"
+        },
+        "attribution_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Attribution Id",
+          "type": "string"
+        },
+        "audit_role": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Audit Role",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Model Id",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/LearningAttributionOutcome"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/LearningSourceKind"
+        },
+        "specialist_role": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Specialist Role"
+        },
+        "surface_ids": {
+          "default": [],
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 1024,
+          "title": "Surface Ids",
+          "type": "array"
+        },
+        "target_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "target_kind": {
+          "$ref": "#/$defs/LearningAttributionTargetKind"
+        },
+        "target_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Sha256",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "attribution_id",
+        "actor_kind",
+        "actor_id",
+        "model_id",
+        "audit_role",
+        "specialist_role",
+        "outcome",
+        "target_kind",
+        "target_id",
+        "target_sha256"
+      ],
+      "title": "TerminalReviewerAttribution",
+      "type": "object"
+    },
+    "TerminalRoleResourceUsage": {
+      "additionalProperties": false,
+      "description": "Exact aggregate cost and runtime for one terminal audit role.",
+      "properties": {
+        "cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,12})(?:\\.[0-9]{1,36})?$",
+          "title": "Cost Usd Exact",
+          "type": "string"
+        },
+        "model_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Model Ids",
+          "type": "array"
+        },
+        "request_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Request Count",
+          "type": "integer"
+        },
+        "role_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Role Id",
+          "type": "string"
+        },
+        "runtime_seconds_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,15})(?:\\.[0-9]{1,9})?$",
+          "title": "Runtime Seconds Exact",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "TERMINAL_PRODUCTION_AUDIT",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Tenant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "source_kind",
+        "role_id",
+        "model_ids",
+        "request_count",
+        "cost_usd_exact",
+        "runtime_seconds_exact"
+      ],
+      "title": "TerminalRoleResourceUsage",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/terminal_audit_learning_record.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed Phase-1 record for exactly one tenant and one completed audit.",
+  "properties": {
+    "audit_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+      "title": "Audit Id",
+      "type": "string"
+    },
+    "authority": {
+      "const": "NONAUTHORIZING",
+      "title": "Authority",
+      "type": "string"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "completed_at": {
+      "format": "date-time",
+      "title": "Completed At",
+      "type": "string"
+    },
+    "confidence_credit_authorized": {
+      "const": false,
+      "title": "Confidence Credit Authorized",
+      "type": "boolean"
+    },
+    "confirmed_findings": {
+      "items": {
+        "$ref": "#/$defs/TerminalConfirmedFinding"
+      },
+      "maxItems": 4096,
+      "title": "Confirmed Findings",
+      "type": "array"
+    },
+    "consensus_credit_authorized": {
+      "const": false,
+      "title": "Consensus Credit Authorized",
+      "type": "boolean"
+    },
+    "coverage_credit_authorized": {
+      "const": false,
+      "title": "Coverage Credit Authorized",
+      "type": "boolean"
+    },
+    "cross_tenant_aggregation_authorized": {
+      "const": false,
+      "title": "Cross Tenant Aggregation Authorized",
+      "type": "boolean"
+    },
+    "evidence_credit_authorized": {
+      "const": false,
+      "title": "Evidence Credit Authorized",
+      "type": "boolean"
+    },
+    "external_misses": {
+      "items": {
+        "$ref": "#/$defs/ExternallyEstablishedMiss"
+      },
+      "maxItems": 4096,
+      "title": "External Misses",
+      "type": "array"
+    },
+    "parent_record_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Parent Record Sha256"
+    },
+    "permitted_use": {
+      "const": "LEAD_ONLY_NON_PRIMING",
+      "title": "Permitted Use",
+      "type": "string"
+    },
+    "prompt_priming_authorized": {
+      "const": false,
+      "title": "Prompt Priming Authorized",
+      "type": "boolean"
+    },
+    "provider_dispatch_authorized": {
+      "const": false,
+      "title": "Provider Dispatch Authorized",
+      "type": "boolean"
+    },
+    "qualification_authorized": {
+      "const": false,
+      "title": "Qualification Authorized",
+      "type": "boolean"
+    },
+    "record_kind": {
+      "const": "TERMINAL_AUDIT_LEARNING_RECORD",
+      "title": "Record Kind",
+      "type": "string"
+    },
+    "record_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Record Sha256",
+      "type": "string"
+    },
+    "rejected_candidates": {
+      "items": {
+        "$ref": "#/$defs/TerminalRejectedCandidate"
+      },
+      "maxItems": 16384,
+      "title": "Rejected Candidates",
+      "type": "array"
+    },
+    "release_authorized": {
+      "const": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "report_payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Payload Sha256",
+      "type": "string"
+    },
+    "reviewed_surfaces": {
+      "items": {
+        "$ref": "#/$defs/TerminalReviewedSurface"
+      },
+      "maxItems": 20000,
+      "minItems": 1,
+      "title": "Reviewed Surfaces",
+      "type": "array"
+    },
+    "reviewer_attributions": {
+      "items": {
+        "$ref": "#/$defs/TerminalReviewerAttribution"
+      },
+      "maxItems": 65536,
+      "title": "Reviewer Attributions",
+      "type": "array"
+    },
+    "role_usage": {
+      "items": {
+        "$ref": "#/$defs/TerminalRoleResourceUsage"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Role Usage",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "mmaudit.terminal-audit-learning.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_kind": {
+      "const": "TERMINAL_PRODUCTION_AUDIT",
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "tenant_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "terminal_report_authority_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Terminal Report Authority Sha256",
+      "type": "string"
+    },
+    "terminal_state": {
+      "const": "COMPLETED",
+      "title": "Terminal State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "record_kind",
+    "tenant_id",
+    "audit_id",
+    "terminal_report_authority_sha256",
+    "report_payload_sha256",
+    "parent_record_sha256",
+    "source_kind",
+    "terminal_state",
+    "completed_at",
+    "captured_at",
+    "confirmed_findings",
+    "rejected_candidates",
+    "reviewer_attributions",
+    "reviewed_surfaces",
+    "role_usage",
+    "external_misses",
+    "permitted_use",
+    "authority",
+    "evidence_credit_authorized",
+    "confidence_credit_authorized",
+    "coverage_credit_authorized",
+    "consensus_credit_authorized",
+    "prompt_priming_authorized",
+    "cross_tenant_aggregation_authorized",
+    "provider_dispatch_authorized",
+    "qualification_authorized",
+    "release_authorized",
+    "record_sha256"
+  ],
+  "title": "TerminalAuditLearningRecord",
+  "type": "object"
+}

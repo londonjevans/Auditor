@@ -825,16 +825,9 @@ def test_mixed_model_commentary_cannot_control_execution_group_or_evidence() -> 
     assert finding.impact == execution.impact
     assert finding.recommendation == execution.recommendation
     assert finding.evidence_strength is EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE
-    assert {item.type for item in finding.evidence} == {"execution", "model", "repository"}
-    host_links = [
-        item
-        for item in finding.evidence
-        if item.type == "repository" and item.source == "mmaudit-host-execution-link"
-    ]
-    assert len(host_links) == 1
-    assert host_links[0].rule_id == provenance.invariant_id
-    assert host_links[0].fingerprint == provenance.provenance_sha256
-    assert finding.model_votes == model.model_votes
+    assert {item.type for item in finding.evidence} == {"execution"}
+    assert finding.model_votes == []
+    assert model.candidate_id in finding.contributing_candidate_ids
 
     rule, result = _sarif_result(finding)
     assert rule["properties"]["groupId"] == execution_group.group_id

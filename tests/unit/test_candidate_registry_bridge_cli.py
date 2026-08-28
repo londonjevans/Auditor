@@ -11,7 +11,12 @@ from typer.testing import CliRunner
 import mmaudit.cli as cli_module
 from mmaudit.config import AuditConfig
 from mmaudit.constants import ExitCode
-from mmaudit.models.candidate_registry_bridge import write_candidate_registry_json
+from mmaudit.models.candidate_registry_bridge import (
+    derive_candidate_registry_from_discovery,
+    validate_candidate_registry_template_selection,
+    write_candidate_registry_json,
+)
+from mmaudit.models.candidate_revocation import CandidateSelectionRevocationError
 from mmaudit.models.candidate_selection import (
     load_candidate_selection_plan,
     seal_authenticated_runner_route_predicate_profile,
@@ -21,6 +26,7 @@ from mmaudit.models.candidate_selection import (
     seal_candidate_selection_source_binding,
 )
 from mmaudit.models.discovery import (
+    DiscoveryCandidateRoute,
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
     load_model_discovery_run,
@@ -46,6 +52,9 @@ ROOT = Path(__file__).parents[2]
 RUNNER = CliRunner()
 MODEL_ID = "alpha/atlas-secure"
 PROVIDER_ENDPOINT = "provider-alpha"
+REVOKED_MODEL_ID = "deepseek/deepseek-v4-pro-0813"
+REVOKED_CANONICAL_ALIAS = "deepseek/deepseek-v4-pro-20260813"
+REVOKED_PROVIDER_ENDPOINT = "parasail/fp8"
 CANARY = "synthetic-registry-bridge-canary"
 RANKING_SOURCE = b"synthetic operator-staged ranking implementation\n"
 LINEAGE_SOURCE = b"synthetic operator-staged lineage review\n"
@@ -164,6 +173,245 @@ def _selection_plan_paths(
     plan_path = tmp_path / "candidate-selection-plan.json"
     plan_path.write_text(stable_json(plan), encoding="utf-8")
     return plan_path, ranking_path, lineage_path
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    (REVOKED_MODEL_ID, REVOKED_CANONICAL_ALIAS),
+)
+@pytest.mark.parametrize("bridge_mode", ("plain", "template", "plan"))
+def test_discover_rejects_tombstoned_alias_before_any_downstream_access(
+    model_id: str,
+    bridge_mode: Literal["plain", "template", "plan"],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    downstream_access: list[str] = []
+
+    def forbidden_access(*_args: object, **_kwargs: object) -> None:
+        downstream_access.append("accessed")
+        raise AssertionError("revoked discovery must reject before downstream access")
+
+    for name in (
+        "load_candidate_registry",
+        "load_candidate_selection_plan",
+        "read_candidate_selection_source",
+        "preflight_candidate_registry_output",
+        "_preflight_model_discovery_output_dir",
+        "load_config",
+        "load_operator_secrets",
+        "OpenRouterClient",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden_access)
+
+    discovery_output = tmp_path / "discovery"
+    registry_output = tmp_path / "registry.json"
+    arguments = [
+        "models",
+        "discover",
+        "--candidate",
+        f"{model_id}={REVOKED_PROVIDER_ENDPOINT}",
+        "--output-dir",
+        str(discovery_output),
+        "--no-color",
+    ]
+    if bridge_mode == "template":
+        arguments.extend(
+            (
+                "--candidate-registry-template",
+                str(tmp_path / "missing-template.json"),
+                "--candidate-registry-output",
+                str(registry_output),
+            )
+        )
+    elif bridge_mode == "plan":
+        arguments.extend(
+            (
+                "--candidate-selection-plan",
+                str(tmp_path / "missing-plan.json"),
+                "--candidate-selection-ranking-source",
+                str(tmp_path / "model-ranking.py"),
+                "--candidate-selection-lineage-review-source",
+                str(tmp_path / "V3-LINEAGE-001-operator-review.md"),
+                "--candidate-registry-output",
+                str(registry_output),
+            )
+        )
+
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate selection assignment is revoked" in " ".join(result.output.split())
+    assert downstream_access == []
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
+
+
+def test_discover_rejects_stale_plan_before_staged_source_or_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    downstream_access: list[str] = []
+
+    def forbidden_access(*_args: object, **_kwargs: object) -> None:
+        downstream_access.append("accessed")
+        raise AssertionError("revoked plan must reject before downstream access")
+
+    for name in (
+        "read_candidate_selection_source",
+        "preflight_candidate_registry_output",
+        "_preflight_model_discovery_output_dir",
+        "load_config",
+        "load_operator_secrets",
+        "OpenRouterClient",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden_access)
+
+    discovery_output = tmp_path / "discovery"
+    registry_output = tmp_path / "registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            "moonshotai/kimi-k3=modal/mxfp4",
+            "--candidate-selection-plan",
+            str(ROOT / "config" / "models.selection-plan.json"),
+            "--candidate-selection-ranking-source",
+            str(tmp_path / "model-ranking.py"),
+            "--candidate-selection-lineage-review-source",
+            str(tmp_path / "V3-LINEAGE-001-operator-review.md"),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--output-dir",
+            str(discovery_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate selection route is revoked" in " ".join(result.output.split())
+    assert downstream_access == []
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
+
+
+@pytest.mark.parametrize(
+    ("model_id", "canonical_model_id"),
+    (
+        (REVOKED_MODEL_ID, None),
+        (REVOKED_CANONICAL_ALIAS, None),
+        ("deepseek/deepseek-v4-pro-observed-0813", REVOKED_CANONICAL_ALIAS),
+    ),
+)
+def test_registry_template_validation_rejects_tombstoned_alias(
+    model_id: str,
+    canonical_model_id: str | None,
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+        provider_name="Synthetic Parasail",
+        canonical_model_id=canonical_model_id,
+    )
+    _manifest, _evidence, template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+
+    with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked"):
+        validate_candidate_registry_template_selection(
+            template=template,
+            routes=(
+                DiscoveryCandidateRoute(
+                    exact_model_id=model_id,
+                    approved_provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint"),
+    (
+        (REVOKED_MODEL_ID, "parasail/fp16"),
+        ("deepseek/deepseek-v4-pro-0814", REVOKED_PROVIDER_ENDPOINT),
+    ),
+)
+def test_registry_template_validation_allows_adjacent_endpoint_or_model(
+    model_id: str,
+    provider_endpoint: str,
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Synthetic Parasail",
+    )
+    _manifest, _evidence, template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+
+    assert (
+        validate_candidate_registry_template_selection(
+            template=template,
+            routes=(
+                DiscoveryCandidateRoute(
+                    exact_model_id=model_id,
+                    approved_provider_endpoint=provider_endpoint,
+                ),
+            ),
+        )
+        == template
+    )
+
+
+def test_registry_derivation_rejects_fresh_tombstoned_canonical_identity(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    exact_model_id = "deepseek/deepseek-v4-pro-observed-0813"
+    _template_manifest, _template_evidence, template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "template",
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id=exact_model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-adjacent-0813",
+                provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+                provider_name="Synthetic Parasail",
+            ),
+        ),
+    )
+    manifest, evidence, _fresh_registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "fresh",
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id=exact_model_id,
+                canonical_model_id=REVOKED_CANONICAL_ALIAS,
+                provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+                provider_name="Synthetic Parasail",
+            ),
+        ),
+    )
+
+    with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked"):
+        derive_candidate_registry_from_discovery(
+            template=template,
+            run_manifest=manifest,
+            evidence=evidence,
+        )
 
 
 @pytest.mark.parametrize(

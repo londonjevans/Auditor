@@ -89,6 +89,7 @@ mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit
 mmaudit run --repo ../.. --language-profile solidity-evm \
   --allow-code-egress --budget-usd 20 \
   --secrets-env-file /absolute/operator/control/mmaudit-secrets.env \
+  --learning-tenant-scope-id tenant-scope-<64-lowercase-hex> \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
@@ -170,6 +171,13 @@ endpoint-routed parameters such as `response_format` or `reasoning`; validated-t
 those parameters omit it. Only fallbacks written explicitly in a role's configuration are attempted.
 Every request records requested/returned model, provider, timestamp, exact output mode and capability
 hash, routing metadata, usage, cost, and prompt/response hashes.
+
+Schema-invalid structured output is not covered by `max_model_retries`, which remains limited to
+transient network or status failures. Ordinary paid runs enable bounded same-route schema retry only
+through an explicit `--schema-validation-retries N` selection (`1` through `31`); omitting the
+option keeps it off. Use the same option with `mmaudit quote create` so the quote, accepted ceiling,
+and eventual run bind the identical split retry policy. After that separate quota is exhausted,
+`SCHEMA_VALIDATION_FAILED` still follows the configured fallback or terminates.
 
 ## Configuration
 
@@ -277,8 +285,14 @@ mmaudit scan --repo . --language-profile solidity-evm
 mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 mmaudit run --repo . --language-profile solidity-evm \
   --allow-code-egress --budget-usd 20 --fail-on high \
+  --learning-tenant-scope-id tenant-scope-<64-lowercase-hex> \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
+
+Private provider audits require an operator-provisioned opaque
+`tenant-scope-<64-lowercase-hex>` value. Reuse it only inside one tenant boundary; never derive it
+from a repository path, output path, run ID, or source hash. Completed REAL audit runs retain the
+resulting nonauthorizing learning record under the private, manifest-bound run directory.
 
 For the maximum-assurance Solidity/EVM path, configure `[reproduction].targets`, pin the fork
 block/chain, point
@@ -292,6 +306,7 @@ mmaudit run --repo . \
   --compile --run-slither \
   --allow-code-egress --allow-fork \
   --budget-usd 20 \
+  --learning-tenant-scope-id tenant-scope-<64-lowercase-hex> \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
@@ -352,6 +367,7 @@ compilation only for a repository you intend to analyze:
 ```bash
 mmaudit scan --repo . --compile --run-slither
 mmaudit run --repo . --compile --run-slither --allow-code-egress --budget-usd 20 \
+  --learning-tenant-scope-id tenant-scope-<64-lowercase-hex> \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
@@ -654,9 +670,10 @@ mmaudit explain MMA-0123456789AB --output .mmaudit
 
 Statuses mean:
 
-- `confirmed`: verifier acceptance plus reproduced/minimized local fork evidence, formal
-  proof/counterexample, or strong deterministic analyzer evidence with validated reachability and
-  impact.
+- `confirmed`: verifier acceptance plus reproduced/minimized local fork evidence or strong
+  deterministic analyzer evidence with validated reachability and impact. Source-overlapping formal
+  counterexamples are retained as nonconfirming observations until an exact candidate-to-property
+  binding is available.
 - `strongly_supported`: complete validated attack path and independent support, but no reproduction
   or deterministic proof strong enough for confirmation.
 - `high_confidence`: one strong source-to-sink analysis, valid locations, verifier acceptance, and no

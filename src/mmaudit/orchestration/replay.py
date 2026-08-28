@@ -59,7 +59,7 @@ from mmaudit.models.schemas import (
     StrictModel,
 )
 from mmaudit.orchestration.execution_candidates import (
-    validate_invariant_execution_candidate_provenance,
+    validate_invariant_execution_candidate,
 )
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
@@ -1384,8 +1384,8 @@ class _ReplayArtifacts(StrictModel):
             if provenance is None or runtime_corpus is None:
                 raise ValueError("execution-origin candidate lacks typed provenance")
             try:
-                validate_invariant_execution_candidate_provenance(
-                    provenance,
+                validate_invariant_execution_candidate(
+                    candidate,
                     invariant_suite=self.invariants.invariants,
                     harnesses=self.invariant_results.harnesses,
                     property_corpus=runtime_corpus,

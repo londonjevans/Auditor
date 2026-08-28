@@ -120,6 +120,36 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
 
     requirements = {item["id"]: item for item in traceability["requirements"]}
     autonomy_evidence = " ".join(requirements["U"]["evidence"])
+    consensus_evidence = {
+        requirement_id: next(
+            evidence
+            for evidence in reversed(requirements[requirement_id]["evidence"])
+            if "V3-CONSENSUS-001" in evidence
+        )
+        for requirement_id in ("A", "N", "U")
+    }
+    assert requirements["A"]["status"] == "PARTIAL"
+    assert requirements["N"]["status"] == "PARTIAL"
+    assert requirements["U"]["status"] == "IN_PROGRESS"
+    for requirement_id in ("A", "N", "U"):
+        assert "V3-CONSENSUS-001" in consensus_evidence[requirement_id]
+    assert "one-verifier/two-falsifier quorum" in consensus_evidence["A"]
+    assert "detached replay" in consensus_evidence["A"]
+    assert "nonconfirming" in consensus_evidence["A"]
+    assert "COMPLETE" in consensus_evidence["N"]
+    assert "provider-free" in consensus_evidence["N"]
+    assert "nonauthorizing" in consensus_evidence["N"]
+    assert "one verifier and two lineage-distinct falsifiers" in consensus_evidence["N"]
+    assert "all dissent" in consensus_evidence["N"]
+    assert "Model agreement alone is nonconfirming" in consensus_evidence["N"]
+    assert "no REAL provider run" in consensus_evidence["N"]
+    assert "provider-free exact three-review quorum" in consensus_evidence["U"]
+    assert "detached terminal-replay" in consensus_evidence["U"]
+    assert "does not alter retry configuration" in consensus_evidence["U"]
+    assert (
+        "grants no provider, campaign, audit, runtime, qualification, or release authority"
+        in (consensus_evidence["U"])
+    )
     assert "Phase 1 is COMPLETE_NONAUTHORIZING" in autonomy_evidence
     assert "084add8778ef36a2e4c86fdbdea4082eb3a1b332" in autonomy_evidence
     assert "not pushed or remote-resolved" in autonomy_evidence
@@ -166,15 +196,52 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "leaves 25 external roles unresolved" in autonomy_evidence
     assert "paused V3-AUTONOMY-001" in requirements["U"]["remaining_proof"]
     assert "V3-RUNTIMEADMIT-001" in requirements["U"]["remaining_proof"]
-    assert "EMPIRICAL_SCHEMA_CONFORMANCE" in requirements["U"]["remaining_proof"]
-    assert "TOKEN_DETAIL_REPORTING_CONVENTION" in requirements["U"]["remaining_proof"]
+    assert "replacement candidate" in requirements["U"]["remaining_proof"]
+    assert "unbound generation identity" in requirements["U"]["remaining_proof"]
+    assert "V3-RETRYCONT-001" in requirements["U"]["remaining_proof"]
+    assert "provider-backed retry" in requirements["U"]["remaining_proof"]
     assert "V3-CALIBRATE-001" in requirements["U"]["remaining_proof"]
+    assert "V3-CONSENSUS-001" in requirements["U"]["remaining_proof"]
+    assert "COMPLETE" in requirements["U"]["remaining_proof"]
+    assert "V3-CONSENSUS-001" in requirements["N"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
     assert runtime_status["candidate_commit"] == "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
     assert runtime_status["candidate_commit_parent"] == ("9a902192cae14bb14144094b3a3b3bf6dafed9a9")
-    assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
+    assert runtime_status["current_ticket"] == "UNSELECTED"
+    assert runtime_status["last_completed_ticket"] == "V3-SCHEMARETRY-001"
+    assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
+    last_completed_work = runtime_status["last_completed_provider_free_work"]
+    assert last_completed_work["ticket"] == "V3-SCHEMARETRY-001"
+    assert "COMPLETE_PROVIDER_FREE_NONAUTHORIZING" in last_completed_work["status"]
+    assert (
+        "V3_REVOKERECON_001_NEXT_DEPENDENCY_READY_QUEUED_NOT_SELECTED"
+        in (last_completed_work["next_slice"])
     )
+    assert "V3_MULTI_AUDIT_001_REMAINS_QUEUED" in last_completed_work["next_slice"]
+    assert "V3_SINGLE_AUDIT_001" in last_completed_work["next_slice"]
+    consensus = runtime_status["consensus_provider_free_adjudication"]
+    assert consensus["ticket"] == "V3-CONSENSUS-001"
+    assert consensus["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    assert consensus["reviewer_roles"] == ["VERIFIER", "FALSIFIER_1", "FALSIFIER_2"]
+    assert consensus["single_reviewer_can_suppress_candidate_group"] is False
+    assert consensus["model_agreement_receives_confirmation_credit"] is False
+    assert consensus["all_dissent_retained"] is True
+    assert consensus["complete_and_partial_terminal_replay_bound"] is True
+    assert consensus["retry_behavior_changed"] is False
+    learning = runtime_status["learning_provider_free_capture"]
+    assert learning["ticket"] == "V3-LEARNING-001"
+    assert learning["status"].startswith("PARTIAL_PHASE_1_COMPLETE_PROVIDER_FREE")
+    assert learning["manifest_bound_and_deterministically_rebuilt"] is True
+    assert learning["phase_2_application_enabled"] is False
+    assert learning["retry_behavior_changed"] is False
+    assert learning["retry_configuration_changed"] is False
+    assert consensus["retry_configuration_changed"] is False
+    assert consensus["successor_ticket_selected"] is False
+    current_inventory = runtime_status["autonomy_phase_zero_inventory"]
+    assert current_inventory["current_reconciliation_commit"] is None
+    assert current_inventory["current_reconciliation_commit_pushed"] is False
+    assert current_inventory["current_reconciliation_commit_remote_resolved"] is False
+    assert current_inventory["current_reconciliation_uncommitted_worktree"] is True
     assert runtime_status["candidate_commit_pushed"] is True
     assert runtime_status["candidate_commit_remote_resolved"] is True
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
@@ -190,8 +257,9 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     calibration_block = runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
     assert "V3-CALIBRATE-001 remains BLOCKED_TECHNICAL" in calibration_block
     assert "calibrated P2 plus successor C2" in calibration_block
-    assert "cleared the immediate standalone qualification-policy input gate" in calibration_block
-    assert "V3-RUNTIMEADMIT-001" in calibration_block
+    assert "FULL admission for one launch" in calibration_block
+    assert "DeepSeek candidate is non-runnable" in calibration_block
+    assert "57 entries / 0.68118684 USD" in calibration_block
     assert "completed real audits remain zero" in calibration_block
     assert "No current command or run index is authorized or inferred" in calibration_block
 
@@ -234,7 +302,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 71
+    assert len(ticket_id_list) == len(ticket_ids) == 73
     assert len(historical_id_list) == len(historical_ids) == 46
     assert ticket_ids - historical_ids == {
         "V3-AUTHLINEAGE-001",
@@ -256,6 +324,8 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-PLANCONSTRAINTS-001",
         "V3-PRIVACY-001",
         "V3-RETRY-001",
+        "V3-RETRYCONT-001",
+        "V3-SCHEMARETRY-001",
         "V3-RUNTIMEADMIT-001",
         "V3-SHARD-001",
         "V3-SMOKE-001",

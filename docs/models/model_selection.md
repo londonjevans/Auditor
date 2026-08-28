@@ -44,9 +44,10 @@ unselected rank-12 record of the superseded r7 proposal rather than being presen
 the configured high-effort profile. The plan's own advisory entries remain literally
 `documentary_lineage = UNCONFIRMED`, and it records `distinct_root_lineages_verified = false`; those
 sealed plan-local values are not rewritten by later documentary evidence. The separately compiled
-public-lineage manifest confirms the current DeepSeek/Z.AI/Moonshot triple and all six directed
-independence pairs. Neither artifact qualifies a model or authorizes a runner, provider call,
-benchmark, seal, audit, or release.
+public-lineage manifest confirms the plan/documentary DeepSeek/Z.AI/Moonshot triple and all six
+directed independence pairs. The DeepSeek candidate route is now tombstoned and cannot be a current
+assignment. Neither artifact qualifies a model or authorizes a runner, provider call, benchmark,
+seal, audit, or release.
 
 Historically, the operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
 with operator-reported frozen-registry SHA-256
@@ -847,12 +848,19 @@ bundle, and ledger state. No AUTHRUNNER action is authorized and no new index ma
 Provider-free `V3-PLANCONSTRAINTS-001` is complete: its shared 29-predicate profile now binds the
 selection plan, pre-snapshot discovery publication, registry custody, provider price-cap projection,
 and FULL/NONCREDITING runtime admission. Runtime output tokens must exactly match the profile before
-state mutation. Empirical schema conformance and token-detail convention remain typed `UNAVAILABLE`.
-The current operator-supplied result reports that no source path can promote
-`EMPIRICAL_SCHEMA_CONFORMANCE` or `TOKEN_DETAIL_REPORTING_CONVENTION` to `SATISFIED`, so separate
-runtime evidence alone cannot clear FULL admission. The queued, not-selected-or-started
-`V3-RUNTIMEADMIT-001` must first implement that provider-free promotion mechanism; r3/r4 cannot
-populate it. Proposal item 5 is
+state mutation. Without explicit verified runtime evidence, empirical schema conformance and the
+token-detail convention remain typed `UNAVAILABLE`.
+Historical operator-supplied evidence records a private provider-free replay in which matching
+index-21/r21 evidence promoted `EMPIRICAL_SCHEMA_CONFORMANCE` to `SATISFIED` but rejected
+`TOKEN_DETAIL_REPORTING_CONVENTION` under the pre-fix digest join. `V3-RUNTIMEADMIT-001` is
+`COMPLETE` at its corrected provider-free boundary and implements a path from one exact canonical
+authenticated-runner smoke-v1.2 bundle to an opaque, policy-age-bound capability for the same
+candidate, PRIMARY, and REPLAY model/endpoint/profile/discovery bindings. Missing, stale,
+mismatched, tampered, caller-asserted, or non-FULL evidence remains rejected, and the default
+discovery bytes still leave both predicates `UNAVAILABLE`. Codex did not read or replay the private
+bundle. Later operator evidence reports corrected-code FULL admission for one launch, followed by a
+candidate failure; that launch grants no reusable admission, and no current operator command or run
+index follows. Proposal item 5 is
 `ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8`: bounded typed successful-usage diagnostics keep
 case mismatch separate and avoid premature generation fetch. Item 3's REPLAY allowlist is historical;
 its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain
@@ -860,47 +868,80 @@ its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain
 `V3-AUTONOMY-001` Phase 2 remains paused. No qualification, runner, seal, audit, benchmark, or release
 authority exists.
 
-### Current operator-result reconciliation — 2026-08-27T06:37Z
+### Current operator-result reconciliation — 2026-08-28T07:56Z
 
-The current operator-supplied record is 137,294 bytes / 2,462 lines at SHA-256
-`50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820`. It is nonauthorizing and
-was not independently authenticated by Codex. It reports that materializing the exact embedded P1
-policy (`1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`) cleared the earlier
-qualification-policy input gate, and that fresh `$0` r22 metadata discovery produced these frozen
-registries:
+The current operator-supplied record is 148,339 bytes / 2,648 lines at SHA-256
+`d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089`. It is uncommitted,
+nonauthorizing, and was not independently authenticated by Codex. Its newest provider-free entry
+reports that the one correct candidate tombstone rejects the revoked DeepSeek/`parasail/fp8`
+assignment but also blocks every unrevoked alternative because plan eligibility evaluates the whole
+pinned route set. The ledger remains 57 entries / `0.68118684` USD and completed real audits remain
+zero. `V3-REVOKERECON-001` is queued and unselected; no candidate assignment or successor plan is
+authorized by this evidence.
 
-- candidate DeepSeek/`parasail/fp8`:
-  `d828e6b77fb16fbc4bd980f2fcd6e610394b915e33915864714b68d2ce205bc7`;
-- PRIMARY Z.AI/`sail-research/fp8`:
-  `db75dcbcfcdde75b95d64e0e66be224a650896ba5b4829e25b04f1effda0d0f4`;
-- REPLAY Kimi/`modal/mxfp4`:
-  `73550667098aa0b96bfd35019a52fdd8b30c91ff680068a1f2b6ccfce45416a9`.
+The immediately preceding operator entry reports that fresh `r23` discovery, the exact materialized
+qualification policy, and paid smoke index 22 cleared the
+launch gates. The reported smoke cost was `0.04395915` USD; bundle
+`29702a02f52626deca38ff36401eb3cb7bb4602f07677881760ad26ba40df5d4` verified
+`VALID / NONCREDITING / NONAUTHORIZING`, and `FULL_CAMPAIGN_ADMISSION` was satisfied for that launch.
+Those private registries, bundle, ledger, and campaign bytes were unavailable to Codex and were not
+promoted into repository authority.
 
-Those private registry bytes were unavailable to Codex and were not promoted into repository
-authority. The active schema-v1.4 selection plan remains byte-unchanged at self-hash
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`; it already proposes the
-same three role/model assignments and includes the exact r22 routes while retaining `phala` as a
-non-selected REPLAY policy alternative. It keeps every authority flag false and explicitly marks
-both campaign-only predicate dispositions `UNAVAILABLE`. The fresh r22 report therefore does not
-mutate or authorize the plan.
+The active schema-v1.4 selection plan remains byte-unchanged at self-hash
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, keeps every authority flag
+false, and still names DeepSeek V4 on `parasail/fp8` as its candidate constraint. The tombstone
+correctly makes that assignment non-runnable, but current whole-plan revocation evaluation also
+rejects every alternative assignment. The plan is now stale and non-runnable, not silently
+rewritten, and no replacement candidate is selected. `V3-REVOKERECON-001` must preserve the
+tombstone while evaluating the route
+actually assigned or emitting a supported successor plan; only then can separate reselection freeze
+fresh evidence and empirically validate structured-output conformance before another paid campaign.
+The operator reports plan-route refusal for MiniMax/Coreweave, Gemma/DeepInfra, and Tencent/Novita,
+while the revoked DeepSeek/Parasail incumbent is correctly refused at assignment with reason
+`EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`. No repository command emits a successor selection
+plan; hand-editing this hash-pinned input is not an approved workaround.
 
-The subsequent `FULL_CAMPAIGN_ADMISSION` evaluation fails on
-`EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`; the current source has no
-satisfying promotion path for either result. `V3-RUNTIMEADMIT-001` is therefore queued but not
-selected or started. Operator-side evidence or prerequisites cannot substitute for that missing
-provider-free mechanism.
+The operator reports that the 24-case campaign launched, then failed closed after roughly 24 logical
+requests and `0.20264508` USD. Nine requests reached `SCHEMA_VALIDATION_FAILED`; 15 completed
+responses had unbound generation identity; terminal provenance validation rejected the candidate
+report. All 24 new ledger entries are reported reconciled, leaving 57 entries and `0.68118684` USD
+spent. `completed_real_audits` remains zero. The unbound-generation condition is separate from the
+schema failures and remains unresolved.
 
-Provider-free `V3-RETRY-001` is complete at `4f666d05c79e550af4f5fc646c5e6ffabb60dcf0`, but the
-hash-pinned qualification configuration remains at `max_schema_validation_retries = 0`. The
-operator-reported trial value `3` failed two canonical-hash regressions and was reverted. Enabling
-same-route schema retry for that campaign requires a deliberate release re-pin or a separately
-reviewed non-pinned continuity path; neither exists here. First-attempt-only structured-output
-compliance remains the qualification rule.
+`V3-RUNTIMEADMIT-001` remains `COMPLETE` at its local provider-free mechanism boundary. The latest
+operator report demonstrates that the private corrected-code path admitted one now-failed launch;
+it does not create reusable admission or future-launch authority. The implementation accepts an
+explicit canonical legacy-v1.2 or current-v1.3 smoke bundle through
+`--runtime-evidence-smoke-bundle`, joins it to the exact
+current policy/routes/profiles/discovery evidence, and grants no benchmark, qualification, audit,
+selection, or release authority by itself.
 
-The same record reports no model-completion transport or campaign launch and an unchanged 29-entry /
-`0.43458261` USD ledger. No operator command or run index is current or inferred. Runtime,
-qualification, campaign, audit, AUTHSEAL, production-selection, and release authority all remain
-false.
+The failed historical campaign did not retry schema-invalid structured output on the same route.
+`max_model_retries = 1` remains limited to transient network/status retry; after the separately
+bounded schema quota is exhausted, `SCHEMA_VALIDATION_FAILED` still uses an explicit fallback or
+terminates. Provider-free `V3-RETRY-001` implemented the default-off mechanism, and
+`V3-RETRYCONT-001` now exposes it only through the explicit paired selection
+`--config config/openrouter-qualification.toml --retry-continuity-config
+config/openrouter-authenticated-runner-retry-continuity.toml`. That pair is raw-byte and
+semantic-hash pinned, enables exactly three schema retries and one transient retry (five maximum
+attempts per logical request), and leaves the frozen qualification profile at
+`max_schema_validation_retries = 0`. First-attempt-only structured-output compliance remains the
+qualification rule. Current durable AUTHRUNNER v1.2 evidence binds the full effective config hash,
+the execution-subtree hash, and the attempt capacity; historical v1.0/v1.1 bundles remain
+parseable but cannot substitute during explicit offline verification.
+
+Ordinary paid audits use a separate explicit boundary. `mmaudit run` and `mmaudit quote create`
+accept `--schema-validation-retries N` only for `1 <= N <= 31`; omitting the option keeps same-route
+schema retry off. A nonzero value already present in configuration is rejected unless the same
+value is selected explicitly, and a conflicting selection is rejected before paid controls or
+quote inputs are opened. The quote, accepted quote, request budget, per-attempt usage, and current
+manifest v1.3 bind the exact split policy hash, so an equal-total transient/schema quota swap cannot
+substitute. Historical manifest and noncrediting-smoke v1.2 bytes remain explicit retry-off legacy
+replay only; newly published smoke evidence is v1.3 and carries complete split-retry custody.
+
+No operator command or run index is current or inferred. The failed launch, spend, and ledger state
+are operator-reported historical effects, not Codex actions or authority. Runtime, qualification,
+future campaign, audit, AUTHSEAL, production-selection, and release authority all remain false.
 
 Root's earlier focused matrix passed `348` tests; an independent focused matrix passed `223`; the
 reasoning slice passed `69` focused tests; and the expanded selection, discovery, benchmark,
@@ -917,13 +958,18 @@ route capability—not repair—is the correction.
 
 ### Full 24-case REAL command — withheld
 
-The full 24-case REAL command is deliberately withheld. The latest provider-free preflight cannot
-satisfy the two campaign-only runtime predicates because no promotion source path exists;
-`V3-RUNTIMEADMIT-001` is queued but not selected or started. Even after that provider-free mechanism
-exists, every remaining prerequisite and a separate explicit operator request would be required for
-a launch; historical smoke success is diagnostic evidence only and grants no authority. No command
-or run index is current. AUTHSEAL publication, qualification, calibration, benchmark, audit, the
-full run, and release remain blocked.
+The full 24-case REAL command is deliberately withheld. Operator evidence reports that
+`V3-RUNTIMEADMIT-001` admitted one campaign, which failed closed on the candidate and grants no
+reusable admission. The current provider-free blocker is earlier: the correct DeepSeek/Parasail
+tombstone is evaluated against every route in pinned plan
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, so MiniMax/Coreweave,
+Gemma/DeepInfra, and Tencent/Novita alternative discovery are all refused while the revoked incumbent
+is correctly rejected at assignment. No repository path emits a successor plan.
+`V3-REVOKERECON-001` must make an unrevoked alternative discoverable without resurrecting the
+revoked route. Every later prerequisite and a separate explicit operator request would still be
+required for a launch; historical smoke success and the local mechanism grant no authority. No
+command or run index is current. AUTHSEAL publication, qualification, calibration, benchmark, audit,
+the full run, and release remain blocked.
 
 ## Queue-derived model-work status
 
@@ -936,7 +982,7 @@ a model or authorize production use.
 | Evidence-derived calibration | `V3-CALIBRATE-001` | `BLOCKED_TECHNICAL` | Provider-free empirical derivation and the two-campaign authority bridge are implemented; no statistically supported real calibrated policy is frozen. |
 | Catalogue refresh and drift detection | `V3-MODELREFRESH-001` | `PARTIAL` | Provider-free durable history, runtime veto, and refreshed-pricing custody are validated. Fresh all-role r22 discovery is operator-reported, private, nonauthorizing, and not independently authenticated; no stock live authority quartet exists. |
 | Root-lineage review | `V3-LINEAGE-001` | `BLOCKED_TECHNICAL` | A signed calibration-only handoff is implemented. Fresh r22 metadata does not supply a complete current signed exact-set decision or runtime approval. |
-| Real staged qualification | `V3-QUALIFY-001` | `QUEUED` | No exact production model is currently qualified; `V3-RUNTIMEADMIT-001` is the immediate queued, not-started campaign-admission dependency. |
+| Real staged qualification | `V3-QUALIFY-001` | `QUEUED` | No exact production model is currently qualified. The provider-free `V3-RUNTIMEADMIT-001` mechanism is complete, but current private runtime evidence, separate authorization, and later qualification work remain absent. |
 | Commercial policy eligibility | `V3-POLICYELIG-001` | `COMPLETE` | Provider-free typed authority, drift, selection, and runtime custody are implemented; no current provider, model, endpoint, entity, jurisdiction, or client determination is independently approved. |
 
 ## Evidence states

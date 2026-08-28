@@ -185,6 +185,7 @@ allow_downgrade = false
 minimum_model_families = 5
 minimum_specialist_agents = 8
 require_reproduction_for_critical = true
+# Legacy field name: unbound formal observations do not satisfy this confirmation gate.
 require_formal_or_reproduction_for_confirmed_critical = true
 # Fails closed unless an orchestrated CI flow supplies a passed benchmark result.
 # Use `mmaudit benchmark` to score generated reports against the local corpus.

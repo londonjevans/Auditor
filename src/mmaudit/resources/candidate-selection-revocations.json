@@ -1,0 +1,34 @@
+{
+  "artifact_kind": "CANDIDATE_SELECTION_REVOCATION_REGISTRY",
+  "benchmark_authorized": false,
+  "entries": [
+    {
+      "canonical_model_slug": "deepseek/deepseek-v4-pro-20260813",
+      "disposition": "REVOKED",
+      "effective_at": "2026-08-27T17:22:00Z",
+      "entry_authority": false,
+      "entry_sha256": "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4",
+      "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+      "exact_route_constraint_sha256": "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
+      "provider_endpoint": "parasail/fp8",
+      "reason": "EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE",
+      "role": "candidate",
+      "schema_version": "1.0",
+      "selection_plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
+    }
+  ],
+  "operator_evidence_authenticity": "OPERATOR_SUPPLIED_UNVERIFIED",
+  "operator_evidence_authority": false,
+  "operator_evidence_sha256": "f3569e3eac39391a9b09566ccc5a2b83a5eed6e963fb8ce417c03c850166e617",
+  "production_selection_authorized": false,
+  "provider_call_authorized": false,
+  "qualification_authorized": false,
+  "registry_sha256": "fa03f1c61ebcbd9d53695b53430cbabd229f38a1d77f07ffb7cf9727e008558b",
+  "release_authorized": false,
+  "runner_authority_authorized": false,
+  "schema_version": "1.0",
+  "seal_publication_authorized": false,
+  "serialized_authority": false,
+  "source_egress_authorized": false,
+  "status": "NONAUTHORIZING_NEGATIVE_ONLY"
+}

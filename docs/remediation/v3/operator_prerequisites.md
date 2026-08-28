@@ -22,6 +22,11 @@ Real provider tests require all of the following:
   campaigns;
 - fallback routing disabled for certification.
 
+Private production audits additionally require a pre-execution
+`--learning-tenant-scope-id tenant-scope-<64-lowercase-hex>`. The operator provisions one opaque
+value per tenant boundary; repository/output paths, run IDs, and source hashes are not tenant
+identities. Terminal learning stays private, manifest-bound, and explicitly nonauthorizing.
+
 The secret file is never target input and its contents must not be displayed,
 logged, hashed, copied, or persisted.
 
@@ -30,16 +35,67 @@ The dedicated `models authenticated-runner` command does not use the test-harnes
 `SYNTHETIC_BENCHMARK`/ZDR/no-fallback policy, the explicit `--allow-code-egress` CLI opt-in,
 three fresh singleton discovery registries, the exact frozen `--qualification-policy PATH`, and
 same-process runner custody. Its `--preflight-only` mode deliberately stops before secret selection
-or provider access.
+or provider access. The completed provider-free runtime-admission mechanism additionally accepts an
+explicit absolute private canonical legacy-v1.2 or current-v1.3 smoke bundle through
+`--runtime-evidence-smoke-bundle PATH`; that input can affect only the exact three
+route/profile/discovery bindings it proves and cannot grant qualification, campaign, runtime,
+audit, selection, or release authority. Token evidence and usage routing must join the full
+request-token-plan hash, while the preview must separately join the recomputed stable projection
+hash.
+
+Schema retry continuity is provider-free and explicit. The frozen retry-off base remains
+`config/openrouter-qualification.toml`; a future authenticated-runner launch selects exactly three
+same-route schema retries only by also passing
+`--retry-continuity-config config/openrouter-authenticated-runner-retry-continuity.toml`.
+`max_model_retries = 1` remains transient-only, the combined maximum is five attempts per logical
+request, and first-attempt-only qualification scoring is unchanged. Current durable v1.2 evidence
+and offline verification bind the full effective configuration, execution subtree, and attempt
+capacity. These local controls grant no candidate, provider, campaign, qualification, audit, or
+release authority.
+
+Ordinary paid audits and their provider-free quotes use the separate
+`--schema-validation-retries N` selection on `mmaudit run` and `mmaudit quote create`, with `N`
+bounded from `1` through `31`. Omission keeps same-route schema retry off. A configuration with a
+nonzero quota requires the exact same explicit CLI selection, and a conflict fails before paid
+controls or quote inputs. `max_model_retries` remains transient-only. Current quote, acceptance,
+budget, usage, and manifest-v1.3 evidence bind the exact split-policy hash; manifest/smoke v1.2 is
+legacy retry-off replay and cannot substitute for current split-retry custody.
 
 ### Current campaign-admission boundary
 
-The `2026-08-27T06:37Z` operator-supplied record reports that exact policy materialization and fresh
-r22 metadata clear the external-input stages, after which `FULL_CAMPAIGN_ADMISSION` fails closed on
-`EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`. The current source has no
-satisfying promotion path for either predicate. `V3-RUNTIMEADMIT-001` is queued but not selected or
-started, so no operator action, campaign command, run index, provider launch, qualification, or
-release authority is current.
+The `2026-08-28T07:56Z` operator-supplied record is 148,339 bytes / 2,648 lines at SHA-256
+`d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089`. It is nonauthorizing,
+uncommitted, and not independently authenticated by Codex. Its newest provider-free entry reports
+that the one correct candidate tombstone rejects the revoked DeepSeek/`parasail/fp8` assignment but
+also blocks every unrevoked alternative because plan eligibility evaluates the whole pinned route
+set. The ledger remains 57 entries / `0.68118684` USD and completed real audits remain zero.
+`V3-REVOKERECON-001` is queued and unselected.
+The tombstone reason is `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`; pinned plan
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f` still lists that route.
+MiniMax/Coreweave, Gemma/DeepInfra, and Tencent/Novita alternatives were all refused by plan-route
+eligibility, while the incumbent was correctly refused at assignment. No repository command emits
+a successor selection plan, so hand-editing the hash-pinned input is not an approved workaround.
+
+The immediately preceding entry reports fresh r23 discovery, paid smoke index 22 (`0.04395915` USD;
+bundle
+`29702a02f52626deca38ff36401eb3cb7bb4602f07677881760ad26ba40df5d4`, verified
+`VALID / NONCREDITING / NONAUTHORIZING`), and `FULL_CAMPAIGN_ADMISSION` satisfied for one launch.
+The 24-case campaign then failed closed after roughly 24 logical requests and `0.20264508` USD: nine
+schema-invalid responses became `SCHEMA_VALIDATION_FAILED`, 15 completed response identities were
+unbound, and terminal candidate provenance was rejected. The operator reports all 24 new ledger
+entries reconciled, 57 entries / `0.68118684` USD total, and zero completed real audits.
+
+The corrected provider-free mechanism remains `COMPLETE` under `V3-RUNTIMEADMIT-001`, but that one
+failed launch creates no reusable admission or future authority. Codex did not read the private
+registries, bundle, campaign, or ledger. The frozen DeepSeek/`parasail/fp8` candidate is non-runnable
+pending revocation/plan reconciliation, separate reselection, and empirical structured-output
+validation; no replacement is selected.
+The historical launch did not retry schema-invalid output on the same route;
+`max_model_retries = 1` was and remains limited to transient network/status retry. The
+operator-selected schema retry is now implemented and explicitly selectable provider-free as
+described above, but it was not engaged in that launch and does not rehabilitate its rejected
+candidate or evidence. There is no current operator command, run index, future FULL admission,
+provider launch, qualification, or release authority.
 
 ## Endpoint-aware token planning
 

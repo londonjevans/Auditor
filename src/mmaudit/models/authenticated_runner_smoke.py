@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation, localcontext
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -21,6 +22,7 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationRunKind,
 )
 from mmaudit.benchmark.models import NoncreditingModelBenchmarkSmokeReport
+from mmaudit.config import ModelRetryPolicy
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageLedgerIntervalEvidence
 from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
@@ -29,8 +31,11 @@ from mmaudit.models.generation_evidence import (
 )
 from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.qualification import CandidateModel, LineageReviewStatus
-from mmaudit.models.schemas import UsageRecord
-from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.models.schemas import UsageRecord, _validate_model_retry_routing_evidence
+from mmaudit.models.token_planning import (
+    RequestTokenPlan,
+    request_token_plan_projection_sha256,
+)
 from mmaudit.models.usage import (
     MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
     require_authenticated_runner_smoke_run_index,
@@ -52,6 +57,17 @@ _PARENT_CORPUS_SHA256 = "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec6
 _PARENT_GROUND_TRUTH_SHA256 = "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c"
 _SMOKE_CORPUS_CASE_SHA256 = "b1ee77e30e881ee328d6563e78755b5442c19f3a134e17d73385afbffe02114d"
 _SMOKE_GROUND_TRUTH_CASE_SHA256 = "94b73e47bfe8cbc8f0974c8041b7654e7c3a251fd23d02318c16a15de019fbbc"
+_MODEL_RETRY_ROUTING_KEYS = frozenset(
+    {
+        "model_retry_policy",
+        "model_retry_policy_sha256",
+        "maximum_attempts_for_request",
+        "transient_retries_used",
+        "schema_validation_retries_used",
+        "model_retry_attempts",
+        "model_retry_evidence_sha256",
+    }
+)
 
 
 class AuthenticatedRunnerSmokeError(ValueError):
@@ -382,7 +398,7 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_noncrediting_smoke_evidence"] = (
         "authenticated_runner_noncrediting_smoke_evidence"
     )
-    schema_version: Literal["1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.1", "1.2", "1.3"] = "1.3"
     purpose: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     disposition: Literal["TRANSPORT_SCHEMA_IDENTITY_COST_VALID"] = (
         "TRANSPORT_SCHEMA_IDENTITY_COST_VALID"
@@ -544,7 +560,7 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
                 or any(usage.token_detail_accounting_evidence is not None for usage in usages)
             )
         ) or (
-            self.schema_version == "1.2"
+            self.schema_version in {"1.2", "1.3"}
             and (
                 any(run.schema_version != "1.2" for run in self.runs)
                 or any(usage.token_detail_accounting_evidence is None for usage in usages)
@@ -553,6 +569,23 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
             raise ValueError(
                 "authenticated runner smoke bundle schema differs from its token accounting"
             )
+        if self.schema_version == "1.3":
+            retry_policy_hashes: set[str] = set()
+            for usage in usages:
+                if not _MODEL_RETRY_ROUTING_KEYS.issubset(usage.routing):
+                    raise ValueError("authenticated runner smoke 1.3 lacks split retry evidence")
+                try:
+                    _validate_model_retry_routing_evidence(
+                        usage.routing,
+                        attempts=usage.attempts,
+                    )
+                except ValueError:
+                    raise ValueError(
+                        "authenticated runner smoke 1.3 retry evidence is inconsistent"
+                    ) from None
+                retry_policy_hashes.add(usage.routing["model_retry_policy_sha256"])
+            if len(retry_policy_hashes) != 1:
+                raise ValueError("authenticated runner smoke 1.3 has multiple split retry policies")
         expected_sequence = (
             usages[0].request_id,
             usages[2].request_id,
@@ -703,22 +736,55 @@ def seal_authenticated_runner_smoke_run_evidence(
         raise AuthenticatedRunnerSmokeError("authenticated runner smoke run is invalid") from None
 
 
+def _validated_model_retry_routing_evidence(usage: UsageRecord) -> bool:
+    if not _MODEL_RETRY_ROUTING_KEYS.issubset(usage.routing):
+        return False
+    try:
+        _validate_model_retry_routing_evidence(usage.routing, attempts=usage.attempts)
+    except ValueError:
+        return False
+    return True
+
+
 def seal_authenticated_runner_smoke_evidence_bundle(
     **values: object,
 ) -> AuthenticatedRunnerSmokeEvidenceBundle:
     """Seal the final four-request result while keeping every authority flag false."""
 
     runs = values.get("runs")
-    schema_version = (
-        "1.2"
+    typed_runs = (
+        cast(tuple[AuthenticatedRunnerSmokeRunEvidence, ...], runs)
         if isinstance(runs, tuple)
-        and bool(runs)
         and all(
             isinstance(run, AuthenticatedRunnerSmokeRunEvidence) and run.schema_version == "1.2"
             for run in runs
         )
-        else "1.1"
+        else ()
     )
+    usages = (
+        tuple(
+            usage
+            for run in typed_runs
+            for usage in (
+                run.candidate_report.result.usage_record,
+                run.adjudication_report.cases[0].usage_record,
+            )
+            if usage is not None
+        )
+        if typed_runs
+        else ()
+    )
+    retry_policies = {
+        usage.routing.get("model_retry_policy_sha256")
+        for usage in usages
+        if _MODEL_RETRY_ROUTING_KEYS.issubset(usage.routing)
+    }
+    retry_evidence_is_complete = (
+        len(usages) == AUTHENTICATED_RUNNER_SMOKE_LOGICAL_REQUEST_COUNT
+        and len(retry_policies) == 1
+        and all(_validated_model_retry_routing_evidence(usage) for usage in usages)
+    )
+    schema_version = "1.3" if retry_evidence_is_complete else "1.2" if typed_runs else "1.1"
     payload = {
         **values,
         "artifact_kind": "authenticated_runner_noncrediting_smoke_evidence",
@@ -777,6 +843,88 @@ def revalidate_authenticated_runner_smoke_evidence_bytes(
     return bundle
 
 
+def require_authenticated_runner_smoke_config_binding(
+    bundle: AuthenticatedRunnerSmokeEvidenceBundle,
+    *,
+    effective_config_sha256: str,
+    maximum_attempts_per_logical_request: int,
+    model_retry_policy_sha256: str,
+    allow_legacy_default_retry_evidence_omission: bool = False,
+) -> AuthenticatedRunnerSmokeEvidenceBundle:
+    """Require current split-retry custody or an explicit schema-off legacy replay."""
+
+    if (
+        not isinstance(effective_config_sha256, str)
+        or re.fullmatch(_SHA256_PATTERN, effective_config_sha256) is None
+        or not isinstance(model_retry_policy_sha256, str)
+        or re.fullmatch(_SHA256_PATTERN, model_retry_policy_sha256) is None
+        or type(maximum_attempts_per_logical_request) is not int
+        or not 1 <= maximum_attempts_per_logical_request <= 32
+        or type(allow_legacy_default_retry_evidence_omission) is not bool
+    ):
+        raise AuthenticatedRunnerSmokeError(
+            "authenticated runner smoke expected retry config is invalid"
+        )
+    validated = revalidate_authenticated_runner_smoke_evidence_bytes(
+        authenticated_runner_smoke_evidence_bytes(bundle)
+    )
+    usages = tuple(
+        usage
+        for run in validated.runs
+        for usage in (
+            run.candidate_report.result.usage_record,
+            run.adjudication_report.cases[0].usage_record,
+        )
+        if usage is not None
+    )
+    legacy_retry_evidence_omission = (
+        allow_legacy_default_retry_evidence_omission
+        and validated.schema_version == "1.2"
+        and model_retry_policy_sha256
+        == ModelRetryPolicy.build(
+            transient_retry_limit=maximum_attempts_per_logical_request - 1,
+            schema_validation_retry_limit=0,
+        ).policy_sha256
+        and all(not (_MODEL_RETRY_ROUTING_KEYS & usage.routing.keys()) for usage in usages)
+    )
+    if (
+        validated.schema_version not in {"1.2", "1.3"}
+        or validated.effective_config_sha256 != effective_config_sha256
+        or any(
+            plan.maximum_attempts != maximum_attempts_per_logical_request
+            for run in validated.runs
+            for plan in (run.candidate_cost_plan, run.judge_cost_plan)
+        )
+        or len(usages) != AUTHENTICATED_RUNNER_SMOKE_LOGICAL_REQUEST_COUNT
+    ):
+        raise AuthenticatedRunnerSmokeError(
+            "authenticated runner smoke differs from the selected effective configuration"
+        )
+    if validated.schema_version != "1.3" and not legacy_retry_evidence_omission:
+        raise AuthenticatedRunnerSmokeError(
+            "authenticated runner smoke differs from the selected retry policy or lacks "
+            "current split retry custody"
+        )
+    for usage in usages:
+        routing = usage.routing
+        if legacy_retry_evidence_omission:
+            continue
+        if (
+            not _MODEL_RETRY_ROUTING_KEYS.issubset(routing)
+            or routing.get("model_retry_policy_sha256") != model_retry_policy_sha256
+        ):
+            raise AuthenticatedRunnerSmokeError(
+                "authenticated runner smoke differs from the selected retry policy"
+            )
+        try:
+            _validate_model_retry_routing_evidence(routing, attempts=usage.attempts)
+        except ValueError:
+            raise AuthenticatedRunnerSmokeError(
+                "authenticated runner smoke retry evidence is inconsistent"
+            ) from None
+    return validated
+
+
 def _require_generation_refetch(
     evidence: OpenRouterGenerationEvidence,
     *,
@@ -811,6 +959,10 @@ def _require_generation_refetch(
 def _require_usage_preview_join(
     usage: UsageRecord,
     preview: OpenRouterStructuredRequestCostPreview,
+    *,
+    _token_plan_projection: Callable[
+        [RequestTokenPlan], str
+    ] = request_token_plan_projection_sha256,
 ) -> None:
     accounted = usage.accounted_cost_usd_exact
     raw_token_plan = usage.routing.get("request_token_plan")
@@ -899,6 +1051,7 @@ def _require_usage_preview_join(
         or usage.routing.get("structured_output_reasoning_request_sha256")
         != preview.reasoning_request_sha256
         or usage.routing.get("request_token_plan_sha256") != token_plan.plan_sha256
+        or preview.request_token_plan_projection_sha256 != _token_plan_projection(token_plan)
         or token_plan.request_id != preview.logical_request_id
         or token_plan.role != preview.role
         or token_plan.prompt_byte_upper_bound_tokens != preview.prompt_byte_upper_bound_tokens
@@ -1013,6 +1166,7 @@ __all__ = [
     "AuthenticatedRunnerSmokeRunEvidence",
     "authenticated_runner_smoke_evidence_bytes",
     "build_authenticated_runner_smoke_cost_plan",
+    "require_authenticated_runner_smoke_config_binding",
     "revalidate_authenticated_runner_smoke_evidence_bytes",
     "seal_authenticated_runner_smoke_evidence_bundle",
     "seal_authenticated_runner_smoke_run_evidence",

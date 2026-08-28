@@ -28,6 +28,7 @@ from mmaudit.models.qualification import (
     LineageReviewStatus,
     QualificationDimensionThreshold,
     load_qualification_policy,
+    seal_candidate_registry,
     seal_qualification_policy,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
@@ -326,6 +327,69 @@ def test_candidate_mode_rejects_underfilled_policy_before_secret_access(
     assert "underfills" in " ".join(result.output.split())
     assert not secret_accessed
     assert not (tmp_path / "campaign-journal").exists()
+
+
+def test_candidate_mode_rejects_revoked_registry_before_ledger_journal_or_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    tmp_path.chmod(0o700)
+    config = _pending_config(config_factory)
+    manifest, evidence, base_registry, suite = _inputs(
+        tmp_path=tmp_path / "inputs",
+        config=config,
+    )
+    model = base_registry.candidates[0].model_copy(
+        update={
+            "canonical_model_slug": "deepseek/deepseek-v4-pro-20260813",
+            "approved_provider_endpoint": "parasail/fp8",
+        }
+    )
+    registry = seal_candidate_registry(
+        created_at=base_registry.created_at,
+        discovery_run_sha256=base_registry.discovery_run_sha256,
+        candidates=(model,),
+    )
+    _patch_inputs(
+        monkeypatch,
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        registry=registry,
+        suite=suite,
+    )
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    ledger = _ledger(tmp_path, config)
+    ledger_before = ledger.read_bytes()
+    result = runner.invoke(
+        cli_module.app,
+        _candidate_args(
+            tmp_path=tmp_path,
+            output=tmp_path / "portfolio",
+            ledger=ledger,
+            secret_file=None,
+            allow_egress=True,
+        ),
+        env={
+            "MMAUDIT_COST_LEDGER_PATH": "",
+            "MMAUDIT_SECRETS_ENV_FILE": "",
+        },
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate assignment is ineligible" in " ".join(result.output.split())
+    assert not secret_accessed
+    assert ledger.read_bytes() == ledger_before
+    assert not (tmp_path / "campaign-journal").exists()
+    assert not (tmp_path / "portfolio").exists()
 
 
 @pytest.mark.parametrize(

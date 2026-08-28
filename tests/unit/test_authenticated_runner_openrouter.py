@@ -262,7 +262,7 @@ def test_detached_run_snapshot_copies_only_durable_report_models() -> None:
 
 
 def test_launch_contract_is_versioned_ordered_and_nonserializable() -> None:
-    assert AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_CONTRACT_VERSION == "2.0"
+    assert AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_CONTRACT_VERSION == "2.1"
     assert tuple(item.name for item in fields(AuthenticatedRunnerOpenRouterLaunch)) == (
         AUTHENTICATED_RUNNER_OPENROUTER_LAUNCH_FIELDS
     )

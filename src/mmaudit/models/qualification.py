@@ -23,6 +23,7 @@ from typing import Any, Literal, Never, Self, SupportsIndex
 
 from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+import mmaudit.models.candidate_revocation as candidate_revocation_module
 import mmaudit.models.route_admission as _route_admission_module
 from mmaudit.benchmark.models import (
     DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS,
@@ -40,6 +41,11 @@ from mmaudit.config import (
     MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
 )
 from mmaudit.constants import ALL_SPECIALIST_ROLES, CANDIDATE_INDEPENDENT_SPECIALIST_ROLES
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationError,
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.discovery import (
     DataCollectionDenyEvidenceSource,
     OpenRouterModelDiscoveryEvidence,
@@ -80,6 +86,12 @@ from mmaudit.models.usage import (
     source_backed_whole_protocol_context,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+
+type _CandidateRevocationCallRoots = tuple[Callable[[], bool], Callable[..., None]]
+_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _LINEAGE_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -2896,9 +2908,38 @@ class VerifiedProductionQualification:
             raise ValueError(f"exact model lacks verified Tier A qualification: {exact_model_id}")
         return matches[0]
 
-    def require_current(self, *, now: datetime) -> Self:
+    def require_current(
+        self,
+        *,
+        now: datetime,
+        _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+            _CANDIDATE_REVOCATION_CALL_ROOTS
+        ),
+    ) -> Self:
         """Revalidate capability integrity and freshness before authority is consumed."""
 
+        method_defaults = VerifiedProductionQualification.require_current.__kwdefaults__
+        if type(_candidate_revocation_call_roots) is not tuple or len(
+            _candidate_revocation_call_roots
+        ) != 2:
+            raise ValueError("verified production candidate revocation boundary changed")
+        trusted_revocation_pristine, trusted_assignment_gate = (
+            _candidate_revocation_call_roots
+        )
+        if (
+            type(method_defaults) is not dict
+            or method_defaults.get("_candidate_revocation_call_roots")
+            is not _candidate_revocation_call_roots
+            or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+            or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+            or require_candidate_assignment_eligible is not trusted_assignment_gate
+            or candidate_revocation_module.candidate_revocation_callables_are_pristine
+            is not trusted_revocation_pristine
+            or candidate_revocation_module.require_candidate_assignment_eligible
+            is not trusted_assignment_gate
+            or not trusted_revocation_pristine()
+        ):
+            raise ValueError("verified production candidate revocation boundary changed")
         now = _validate_utc_second(now, label="verified qualification use time")
         issued_state = _issued_verified_production_capability_state(self)
         if type(self) is not VerifiedProductionQualification or issued_state is None:
@@ -2948,6 +2989,18 @@ class VerifiedProductionQualification:
         for model in self.models:
             _validate_exact_model_id(model.exact_model_id)
             _validate_exact_model_id(model.canonical_model_slug)
+            try:
+                for model_id in (model.exact_model_id, model.canonical_model_slug):
+                    trusted_assignment_gate(
+                        exact_model_id=model_id,
+                        provider_endpoint=model.approved_provider_endpoint,
+                    )
+            except CandidateSelectionRevocationError as exc:
+                raise ValueError(
+                    "verified production model failed current candidate revocation "
+                    f"eligibility: {model.exact_model_id} @ "
+                    f"{model.approved_provider_endpoint}"
+                ) from exc
             try:
                 expected_reasoning_routes = tuple(
                     sorted(

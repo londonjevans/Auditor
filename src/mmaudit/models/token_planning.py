@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import ROUND_FLOOR, Decimal
 from enum import StrEnum
@@ -1250,6 +1250,54 @@ class RequestTokenPlan(FrozenTokenEvidence):
         return self
 
 
+def _build_request_token_plan_projection_sha256() -> Callable[[RequestTokenPlan], str]:
+    """Capture the canonical encoder and digest primitive in an immutable closure."""
+
+    trusted_json_dumps = json.dumps
+    trusted_sha256 = hashlib.sha256
+    plan_type = RequestTokenPlan
+    error_type = TokenPlanningError
+
+    def request_token_plan_projection_sha256(plan: RequestTokenPlan) -> str:
+        """Hash request-local plan semantics without live global-budget positions.
+
+        The complete ``plan_sha256`` remains distinct because it also commits the
+        reservation positions before and after this request.
+        """
+
+        if type(plan) is not plan_type:
+            raise error_type("request token plan projection requires exact typed evidence")
+        plan_payload = plan.model_dump(
+            mode="json",
+            exclude={"global_budget", "plan_sha256"},
+        )
+        global_budget = plan.global_budget
+        plan_payload["global_budget"] = {
+            "schema_version": global_budget.schema_version,
+            "global_input_token_budget": global_budget.global_input_token_budget,
+            "global_output_token_budget": global_budget.global_output_token_budget,
+            "request_input_tokens": global_budget.request_input_tokens,
+            "request_output_tokens": global_budget.request_output_tokens,
+        }
+        material = trusted_json_dumps(
+            {
+                "domain": "mmaudit.openrouter.candidate-review-token-plan-projection.v1",
+                "request_token_plan": plan_payload,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        return trusted_sha256(material.encode("utf-8")).hexdigest()
+
+    return request_token_plan_projection_sha256
+
+
+request_token_plan_projection_sha256 = _build_request_token_plan_projection_sha256()
+del _build_request_token_plan_projection_sha256
+
+
 def build_request_token_plan(
     *,
     request_id: str,
@@ -1684,4 +1732,5 @@ __all__ = [
     "TokenPlanningError",
     "Utf8TokenEstimate",
     "build_request_token_plan",
+    "request_token_plan_projection_sha256",
 ]

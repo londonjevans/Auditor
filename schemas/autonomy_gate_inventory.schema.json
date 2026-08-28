@@ -184,12 +184,12 @@
       "type": "string"
     },
     "audit_config_leaf_locator_count": {
-      "const": 506,
+      "const": 507,
       "title": "Audit Config Leaf Locator Count",
       "type": "integer"
     },
     "audit_config_leaf_occurrence_count": {
-      "const": 509,
+      "const": 510,
       "title": "Audit Config Leaf Occurrence Count",
       "type": "integer"
     },
@@ -199,22 +199,22 @@
       "type": "integer"
     },
     "audit_override_path_count": {
-      "const": 45,
+      "const": 46,
       "title": "Audit Override Path Count",
       "type": "integer"
     },
     "audit_run_option_leaf_count": {
-      "const": 13,
+      "const": 16,
       "title": "Audit Run Option Leaf Count",
       "type": "integer"
     },
     "cli_run_parameter_count": {
-      "const": 50,
+      "const": 53,
       "title": "Cli Run Parameter Count",
       "type": "integer"
     },
     "completion_entrypoint_parameter_count": {
-      "const": 300,
+      "const": 323,
       "title": "Completion Entrypoint Parameter Count",
       "type": "integer"
     },
@@ -286,12 +286,12 @@
       "type": "string"
     },
     "pipeline_init_parameter_count": {
-      "const": 25,
+      "const": 26,
       "title": "Pipeline Init Parameter Count",
       "type": "integer"
     },
     "pipeline_run_parameter_count": {
-      "const": 15,
+      "const": 16,
       "title": "Pipeline Run Parameter Count",
       "type": "integer"
     },

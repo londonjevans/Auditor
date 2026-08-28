@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import math
 from decimal import Decimal
 from typing import Any
@@ -266,6 +267,47 @@ def test_route_constraint_guard_alias_replacement_revokes_captured_guard(
     assert route_constraint_callables_are_pristine() is True
 
 
+def test_runtime_transition_rejects_retargeted_registered_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mmaudit.models.route_runtime_evidence as runtime_evidence_module
+
+    called = False
+
+    def retargeted_consumer(*_args: object, **_kwargs: object) -> tuple[None, None]:
+        nonlocal called
+        called = True
+        return None, None
+
+    profile = _profile()
+    constraint = _constraint(profile)
+    facts = _facts(profile=profile, constraint=constraint)
+    report = evaluate_route_predicates(profile=profile, constraint=constraint, facts=facts)
+    assert route_constraint_callables_are_pristine() is True
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            runtime_evidence_module,
+            "runtime_predicate_transition_reasons",
+            retargeted_consumer,
+        )
+        assert route_constraint_callables_are_pristine() is False
+        with pytest.raises(RouteConstraintError, match="callable boundary changed"):
+            route_constraints_module.transition_full_campaign_runtime_predicates(
+                report,
+                runtime_evidence=object(),
+                qualification_policy=object(),
+                role=ExactRouteRole.CANDIDATE,
+                model=object(),
+                discovery_manifest=object(),
+                discovery_evidence=object(),
+                facts=facts,
+            )
+
+    assert called is False
+    assert route_constraint_callables_are_pristine() is True
+
+
 def test_route_purpose_enum_decode_table_mutation_fails_closed() -> None:
     purpose = RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
     value_map = RouteConstraintPurpose._value2member_map_
@@ -440,6 +482,40 @@ def test_profile_constraint_facts_and_report_are_deterministic_and_self_hashed()
         RoutePredicateDisposition.UNAVAILABLE,
         RoutePredicateDisposition.UNAVAILABLE,
     )
+
+
+def test_default_route_artifact_bytes_remain_pinned_without_runtime_evidence() -> None:
+    profile = _profile()
+    constraint = _constraint(profile)
+    facts = _facts(profile=profile, constraint=constraint)
+    report = evaluate_route_predicates(profile=profile, constraint=constraint, facts=facts)
+
+    expected = (
+        (
+            profile,
+            2_092,
+            "3a10acd74a520acaeb034e76219cced83ed67414b3f2aa03570ec7deeb469b13",
+        ),
+        (
+            constraint,
+            282,
+            "778e27473f955952c763f757d0450daaf52f7053303d4169f3b9242e5e6f5bf2",
+        ),
+        (
+            facts,
+            2_483,
+            "98ee35edeb8d2df320ba8518d18e8d39f257ae387c7e3815d510156f0eeac04c",
+        ),
+        (
+            report,
+            3_079,
+            "5b8a7bbcd24c8ce0e23f698c8e6c2428b8df6e85c88b11f2b8caf52b9e92a5c0",
+        ),
+    )
+    for artifact, expected_bytes, expected_sha256 in expected:
+        raw = artifact.model_dump_json().encode("utf-8")
+        assert len(raw) == expected_bytes
+        assert hashlib.sha256(raw).hexdigest() == expected_sha256
 
 
 @pytest.mark.parametrize(
@@ -1281,6 +1357,12 @@ def test_purpose_rules_stage_unavailable_facts_without_weakening() -> None:
     assert tuple(item.reason for item in campaign_error.value.failures) == (
         RoutePredicateReason.EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,
         RoutePredicateReason.TOKEN_DETAIL_CONVENTION_UNAVAILABLE,
+    )
+    assert str(campaign_error.value) == (
+        "route predicate report does not satisfy its closed purpose: "
+        "purpose=FULL_CAMPAIGN_ADMISSION; "
+        "failures=EMPIRICAL_SCHEMA_CONFORMANCE=EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,"
+        "TOKEN_DETAIL_REPORTING_CONVENTION=TOKEN_DETAIL_CONVENTION_UNAVAILABLE"
     )
 
     static_full_facts = _facts(

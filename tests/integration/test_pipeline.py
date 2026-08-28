@@ -28,6 +28,7 @@ from mmaudit.benchmark.certificate import (
 from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
+    LearningCaptureScope,
     canonical_audit_config_json,
     configured_model_ids,
 )
@@ -41,6 +42,8 @@ from mmaudit.models.openrouter import (
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.scheduler import (
     SchedulerArtifact,
+    SchedulerEvidenceCapJudgmentOutput,
+    SchedulerEvidencePayloadBinding,
     SchedulerReproductionHostOutput,
     SchedulerTaskOutput,
     SchedulerTerminalReportAuthority,
@@ -57,6 +60,8 @@ from mmaudit.models.schemas import (
     CandidateFindingArtifact,
     CandidateOriginKind,
     CompilationStatus,
+    ConsensusQuorumOutcome,
+    ConsensusReviewerSlot,
     ContextPackage,
     DependencyPreparationResult,
     DependencyPreparationStatus,
@@ -98,6 +103,7 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     TransactionOrderingCapability,
     UsageRecord,
+    VerificationVerdict,
 )
 from mmaudit.models.sharding import (
     SolidityCoverageArtifact,
@@ -122,6 +128,7 @@ from mmaudit.orchestration.context_manifest import (
     validate_context_manifest_against_usage,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.learning import TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     _ManifestReproductionArtifact,
@@ -189,7 +196,7 @@ from mmaudit.traceability import (
     MaximumAssuranceTraceability,
     validate_traceability_evidence,
 )
-from tests.conftest import FIXTURES, model_registry_entry
+from tests.conftest import FIXTURES, MODEL_IDS, model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter, _extract_json, _request_schema_name
 from tests.qualification_support import synthetic_production_qualification
 from tests.refresh_runtime_support import synthetic_refresh_runtime
@@ -1433,6 +1440,9 @@ async def _run(
             allow_code_egress=True,
             allow_fork_probing=allow_fork_probing,
             severity_threshold=severity_threshold,
+            learning_capture_scope=LearningCaptureScope(
+                tenant_scope_id=f"tenant-scope-{'a' * 64}",
+            ),
         )
     finally:
         await http_client.aclose()
@@ -1807,7 +1817,12 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     assert result.exit_code is ExitCode.INCOMPLETE
     assert not result.report.completed
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
-    assert any(finding.status == "confirmed" for finding in result.report.findings)
+    assert result.report.findings
+    assert all(finding.status is not FindingStatus.CONFIRMED for finding in result.report.findings)
+    assert all(
+        finding.status is FindingStatus.HIGH_CONFIDENCE for finding in result.report.findings
+    )
+    assert not (result.run_dir / TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH).exists()
     assert before == after
     assert fake.chat_calls == len(result.report.usage) == 14
     assert {record.role for record in result.report.usage} >= {
@@ -3054,6 +3069,7 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
                     falsification_decisions=result.report.falsification_decisions,
                     reproduction_results=artifact.results,
                     reproduction_resolutions=artifact.candidate_resolutions,
+                    consensus_review=result.report.consensus_review,
                 )
 
             for coherently_resealed_artifact in (
@@ -3143,6 +3159,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
             "approved_model_lineages": [entry["root_lineage"] for entry in registry],
         },
         repository={"max_total_context_bytes": 5_000_000},
+        execution={"budget_usd": 33},
+        token_budgets={
+            "global_input_token_budget": 14_000_000,
+            "global_output_token_budget": 2_500_000,
+        },
         maximum_assurance={"allow_downgrade": True},
         models={"specialists": specialists, "registry": registry},
         smart_contracts={
@@ -5096,19 +5117,21 @@ async def test_one_model_timeout_preserves_partial_candidate_evidence_without_pr
     assert not result.report.completed
     assert any("source_audit" in reason for reason in result.report.incomplete_reasons)
     assert (result.run_dir / "final-findings.json").is_file()
-    assert not result.report.findings
-    assert result.report.rejected_findings
+    assert result.report.findings
+    assert all(finding.status is FindingStatus.NEEDS_REVIEW for finding in result.report.findings)
+    assert not result.report.rejected_findings
+    assert result.report.consensus_review is None
     candidate_artifact = CandidateFindingArtifact.model_validate_json(
         (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
     )
     candidate_ids = {candidate.candidate_id for candidate in candidate_artifact.findings}
-    rejected_candidate_ids = {
+    retained_candidate_ids = {
         candidate_id
-        for finding in result.report.rejected_findings
+        for finding in result.report.findings
         for candidate_id in finding.contributing_candidate_ids
     }
     assert candidate_ids
-    assert rejected_candidate_ids == candidate_ids
+    assert retained_candidate_ids == candidate_ids
     forensic_findings = FindingsArtifact.model_validate_json(
         (result.run_dir / "findings.json").read_text(encoding="utf-8")
     )
@@ -5268,6 +5291,180 @@ async def test_verifier_rejection_survives_for_explanation(
     assert result.report.findings == []
     assert result.report.rejected_findings
     assert all(finding.status == "rejected" for finding in result.report.rejected_findings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected_outcome", "expected_verdicts", "expect_rejected"),
+    [
+        pytest.param(
+            "verifier_rejects_falsifiers_verify",
+            ConsensusQuorumOutcome.SUPPORTED,
+            {
+                ConsensusReviewerSlot.VERIFIER: VerificationVerdict.REJECTED,
+                ConsensusReviewerSlot.FALSIFIER_1: VerificationVerdict.VERIFIED,
+                ConsensusReviewerSlot.FALSIFIER_2: VerificationVerdict.VERIFIED,
+            },
+            False,
+            id="reject-verify-verify-retained",
+        ),
+        pytest.param(
+            "verifier_verifies_falsifiers_reject",
+            ConsensusQuorumOutcome.REJECTED,
+            {
+                ConsensusReviewerSlot.VERIFIER: VerificationVerdict.VERIFIED,
+                ConsensusReviewerSlot.FALSIFIER_1: VerificationVerdict.REJECTED,
+                ConsensusReviewerSlot.FALSIFIER_2: VerificationVerdict.REJECTED,
+            },
+            True,
+            id="verify-reject-reject-rejected",
+        ),
+    ],
+)
+async def test_closed_three_review_quorum_controls_pipeline_disposition(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    mode: str,
+    expected_outcome: ConsensusQuorumOutcome,
+    expected_verdicts: dict[ConsensusReviewerSlot, VerificationVerdict],
+    expect_rejected: bool,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter(mode=mode)
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+    )
+
+    artifact = result.report.consensus_review
+    assert artifact is not None
+    assert tuple(reviewer.slot for reviewer in artifact.reviewers) == (
+        ConsensusReviewerSlot.VERIFIER,
+        ConsensusReviewerSlot.FALSIFIER_1,
+        ConsensusReviewerSlot.FALSIFIER_2,
+    )
+    assert artifact.reviewers[0].requested_model == MODEL_IDS["verifier"]
+    assert len({reviewer.root_lineage for reviewer in artifact.reviewers}) == 3
+    assert len({reviewer.scheduler_task_id for reviewer in artifact.reviewers}) == 3
+    assert len({reviewer.logical_request_id for reviewer in artifact.reviewers}) == 3
+    assert all(reviewer.candidate_ids == artifact.candidate_ids for reviewer in artifact.reviewers)
+    assert all(quorum.outcome is expected_outcome for quorum in artifact.candidate_quorums)
+    for reviewer in artifact.reviewers:
+        assert {decision.verdict for decision in reviewer.decisions} == {
+            expected_verdicts[reviewer.slot]
+        }
+
+    terminal_findings = [
+        *result.report.findings,
+        *result.report.rejected_findings,
+        *result.report.filtered_findings,
+    ]
+    assert terminal_findings
+    if expect_rejected:
+        assert not result.report.findings
+        assert result.report.rejected_findings
+        assert all(
+            finding.status is FindingStatus.REJECTED for finding in result.report.rejected_findings
+        )
+    else:
+        assert result.report.findings
+        assert not result.report.rejected_findings
+        assert all(
+            finding.status is not FindingStatus.REJECTED for finding in result.report.findings
+        )
+    assert all(finding.status is not FindingStatus.CONFIRMED for finding in terminal_findings)
+
+    for finding in terminal_findings:
+        assert finding.disagreement.count("judge:") == 1
+        for candidate_id in finding.contributing_candidate_ids:
+            assert all(
+                finding.disagreement.count(f"{slot.value}:{candidate_id}:") == 1
+                for slot in (
+                    ConsensusReviewerSlot.VERIFIER,
+                    ConsensusReviewerSlot.FALSIFIER_1,
+                    ConsensusReviewerSlot.FALSIFIER_2,
+                )
+            )
+        assert "Nearby control disproves the claim" in finding.disagreement
+        assert "The source and sink are directly reachable" in finding.disagreement
+
+    judgment_requests = [
+        request for request in fake.requests if _request_schema_name(request) == "mmaudit_judgment"
+    ]
+    assert len(judgment_requests) == 1
+    judgment_payload = _extract_json(
+        judgment_requests[0]["messages"][1]["content"],
+        "VERIFIED_GROUPS_JSON",
+    )
+    assert judgment_payload["candidate_groups"]
+    for group in judgment_payload["candidate_groups"]:
+        assert group["consensus_review_artifact_sha256"] == artifact.artifact_sha256
+        candidate_ids = {candidate["candidate_id"] for candidate in group["candidates"]}
+        assert len(group["reviewer_decisions"]) == 3 * len(candidate_ids)
+        assert {
+            (record["decision"]["candidate_id"], record["slot"])
+            for record in group["reviewer_decisions"]
+        } == {
+            (candidate_id, slot.value)
+            for candidate_id in candidate_ids
+            for slot in (
+                ConsensusReviewerSlot.VERIFIER,
+                ConsensusReviewerSlot.FALSIFIER_1,
+                ConsensusReviewerSlot.FALSIFIER_2,
+            )
+        }
+        assert {quorum["outcome"] for quorum in group["consensus_quorums"]} == {
+            expected_outcome.value
+        }
+
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    judgment_pass = scheduler_artifact.summary.pass_results[6]
+    judgment_task = next(
+        task for task in judgment_pass.plan.tasks if task.role == "host:evidence_cap_judgment"
+    )
+    retained_outputs = tuple(
+        SchedulerTaskOutput.model_validate_json(path.read_text(encoding="utf-8"))
+        for path in sorted(
+            (result.run_dir / "private" / "scheduler-journal" / "task-outputs").glob("*.json")
+        )
+    )
+    retained_judgment = next(
+        output for output in retained_outputs if output.task_id == judgment_task.task_id
+    )
+    judgment = SchedulerEvidenceCapJudgmentOutput.model_validate(retained_judgment.payload)
+    assert judgment.consensus_review == SchedulerEvidencePayloadBinding.build(
+        kind="consensus_review",
+        subject_id=artifact.campaign_id,
+        payload=artifact,
+    )
+
+
+@pytest.mark.asyncio
+async def test_judge_cannot_filter_quorum_retained_high_claim_by_lowering_severity(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        FakeOpenRouter(mode="judge_lowers_severity"),
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        severity_threshold=Severity.HIGH,
+    )
+
+    assert result.report.findings
+    assert all(
+        finding.severity in {Severity.HIGH, Severity.CRITICAL} for finding in result.report.findings
+    )
 
 
 @pytest.mark.asyncio

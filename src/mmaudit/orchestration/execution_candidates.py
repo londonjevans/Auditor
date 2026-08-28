@@ -261,17 +261,12 @@ def build_invariant_execution_candidates(
             ),
             source_locations=source_locations,
         )
-        validate_invariant_execution_candidate_provenance(
+        candidate = reconstruct_invariant_execution_candidate(
             provenance,
             invariant_suite=invariant_suite,
             harnesses=harnesses,
             property_corpus=property_corpus,
             executions=executions,
-        )
-        candidate = _candidate_from_execution(
-            invariant=invariant,
-            properties=properties,
-            provenance=provenance,
         )
         if candidate.candidate_id in seen_candidate_ids:
             reject(
@@ -409,6 +404,75 @@ def validate_invariant_execution_candidate_provenance(
     observed = {field: getattr(provenance, field) for field in expected}
     if observed != expected:
         raise ValueError("execution provenance differs from its exact serialized runtime evidence")
+
+
+def reconstruct_invariant_execution_candidate(
+    provenance: InvariantExecutionCandidateProvenance,
+    *,
+    invariant_suite: InvariantSuite | None,
+    harnesses: list[FoundryInvariantHarnessSpec],
+    property_corpus: PropertyCorpus,
+    executions: list[InvariantExecutionResult],
+) -> CandidateFinding:
+    """Rebuild the only candidate payload authorized by one execution origin."""
+
+    typed_provenance = InvariantExecutionCandidateProvenance.model_validate(
+        provenance.model_dump(mode="python")
+    )
+    validate_invariant_execution_candidate_provenance(
+        typed_provenance,
+        invariant_suite=invariant_suite,
+        harnesses=harnesses,
+        property_corpus=property_corpus,
+        executions=executions,
+    )
+    invariants = [
+        invariant
+        for invariant in _validated_invariants(invariant_suite)
+        if invariant.id == typed_provenance.invariant_id
+    ]
+    validated_corpus = _validated_property_corpus(property_corpus)
+    if len(invariants) != 1 or validated_corpus is None:
+        raise ValueError("execution candidate lacks exact canonical reconstruction inputs")
+    invariant = invariants[0]
+    properties = [
+        property_spec
+        for property_spec in validated_corpus.properties
+        if property_spec.invariant_id == invariant.id
+        and property_spec.harness_name == typed_provenance.harness_name
+    ]
+    return _candidate_from_execution(
+        invariant=invariant,
+        properties=properties,
+        provenance=typed_provenance,
+    )
+
+
+def validate_invariant_execution_candidate(
+    candidate: CandidateFinding,
+    *,
+    invariant_suite: InvariantSuite | None,
+    harnesses: list[FoundryInvariantHarnessSpec],
+    property_corpus: PropertyCorpus,
+    executions: list[InvariantExecutionResult],
+) -> None:
+    """Require exact equality with the candidate reconstructed from runtime evidence."""
+
+    typed_candidate = CandidateFinding.model_validate(candidate.model_dump(mode="python"))
+    if (
+        typed_candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+        or typed_candidate.execution_provenance is None
+    ):
+        raise ValueError("candidate does not declare deterministic execution provenance")
+    expected = reconstruct_invariant_execution_candidate(
+        typed_candidate.execution_provenance,
+        invariant_suite=invariant_suite,
+        harnesses=harnesses,
+        property_corpus=property_corpus,
+        executions=executions,
+    )
+    if typed_candidate != expected:
+        raise ValueError("execution candidate differs from its canonical runtime reconstruction")
 
 
 def _validated_invariants(suite: InvariantSuite | None) -> list[InvariantSpec]:

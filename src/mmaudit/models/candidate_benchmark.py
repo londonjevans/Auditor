@@ -7,10 +7,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import Field, field_validator, model_validator
 
+import mmaudit.models.candidate_revocation as candidate_revocation_module
 from mmaudit.benchmark.models import (
     AuthenticatedRunnerModelBenchmarkRunKind,
     ModelBenchmarkProviderResult,
@@ -23,6 +24,10 @@ from mmaudit.benchmark.models import (
     validate_authenticated_runner_model_benchmark_cost_previews,
 )
 from mmaudit.config import AuditConfig, TokenBudgetConfig
+from mmaudit.models.candidate_revocation import (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+)
 from mmaudit.models.discovery import (
     ModelDiscoveryValidationError,
     OpenRouterModelDiscoveryEvidence,
@@ -83,6 +88,15 @@ from mmaudit.privacy import (
 from mmaudit.repository.privacy_provenance import (
     PrivacySourceProvenanceObservation,
     prove_release_pinned_model_benchmark_source,
+)
+
+if TYPE_CHECKING:
+    from mmaudit.models.route_runtime_evidence import VerifiedThreeRouteRuntimeEvidence
+
+type _CandidateRevocationCallRoots = tuple[Callable[[], bool], Callable[..., None]]
+_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
 )
 
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
@@ -598,6 +612,9 @@ async def run_candidate_reasoning_profile_benchmarks(
     explicitly_allow_synthetic_egress: bool,
     evidence_sink: CandidateReasoningProfileEvidenceSink,
     client_factory: CandidateBenchmarkClientFactory | None = None,
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
 ) -> CandidateReasoningProfileBenchmarkExecutionResult:
     """Execute every planned profile route while preserving each failed denominator."""
 
@@ -612,6 +629,32 @@ async def run_candidate_reasoning_profile_benchmarks(
     registry = CandidateRegistry.model_validate_json(candidate_registry.model_dump_json())
     suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
     plan = CandidateReasoningProfileBenchmarkPlan.model_validate(plan.model_dump(mode="json"))
+    function_defaults = run_candidate_reasoning_profile_benchmarks.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 2:
+        raise ValueError("candidate benchmark revocation boundary changed")
+    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_revocation_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or not trusted_revocation_pristine()
+    ):
+        raise ValueError("candidate benchmark revocation boundary changed")
+    for candidate in registry.candidates:
+        for model_id in {candidate.exact_model_id, candidate.canonical_model_slug}:
+            trusted_assignment_gate(
+                exact_model_id=model_id,
+                provider_endpoint=candidate.approved_provider_endpoint,
+            )
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
         raise ValueError("supplemental reasoning benchmarks require a durable atomic cost ledger")
     if not budget.require_endpoint_cost_bound:
@@ -739,6 +782,10 @@ async def run_candidate_registry_benchmarks(
     expected_request_cost_previews: (
         tuple[OpenRouterStructuredRequestCostPreview, ...] | None
     ) = None,
+    runtime_route_evidence: VerifiedThreeRouteRuntimeEvidence | None = None,
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
 ) -> CandidateBenchmarkExecutionResult:
     """Benchmark every exact frozen candidate while preserving failed denominators."""
 
@@ -752,6 +799,32 @@ async def run_candidate_registry_benchmarks(
     )
     candidate_registry = CandidateRegistry.model_validate_json(candidate_registry.model_dump_json())
     benchmark_suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
+    function_defaults = run_candidate_registry_benchmarks.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 2:
+        raise ValueError("candidate benchmark revocation boundary changed")
+    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_revocation_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or not trusted_revocation_pristine()
+    ):
+        raise ValueError("candidate benchmark revocation boundary changed")
+    for candidate in candidate_registry.candidates:
+        for model_id in {candidate.exact_model_id, candidate.canonical_model_slug}:
+            trusted_assignment_gate(
+                exact_model_id=model_id,
+                provider_endpoint=candidate.approved_provider_endpoint,
+            )
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
         raise ValueError("candidate benchmarks require a shared durable atomic cost ledger")
     if not budget.require_endpoint_cost_bound:
@@ -783,6 +856,8 @@ async def run_candidate_registry_benchmarks(
     preview_coordinates_supplied = (
         authenticated_runner_run_kind is not None or expected_request_cost_previews is not None
     )
+    if runtime_route_evidence is not None and authenticated_runner_run_kind is None:
+        raise ValueError("runtime route evidence requires authenticated runner execution")
     sealed_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...] | None = None
     if preview_coordinates_supplied:
         if (
@@ -863,6 +938,8 @@ async def run_candidate_registry_benchmarks(
                 pre_dispatch_rejection_observer=pre_dispatch_rejection_observer,
                 authenticated_runner_run_kind=authenticated_runner_run_kind,
                 expected_request_cost_previews=sealed_request_cost_previews,
+                runtime_route_evidence=runtime_route_evidence,
+                qualification_policy=qualification_policy,
             )
             observed_usage = tuple(usage.records[usage_start:])
             raw_ledger_after = budget.atomic_ledger.snapshot()
@@ -980,6 +1057,8 @@ async def _execute_candidate(
     expected_request_cost_previews: (
         tuple[OpenRouterStructuredRequestCostPreview, ...] | None
     ) = None,
+    runtime_route_evidence: VerifiedThreeRouteRuntimeEvidence | None = None,
+    qualification_policy: QualificationPolicy | None = None,
 ) -> tuple[ModelBenchmarkReport, CandidateBenchmarkFailureStage | None, int]:
     before_usage = len(usage.records)
     client: OpenRouterClient | None = None
@@ -1128,6 +1207,11 @@ async def _execute_candidate(
                     evidence=endpoint_evidence,
                     expected_role=ExactRouteRole.CANDIDATE,
                     purpose=RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+                    discovery_manifest=discovery_manifest,
+                    runtime_evidence=runtime_route_evidence,
+                    qualification_policy=(
+                        qualification_policy if runtime_route_evidence is not None else None
+                    ),
                     frozen_live_equivalent=True,
                     runtime_required_output_tokens=config.effective_reserved_output_tokens,
                 )

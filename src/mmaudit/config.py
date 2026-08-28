@@ -150,6 +150,79 @@ class PrivacyConfig(ConfigModel):
         return self
 
 
+class ModelRetryPolicy(ConfigModel):
+    """Exact split retry policy bound independently of its combined attempt ceiling."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    transient_retry_scope: Literal["NETWORK_OR_STATUS"] = "NETWORK_OR_STATUS"
+    schema_retry_failure_code: Literal["SCHEMA_VALIDATION_FAILED"] = "SCHEMA_VALIDATION_FAILED"
+    schema_retry_route: Literal["SAME_ROUTE"] = "SAME_ROUTE"
+    exhaustion_disposition: Literal["EXPLICIT_FALLBACK_OR_TERMINATE"] = (
+        "EXPLICIT_FALLBACK_OR_TERMINATE"
+    )
+    transient_retry_limit: int = Field(ge=0, le=5, strict=True)
+    schema_validation_retry_limit: int = Field(ge=0, le=31, strict=True)
+    maximum_attempts: int = Field(ge=1, le=32, strict=True)
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        transient_retry_limit: int,
+        schema_validation_retry_limit: int,
+    ) -> ModelRetryPolicy:
+        if type(transient_retry_limit) is not int or type(schema_validation_retry_limit) is not int:
+            raise ValueError("model retry limits must be exact integers")
+        maximum_attempts = 1 + transient_retry_limit + schema_validation_retry_limit
+        values = {
+            "schema_version": "1.0",
+            "transient_retry_scope": "NETWORK_OR_STATUS",
+            "schema_retry_failure_code": "SCHEMA_VALIDATION_FAILED",
+            "schema_retry_route": "SAME_ROUTE",
+            "exhaustion_disposition": "EXPLICIT_FALLBACK_OR_TERMINATE",
+            "transient_retry_limit": transient_retry_limit,
+            "schema_validation_retry_limit": schema_validation_retry_limit,
+            "maximum_attempts": maximum_attempts,
+        }
+        encoded = json.dumps(
+            {"domain": "mmaudit.model-retry-policy.v1", **values},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return cls.model_validate(
+            {**values, "policy_sha256": hashlib.sha256(encoded).hexdigest()},
+            strict=True,
+        )
+
+    @model_validator(mode="after")
+    def attempt_total_and_self_hash_are_exact(self) -> ModelRetryPolicy:
+        expected_attempts = 1 + self.transient_retry_limit + self.schema_validation_retry_limit
+        encoded = json.dumps(
+            {
+                "domain": "mmaudit.model-retry-policy.v1",
+                "schema_version": self.schema_version,
+                "transient_retry_scope": self.transient_retry_scope,
+                "schema_retry_failure_code": self.schema_retry_failure_code,
+                "schema_retry_route": self.schema_retry_route,
+                "exhaustion_disposition": self.exhaustion_disposition,
+                "transient_retry_limit": self.transient_retry_limit,
+                "schema_validation_retry_limit": self.schema_validation_retry_limit,
+                "maximum_attempts": expected_attempts,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if (
+            self.maximum_attempts != expected_attempts
+            or self.policy_sha256 != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise ValueError("model retry policy total or self-hash is inconsistent")
+        return self
+
+
 class ExecutionConfig(ConfigModel):
     concurrency: int = Field(default=3, ge=1, le=16)
     request_timeout_seconds: float = Field(default=180, gt=0, le=900)
@@ -167,6 +240,13 @@ class ExecutionConfig(ConfigModel):
     max_request_bytes: int = Field(default=4_000_000, ge=1_024)
     max_output_tokens_per_request: int = Field(default=32_768, ge=256, le=65_536)
     max_requests_per_agent: int = Field(default=2, ge=1, le=640)
+    max_candidates_per_run: int = Field(
+        default=200,
+        ge=1,
+        le=2_000,
+        strict=True,
+        exclude_if=lambda value: value == 200,
+    )
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
 
     @model_validator(mode="after")
@@ -179,6 +259,12 @@ class ExecutionConfig(ConfigModel):
     def maximum_model_attempts(self) -> int:
         """Bound all transient and schema-validation attempts for one route."""
 
+        return self.model_retry_policy.maximum_attempts
+
+    @property
+    def model_retry_policy(self) -> ModelRetryPolicy:
+        """Return the exact separately hashed transient/schema retry policy."""
+
         if (
             type(self.max_model_retries) is not int
             or type(self.max_schema_validation_retries) is not int
@@ -186,10 +272,12 @@ class ExecutionConfig(ConfigModel):
             or self.max_schema_validation_retries < 0
         ):
             raise ValueError("model retry limits must be nonnegative integers")
-        attempts = 1 + self.max_model_retries + self.max_schema_validation_retries
-        if attempts > 32:
+        if 1 + self.max_model_retries + self.max_schema_validation_retries > 32:
             raise ValueError("combined model attempts must not exceed 32")
-        return attempts
+        return ModelRetryPolicy.build(
+            transient_retry_limit=self.max_model_retries,
+            schema_validation_retry_limit=self.max_schema_validation_retries,
+        )
 
     @field_validator("cost_ledger_path")
     @classmethod
@@ -1680,6 +1768,7 @@ _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
     "execution.concurrency": (int,),
     "execution.cost_ledger_path": (str,),
     "execution.max_request_bytes": (int,),
+    "execution.max_schema_validation_retries": (int,),
     "language_profile": (str,),
     "maximum_assurance.allow_downgrade": (bool,),
     "maximum_assurance.benchmark_gate": (bool,),
@@ -1778,6 +1867,16 @@ class AuditConfigOverrides(ConfigModel):
         return apply_audit_config_overrides(config, self)
 
 
+class LearningCaptureScope(ConfigModel):
+    """Opaque, pre-execution tenant binding for terminal learning capture."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    tenant_scope_id: str = Field(pattern=r"^tenant-scope-[0-9a-f]{64}$")
+    input_kind: Literal["TENANT_AUDIT"] = "TENANT_AUDIT"
+
+
 class AuditRunOptions(ConfigModel):
     """Security-relevant per-run options not represented by AuditConfig."""
 
@@ -1802,6 +1901,7 @@ class AuditRunOptions(ConfigModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    learning_capture_scope: LearningCaptureScope | None = None
 
     @field_validator(
         "scanner_only",
@@ -1834,6 +1934,12 @@ class AuditRunOptions(ConfigModel):
     def assurance_options_do_not_conflict(self) -> AuditRunOptions:
         if self.require_maximum_assurance and self.allow_maximum_assurance_downgrade:
             raise ValueError("run options cannot require and downgrade maximum assurance")
+        if self.learning_capture_scope is not None and (
+            self.scanner_only
+            or self.privacy_source_classification
+            is not PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+        ):
+            raise ValueError("learning capture scope is accepted only for private tenant audits")
         return self
 
     def stable_hash(self) -> str:

@@ -38,6 +38,7 @@ from mmaudit.models.schemas import (
     CandidateOriginKind,
     CandidateReproductionResolution,
     CandidateReviewBatch,
+    ConsensusReviewArtifact,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
@@ -734,17 +735,14 @@ class SchedulerCandidateWorkset(StrictModel):
         payload = source_output.payload
         if not isinstance(payload, dict):
             raise ValueError("scheduler pass-four output lacks a typed candidate inventory")
-        candidate_ids = _candidate_id_inventory(payload.get("candidate_ids"), "candidate")
-        raw_payload_hashes = payload.get("candidate_payload_sha256s")
-        if not isinstance(raw_payload_hashes, dict) or any(
-            not isinstance(candidate_id, str)
-            or not isinstance(candidate_sha256, str)
-            or re.fullmatch(_SHA256_PATTERN, candidate_sha256) is None
-            for candidate_id, candidate_sha256 in raw_payload_hashes.items()
-        ):
-            raise ValueError("scheduler pass-four output lacks canonical candidate payload hashes")
-        if tuple(sorted(raw_payload_hashes)) != candidate_ids:
-            raise ValueError("scheduler candidate payload hashes differ from pass-four inventory")
+        try:
+            integration = SchedulerCrossShardIntegrationOutput.model_validate(payload)
+        except ValueError:
+            raise ValueError(
+                "scheduler pass-four output lacks a typed candidate inventory"
+            ) from None
+        candidate_ids = integration.candidate_ids
+        raw_payload_hashes = integration.candidate_payload_sha256s
         payload_bindings = tuple(
             SchedulerCandidatePayloadBinding.build(
                 candidate_id=candidate_id,
@@ -752,14 +750,8 @@ class SchedulerCandidateWorkset(StrictModel):
             )
             for candidate_id in candidate_ids
         )
-        high_critical = _candidate_id_inventory(
-            payload.get("high_critical_candidate_ids"),
-            "high/critical candidate",
-        )
-        validation = _candidate_id_inventory(
-            payload.get("validation_candidate_ids"),
-            "validation candidate",
-        )
+        high_critical = integration.high_critical_candidate_ids
+        validation = integration.validation_candidate_ids
         if not set(high_critical) <= set(candidate_ids) or not set(validation) <= set(
             candidate_ids
         ):
@@ -2838,37 +2830,46 @@ class SchedulerPassPlan(StrictModel):
             return
         if not candidate_ids:
             raise ValueError("non-empty pass-six review requires candidate work")
-        allowed = set(candidate_ids)
-        verifier_tasks = tuple(
+        expected_roles = {
+            "independent-verifier": "verifier",
+            "candidate-falsifier-1": "candidate_falsifier",
+            "candidate-falsifier-2": "candidate_falsifier",
+        }
+        reviewer_tasks = tuple(
             task
             for task in self.tasks
-            if task.task_kind is SchedulerTaskKind.MODEL_REQUEST and task.role == "verifier"
+            if task.task_key in expected_roles or task.role in {"verifier", "candidate_falsifier"}
         )
-        falsifier_tasks = tuple(
-            task
-            for task in self.tasks
-            if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
-            and task.role == "candidate_falsifier"
+        if (
+            len(reviewer_tasks) != len(expected_roles)
+            or {task.task_key for task in reviewer_tasks} != set(expected_roles)
+            or any(
+                task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+                or task.role != expected_roles[task.task_key]
+                for task in reviewer_tasks
+            )
+        ):
+            raise ValueError(
+                "pass six requires exactly one independent verifier and two candidate "
+                "falsifier reviewer tasks"
+            )
+        if any(task.candidate_ids != candidate_ids for task in reviewer_tasks):
+            raise ValueError(
+                "pass six reviewer tasks must bind the exact complete validation workset"
+            )
+        identity_inventories = (
+            tuple(task.root_lineage for task in reviewer_tasks),
+            tuple(task.task_id for task in reviewer_tasks),
+            tuple(task.logical_request_id for task in reviewer_tasks),
         )
-        for task in (*verifier_tasks, *falsifier_tasks):
-            if not task.candidate_ids or not set(task.candidate_ids) <= allowed:
-                raise ValueError("pass six reviewer tasks must bind exact validation candidates")
-        for candidate_id in candidate_ids:
-            verifier_lineages = {
-                task.root_lineage for task in verifier_tasks if candidate_id in task.candidate_ids
-            }
-            falsifier_lineages = {
-                task.root_lineage for task in falsifier_tasks if candidate_id in task.candidate_ids
-            }
-            if (
-                not verifier_lineages
-                or len(falsifier_lineages) < 2
-                or not verifier_lineages.isdisjoint(falsifier_lineages)
-            ):
-                raise ValueError(
-                    "pass six requires a verifier and two independent falsifier lineages "
-                    "per candidate"
-                )
+        if any(
+            any(identity is None for identity in inventory)
+            or len(set(inventory)) != len(expected_roles)
+            for inventory in identity_inventories
+        ):
+            raise ValueError(
+                "pass six reviewer lineages, tasks, and logical requests must be pairwise distinct"
+            )
 
 
 class SchedulerTaskActivation(StrictModel):
@@ -4804,6 +4805,7 @@ class SchedulerCrossShardIntegrationOutput(StrictModel):
     semantic_inventory_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     candidate_ids: tuple[str, ...] = Field(max_length=100_000)
     candidate_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    candidate_records: tuple[SchedulerFindingReductionCandidate, ...] = Field(max_length=100_000)
     shard_ids: tuple[str, ...] = Field(max_length=100_000)
     semantic_relationship_ids: tuple[str, ...] = Field(max_length=100_000)
     boundary_review_artifact_sha256s: tuple[str, ...] = Field(max_length=100_000)
@@ -4829,6 +4831,10 @@ class SchedulerCrossShardIntegrationOutput(StrictModel):
         )
         relationship_ids = tuple(item.relationship_id for item in self.relationships)
         decision_ids = tuple(item.relationship_id for item in self.decisions)
+        record_ids = tuple(item.candidate_id for item in self.candidate_records)
+        valid_ids = tuple(
+            item.candidate_id for item in self.candidate_records if item.location_validation.valid
+        )
         expected_status = (
             "NOT_APPLICABLE_NO_SEMANTIC_INVENTORY"
             if self.semantic_inventory_sha256 is None
@@ -4842,8 +4848,13 @@ class SchedulerCrossShardIntegrationOutput(StrictModel):
                 re.fullmatch(_SHA256_PATTERN, value) is None
                 for value in self.candidate_payload_sha256s.values()
             )
+            or record_ids != candidates
+            or any(
+                item.candidate_sha256 != self.candidate_payload_sha256s[item.candidate_id]
+                for item in self.candidate_records
+            )
             or not set(self.high_critical_candidate_ids) <= set(candidates)
-            or not set(self.validation_candidate_ids) <= set(candidates)
+            or self.validation_candidate_ids != valid_ids
             or relationship_ids != tuple(sorted(set(relationship_ids)))
             or self.semantic_relationship_ids != relationship_ids
             or decision_ids != relationship_ids
@@ -4940,6 +4951,7 @@ class SchedulerEvidencePayloadBinding(StrictModel):
         cls,
         *,
         kind: Literal[
+            "consensus_review",
             "judge",
             "verification",
             "cross_examination",
@@ -4990,10 +5002,14 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
     schema_version: Literal["2.0"] = "2.0"
     algorithm: Literal["mmaudit.evidence-cap-terminal-authority.v2"]
     severity_threshold: Severity
+    critical_confirmation_requires_execution: bool
     group_ids: tuple[str, ...] = Field(max_length=100_000)
     judge_decision_ids: tuple[str, ...] = Field(max_length=100_000)
     candidate_ids: tuple[str, ...] = Field(max_length=100_000)
     candidate_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    terminal_candidate_records: tuple[SchedulerFindingReductionCandidate, ...] = Field(
+        max_length=100_000
+    )
     candidate_grouping_sha256: str = Field(pattern=_SHA256_PATTERN)
     terminal_findings: tuple[SchedulerTerminalFindingBinding, ...] = Field(max_length=100_000)
     final_finding_ids: tuple[str, ...] = Field(max_length=100_000)
@@ -5003,6 +5019,10 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
     rejected_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     filtered_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     judge_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
+    consensus_review: SchedulerEvidencePayloadBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     verification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
     cross_examination_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(
         max_length=100_000
@@ -5034,6 +5054,9 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
         candidate_hash_ids = require_payload_hashes(
             self.candidate_payload_sha256s,
             "candidate",
+        )
+        terminal_candidate_ids = tuple(
+            item.candidate_id for item in self.terminal_candidate_records
         )
         final_hash_ids = require_payload_hashes(
             self.final_finding_payload_sha256s,
@@ -5086,6 +5109,17 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
             ):
                 raise ValueError(f"scheduler {label} evidence inventory is not canonical")
 
+        if self.consensus_review is not None and self.consensus_review.record_id != (
+            scheduler_canonical_sha256(
+                {
+                    "kind": "consensus_review",
+                    "subject_id": self.consensus_review.subject_id,
+                    "payload_sha256": self.consensus_review.payload_sha256,
+                }
+            )
+        ):
+            raise ValueError("scheduler consensus-review evidence binding is not canonical")
+
         judge_subjects = tuple(item.subject_id for item in self.judge_decisions)
         candidate_evidence_inventories = (
             self.verification_decisions,
@@ -5104,6 +5138,11 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
         if (
             judges != groups
             or candidate_hash_ids != candidates
+            or terminal_candidate_ids != candidates
+            or any(
+                item.candidate_sha256 != self.candidate_payload_sha256s[item.candidate_id]
+                for item in self.terminal_candidate_records
+            )
             or terminal_group_ids != groups
             or tuple(sorted(grouped_candidate_ids)) != candidates
             or len(set(grouped_candidate_ids)) != len(grouped_candidate_ids)
@@ -5217,6 +5256,9 @@ def _parse_scheduler_host_payload(
         activation_input = {
             "candidate_ids": list(parsed.candidate_ids),
             "candidate_payload_sha256s": parsed.candidate_payload_sha256s,
+            "candidate_records": [
+                item.model_dump(mode="json") for item in parsed.candidate_records
+            ],
             "high_critical_candidate_ids": list(parsed.high_critical_candidate_ids),
             "validation_candidate_ids": list(parsed.validation_candidate_ids),
             "shard_ids": list(parsed.shard_ids),
@@ -8974,6 +9016,10 @@ class SchedulerTerminalReportAuthority(StrictModel):
     rejected_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     filtered_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     report_quality_payload_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    consensus_review: SchedulerEvidencePayloadBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     verification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
         default=None,
         max_length=100_000,
@@ -9018,6 +9064,7 @@ class SchedulerTerminalReportAuthority(StrictModel):
         falsification_decisions: Iterable[FalsificationDecision],
         reproduction_results: Iterable[ReproductionResult],
         reproduction_resolutions: Iterable[CandidateReproductionResolution],
+        consensus_review: ConsensusReviewArtifact | None = None,
     ) -> SchedulerTerminalReportAuthority:
         validated_manifest = SchedulerCampaignManifest.model_validate(
             manifest.model_dump(mode="python")
@@ -9043,6 +9090,10 @@ class SchedulerTerminalReportAuthority(StrictModel):
         candidate_ids = tuple(item.candidate_id for item in canonical_candidates)
         if candidate_ids != tuple(sorted(set(candidate_ids))):
             raise ValueError("scheduler terminal authority repeats a candidate identity")
+        canonical_candidate_payload_sha256s = {
+            item.candidate_id: scheduler_canonical_sha256(item.model_dump(mode="json"))
+            for item in canonical_candidates
+        }
         cls._require_valid_finding_partitions(
             severity_threshold=severity_threshold,
             final_findings=canonical_final,
@@ -9055,7 +9106,10 @@ class SchedulerTerminalReportAuthority(StrictModel):
             else None
         )
         canonical_verifications = tuple(
-            VerificationDecision.model_validate(item) for item in verification_decisions
+            sorted(
+                (VerificationDecision.model_validate(item) for item in verification_decisions),
+                key=lambda item: item.candidate_id,
+            )
         )
         canonical_cross_examinations = tuple(
             CandidateCrossExaminationDecision.model_validate(item)
@@ -9071,6 +9125,29 @@ class SchedulerTerminalReportAuthority(StrictModel):
             CandidateReproductionResolution.model_validate(item)
             for item in reproduction_resolutions
         )
+        canonical_consensus_review = (
+            ConsensusReviewArtifact.model_validate(consensus_review.model_dump(mode="python"))
+            if consensus_review is not None
+            else None
+        )
+        if canonical_consensus_review is not None and (
+            canonical_consensus_review.campaign_id != validated_manifest.campaign_id
+            or canonical_consensus_review.manifest_sha256 != validated_manifest.manifest_sha256
+            or not set(canonical_consensus_review.candidate_ids) <= set(candidate_ids)
+            or any(
+                canonical_consensus_review.candidate_payload_sha256s[candidate_id]
+                != canonical_candidate_payload_sha256s[candidate_id]
+                for candidate_id in canonical_consensus_review.candidate_ids
+            )
+            or canonical_verifications
+            != tuple(
+                canonical_consensus_review.reviewers[0]
+                .decision_for(candidate_id)
+                .as_verification_decision()
+                for candidate_id in canonical_consensus_review.candidate_ids
+            )
+        ):
+            raise ValueError("scheduler consensus review differs from campaign candidate authority")
         cls._require_unique_semantic_keys(
             ((item.candidate_id,) for item in canonical_verifications),
             "verification",
@@ -9104,10 +9181,7 @@ class SchedulerTerminalReportAuthority(StrictModel):
             "campaign_status": validated_summary.status,
             "severity_threshold": severity_threshold,
             "candidate_ids": candidate_ids,
-            "candidate_payload_sha256s": {
-                item.candidate_id: scheduler_canonical_sha256(item.model_dump(mode="json"))
-                for item in canonical_candidates
-            },
+            "candidate_payload_sha256s": canonical_candidate_payload_sha256s,
             "final_finding_ids": tuple(item.id for item in canonical_final),
             "rejected_finding_ids": tuple(item.id for item in canonical_rejected),
             "filtered_finding_ids": tuple(item.id for item in canonical_filtered),
@@ -9140,6 +9214,12 @@ class SchedulerTerminalReportAuthority(StrictModel):
                 ((item.candidate_id, item) for item in canonical_resolutions),
             ),
         }
+        if canonical_consensus_review is not None:
+            values["consensus_review"] = SchedulerEvidencePayloadBinding.build(
+                kind="consensus_review",
+                subject_id=canonical_consensus_review.campaign_id,
+                payload=canonical_consensus_review,
+            )
         return cls(**values, authority_sha256=scheduler_canonical_sha256(values))
 
     @staticmethod
@@ -9242,7 +9322,8 @@ class SchedulerTerminalReportAuthority(StrictModel):
             or self.filtered_finding_payload_sha256s != judgment.filtered_finding_payload_sha256s
         )
         evidence_projection_differs = self.schema_version == "1.1" and (
-            self.verification_decisions != judgment.verification_decisions
+            self.consensus_review != judgment.consensus_review
+            or self.verification_decisions != judgment.verification_decisions
             or self.cross_examination_decisions != judgment.cross_examination_decisions
             or self.falsification_decisions != judgment.falsification_decisions
             or self.reproduction_results != judgment.reproduction_results
@@ -9272,10 +9353,23 @@ class SchedulerTerminalReportAuthority(StrictModel):
             or (self.schema_version == "1.1") != has_complete_evidence_authority
         ):
             raise ValueError("scheduler terminal evidence-authority schema is inconsistent")
-        if self.schema_version == "1.0" and any(
-            inventory is not None for _kind, inventory in evidence_inventories
+        if self.schema_version == "1.0" and (
+            self.consensus_review is not None
+            or any(inventory is not None for _kind, inventory in evidence_inventories)
         ):
             raise ValueError("legacy scheduler terminal authority cannot claim decision evidence")
+        if self.consensus_review is not None and (
+            self.consensus_review.subject_id != self.campaign_id
+            or self.consensus_review.record_id
+            != scheduler_canonical_sha256(
+                {
+                    "kind": "consensus_review",
+                    "subject_id": self.consensus_review.subject_id,
+                    "payload_sha256": self.consensus_review.payload_sha256,
+                }
+            )
+        ):
+            raise ValueError("scheduler terminal consensus-review binding is inconsistent")
 
         inventories = (
             (

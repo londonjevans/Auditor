@@ -601,7 +601,7 @@
           "type": "string"
         },
         "attempt_index": {
-          "maximum": 6,
+          "maximum": 32,
           "minimum": 1,
           "title": "Attempt Index",
           "type": "integer"
@@ -1780,6 +1780,59 @@
           "title": "Baseline Spent Usd Exact",
           "type": "string"
         },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
+        },
+        "campaign_logical_request_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Logical Request Count"
+        },
+        "campaign_logical_request_inventory_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Logical Request Inventory Sha256"
+        },
+        "campaign_manifest_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Manifest Sha256"
+        },
         "cap_usd_exact": {
           "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
           "title": "Cap Usd Exact",
@@ -1846,8 +1899,11 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },

@@ -37,6 +37,7 @@ from mmaudit.orchestration.consensus import (
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.pipeline import _validated_finding_result
+from tests.unit.test_consensus import _uniform_review_evidence
 from tests.unit.test_execution_origin_consensus import (
     _decision,
     _execution_candidate,
@@ -248,14 +249,27 @@ def test_model_agreement_cannot_confirm_without_deterministic_evidence() -> None
         candidate.candidate_id: _validation(valid=True, marker=marker)
         for candidate, marker in zip(candidates, ("a", "b"), strict=True)
     }
+    consensus_review, cross_examinations = _uniform_review_evidence(candidates)
 
-    assert preliminary_status(group, decisions, validations, []) is FindingStatus.STRONGLY_SUPPORTED
+    assert (
+        preliminary_status(
+            group,
+            decisions,
+            validations,
+            [],
+            consensus_review=consensus_review,
+            cross_examinations=cross_examinations,
+        )
+        is FindingStatus.STRONGLY_SUPPORTED
+    )
     finding = merge_group(
         group,
         decisions=decisions,
         validations=validations,
         scanner_findings=[],
         judge=_judge(group.group_id, status=FindingStatus.CONFIRMED),
+        consensus_review=consensus_review,
+        cross_examinations=cross_examinations,
     )
 
     assert finding.status is FindingStatus.STRONGLY_SUPPORTED
@@ -317,4 +331,4 @@ def test_model_enrichment_cannot_change_execution_identity_or_location() -> None
     assert finding.locations == list(provenance.source_locations)
     assert relocated not in finding.locations
     assert enrichment.candidate_id in finding.contributing_candidate_ids
-    assert any(item.type == "model" for item in finding.evidence)
+    assert all(item.type != "model" for item in finding.evidence)

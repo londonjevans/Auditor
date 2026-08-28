@@ -155,6 +155,21 @@ def test_schema_and_transient_retry_quotas_share_the_exact_32_attempt_ceiling() 
         _ = validation_bypassed.maximum_model_attempts
 
 
+def test_candidate_run_bound_is_strict_bounded_and_default_hash_neutral() -> None:
+    baseline = ExecutionConfig()
+    explicit_default = ExecutionConfig(max_candidates_per_run=200)
+
+    assert baseline.max_candidates_per_run == 200
+    assert "max_candidates_per_run" not in baseline.model_dump(mode="json")
+    assert explicit_default.model_dump(mode="json") == baseline.model_dump(mode="json")
+    assert ExecutionConfig(max_candidates_per_run=1).max_candidates_per_run == 1
+    assert ExecutionConfig(max_candidates_per_run=2_000).max_candidates_per_run == 2_000
+
+    for invalid in (True, False, 0, 2_001):
+        with pytest.raises(ValueError):
+            ExecutionConfig(max_candidates_per_run=invalid)
+
+
 def test_model_catalog_refresh_policy_is_exact_and_fail_closed(config_factory) -> None:
     config = config_factory(
         models={

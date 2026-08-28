@@ -22,6 +22,7 @@ from mmaudit.config import (
     AuditConfigOverrides,
     AuditRunOptions,
     LoadedAuditConfig,
+    ModelRetryPolicy,
 )
 from mmaudit.constants import DEFAULT_EXCLUSIONS, ExitCode
 from mmaudit.models.qualification import VerifiedProductionQualification
@@ -122,6 +123,49 @@ from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
+
+
+def _successful_model_retry_routing(policy: ModelRetryPolicy) -> dict[str, object]:
+    values: dict[str, object] = {
+        "model_retry_policy": policy.model_dump(mode="json"),
+        "model_retry_policy_sha256": policy.policy_sha256,
+        "maximum_attempts_for_request": policy.maximum_attempts,
+        "transient_retries_used": 0,
+        "schema_validation_retries_used": 0,
+        "model_retry_attempts": [{"attempt_ordinal": 1, "outcome": "SUCCESS"}],
+    }
+    return {
+        **values,
+        "model_retry_evidence_sha256": canonical_sha256(
+            {"domain": "mmaudit.model-retry-evidence.v1", **values}
+        ),
+    }
+
+
+def _model_retry_usage(
+    config: AuditConfig,
+    *,
+    policy: ModelRetryPolicy | None,
+) -> UsageRecord:
+    model_id = config.models.source_audit.primary
+    return UsageRecord(
+        request_id="request-manifest-retry-policy",
+        role="source_audit",
+        requested_model=model_id,
+        returned_model=model_id,
+        actual_model=model_id,
+        provider="Synthetic Provider",
+        model_family=model_id,
+        timestamp=datetime(2026, 1, 2, tzinfo=UTC),
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        accounted_cost_usd=0,
+        routing={} if policy is None else _successful_model_retry_routing(policy),
+        prompt_sha256="c" * 64,
+        status="success",
+        attempts=1,
+    )
 
 
 def _report(config) -> AuditReport:
@@ -797,7 +841,7 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert first.model_dump_json() == second.model_dump_json()
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.source_tree_sha256
-    assert first.schema_version == "1.2"
+    assert first.schema_version == "1.3"
     assert first.run_configuration is not None
     assert first.run_configuration.requested_profile.value == "standard"
     assert first.run_configuration.achieved_profile is None
@@ -969,7 +1013,7 @@ def test_legacy_completed_report_new_issuance_uses_fail_closed_status_projection
     )
     metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
 
-    assert manifest.schema_version == "1.2"
+    assert manifest.schema_version == "1.3"
     assert manifest.run_configuration is not None
     assert manifest.run_configuration.achieved_profile is None
     for field_name, expected_value in report_status_metadata(report).items():
@@ -977,6 +1021,129 @@ def test_legacy_completed_report_new_issuance_uses_fail_closed_status_projection
     assert metadata["completed"] is False
     assert metadata["quality_status"] == "incomplete"
     assert metadata["run_status"] == "INCOMPLETE"
+
+
+def test_current_manifest_accepts_exact_split_retry_policy_custody(config_factory) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+        }
+    )
+    policy = ModelRetryPolicy.build(
+        transient_retry_limit=0,
+        schema_validation_retry_limit=1,
+    )
+    report = _report(config).model_copy(
+        update={"usage": [_model_retry_usage(config, policy=policy)]}
+    )
+
+    manifest_module._require_report_model_retry_policy(report, config)
+
+
+def test_historical_current_manifest_accepts_all_absent_retry_evidence_for_default_off_split(
+    config_factory,
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 0,
+        }
+    )
+    report = _report(config).model_copy(update={"usage": [_model_retry_usage(config, policy=None)]})
+
+    manifest_module._require_report_model_retry_policy(
+        report,
+        config,
+        allow_legacy_default_retry_evidence_omission=True,
+    )
+
+
+@pytest.mark.parametrize("omission", ["partial", "mixed"])
+def test_current_manifest_rejects_partial_or_mixed_split_retry_policy_custody(
+    config_factory,
+    omission: str,
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 0,
+        }
+    )
+    policy = ModelRetryPolicy.build(
+        transient_retry_limit=1,
+        schema_validation_retry_limit=0,
+    )
+    complete = _model_retry_usage(config, policy=policy)
+    if omission == "partial":
+        routing = dict(complete.routing)
+        routing.pop("model_retry_evidence_sha256")
+        usage = [complete.model_copy(update={"routing": routing})]
+    else:
+        absent = _model_retry_usage(config, policy=None).model_copy(
+            update={"request_id": "request-manifest-retry-policy-absent"}
+        )
+        usage = [complete, absent]
+    report = _report(config).model_copy(update={"usage": usage})
+
+    with pytest.raises(
+        ValueError,
+        match="legacy manifest",
+    ):
+        manifest_module._require_report_model_retry_policy(
+            report,
+            config,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
+
+
+def test_historical_current_manifest_rejects_all_absent_retry_evidence_for_changed_split(
+    config_factory,
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+        }
+    )
+    assert config.execution.maximum_model_attempts == 2
+    report = _report(config).model_copy(update={"usage": [_model_retry_usage(config, policy=None)]})
+
+    with pytest.raises(
+        ValueError,
+        match="legacy manifest",
+    ):
+        manifest_module._require_report_model_retry_policy(
+            report,
+            config,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
+
+
+def test_current_manifest_rejects_equal_total_split_retry_policy_substitution(
+    config_factory,
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+        }
+    )
+    substituted_policy = ModelRetryPolicy.build(
+        transient_retry_limit=1,
+        schema_validation_retry_limit=0,
+    )
+    assert substituted_policy.maximum_attempts == config.execution.maximum_model_attempts
+    assert substituted_policy.policy_sha256 != config.execution.model_retry_policy.policy_sha256
+    report = _report(config).model_copy(
+        update={"usage": [_model_retry_usage(config, policy=substituted_policy)]}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="current model usage differs from the selected split retry policy",
+    ):
+        manifest_module._require_report_model_retry_policy(report, config)
 
 
 @pytest.mark.parametrize("retained_report_leaves", [set(), {"audit-results.sarif"}])
@@ -1050,7 +1217,7 @@ def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
     )
     assert current.run_configuration is not None
 
-    with pytest.raises(ValueError, match=r"new manifest issuance requires schema 1\.2"):
+    with pytest.raises(ValueError, match=r"new manifest issuance requires schema 1\.3"):
         seal_run_evidence_manifest(
             run_id=current.run_id,
             repository_root_name=current.repository_root_name,
@@ -2308,7 +2475,12 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     assert schema["$defs"]["fileBinding"]["additionalProperties"] is False
     assert schema["$defs"]["hashBinding"]["additionalProperties"] is False
     assert schema["$defs"]["bindingSet"]["additionalProperties"] is False
-    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
+    assert schema["properties"]["schema_version"]["enum"] == [
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+    ]
     expected_profiles = {"quick", "standard", "deep", "maximum-assurance"}
     assert (
         set(schema["$defs"]["runConfiguration"]["properties"]["requested_profile"]["enum"])
@@ -2378,12 +2550,12 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     current_rule = next(
         rule
         for rule in compatibility
-        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.1", "1.2"}
+        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.1", "1.2", "1.3"}
     )
     report_bundle_rule = next(
         rule
         for rule in compatibility
-        if rule["if"]["properties"]["schema_version"].get("const") == "1.2"
+        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.2", "1.3"}
     )
     assert legacy_rule["then"]["properties"]["run_configuration"] == {"type": "null"}
     assert "run_configuration" in current_rule["then"]["required"]
@@ -2728,6 +2900,31 @@ def test_verify_run_reconstructs_an_already_sealed_schema_1_1_manifest(
     )
 
     assert legacy.schema_version == "1.1"
+    assert verification.status is RunVerificationStatus.CURRENT
+    assert not verification.mismatches
+
+
+def test_verify_run_preserves_schema_1_2_as_explicit_retry_off_legacy(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, current, _report_value = _write_verifiable_run(tmp_path, config)
+    payload = current.model_dump(mode="json", exclude={"manifest_sha256"})
+    payload["schema_version"] = "1.2"
+    legacy = RunEvidenceManifest.model_validate(
+        {**payload, "manifest_sha256": canonical_sha256(payload)}
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
+
+    verification = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert legacy.schema_version == "1.2"
     assert verification.status is RunVerificationStatus.CURRENT
     assert not verification.mismatches
 

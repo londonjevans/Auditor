@@ -16,7 +16,7 @@ import stat
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, localcontext
 from pathlib import Path
-from typing import Annotated, Any, Final, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -42,7 +42,11 @@ from mmaudit.models.evidence_seal_authority import (
     EvidenceSealLineageRole,
     EvidenceSealRunKind,
 )
-from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    UsageRecord,
+    _validate_model_retry_routing_evidence,
+)
 from mmaudit.models.token_planning import RequestTokenPlan
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import read_json_evidence
@@ -161,6 +165,11 @@ AUTHENTICATED_RUNNER_DURABLE_ROUTING_KEYS: Final[tuple[str, ...]] = tuple(
             "identity_strength",
             "latency_ms",
             "model_metadata_snapshot_sha256",
+            "model_retry_attempts",
+            "model_retry_evidence_sha256",
+            "model_retry_policy",
+            "model_retry_policy_sha256",
+            "maximum_attempts_for_request",
             "native_finish_reason",
             "output_capability_sha256",
             "privacy_authorization",
@@ -234,10 +243,23 @@ AUTHENTICATED_RUNNER_DURABLE_ROUTING_KEYS: Final[tuple[str, ...]] = tuple(
             "structured_output_response_format",
             "structured_output_supported_modes",
             "structured_output_validated_response_sha256",
+            "schema_validation_retries_used",
+            "transient_retries_used",
             "validation_status",
             "zdr_requested",
         }
     )
+)
+_MODEL_RETRY_ROUTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "model_retry_policy",
+        "model_retry_policy_sha256",
+        "maximum_attempts_for_request",
+        "transient_retries_used",
+        "schema_validation_retries_used",
+        "model_retry_attempts",
+        "model_retry_evidence_sha256",
+    }
 )
 
 
@@ -439,7 +461,12 @@ AuthenticatedRunnerAuthsealComparison = Annotated[
 class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
     """Complete offline AUTHRUNNER evidence that grants no serialized authority."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    effective_config_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     runner_evidence: AuthenticatedCrossLineageRunnerEvidence
     runner_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     closed_ledger_evidence: AuthenticatedCrossLineageLedgerIntervalEvidence
@@ -502,15 +529,45 @@ class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
             CrossLineageAdjudicationRunKind.REPLAY,
         ):
             raise ValueError("durable bundle requires exact PRIMARY then REPLAY order")
-        expected_run_version = self.schema_version
+        expected_run_version = "1.0" if self.schema_version == "1.0" else "1.1"
         if any(item.schema_version != expected_run_version for item in self.runs):
             raise ValueError("durable bundle and run schema versions differ")
+        if self.schema_version in ("1.0", "1.1"):
+            if self.effective_config_sha256 is not None or evidence.schema_version != "1.0":
+                raise ValueError(
+                    "historical durable AUTHRUNNER evidence cannot carry effective config custody"
+                )
+        elif (
+            self.effective_config_sha256 is None
+            or evidence.schema_version != "1.1"
+            or evidence.effective_config_sha256 != self.effective_config_sha256
+        ):
+            raise ValueError(
+                "current durable AUTHRUNNER evidence lacks exact effective config custody"
+            )
         _require_frozen_protocol_shape(evidence)
         for retained, run in zip(self.runs, evidence.runs, strict=True):
             _require_exact_run_join(retained=retained, run=run, evidence=evidence)
         _require_exact_ledger_join(evidence=evidence, ledger=ledger)
-        if self.schema_version == "1.1":
+        if self.schema_version in ("1.1", "1.2"):
             _require_exact_cost_plan_ledger_join(retained_runs=self.runs, ledger=ledger)
+            retained_plans = tuple(
+                plan
+                for retained in self.runs
+                for plan in (retained.candidate_cost_plan, retained.judge_cost_plan)
+            )
+            if any(plan is None for plan in retained_plans):
+                raise ValueError("durable AUTHRUNNER v1.1 lacks exact staged cost plans")
+            exact_plans = tuple(
+                cast(AuthenticatedRunnerStagedCostPlan, plan) for plan in retained_plans
+            )
+            if (
+                len({plan.execution_config_sha256 for plan in exact_plans}) != 1
+                or len({plan.maximum_attempts_per_logical_request for plan in exact_plans}) != 1
+            ):
+                raise ValueError(
+                    "durable AUTHRUNNER staged plans differ on execution config or retry capacity"
+                )
         _require_exact_authseal_join(
             comparison=self.authseal_comparison,
             evidence=evidence,
@@ -524,6 +581,7 @@ class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
 
 def build_authenticated_runner_durable_bundle(
     *,
+    effective_config_sha256: str,
     runner_evidence: AuthenticatedCrossLineageRunnerEvidence,
     candidate_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...],
     judge_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...],
@@ -536,6 +594,13 @@ def build_authenticated_runner_durable_bundle(
 ) -> AuthenticatedRunnerDurableEvidenceBundle:
     """Build one exact two-run durable evidence bundle without runtime authority."""
 
+    if (
+        not isinstance(effective_config_sha256, str)
+        or re.fullmatch(_SHA256_PATTERN, effective_config_sha256) is None
+    ):
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable AUTHRUNNER effective config hash is invalid"
+        )
     if (
         type(candidate_cost_plans) is not tuple
         or type(judge_cost_plans) is not tuple
@@ -589,7 +654,8 @@ def build_authenticated_runner_durable_bundle(
         )
         ledger = evidence.ledger_interval
         payload: dict[str, Any] = {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
+            "effective_config_sha256": effective_config_sha256,
             "runner_evidence": evidence,
             "runner_evidence_sha256": evidence.evidence_sha256,
             "closed_ledger_evidence": ledger,
@@ -619,6 +685,88 @@ def build_authenticated_runner_durable_bundle(
             "durable AUTHRUNNER bundle is invalid"
         ) from None
     return bundle
+
+
+def require_authenticated_runner_durable_config_binding(
+    bundle: AuthenticatedRunnerDurableEvidenceBundle,
+    *,
+    effective_config_sha256: str,
+    execution_config_sha256: str,
+    maximum_attempts_per_logical_request: int,
+    model_retry_policy_sha256: str,
+) -> AuthenticatedRunnerDurableEvidenceBundle:
+    """Require one current bundle to bind the exact selected full and execution config."""
+
+    for value, label in (
+        (effective_config_sha256, "effective config"),
+        (execution_config_sha256, "execution config"),
+        (model_retry_policy_sha256, "model retry policy"),
+    ):
+        if not isinstance(value, str) or re.fullmatch(_SHA256_PATTERN, value) is None:
+            raise AuthenticatedRunnerDurableBundleError(
+                f"durable AUTHRUNNER expected {label} hash is invalid"
+            )
+    if (
+        type(maximum_attempts_per_logical_request) is not int
+        or not 1 <= maximum_attempts_per_logical_request <= 32
+    ):
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable AUTHRUNNER expected retry capacity is invalid"
+        )
+    try:
+        validated = _revalidate_model(
+            bundle,
+            AuthenticatedRunnerDurableEvidenceBundle,
+            label="durable AUTHRUNNER bundle",
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable AUTHRUNNER bundle is structurally invalid"
+        ) from None
+    if validated.schema_version != "1.2" or validated.effective_config_sha256 is None:
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable AUTHRUNNER evidence is legacy and lacks effective config custody"
+        )
+    retained_plans = tuple(
+        plan
+        for retained in validated.runs
+        for plan in (retained.candidate_cost_plan, retained.judge_cost_plan)
+    )
+    retained_usage = tuple(
+        case.usage_record
+        for retained in validated.runs
+        for result in retained.candidate_report.results
+        for case in result.cases
+    ) + tuple(
+        case.usage_record
+        for retained in validated.runs
+        for case in retained.adjudication_report.cases
+    )
+    if (
+        validated.effective_config_sha256 != effective_config_sha256
+        or any(plan is None for plan in retained_plans)
+        or any(
+            cast(AuthenticatedRunnerStagedCostPlan, plan).execution_config_sha256
+            != execution_config_sha256
+            or cast(
+                AuthenticatedRunnerStagedCostPlan,
+                plan,
+            ).maximum_attempts_per_logical_request
+            != maximum_attempts_per_logical_request
+            for plan in retained_plans
+        )
+        or any(usage is None for usage in retained_usage)
+        or any(
+            not _MODEL_RETRY_ROUTING_KEYS.issubset(cast(UsageRecord, usage).routing)
+            or cast(UsageRecord, usage).routing.get("model_retry_policy_sha256")
+            != model_retry_policy_sha256
+            for usage in retained_usage
+        )
+    ):
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable AUTHRUNNER evidence differs from the selected effective configuration"
+        )
+    return validated
 
 
 def authenticated_runner_durable_bundle_bytes(
@@ -1312,7 +1460,10 @@ def _require_decision_matches_candidate_report(
 
 def _require_safe_report_routing(report: CrossLineageAdjudicationReport) -> None:
     for case in report.cases:
-        _require_safe_routing_value(case.usage_record.routing)
+        _require_safe_routing_value(
+            case.usage_record.routing,
+            attempts=case.usage_record.attempts,
+        )
 
 
 def _require_safe_candidate_report_routing(report: ModelBenchmarkReport) -> None:
@@ -1322,10 +1473,13 @@ def _require_safe_candidate_report_routing(report: ModelBenchmarkReport) -> None
                 raise AuthenticatedRunnerDurableBundleError(
                     "durable candidate report lacks typed routing evidence"
                 )
-            _require_safe_routing_value(case.usage_record.routing)
+            _require_safe_routing_value(
+                case.usage_record.routing,
+                attempts=case.usage_record.attempts,
+            )
 
 
-def _require_safe_routing_value(value: object) -> None:
+def _require_safe_routing_value(value: object, *, attempts: int | None = None) -> None:
     if type(value) is not dict:
         raise AuthenticatedRunnerDurableBundleError(
             "durable routing contains a non-protocol top-level field"
@@ -1339,6 +1493,15 @@ def _require_safe_routing_value(value: object) -> None:
             raise AuthenticatedRunnerDurableBundleError(
                 "durable routing contains a non-protocol top-level field"
             )
+    try:
+        _validate_model_retry_routing_evidence(
+            value,
+            attempts=(attempts if attempts is not None else 0),
+        )
+    except ValueError as exc:
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable model retry evidence is inconsistent"
+        ) from exc
     remaining: list[tuple[object, int]] = [(value, 0)]
     observed_nodes = 0
     while remaining:
@@ -1454,5 +1617,6 @@ __all__ = [
     "authenticated_runner_durable_bundle_bytes",
     "build_authenticated_runner_durable_bundle",
     "load_authenticated_runner_durable_bundle",
+    "require_authenticated_runner_durable_config_binding",
     "revalidate_authenticated_runner_durable_bundle",
 ]

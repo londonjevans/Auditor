@@ -524,6 +524,22 @@ def test_replay_accepts_exact_execution_candidate_artifact_join(tmp_path: Path) 
     assert artifacts.candidates.findings[0].execution_provenance == provenance
 
 
+def test_replay_rejects_coherently_resealed_detached_execution_claim(tmp_path: Path) -> None:
+    payload, candidate, _provenance_record = _replay_payload(tmp_path)
+    forged = candidate.model_copy(
+        update={
+            "title": "Forged critical execution claim",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-999"],
+            "owasp": ["A01:2021"],
+            "summary": "Detached semantics not derived from the bound invariant.",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="differs from its saved invariant execution"):
+        _ReplayArtifacts.model_validate(_with_replay_candidate(payload, forged))
+
+
 def test_replay_accepts_forced_resolution_for_exact_execution_origin_candidate(
     tmp_path: Path,
 ) -> None:
@@ -766,6 +782,29 @@ def test_manifest_binds_execution_candidate_to_exact_final_finding(tmp_path: Pat
     root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
 
     _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_rejects_coherently_resealed_detached_execution_claim(tmp_path: Path) -> None:
+    root, report, candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    forged = candidate.model_copy(
+        update={
+            "title": "Forged critical execution claim",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-999"],
+            "owasp": ["A01:2021"],
+            "recommendation": "Unbound remediation text.",
+        }
+    )
+    write_json(
+        root / "candidate-findings.json",
+        {"schema_version": "1.1", "findings": [forged.model_dump(mode="json")]},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="execution-origin candidate differs from its emitted runtime artifacts",
+    ):
+        _validate_report_artifact_consistency(root, report)
 
 
 def test_current_report_rejects_complete_active_rejected_execution_splice(

@@ -43,48 +43,48 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3686
-    assert inventory.source_occurrence_count == 3689
-    assert inventory.audit_config_leaf_locator_count == 506
-    assert inventory.audit_config_leaf_occurrence_count == 509
+    assert inventory.source_count == 3783
+    assert inventory.source_occurrence_count == 3786
+    assert inventory.audit_config_leaf_locator_count == 507
+    assert inventory.audit_config_leaf_occurrence_count == 510
     assert inventory.audit_config_shared_locator_count == 3
-    assert inventory.audit_run_option_leaf_count == 13
-    assert inventory.audit_override_path_count == 45
+    assert inventory.audit_run_option_leaf_count == 16
+    assert inventory.audit_override_path_count == 46
     assert inventory.environment_override_count == 28
-    assert inventory.cli_run_parameter_count == 50
-    assert inventory.pipeline_init_parameter_count == 25
-    assert inventory.pipeline_run_parameter_count == 15
-    assert inventory.completion_entrypoint_parameter_count == 300
+    assert inventory.cli_run_parameter_count == 53
+    assert inventory.pipeline_init_parameter_count == 26
+    assert inventory.pipeline_run_parameter_count == 16
+    assert inventory.completion_entrypoint_parameter_count == 323
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
-        "AUDIT_CONFIG_LEAF": 506,
-        "AUDIT_RUN_OPTION_LEAF": 13,
-        "AUDIT_OVERRIDE_PATH": 45,
+        "AUDIT_CONFIG_LEAF": 507,
+        "AUDIT_RUN_OPTION_LEAF": 16,
+        "AUDIT_OVERRIDE_PATH": 46,
         "ENVIRONMENT_OVERRIDE": 28,
-        "CLI_RUN_PARAMETER": 50,
-        "PIPELINE_INIT_PARAMETER": 25,
-        "PIPELINE_RUN_PARAMETER": 15,
-        "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-        "DIRECT_ENVIRONMENT_INPUT": 494,
+        "CLI_RUN_PARAMETER": 53,
+        "PIPELINE_INIT_PARAMETER": 26,
+        "PIPELINE_RUN_PARAMETER": 16,
+        "COMPLETION_ENTRYPOINT_PARAMETER": 323,
+        "DIRECT_ENVIRONMENT_INPUT": 503,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 232,
-        "EXPLICIT_NON_FIELD_GATE": 1945,
+        "AUDITED_MODULE_UNIVERSE": 241,
+        "EXPLICIT_NON_FIELD_GATE": 1991,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3643,
-        SourceCoverageClassification.NON_GATING_CONTROL: 43,
+        SourceCoverageClassification.GATE: 3737,
+        SourceCoverageClassification.NON_GATING_CONTROL: 46,
     }
     assert {item.value for item in SourceCoverageClassification} == {
         "GATE",
         "NON_GATING_CONTROL",
     }
-    assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 100
+    assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 106
     assert (
         sum(":working-directory:" in source.source_path for source in inventory.source_coverage)
         == 111
     )
     assert (
-        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 83
+        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 86
     )
     assert (
         sum(
@@ -94,15 +94,15 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 19
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 273
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 276
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
-        == 79
+        == 80
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1578
+        == 1620
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -193,6 +193,53 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
     assert smoke_run_index.source_kind is CompletionInputSourceKind.COMPLETION_ENTRYPOINT_PARAMETER
     assert smoke_run_index.classification is SourceCoverageClassification.GATE
     assert smoke_run_index.logical_gate_id == "gate-authenticated-real-campaign"
+    runtime_evidence = sources[
+        "completion-entrypoint:models_authenticated_runner:runtime_evidence_smoke_bundle"
+    ]
+    assert runtime_evidence.source_kind is CompletionInputSourceKind.COMPLETION_ENTRYPOINT_PARAMETER
+    assert runtime_evidence.classification is SourceCoverageClassification.GATE
+    assert runtime_evidence.logical_gate_id == "gate-autonomous-model-authority"
+    for source_id in (
+        "cli-run:accepted_quote",
+        "completion-entrypoint:_execute_audit:accepted_quote",
+        "completion-entrypoint:quote_accept:quote_path",
+        "completion-entrypoint:quote_create:portfolio_preflight",
+        "completion-entrypoint:quote_reconcile:acceptance_path",
+        "pipeline-init:accepted_prepurchase_quote",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-budget-ceiling"
+    for source_id in (
+        "audit-config:execution.max_schema_validation_retries",
+        "audit-override:execution.max_schema_validation_retries",
+        "cli-run:schema_validation_retries",
+        "completion-entrypoint:_execute_audit:schema_validation_retries",
+        "completion-entrypoint:quote_create:schema_validation_retries",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-full-quality-analysis"
+    assert (
+        sources["completion-entrypoint:quote_create:campaign_manifest"].logical_gate_id
+        == "gate-authenticated-real-campaign"
+    )
+    assert (
+        sources["completion-entrypoint:quote_reconcile:cost_ledger_evidence"].logical_gate_id
+        == "gate-cost-ledger-provisioning"
+    )
+    assert (
+        sources["completion-entrypoint:quote_reconcile:model_execution"].logical_gate_id
+        == "gate-release-evidence-pipeline"
+    )
+    assert sources["audited-module:models.route_runtime_evidence"].logical_gate_id == (
+        "gate-runtime-package-integrity"
+    )
+    for source_id in (
+        "direct-env-ast:models.route_runtime_evidence:"
+        "_build_runtime_capability_authority:process-identity-binding:1",
+        "direct-env-ast:models.route_runtime_evidence:"
+        "_build_runtime_capability_authority.issue:process-identity:1",
+        "direct-env-ast:models.route_runtime_evidence:"
+        "_build_runtime_capability_authority.reasons:process-identity:1",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-authenticated-real-campaign"
     for source_id in (
         "audited-module:orchestration.managed_toolchain",
         "audited-module:resources.managed_toolchain_bundle.json",

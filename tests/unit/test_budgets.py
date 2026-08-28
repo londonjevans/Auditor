@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.orchestration.budgets as budgets_module
+from mmaudit.config import ModelRetryPolicy
 from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ModelRequestValidationStatus,
@@ -2937,3 +2939,647 @@ async def test_shared_budget_recovery_requires_exact_per_attempt_ledger_cost_joi
 
     assert manager.recovery_required
     assert ledger.snapshot() == before
+
+
+def _accepted_quote_budget_fixture(
+    tmp_path,
+    config_factory,
+    *,
+    run_hard_ceiling_usd_exact: str,
+    baseline_spent_usd_exact: str = "0",
+):
+    from tests.unit.test_prepurchase_quote import _quote_fixture
+
+    cap = Decimal(baseline_spent_usd_exact) + Decimal(run_hard_ceiling_usd_exact)
+    return _quote_fixture(
+        tmp_path,
+        config_factory,
+        seed="budget-accepted-quote",
+        cap_usd=format(cap, "f"),
+        baseline_spent_usd_exact=baseline_spent_usd_exact,
+    )
+
+
+def _quoted_budget_manager(
+    ledger: AtomicCostLedger,
+    accepted_quote,
+) -> BudgetManager:
+    return BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        accepted_quote=accepted_quote,
+    )
+
+
+def _quoted_request_bound(quote_data) -> EndpointRequestCostBound:
+    envelope = quote_data.preflight.task_envelopes[0]
+    return EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=envelope.requested_model,
+        provider_endpoint=envelope.provider_endpoint,
+        request_material="quoted-request",
+        pricing={
+            "completion": "0",
+            "prompt": "0",
+            "request": "0.1",
+        },
+        maximum_units={
+            "completion": envelope.maximum_completion_tokens_per_attempt,
+            "prompt": envelope.maximum_prompt_tokens_per_attempt,
+            "request": 1,
+        },
+    )
+
+
+def _quoted_retry_policy_sha256(quote_data) -> str:
+    return quote_data.quote.retry_policy.policy_sha256
+
+
+def _quoted_portfolio_slot(
+    quote_data,
+    *,
+    attempt_ordinal: int,
+) -> PortfolioTaskSlot:
+    envelope = quote_data.preflight.task_envelopes[0]
+    request_id = envelope.attempt_request_ids[attempt_ordinal - 1]
+    return PortfolioTaskSlot(
+        task_id=envelope.scheduler_task_id,
+        logical_request_id=envelope.scheduler_logical_request_id,
+        attempt_ordinal=attempt_ordinal,
+        request_id=request_id,
+        role=envelope.request_role,
+        exact_model_id=envelope.requested_model,
+        provider_endpoint=envelope.provider_endpoint,
+        endpoint_policy_snapshot_sha256=envelope.endpoint_policy_snapshot_sha256,
+        endpoint_policy_pricing_sha256=envelope.endpoint_policy_pricing_sha256,
+        endpoint_pricing_snapshot_sha256=envelope.endpoint_pricing_snapshot_sha256,
+        envelope_recipe_sha256=envelope.request_envelope_recipe_sha256,
+        planned_prompt_tokens=envelope.maximum_prompt_tokens_per_attempt,
+        planned_visible_output_tokens=envelope.maximum_visible_output_tokens_per_attempt,
+        planned_reasoning_tokens=envelope.maximum_reasoning_tokens_per_attempt,
+        planned_completion_tokens=envelope.maximum_completion_tokens_per_attempt,
+        maximum_cost_usd=Decimal(envelope.maximum_cost_usd_per_attempt_exact),
+    )
+
+
+def _quoted_ceiling_bound(ceiling) -> EndpointRequestCostBound:
+    assert ceiling.requested_model is not None
+    assert ceiling.provider_endpoint is not None
+    return EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=ceiling.requested_model,
+        provider_endpoint=ceiling.provider_endpoint,
+        request_material=f"quoted {ceiling.task_class.value} request",
+        pricing={"completion": "0", "prompt": "0", "request": "0.1"},
+        maximum_units={
+            "completion": ceiling.maximum_output_tokens_per_attempt,
+            "prompt": ceiling.maximum_input_tokens_per_attempt,
+            "request": 1,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_allows_exact_ceiling_and_exposes_constraint_hashes(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.100000000000000001",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    manager = _quoted_budget_manager(ledger, accepted)
+
+    envelope = quote_data.preflight.task_envelopes[0]
+    reservation = await manager.reserve(
+        "quoted-request",
+        envelope.request_role,
+        "quoted-request",
+        endpoint_cost_bound=_quoted_request_bound(quote_data),
+        model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+    )
+
+    assert manager.accepted_quote_sha256 == accepted.quote_sha256
+    assert manager.accepted_quote_acceptance_sha256 == accepted.acceptance_sha256
+    assert manager.accepted_quote_retry_policy_sha256 == (
+        quote_data.quote.retry_policy.policy_sha256
+    )
+    assert manager.accepted_quote_run_hard_ceiling_usd_exact == Decimal("0.100000000000000001")
+    assert manager.effective_total_usd_exact == Decimal("0.100000000000000001")
+    assert manager.remaining_usd == 1e-18
+    assert ledger.snapshot().active_reserved_usd == Decimal("0.1")
+    await manager.release(reservation)
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_rejects_equal_total_split_retry_policy_before_reservation(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+    before = quote_data.ledger.snapshot()
+    swapped_policy = ModelRetryPolicy.build(
+        transient_retry_limit=0,
+        schema_validation_retry_limit=1,
+    )
+
+    assert swapped_policy.maximum_attempts == quote_data.quote.retry_policy.maximum_attempts
+    assert swapped_policy.policy_sha256 != quote_data.quote.retry_policy.policy_sha256
+    with pytest.raises(BudgetReservationStateError, match="retry policy differs"):
+        await manager.reserve(
+            "quoted-policy-drift",
+            quote_data.preflight.task_envelopes[0].request_role,
+            "quoted-request",
+            endpoint_cost_bound=_quoted_request_bound(quote_data),
+            model_retry_policy_sha256=swapped_policy.policy_sha256,
+        )
+
+    assert quote_data.ledger.snapshot() == before
+    assert manager.reserved_usd == 0
+    assert manager._issued == {}
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_guard_retarget_and_kwarg_injection_fail_before_reservation(
+    tmp_path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+    before = quote_data.ledger.snapshot()
+
+    def forged_guard(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    original_guard = budgets_module._require_accepted_quote_request
+    monkeypatch.setattr(
+        budgets_module,
+        "globals",
+        lambda: {"_require_accepted_quote_request": original_guard},
+        raising=False,
+    )
+    monkeypatch.setattr(budgets_module, "_require_accepted_quote_request", forged_guard)
+    with pytest.raises(BudgetReservationStateError, match="guard provenance"):
+        await manager.reserve(
+            "quoted-guard-bypass",
+            quote_data.preflight.task_envelopes[0].request_role,
+            "quoted-request",
+            endpoint_cost_bound=_quoted_request_bound(quote_data),
+            model_retry_policy_sha256="0" * 64,
+            _accepted_quote_request_guard=forged_guard,
+        )
+
+    assert quote_data.ledger.snapshot() == before
+    assert manager.reserved_usd == 0
+    assert manager._issued == {}
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_rejects_one_cost_atom_over_without_ledger_mutation(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    manager = _quoted_budget_manager(ledger, accepted)
+    before = ledger.snapshot()
+
+    envelope = quote_data.preflight.task_envelopes[0]
+    mismatched_bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=envelope.requested_model,
+        provider_endpoint=envelope.provider_endpoint,
+        request_material="quoted-request",
+        pricing={"completion": "0", "prompt": "0", "request": "0.100000000000000001"},
+        maximum_units={"completion": 50, "prompt": 100, "request": 1},
+    )
+    with pytest.raises(BudgetReservationStateError, match="differs from the accepted quote"):
+        await manager.reserve(
+            "quoted-request",
+            envelope.request_role,
+            "quoted-request",
+            endpoint_cost_bound=mismatched_bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+
+    assert ledger.snapshot() == before
+
+
+def test_accepted_quote_effective_total_adds_exact_baseline_spend(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.3",
+        baseline_spent_usd_exact="0.2",
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+
+    assert manager.spent_usd_exact == Decimal("0.2")
+    assert manager.effective_total_usd_exact == Decimal("0.5")
+    assert manager.remaining_usd == 0.3
+    assert manager.recovery_required
+
+
+@pytest.mark.parametrize("drift", ("spent", "terminal_snapshot"))
+def test_accepted_quote_rejects_ledger_baseline_drift_without_mutation(
+    tmp_path,
+    config_factory,
+    drift: str,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    reservation = ledger.reserve("drift-request", Decimal("0.01"))
+    if drift == "spent":
+        ledger.reconcile(reservation, Decimal("0.01"))
+    else:
+        ledger.release(reservation, reason=ReleaseReason.CANCELLED_BEFORE_SEND)
+    before = ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="baseline differs"):
+        _quoted_budget_manager(ledger, accepted)
+
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("active_kind", ("ordinary", "portfolio"))
+def test_accepted_quote_rejects_active_reserve_or_hold_without_mutation(
+    tmp_path,
+    config_factory,
+    active_kind: str,
+) -> None:
+    from mmaudit.orchestration.cost_ledger import PortfolioAttemptSlot
+
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    if active_kind == "ordinary":
+        ledger.reserve("active-request", Decimal("0.01"))
+    else:
+        ledger.reserve_portfolio(
+            "1" * 64,
+            (PortfolioAttemptSlot("active-request", Decimal("0.01")),),
+        )
+    before = ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="zero-active-reservation"):
+        _quoted_budget_manager(ledger, accepted)
+
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_portfolio_reservation_uses_exact_incremental_ceiling(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.2",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    manager = _quoted_budget_manager(ledger, accepted)
+    slots = (
+        _quoted_portfolio_slot(quote_data, attempt_ordinal=1),
+        _quoted_portfolio_slot(quote_data, attempt_ordinal=2),
+    )
+
+    portfolio = await manager.reserve_portfolio("2" * 64, slots)
+
+    assert ledger.snapshot().active_reserved_usd == Decimal("0.2")
+    await manager.release_portfolio(portfolio)
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_portfolio_rejects_one_atom_over_without_mutation(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.2",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    manager = _quoted_budget_manager(ledger, accepted)
+    before = ledger.snapshot()
+    first = _quoted_portfolio_slot(quote_data, attempt_ordinal=1)
+    slots = (
+        first,
+        replace(
+            first,
+            task_id="second-task",
+            logical_request_id="second-request",
+            request_id="second-request",
+        ),
+        replace(
+            first,
+            task_id="third-task",
+            logical_request_id="third-request",
+            request_id="third-request",
+        ),
+    )
+
+    with pytest.raises(BudgetReservationStateError, match="accepted quote route ceiling"):
+        await manager.reserve_portfolio("3" * 64, slots)
+
+    assert ledger.snapshot() == before
+
+
+def test_unaccepted_quote_cannot_install_a_budget_constraint(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.1",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    before = ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="accepted pre-purchase quote type"):
+        _quoted_budget_manager(ledger, accepted.quote)
+
+    assert ledger.snapshot() == before
+
+
+def test_accepted_quote_requires_manager_total_to_cover_baseline_plus_ceiling(
+    tmp_path,
+    config_factory,
+) -> None:
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="0.2",
+    )
+    ledger = quote_data.ledger
+    accepted = quote_data.acceptance
+    before = ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="manager total cannot cover"):
+        BudgetManager(
+            total_usd=0.1,
+            max_output_tokens=10,
+            conservative_usd_per_million_tokens=1,
+            max_requests_per_agent=10,
+            atomic_ledger=ledger,
+            accepted_quote=accepted,
+        )
+
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_rejects_self_hashed_low_price_route_against_live_pricing(
+    tmp_path,
+    config_factory,
+) -> None:
+    from mmaudit.models.prepurchase_quote import (
+        PrepurchaseQuoteTaskCeiling,
+        PrepurchaseQuoteTaskClass,
+        accept_prepurchase_quote,
+        build_prepurchase_quote,
+    )
+
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="1",
+    )
+    source = next(
+        item
+        for item in quote_data.ceilings
+        if item.task_class is PrepurchaseQuoteTaskClass.ADVERSARIAL_CROSS_EXAMINATION
+    )
+    assert source.request_role is not None
+    assert source.requested_model is not None
+    assert source.request_envelope_recipe_sha256 is not None
+    assert source.endpoint_policy_snapshot_sha256 is not None
+    assert source.endpoint_policy_pricing_sha256 is not None
+    assert source.provider_endpoint is not None
+    low_bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=source.requested_model,
+        provider_endpoint=source.provider_endpoint,
+        request_material="self-hashed low quote",
+        pricing={"completion": "0", "prompt": "0", "request": "0.01"},
+        maximum_units={"completion": 50, "prompt": 100, "request": 1},
+    )
+    low_ceiling = PrepurchaseQuoteTaskCeiling.build(
+        task_class=source.task_class,
+        request_role=source.request_role,
+        requested_model=source.requested_model,
+        request_envelope_recipe_sha256=source.request_envelope_recipe_sha256,
+        endpoint_policy_snapshot_sha256=source.endpoint_policy_snapshot_sha256,
+        endpoint_policy_pricing_sha256=source.endpoint_policy_pricing_sha256,
+        provider_endpoint=source.provider_endpoint,
+        endpoint_pricing_snapshot_sha256=low_bound.pricing_snapshot_sha256,
+        standard_task_count=source.standard_task_count,
+        maximum_task_count=source.maximum_task_count,
+        standard_attempts_per_task=source.standard_attempts_per_task,
+        maximum_attempts_per_task=source.maximum_attempts_per_task,
+        maximum_input_tokens_per_attempt=source.maximum_input_tokens_per_attempt,
+        maximum_output_tokens_per_attempt=source.maximum_output_tokens_per_attempt,
+        maximum_cost_usd_per_attempt_exact="0.01",
+        standard_wall_clock_seconds_per_task=source.standard_wall_clock_seconds_per_task,
+        maximum_wall_clock_seconds_per_task=source.maximum_wall_clock_seconds_per_task,
+    )
+    forged_quote = build_prepurchase_quote(
+        campaign_manifest=quote_data.manifest,
+        solidity_shard_inventory=quote_data.inventory,
+        portfolio_preflight=quote_data.preflight,
+        local_analysis_ceiling=quote_data.local_analysis,
+        retry_policy=quote_data.quote.retry_policy,
+        task_ceilings=tuple(
+            low_ceiling if item == source else item for item in quote_data.ceilings
+        ),
+    )
+    accepted = accept_prepurchase_quote(
+        forged_quote,
+        accepted_at=quote_data.acceptance.accepted_at,
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, accepted)
+    live_bound = _quoted_ceiling_bound(source)
+    request_material = f"quoted {source.task_class.value} request"
+    before = quote_data.ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="differs from the accepted quote"):
+        await manager.reserve(
+            "candidate-price-drift",
+            f"candidate_falsifier:{'a' * 64}:reviewer_1",
+            request_material,
+            endpoint_cost_bound=live_bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+
+    assert quote_data.ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_normalizes_only_exact_candidate_reviewer_roles(
+    tmp_path,
+    config_factory,
+) -> None:
+    from mmaudit.models.prepurchase_quote import PrepurchaseQuoteTaskClass
+
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="1",
+    )
+    ceiling = next(
+        item
+        for item in quote_data.ceilings
+        if item.task_class is PrepurchaseQuoteTaskClass.ADVERSARIAL_CROSS_EXAMINATION
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+    bound = _quoted_ceiling_bound(ceiling)
+    request_material = f"quoted {ceiling.task_class.value} request"
+    valid_role = f"candidate_falsifier:{'b' * 64}:reviewer_2"
+    reservation = await manager.reserve(
+        "candidate-role-valid",
+        valid_role,
+        request_material,
+        endpoint_cost_bound=bound,
+        model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+    )
+    await manager.release(reservation)
+    before = quote_data.ledger.snapshot()
+
+    with pytest.raises(BudgetReservationStateError, match="differs from the accepted quote"):
+        await manager.reserve(
+            "candidate-role-invalid",
+            f"candidate_falsifier:{'b' * 64}:reviewer_3",
+            request_material,
+            endpoint_cost_bound=bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+
+    assert quote_data.ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_route_capacity_failure_does_not_consume_or_mutate(
+    tmp_path,
+    config_factory,
+) -> None:
+    from mmaudit.models.prepurchase_quote import PrepurchaseQuoteTaskClass
+
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="1",
+    )
+    ceiling = next(
+        item
+        for item in quote_data.ceilings
+        if item.task_class is PrepurchaseQuoteTaskClass.ADVERSARIAL_CROSS_EXAMINATION
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+    bound = _quoted_ceiling_bound(ceiling)
+    request_material = f"quoted {ceiling.task_class.value} request"
+    role = f"candidate_falsifier:{'c' * 64}:reviewer_1"
+    for index in range(ceiling.worst_case_request_count):
+        reservation = await manager.reserve(
+            f"candidate-capacity-{index}",
+            role,
+            request_material,
+            endpoint_cost_bound=bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+        await manager.release(reservation)
+    before = quote_data.ledger.snapshot()
+
+    for identifier in ("candidate-capacity-over-a", "candidate-capacity-over-b"):
+        with pytest.raises(BudgetExhaustedError, match="route request ceiling is exhausted"):
+            await manager.reserve(
+                identifier,
+                role,
+                request_material,
+                endpoint_cost_bound=bound,
+                model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+            )
+        assert quote_data.ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_accepted_quote_recovery_uses_separate_global_request_capacity(
+    tmp_path,
+    config_factory,
+) -> None:
+    from mmaudit.models.prepurchase_quote import PrepurchaseQuoteTaskClass
+
+    quote_data = _accepted_quote_budget_fixture(
+        tmp_path,
+        config_factory,
+        run_hard_ceiling_usd_exact="1",
+    )
+    primary = next(
+        item
+        for item in quote_data.ceilings
+        if item.task_class is PrepurchaseQuoteTaskClass.ADVERSARIAL_CROSS_EXAMINATION
+    )
+    recovery = next(
+        item
+        for item in quote_data.ceilings
+        if item.task_class is PrepurchaseQuoteTaskClass.TRUNCATION_RECOVERY
+    )
+    manager = _quoted_budget_manager(quote_data.ledger, quote_data.acceptance)
+    bound = _quoted_ceiling_bound(primary)
+    request_material = f"quoted {primary.task_class.value} request"
+    role = f"candidate_falsifier:{'d' * 64}:reviewer_1"
+    for index in range(recovery.worst_case_request_count):
+        reservation = await manager.reserve(
+            f"scheduler-recovery-request-{index:064x}",
+            role,
+            request_material,
+            endpoint_cost_bound=bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+        await manager.release(reservation)
+    before = quote_data.ledger.snapshot()
+
+    with pytest.raises(BudgetExhaustedError, match="global recovery request ceiling"):
+        await manager.reserve(
+            f"scheduler-recovery-request-{recovery.worst_case_request_count:064x}",
+            role,
+            request_material,
+            endpoint_cost_bound=bound,
+            model_retry_policy_sha256=_quoted_retry_policy_sha256(quote_data),
+        )
+
+    assert quote_data.ledger.snapshot() == before

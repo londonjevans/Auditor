@@ -350,6 +350,26 @@ def test_provider_free_fixture_cannot_issue_runner_projection(
         _issue(live_inputs, interval)
 
 
+def test_runner_rejects_mixed_campaign_effective_configuration_before_origin_replay(
+    tmp_path: Path,
+    live_inputs: _LiveInputs,
+) -> None:
+    runs = (
+        live_inputs.runs[0],
+        replace(
+            live_inputs.runs[1],
+            candidate_campaign_effective_config_sha256="4" * 64,
+        ),
+    )
+    _ledger, interval = _closed_runner_interval(tmp_path / "mixed-config.json", runs)
+
+    with pytest.raises(
+        AuthenticatedCrossLineageRunnerError,
+        match="do not share one effective configuration",
+    ):
+        _issue(live_inputs, interval, runs=runs)
+
+
 def test_structural_attesters_do_not_mint_authrunner_transport_origin(
     live_inputs: _LiveInputs,
 ) -> None:

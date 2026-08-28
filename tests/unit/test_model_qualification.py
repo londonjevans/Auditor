@@ -43,6 +43,7 @@ from mmaudit.models.candidate_benchmark import (
     CandidateReasoningProfileBenchmarkPlan,
     CandidateReasoningProfileBenchmarkRoute,
 )
+from mmaudit.models.candidate_revocation import CandidateSelectionRevocationError
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
@@ -842,9 +843,14 @@ def _bundle(
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
     reasoning_policy: ReasoningPolicyArtifact | None = None,
     observed_reasoning_tokens: int = 0,
+    route_override: tuple[str, str, str] | None = None,
 ) -> _Bundle:
     reasoning_policy = reasoning_policy or _reasoning_policy()
-    model_ids = tuple(_model_id(index) for index in range(8))
+    if route_override is None:
+        model_ids = tuple(_model_id(index) for index in range(8))
+    else:
+        override_model_id, _, _ = route_override
+        model_ids = tuple(sorted((override_model_id, *(_model_id(index) for index in range(1, 8)))))
     grouped_ids = {
         root_index: tuple(
             sorted(
@@ -885,13 +891,21 @@ def _bundle(
     candidates = tuple(
         CandidateModel(
             exact_model_id=model_id,
-            canonical_model_slug=model_id,
+            canonical_model_slug=(
+                route_override[1]
+                if route_override is not None and model_id == route_override[0]
+                else model_id
+            ),
             root_lineage=(
                 _root(index % root_count) if review_status is LineageReviewStatus.APPROVED else None
             ),
             lineage_review=reviews[index % root_count],
             discovery_evidence_sha256=_sha(f"discovery-{model_id}"),
-            approved_provider_endpoint=f"provider-{index}",
+            approved_provider_endpoint=(
+                route_override[2]
+                if route_override is not None and model_id == route_override[0]
+                else f"provider-{index}"
+            ),
             approved_provider_name=f"Approved Provider {index}",
             endpoint_snapshot_sha256=_sha(f"endpoint-{model_id}"),
             output_capability_sha256=SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
@@ -1480,6 +1494,66 @@ def test_verified_production_capability_is_opaque_current_and_exact() -> None:
     object.__setattr__(capability, "capability_sha256", _sha("tampered-capability"))
     with pytest.raises(ValueError, match="integrity"):
         capability.require_current(now=verified_at)
+
+
+@pytest.mark.parametrize(
+    ("exact_model_id", "canonical_model_slug"),
+    (
+        (
+            "deepseek/deepseek-v4-pro-0813",
+            "deepseek/deepseek-v4-pro-observed-0813",
+        ),
+        (
+            "deepseek/deepseek-v4-pro-observed-20260813",
+            "deepseek/deepseek-v4-pro-20260813",
+        ),
+    ),
+)
+def test_already_issued_qualification_rejects_current_revoked_route_aliases(
+    exact_model_id: str,
+    canonical_model_slug: str,
+) -> None:
+    bundle = _bundle(route_override=(exact_model_id, canonical_model_slug, "parasail/fp8"))
+
+    def retain_pre_tombstone_capability(
+        capability: VerifiedProductionQualification,
+        *,
+        now: datetime,
+        **_kwargs: object,
+    ) -> VerifiedProductionQualification:
+        del now
+        return capability
+
+    with patch.object(
+        VerifiedProductionQualification,
+        "require_current",
+        retain_pre_tombstone_capability,
+    ):
+        capability = _resolve_for_test(bundle)
+
+    with pytest.raises(
+        ValueError,
+        match="failed current candidate revocation eligibility",
+    ) as error:
+        capability.require_current(now=_NOW + timedelta(hours=3))
+
+    assert type(error.value) is ValueError
+    assert isinstance(error.value.__cause__, CandidateSelectionRevocationError)
+    assert str(error.value.__cause__) == "candidate selection assignment is revoked"
+
+
+def test_current_qualification_does_not_expand_revocation_to_adjacent_endpoint() -> None:
+    capability = _resolve_for_test(
+        _bundle(
+            route_override=(
+                "deepseek/deepseek-v4-pro-0813",
+                "deepseek/deepseek-v4-pro-20260813",
+                "parasail/fp16",
+            )
+        )
+    )
+
+    assert capability.require_current(now=_NOW + timedelta(hours=3)) is capability
 
 
 def test_production_reasoning_effort_must_match_measured_qualification_profile() -> None:

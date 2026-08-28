@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from mmaudit.constants import SEVERITY_ORDER
 from mmaudit.models.schemas import (
+    CandidateConsensusDecision,
+    CandidateCrossExaminationDecision,
     CandidateFinding,
     CandidateOriginKind,
+    ConsensusQuorumOutcome,
+    ConsensusReviewArtifact,
     Evidence,
     EvidenceStrength,
     Finding,
@@ -43,11 +48,14 @@ _STOPWORDS = {
 
 HOST_EXECUTION_ANALYSIS_LINK_SOURCE = "mmaudit-host-execution-link"
 
+type _CandidateClaimKey = str
+
 
 @dataclass(frozen=True)
 class CandidateGroup:
     group_id: str
     candidates: tuple[CandidateFinding, ...]
+    publication_claim_key: str | None = None
 
     @property
     def execution_candidates(self) -> tuple[CandidateFinding, ...]:
@@ -80,15 +88,18 @@ def candidate_similarity(left: CandidateFinding, right: CandidateFinding) -> flo
     right_cwe = {value.upper() for value in right.cwe}
     if left_cwe and left_cwe & right_cwe:
         score += 0.3
-    for left_location in left.locations:
-        for right_location in right.locations:
-            if left_location.path == right_location.path:
-                score += 0.25
-                if abs(left_location.start_line - right_location.start_line) <= 12:
-                    score += 0.2
-                if left_location.symbol and left_location.symbol == right_location.symbol:
-                    score += 0.1
-                break
+    location_score = max(
+        (
+            0.25
+            + (0.2 if abs(left_location.start_line - right_location.start_line) <= 12 else 0)
+            + (0.1 if left_location.symbol and left_location.symbol == right_location.symbol else 0)
+            for left_location in left.locations
+            for right_location in right.locations
+            if left_location.path == right_location.path
+        ),
+        default=0.0,
+    )
+    score += location_score
     score += 0.1 * _jaccard(_tokens(left.title), _tokens(right.title))
     score += 0.05 * _jaccard(
         _tokens(" ".join(left.attack_path)),
@@ -194,6 +205,7 @@ def bind_model_analysis_to_execution_origin(
 def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]:
     if not candidates:
         return []
+    candidates = sorted(candidates, key=lambda candidate: candidate.candidate_id)
     parent = list(range(len(candidates)))
 
     def find(index: int) -> int:
@@ -211,12 +223,20 @@ def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]
         return [index for index in range(len(candidates)) if find(index) == root]
 
     def can_union(left: int, right: int) -> bool:
-        """Prevent a review-only bridge from absorbing an unrelated execution anchor."""
+        """Require complete-link similarity and compatible execution anchors."""
 
-        member_indices = [
-            *component_indices(find(left)),
-            *component_indices(find(right)),
-        ]
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return True
+        left_indices = component_indices(left_root)
+        right_indices = component_indices(right_root)
+        if not all(
+            candidate_similarity(candidates[left_index], candidates[right_index]) >= 0.55
+            for left_index in left_indices
+            for right_index in right_indices
+        ):
+            return False
+        member_indices = [*left_indices, *right_indices]
         members = [candidates[index] for index in sorted(set(member_indices))]
         execution_anchors = [
             candidate
@@ -260,7 +280,43 @@ def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]
     return sorted(result, key=lambda group: group.group_id)
 
 
-def stable_finding_id(candidate: CandidateFinding) -> str:
+def publication_groups(candidates: list[CandidateFinding]) -> list[CandidateGroup]:
+    """Partition fuzzy model groups into exact public claims before judgment."""
+
+    result: list[CandidateGroup] = []
+    for coarse_group in group_candidates(candidates):
+        if coarse_group.execution_candidates:
+            result.append(coarse_group)
+            continue
+        partitions: dict[str, list[CandidateFinding]] = {}
+        for candidate in coarse_group.candidates:
+            claim_key = _candidate_claim_key(candidate)
+            partition_key = claim_key or json.dumps(
+                {"candidate_id": candidate.candidate_id},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            partitions.setdefault(partition_key, []).append(candidate)
+        for claim_key, members in partitions.items():
+            ordered = tuple(sorted(members, key=lambda candidate: candidate.candidate_id))
+            digest = hashlib.sha256(
+                f"mmaudit.publication-claim.v1\0{claim_key}".encode()
+            ).hexdigest()[:16]
+            result.append(
+                CandidateGroup(
+                    group_id=f"claim-{digest}",
+                    candidates=ordered,
+                    publication_claim_key=claim_key,
+                )
+            )
+    return sorted(result, key=lambda group: group.group_id)
+
+
+def stable_finding_id(
+    candidate: CandidateFinding,
+    *,
+    publication_claim_key: str | None = None,
+) -> str:
     primary = sorted(
         candidate.locations,
         key=lambda location: (location.path, location.start_line, location.end_line),
@@ -277,31 +333,233 @@ def stable_finding_id(candidate: CandidateFinding) -> str:
             primary.path,
             str(primary.start_line),
             primary.symbol or "",
+            publication_claim_key or "",
         )
     )
     return f"MMA-{hashlib.sha256(stable.encode()).hexdigest()[:12].upper()}"
 
 
-def _scanner_matches(candidate: CandidateFinding, scanners: Iterable[ScannerFinding]) -> bool:
-    candidate_cwe = {value.upper() for value in candidate.cwe}
-    for scanner in scanners:
-        if any(
-            evidence.type == "scanner"
-            and evidence.fingerprint
-            and evidence.fingerprint == scanner.fingerprint
-            for evidence in candidate.evidence
+def _candidate_quorum(
+    consensus_review: ConsensusReviewArtifact | None,
+    candidate_id: str,
+) -> CandidateConsensusDecision | None:
+    if consensus_review is None or candidate_id not in consensus_review.candidate_ids:
+        return None
+    return consensus_review.quorum_for(candidate_id)
+
+
+def _review_decisions_for_candidate(
+    consensus_review: ConsensusReviewArtifact,
+    candidate_id: str,
+) -> tuple[VerificationDecision, ...]:
+    return tuple(
+        reviewer.decision_for(candidate_id).as_verification_decision()
+        for reviewer in consensus_review.reviewers
+    )
+
+
+def _has_exact_cross_examination(
+    candidate_id: str,
+    cross_examinations: Iterable[CandidateCrossExaminationDecision],
+) -> bool:
+    decisions = tuple(
+        sorted(
+            (decision for decision in cross_examinations if decision.candidate_id == candidate_id),
+            key=lambda decision: decision.reviewer_index,
+        )
+    )
+    return (
+        len(decisions) == 2
+        and tuple(decision.reviewer_index for decision in decisions) == (1, 2)
+        and len({decision.request_id for decision in decisions}) == 2
+        and len({decision.root_lineage for decision in decisions}) == 2
+        and len({decision.requested_model for decision in decisions}) == 2
+        and all(decision.returned_model == decision.requested_model for decision in decisions)
+    )
+
+
+def _candidate_status(
+    candidate: CandidateFinding,
+    *,
+    consensus_review: ConsensusReviewArtifact | None,
+    validation: LocationValidation | None,
+    scanner_findings: list[ScannerFinding],
+    cross_examinations: Iterable[CandidateCrossExaminationDecision],
+    deterministically_rejected_candidate_ids: frozenset[str],
+) -> FindingStatus:
+    """Reduce one candidate without borrowing evidence or controls from a peer."""
+
+    if validation is None or not validation.valid:
+        return FindingStatus.REJECTED
+    if candidate.candidate_id in deterministically_rejected_candidate_ids:
+        return FindingStatus.REJECTED
+    quorum = _candidate_quorum(consensus_review, candidate.candidate_id)
+    if quorum is None or quorum.outcome is ConsensusQuorumOutcome.INCONCLUSIVE:
+        return FindingStatus.NEEDS_REVIEW
+    if quorum.outcome is ConsensusQuorumOutcome.REJECTED:
+        return FindingStatus.REJECTED
+    if candidate.severity.value in {"high", "critical"} and not _has_exact_cross_examination(
+        candidate.candidate_id,
+        cross_examinations,
+    ):
+        return FindingStatus.NEEDS_REVIEW
+
+    assert consensus_review is not None
+    review_decisions = _review_decisions_for_candidate(
+        consensus_review,
+        candidate.candidate_id,
+    )
+    verified_support = sum(
+        decision.verdict is VerificationVerdict.VERIFIED for decision in review_decisions
+    )
+    unguarded_support = sum(
+        decision.verdict in {VerificationVerdict.VERIFIED, VerificationVerdict.PLAUSIBLE}
+        and not decision.guards_and_controls
+        for decision in review_decisions
+    )
+    complete_attack_path = (
+        candidate.source is not None
+        and candidate.sink is not None
+        and not candidate.compensating_controls
+        and unguarded_support >= 2
+    )
+    reproduction = any(
+        evidence.type == "reproduction"
+        and evidence.source == "mmaudit-local-fork-reproduction"
+        and bool(evidence.fingerprint)
+        for evidence in candidate.evidence
+    )
+    del scanner_findings  # Scanner observations lack an exact full-claim binding.
+
+    # A mixed support quorum is deliberately only plausible. Two exact VERIFIED
+    # decisions are required before model review can participate in a higher cap.
+    quorum_verified = verified_support >= 2
+    if quorum_verified and reproduction:
+        return FindingStatus.CONFIRMED
+    if quorum_verified and complete_attack_path:
+        return FindingStatus.HIGH_CONFIDENCE
+    return FindingStatus.NEEDS_REVIEW
+
+
+def _candidate_claim_key(candidate: CandidateFinding) -> _CandidateClaimKey | None:
+    """Return the complete canonical public semantics eligible for support credit."""
+
+    cwe = tuple(sorted({value.upper() for value in candidate.cwe}))
+    if not cwe or candidate.source is None or candidate.sink is None:
+        return None
+    payload = {
+        "title": candidate.title,
+        "cwe": cwe,
+        "owasp": tuple(sorted({value.upper() for value in candidate.owasp})),
+        "summary": candidate.summary,
+        "impact": candidate.impact,
+        "preconditions": candidate.preconditions,
+        "locations": [
+            location.model_dump(mode="json")
+            for location in sorted(
+                candidate.locations,
+                key=lambda item: (
+                    item.path,
+                    item.start_line,
+                    item.end_line,
+                    item.symbol or "",
+                    item.content_hash or "",
+                ),
+            )
+        ],
+        "source": candidate.source.model_dump(mode="json"),
+        "sink": candidate.sink.model_dump(mode="json"),
+        "attack_path": candidate.attack_path,
+        "compensating_controls": candidate.compensating_controls,
+        "false_positive_conditions": candidate.false_positive_conditions,
+        "recommendation": candidate.recommendation,
+        "verification_test": candidate.verification_test.model_dump(mode="json"),
+    }
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def _candidate_publication_rank(candidate: CandidateFinding) -> tuple[int, float, str]:
+    return (
+        SEVERITY_ORDER[candidate.severity.value],
+        candidate.confidence,
+        candidate.candidate_id,
+    )
+
+
+def _candidate_status_publication_rank(
+    candidate: CandidateFinding,
+    candidate_statuses: dict[str, FindingStatus],
+) -> tuple[int, int, float, str]:
+    """Rank exact-claim primaries by severity, then deterministic evidence status."""
+
+    status = candidate_statuses.get(candidate.candidate_id)
+    return (
+        SEVERITY_ORDER[candidate.severity.value],
+        _STATUS_RANK[status] if status is not None else -1,
+        candidate.confidence,
+        candidate.candidate_id,
+    )
+
+
+def _publication_claim_candidates(
+    candidates: Iterable[CandidateFinding],
+    *,
+    candidate_statuses: dict[str, FindingStatus],
+) -> tuple[CandidateFinding, ...]:
+    """Select the highest-severity exact semantic claim without cross-claim transfer."""
+
+    ordered = tuple(sorted(candidates, key=lambda candidate: candidate.candidate_id))
+    if not ordered:
+        return ()
+    primary = max(
+        ordered,
+        key=lambda candidate: _candidate_status_publication_rank(
+            candidate,
+            candidate_statuses,
+        ),
+    )
+    claim_key = _candidate_claim_key(primary)
+    if claim_key is None:
+        return (primary,)
+    return tuple(candidate for candidate in ordered if _candidate_claim_key(candidate) == claim_key)
+
+
+def _strongly_supported_model_candidates(
+    *,
+    candidates: Iterable[CandidateFinding],
+    candidate_statuses: dict[str, FindingStatus],
+) -> tuple[CandidateFinding, ...]:
+    """Select one exact-claim cluster with at least two independent model families."""
+
+    by_claim: dict[_CandidateClaimKey, list[CandidateFinding]] = {}
+    for candidate in candidates:
+        claim_key = _candidate_claim_key(candidate)
+        if (
+            candidate_statuses.get(candidate.candidate_id) is FindingStatus.HIGH_CONFIDENCE
+            and candidate.model_family is not None
+            and claim_key is not None
         ):
-            return True
-        scanner_cwe = {value.upper() for value in scanner.cwe}
-        for candidate_location in candidate.locations:
-            for scanner_location in scanner.locations:
-                if (
-                    candidate_location.path == scanner_location.path
-                    and abs(candidate_location.start_line - scanner_location.start_line) <= 12
-                    and (not candidate_cwe or not scanner_cwe or bool(candidate_cwe & scanner_cwe))
-                ):
-                    return True
-    return False
+            by_claim.setdefault(claim_key, []).append(candidate)
+    eligible = [
+        tuple(sorted(members, key=lambda candidate: candidate.candidate_id))
+        for members in by_claim.values()
+        if len({candidate.model_family for candidate in members}) >= 2
+    ]
+    if not eligible:
+        return ()
+    return max(
+        eligible,
+        key=lambda members: max(
+            _candidate_status_publication_rank(candidate, candidate_statuses)
+            for candidate in members
+        ),
+    )
 
 
 def preliminary_status(
@@ -309,7 +567,12 @@ def preliminary_status(
     decisions: dict[str, VerificationDecision],
     validations: dict[str, LocationValidation],
     scanner_findings: list[ScannerFinding],
+    *,
+    consensus_review: ConsensusReviewArtifact | None = None,
+    cross_examinations: Iterable[CandidateCrossExaminationDecision] = (),
+    deterministically_rejected_candidate_ids: frozenset[str] = frozenset(),
 ) -> FindingStatus:
+    cross_examination_records = tuple(cross_examinations)
     valid_execution = [
         candidate
         for candidate in group.execution_candidates
@@ -322,73 +585,160 @@ def preliminary_status(
         # invariant counterexample. Model roles may analyze its impact, but they do
         # not control whether the deterministic observation exists.
         return FindingStatus.CONFIRMED
-    accepted = [
+    del decisions  # The single-verifier map is retained for API compatibility, never authority.
+    candidate_statuses = {
+        candidate.candidate_id: _candidate_status(
+            candidate,
+            consensus_review=consensus_review,
+            validation=validations.get(candidate.candidate_id),
+            scanner_findings=scanner_findings,
+            cross_examinations=cross_examination_records,
+            deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
+        )
+        for candidate in group.candidates
+    }
+    retained = [
         candidate
         for candidate in group.candidates
-        if decisions.get(candidate.candidate_id)
-        and decisions[candidate.candidate_id].verdict
-        in {VerificationVerdict.VERIFIED, VerificationVerdict.PLAUSIBLE}
+        if candidate_statuses[candidate.candidate_id] is not FindingStatus.REJECTED
     ]
-    if not accepted:
+    if not retained:
         return FindingStatus.REJECTED
-    valid = [
-        candidate
-        for candidate in accepted
-        if validations.get(candidate.candidate_id) and validations[candidate.candidate_id].valid
-    ]
-    if not valid:
-        return FindingStatus.REJECTED
-    verifier_accepts = any(
-        decisions[candidate.candidate_id].verdict is VerificationVerdict.VERIFIED
-        for candidate in valid
+    publication_claim = _publication_claim_candidates(
+        retained,
+        candidate_statuses=candidate_statuses,
     )
-    scanner_support = any(_scanner_matches(candidate, scanner_findings) for candidate in valid)
-    independent_families = {
-        candidate.model_family
-        for candidate in valid
-        if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
-        and candidate.model_family is not None
-    }
-    reproduction = any(
-        evidence.type == "reproduction"
-        and evidence.source == "mmaudit-local-fork-reproduction"
-        and bool(evidence.fingerprint)
-        for candidate in valid
-        for evidence in candidate.evidence
+    publication_primary = max(
+        publication_claim,
+        key=lambda candidate: _candidate_status_publication_rank(
+            candidate,
+            candidate_statuses,
+        ),
     )
-    formal_counterexample = any(
-        evidence.type == "formal"
-        and evidence.rule_id == "counterexample"
-        and bool(evidence.fingerprint)
-        for candidate in valid
-        for evidence in candidate.evidence
+    primary_status = candidate_statuses[publication_primary.candidate_id]
+    strongly_supported_candidates = _strongly_supported_model_candidates(
+        candidates=publication_claim,
+        candidate_statuses=candidate_statuses,
     )
-    complete_attack_path = any(
-        candidate.source is not None
-        and candidate.sink is not None
-        and not candidate.compensating_controls
-        and not decisions[candidate.candidate_id].guards_and_controls
-        for candidate in valid
-    )
-    if verifier_accepts and reproduction:
-        return FindingStatus.CONFIRMED
-    if verifier_accepts and formal_counterexample and complete_attack_path:
-        return FindingStatus.CONFIRMED
-    if verifier_accepts and scanner_support and complete_attack_path:
-        return FindingStatus.CONFIRMED
-    if verifier_accepts and len(independent_families) >= 2 and complete_attack_path:
+    if (
+        primary_status is FindingStatus.HIGH_CONFIDENCE
+        and publication_primary in strongly_supported_candidates
+    ):
         return FindingStatus.STRONGLY_SUPPORTED
-    if verifier_accepts:
-        strongest = max(valid, key=lambda candidate: candidate.confidence)
-        decision = decisions[strongest.candidate_id]
-        if (
-            strongest.source is not None
-            and strongest.sink is not None
-            and not strongest.compensating_controls
-            and not decision.guards_and_controls
-        ):
-            return FindingStatus.HIGH_CONFIDENCE
-    return FindingStatus.NEEDS_REVIEW
+    # The candidate that owns the published severity and claim text must also own
+    # its status cap. In particular, executable evidence on a lower-severity peer
+    # cannot confirm a higher-severity model-only publication.
+    return primary_status
+
+
+def _select_status_bearing_model_candidates(
+    *,
+    group: CandidateGroup,
+    valid_candidates: list[CandidateFinding],
+    candidate_statuses: dict[str, FindingStatus],
+    cap: FindingStatus,
+) -> tuple[CandidateFinding, ...]:
+    accepted_valid_candidates = [
+        candidate
+        for candidate in valid_candidates
+        if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
+        and candidate_statuses.get(candidate.candidate_id) is not FindingStatus.REJECTED
+    ]
+    publication_claim = _publication_claim_candidates(
+        accepted_valid_candidates,
+        candidate_statuses=candidate_statuses,
+    )
+    if cap is FindingStatus.STRONGLY_SUPPORTED:
+        winning_candidates = _strongly_supported_model_candidates(
+            candidates=publication_claim,
+            candidate_statuses=candidate_statuses,
+        )
+    else:
+        winning_candidates = tuple(
+            candidate
+            for candidate in publication_claim
+            if candidate_statuses.get(candidate.candidate_id) is cap
+        )
+    selection_pool = (
+        publication_claim
+        or [
+            candidate
+            for candidate in valid_candidates
+            if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
+        ]
+        or list(group.candidates)
+    )
+    publication_primary = max(
+        selection_pool,
+        key=lambda candidate: _candidate_status_publication_rank(
+            candidate,
+            candidate_statuses,
+        ),
+    )
+    return tuple(
+        sorted(
+            {
+                candidate.candidate_id: candidate
+                for candidate in (*winning_candidates, publication_primary)
+            }.values(),
+            key=lambda candidate: candidate.candidate_id,
+        )
+    )
+
+
+def status_bearing_candidate_ids(
+    group: CandidateGroup,
+    *,
+    decisions: dict[str, VerificationDecision],
+    validations: dict[str, LocationValidation],
+    scanner_findings: list[ScannerFinding],
+    consensus_review: ConsensusReviewArtifact | None = None,
+    cross_examinations: Iterable[CandidateCrossExaminationDecision] = (),
+    deterministically_rejected_candidate_ids: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Return exact-claim status support plus the candidate owning published semantics."""
+
+    valid_candidates = [
+        candidate
+        for candidate in group.candidates
+        if (validation := validations.get(candidate.candidate_id)) is not None and validation.valid
+    ]
+    if group.execution_candidates:
+        valid_execution = [
+            candidate for candidate in group.execution_candidates if candidate in valid_candidates
+        ]
+        selected_execution_candidates = valid_execution or list(group.execution_candidates)
+        return frozenset(candidate.candidate_id for candidate in selected_execution_candidates)
+
+    cross_examination_records = tuple(cross_examinations)
+    candidate_statuses = {
+        candidate.candidate_id: _candidate_status(
+            candidate,
+            consensus_review=consensus_review,
+            validation=validations.get(candidate.candidate_id),
+            scanner_findings=scanner_findings,
+            cross_examinations=cross_examination_records,
+            deterministically_rejected_candidate_ids=deterministically_rejected_candidate_ids,
+        )
+        for candidate in group.candidates
+        if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
+    }
+    cap = preliminary_status(
+        group,
+        decisions,
+        validations,
+        scanner_findings,
+        consensus_review=consensus_review,
+        cross_examinations=cross_examination_records,
+        deterministically_rejected_candidate_ids=deterministically_rejected_candidate_ids,
+    )
+    selected_model_candidates = _select_status_bearing_model_candidates(
+        group=group,
+        valid_candidates=valid_candidates,
+        candidate_statuses=candidate_statuses,
+        cap=cap,
+    )
+    return frozenset(candidate.candidate_id for candidate in selected_model_candidates)
 
 
 def _unique_strings(values: Iterable[str]) -> list[str]:
@@ -446,20 +796,30 @@ def merge_group(
     validations: dict[str, LocationValidation],
     scanner_findings: list[ScannerFinding],
     judge: JudgeDecision | None,
+    consensus_review: ConsensusReviewArtifact | None = None,
+    cross_examinations: Iterable[CandidateCrossExaminationDecision] = (),
+    deterministically_rejected_candidate_ids: frozenset[str] = frozenset(),
 ) -> Finding:
     """Merge evidence while preventing a judge from exceeding consensus."""
 
+    cross_examination_records = tuple(cross_examinations)
     valid_candidates = [
         candidate
         for candidate in group.candidates
         if (validation := validations.get(candidate.candidate_id)) is not None and validation.valid
     ]
-    accepted_valid_candidates = [
-        candidate
-        for candidate in valid_candidates
-        if (decision := decisions.get(candidate.candidate_id)) is not None
-        and decision.verdict in {VerificationVerdict.VERIFIED, VerificationVerdict.PLAUSIBLE}
-    ]
+    candidate_statuses = {
+        candidate.candidate_id: _candidate_status(
+            candidate,
+            consensus_review=consensus_review,
+            validation=validations.get(candidate.candidate_id),
+            scanner_findings=scanner_findings,
+            cross_examinations=cross_examination_records,
+            deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
+        )
+        for candidate in group.candidates
+        if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
+    }
     valid_execution_candidates = [
         candidate for candidate in group.execution_candidates if candidate in valid_candidates
     ]
@@ -476,40 +836,76 @@ def merge_group(
     execution_origin_valid = bool(group.execution_candidates) and len(
         valid_execution_candidates
     ) == len(group.execution_candidates)
+    cap = preliminary_status(
+        group,
+        decisions,
+        validations,
+        scanner_findings,
+        consensus_review=consensus_review,
+        cross_examinations=cross_examination_records,
+        deterministically_rejected_candidate_ids=deterministically_rejected_candidate_ids,
+    )
+    status_bearing_model_candidates = list(
+        _select_status_bearing_model_candidates(
+            group=group,
+            valid_candidates=valid_candidates,
+            candidate_statuses=candidate_statuses,
+            cap=cap,
+        )
+    )
     primary_pool = (
         valid_execution_candidates
         or list(group.execution_candidates)
-        or accepted_valid_candidates
+        or status_bearing_model_candidates
         or valid_candidates
         or list(group.candidates)
     )
     primary = max(
         primary_pool,
-        key=lambda candidate: (
-            candidate.confidence,
-            SEVERITY_ORDER[candidate.severity.value],
-            candidate.candidate_id,
+        key=lambda candidate: _candidate_status_publication_rank(
+            candidate,
+            candidate_statuses,
         ),
     )
-    cap = preliminary_status(group, decisions, validations, scanner_findings)
     status = cap
     if (
         not valid_execution_candidates
         and judge is not None
         and _STATUS_RANK[judge.status] < _STATUS_RANK[status]
     ):
-        status = judge.status
-    severity = judge.severity if judge is not None else primary.severity
+        # A fourth model may calibrate within the retained partition, but it cannot
+        # unilaterally erase a group retained by the exact three-review quorum.
+        status = (
+            FindingStatus.NEEDS_REVIEW
+            if _STATUS_RANK[judge.status] < _STATUS_RANK[FindingStatus.NEEDS_REVIEW]
+            else judge.status
+        )
+    severity = (
+        max(
+            (primary.severity, judge.severity),
+            key=lambda value: SEVERITY_ORDER[value.value],
+        )
+        if judge is not None
+        else primary.severity
+    )
     confidence = (
         max(candidate.confidence for candidate in valid_execution_candidates)
         if valid_execution_candidates
         else min(
-            max(candidate.confidence for candidate in group.candidates),
+            max(candidate.confidence for candidate in primary_pool),
             judge.confidence if judge is not None else 1.0,
         )
     )
+    # Execution-origin groups retain linked candidates in contributor IDs and review
+    # dissent, while execution anchors alone own the published claim and evidence.
+    # Model-origin groups likewise publish only candidates establishing the winning cap.
+    evidence_candidates = (
+        valid_execution_candidates or list(group.execution_candidates)
+        if group.execution_candidates
+        else [primary]
+    )
     validation_scope = (
-        list(group.execution_candidates) if group.execution_candidates else list(group.candidates)
+        list(group.execution_candidates) if group.execution_candidates else evidence_candidates
     )
     validation_errors = [
         error
@@ -539,25 +935,30 @@ def merge_group(
         confidence = 0.0
     elif validation_errors and not valid_candidates:
         confidence = min(confidence, 0.59)
-    disagreement = (
-        judge.rationale
-        if judge
-        else "; ".join(
+    review_rationales = (
+        [
+            (
+                f"{reviewer.slot.value}:{candidate.candidate_id}:"
+                f"{reviewer.decision_for(candidate.candidate_id).rationale}"
+            )
+            for candidate in group.candidates
+            for reviewer in consensus_review.reviewers
+            if candidate.candidate_id in consensus_review.candidate_ids
+        ]
+        if consensus_review is not None
+        else [
             decision.rationale
             for candidate in group.candidates
             if (decision := decisions.get(candidate.candidate_id)) is not None
-        )
+        ]
     )
-    cwe = (
-        judge.cwe
-        if judge and judge.cwe
-        else _unique_strings(value for candidate in group.candidates for value in candidate.cwe)
+    disagreement = "; ".join(
+        [*review_rationales, *([f"judge:{judge.rationale}"] if judge is not None else [])]
     )
-    owasp = (
-        judge.owasp
-        if judge and judge.owasp
-        else _unique_strings(value for candidate in group.candidates for value in candidate.owasp)
-    )
+    # The group judge may calibrate impact, but cannot replace a winning claim's
+    # classification with taxonomy unsupported by its status-bearing candidates.
+    cwe = _unique_strings(value for candidate in evidence_candidates for value in candidate.cwe)
+    owasp = _unique_strings(value for candidate in evidence_candidates for value in candidate.owasp)
     location_candidates = (
         (
             valid_execution_candidates
@@ -566,28 +967,19 @@ def merge_group(
         )
         if group.execution_candidates
         else (
-            valid_candidates
-            if status is not FindingStatus.REJECTED and valid_candidates
+            evidence_candidates
+            if status is not FindingStatus.REJECTED and evidence_candidates
             else list(group.candidates)
         )
     )
-    matched_scanners = [
-        scanner
-        for scanner in scanner_findings
-        if any(_scanner_matches(candidate, [scanner]) for candidate in valid_candidates)
-    ]
     evidence = _unique_evidence(
         [
-            *(evidence for candidate in group.candidates for evidence in candidate.evidence),
             *(
-                Evidence(
-                    type="scanner",
-                    source=scanner.scanner,
-                    description=scanner.message,
-                    rule_id=scanner.rule_id,
-                    fingerprint=scanner.fingerprint,
-                )
-                for scanner in matched_scanners
+                evidence
+                for candidate in evidence_candidates
+                for evidence in candidate.evidence
+                if candidate.origin_kind is not CandidateOriginKind.MODEL_REVIEW
+                or evidence.type != "scanner"
             ),
         ]
     )
@@ -596,18 +988,21 @@ def merge_group(
         evidence=evidence,
         independent_families={
             candidate.model_family
-            for candidate in valid_candidates
+            for candidate in evidence_candidates
             if candidate.origin_kind is CandidateOriginKind.MODEL_REVIEW
             and candidate.model_family is not None
         },
         has_complete_attack_path=any(
             candidate.source is not None and candidate.sink is not None
-            for candidate in valid_candidates
+            for candidate in evidence_candidates
         ),
         has_execution_counterexample=execution_origin_valid,
     )
     return Finding(
-        id=stable_finding_id(primary),
+        id=stable_finding_id(
+            primary,
+            publication_claim_key=group.publication_claim_key,
+        ),
         group_id=group.group_id,
         origin_kind=(
             FindingOriginKind.DETERMINISTIC_EXECUTION
@@ -624,7 +1019,7 @@ def merge_group(
         summary=primary.summary,
         impact=primary.impact,
         preconditions=_unique_strings(
-            value for candidate in group.candidates for value in candidate.preconditions
+            value for candidate in evidence_candidates for value in candidate.preconditions
         ),
         locations=_unique_locations(
             location for candidate in location_candidates for location in candidate.locations
@@ -634,17 +1029,26 @@ def merge_group(
         attack_path=primary.attack_path,
         evidence=evidence,
         compensating_controls=_unique_strings(
-            value for candidate in group.candidates for value in candidate.compensating_controls
+            value for candidate in evidence_candidates for value in candidate.compensating_controls
         ),
         false_positive_conditions=_unique_strings(
-            value for candidate in group.candidates for value in candidate.false_positive_conditions
+            value
+            for candidate in evidence_candidates
+            for value in candidate.false_positive_conditions
         ),
         recommendation=primary.recommendation,
         verification_test=primary.verification_test,
-        model_votes=[vote for candidate in group.candidates for vote in candidate.model_votes],
+        model_votes=[vote for candidate in evidence_candidates for vote in candidate.model_votes],
         location_validation=LocationValidation(
             valid=(
-                execution_origin_valid if group.execution_candidates else bool(valid_candidates)
+                execution_origin_valid
+                if group.execution_candidates
+                else bool(evidence_candidates)
+                and all(
+                    (validation := validations.get(candidate.candidate_id)) is not None
+                    and validation.valid
+                    for candidate in evidence_candidates
+                )
             ),
             content_hash=aggregate_hash,
             errors=validation_errors,
@@ -678,8 +1082,6 @@ def _evidence_strength(
     has_complete_attack_path: bool,
     has_execution_counterexample: bool = False,
 ) -> EvidenceStrength:
-    if any(item.type == "formal" and item.rule_id == "counterexample" for item in evidence):
-        return EvidenceStrength.FORMAL_COUNTEREXAMPLE
     reproduction = _reproduction_state(evidence)
     if reproduction is ReproductionState.REPRODUCED_AND_MINIMIZED:
         return EvidenceStrength.MINIMIZED_LOCAL_FORK_REPRODUCTION
@@ -716,7 +1118,6 @@ def enforce_critical_evidence_cap(
         or finding.status is not FindingStatus.CONFIRMED
         or finding.evidence_strength
         in {
-            EvidenceStrength.FORMAL_COUNTEREXAMPLE,
             EvidenceStrength.LOCAL_FORK_REPRODUCTION,
             EvidenceStrength.MINIMIZED_LOCAL_FORK_REPRODUCTION,
             EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE,
@@ -725,7 +1126,8 @@ def enforce_critical_evidence_cap(
         return finding
     reason = (
         "Critical confirmation was capped at strongly supported because no "
-        "accepted local reproduction or matching formal counterexample was available."
+        "accepted local reproduction or typed deterministic execution counterexample was "
+        "available."
     )
     return finding.model_copy(
         update={

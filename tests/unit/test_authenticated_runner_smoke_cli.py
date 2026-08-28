@@ -130,7 +130,14 @@ def _patch_launch_inputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> SimpleNamespace:
-    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
+    config = SimpleNamespace(
+        execution=SimpleNamespace(
+            cost_ledger_path=None,
+            max_model_retries=1,
+            max_schema_validation_retries=0,
+        ),
+        stable_hash=lambda: "a" * 64,
+    )
     ledger = SimpleNamespace(
         path=tmp_path / "cost-ledger.json",
         lock_path=tmp_path / ".cost-ledger.json.lock",
@@ -144,7 +151,11 @@ def _patch_launch_inputs(
         lambda _path: object(),
     )
     monkeypatch.setattr(cli_module, "resolve_verified_public_model_lineage", lambda: object())
-    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_candidate_registry",
+        lambda _path: SimpleNamespace(candidates=()),
+    )
     monkeypatch.setattr(
         cli_module,
         "load_model_discovery_run",
@@ -154,6 +165,11 @@ def _patch_launch_inputs(
         cli_module,
         "_budget_and_usage",
         lambda *_args, **_kwargs: (budget, object()),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_smoke_config_binding",
+        lambda bundle, **_kwargs: bundle,
     )
     return ledger
 
@@ -617,6 +633,7 @@ def test_authenticated_runner_smoke_real_path_preflights_before_secret_and_publi
     inventory = _inventory()
     ledger_evidence = SimpleNamespace(entries=(object(),) * 4, final_spent_usd="0.18")
     bundle = SimpleNamespace(
+        schema_version="1.3",
         smoke_run_index=2,
         bundle_sha256="d" * 64,
         closed_ledger_evidence=ledger_evidence,
@@ -694,8 +711,15 @@ def test_verify_authenticated_runner_smoke_replays_exact_corpus_parent_and_confi
         corpus_sha256="b" * 64,
         ground_truth_sha256="c" * 64,
     )
-    config = SimpleNamespace(stable_hash=lambda: "d" * 64)
+    config = SimpleNamespace(
+        execution=SimpleNamespace(
+            max_model_retries=1,
+            max_schema_validation_retries=0,
+        ),
+        stable_hash=lambda: "d" * 64,
+    )
     bundle = SimpleNamespace(
+        schema_version="1.3",
         smoke_run_index=2,
         smoke_corpus_bundle_sha256=smoke.bundle_sha256,
         parent_corpus_sha256=parent.corpus_sha256,
@@ -744,6 +768,11 @@ def test_verify_authenticated_runner_smoke_replays_exact_corpus_parent_and_confi
         cli_module,
         "load_config",
         load_configuration,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_smoke_config_binding",
+        lambda value, **_kwargs: value,
     )
 
     def external_state_forbidden(*_args: object, **_kwargs: object) -> Any:
@@ -840,7 +869,18 @@ def test_verify_authenticated_runner_smoke_rejects_detached_pin(
     monkeypatch.setattr(
         cli_module,
         "load_config",
-        lambda _path: SimpleNamespace(stable_hash=lambda: "d" * 64),
+        lambda _path: SimpleNamespace(
+            execution=SimpleNamespace(
+                max_model_retries=1,
+                max_schema_validation_retries=0,
+            ),
+            stable_hash=lambda: "d" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_smoke_config_binding",
+        lambda value, **_kwargs: value,
     )
 
     result = RUNNER.invoke(
@@ -937,8 +977,9 @@ def test_smoke_evidence_schema_is_generated_closed_and_non_authorizing() -> None
     assert schema["properties"]["run_count"]["const"] == 2
     assert schema["properties"]["logical_request_count"]["const"] == 4
     assert schema["properties"]["maximum_provider_attempt_count"]["const"] == 8
+    assert schema["properties"]["schema_version"]["enum"] == ["1.1", "1.2", "1.3"]
+    assert schema["properties"]["schema_version"]["default"] == "1.3"
     for definition in (
-        schema,
         schema["$defs"]["AuthenticatedRunnerSmokeCostPlan"],
         schema["$defs"]["AuthenticatedRunnerSmokeRunEvidence"],
     ):

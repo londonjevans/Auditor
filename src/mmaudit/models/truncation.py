@@ -28,6 +28,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.structured_output import (
     StructuredOutputDecodeError,
+    StructuredOutputFailureCode,
     decode_structured_output,
 )
 
@@ -126,8 +127,14 @@ class CandidateReviewTruncationFailureCode(StrEnum):
 class CandidateReviewTruncationError(ValueError):
     """Typed, raw-output-free framed recovery rejection."""
 
-    def __init__(self, code: CandidateReviewTruncationFailureCode) -> None:
+    def __init__(
+        self,
+        code: CandidateReviewTruncationFailureCode,
+        *,
+        structured_output_failure_code: StructuredOutputFailureCode | None = None,
+    ) -> None:
         self.code = code
+        self.structured_output_failure_code = structured_output_failure_code
         super().__init__(f"candidate review truncation rejected: {code.value}")
 
 
@@ -994,6 +1001,10 @@ class _MalformedFrameBoundaryError(ValueError):
     pass
 
 
+class _CandidateReviewRawBoundError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class _RetainedFinding:
     value: CandidateFinding
@@ -1177,18 +1188,22 @@ def decode_complete_candidate_review_document(content: str) -> CandidateReviewFr
     if not candidate_review_protocol_implementation_is_pristine():
         raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ARGUMENT)
     _validated_response_bytes(content)
-    document: CandidateReviewFramedDocument | None = None
     try:
         _validate_complete_document_raw_bounds(content)
-        decoded = decode_structured_output(content, CandidateReviewFramedDocument)
-        document = decoded.value
-    except (StructuredOutputDecodeError, ValidationError, ValueError):
-        pass
-    if document is None:
+    except _CandidateReviewRawBoundError:
         raise CandidateReviewTruncationError(
             CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT
-        )
-    return document
+        ) from None
+    except ValueError:
+        pass
+    try:
+        decoded = decode_structured_output(content, CandidateReviewFramedDocument)
+    except StructuredOutputDecodeError as exc:
+        raise CandidateReviewTruncationError(
+            CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT,
+            structured_output_failure_code=exc.code,
+        ) from None
+    return decoded.value
 
 
 def decode_complete_candidate_review_frames(content: str) -> CandidateReviewBatch:
@@ -1510,11 +1525,11 @@ def _scan_object_end(content: str, start: int) -> int | None:
             in_string = True
         elif character == "{":
             if len(stack) >= MAX_CANDIDATE_REVIEW_JSON_DEPTH:
-                raise _MalformedFrameBoundaryError
+                raise _CandidateReviewRawBoundError
             stack.append("}")
         elif character == "[":
             if len(stack) >= MAX_CANDIDATE_REVIEW_JSON_DEPTH:
-                raise _MalformedFrameBoundaryError
+                raise _CandidateReviewRawBoundError
             stack.append("]")
         elif character in "}]":
             if not stack or character != stack.pop():
@@ -1550,12 +1565,12 @@ def _validate_complete_document_raw_bounds(content: str) -> None:
     frame_count = 0
     while index < len(content) and content[index] != "]":
         if frame_count >= MAX_CANDIDATE_REVIEW_FRAMES:
-            raise ValueError("candidate review frame count exceeds its fixed bound")
+            raise _CandidateReviewRawBoundError
         frame_end = _scan_object_end(content, index)
         if frame_end is None:
             raise ValueError("candidate review frame is incomplete")
         if len(content[index:frame_end].encode("utf-8")) > MAX_CANDIDATE_REVIEW_FRAME_BYTES:
-            raise ValueError("candidate review frame exceeds its fixed byte bound")
+            raise _CandidateReviewRawBoundError
         frame_count += 1
         index = _skip_json_whitespace(content, frame_end)
         if index < len(content) and content[index] == ",":
@@ -2067,6 +2082,8 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "pairwise",
         "BaseModel",
         "ValidationError",
+        "StructuredOutputDecodeError",
+        "StructuredOutputFailureCode",
         "CandidateFinding",
         "CandidateReviewBatch",
         "ModelSurfaceReviewRecord",
@@ -2107,6 +2124,7 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_DuplicateObjectKeyError",
         "_NonFiniteNumberError",
         "_MalformedFrameBoundaryError",
+        "_CandidateReviewRawBoundError",
         "_RetainedFinding",
         "_RetainedSurfaceReview",
         "_PrefixState",

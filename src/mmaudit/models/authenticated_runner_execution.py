@@ -1053,7 +1053,9 @@ async def _execute_authenticated_cross_lineage_runner_impl(
         evidence=runner_evidence,
     )
     if (
-        runner_projection.ledger_request_ids != tuple(sorted(expected_attempt_ids))
+        runner_evidence.effective_config_sha256 != effective_config_sha256
+        or runner_projection.effective_config_sha256 != effective_config_sha256
+        or runner_projection.ledger_request_ids != tuple(sorted(expected_attempt_ids))
         or tuple(item.custody.run_kind for item in executed)
         != (CrossLineageAdjudicationRunKind.PRIMARY, CrossLineageAdjudicationRunKind.REPLAY)
         or tuple(item.adjudication_report_sha256 for item in runner_projection.runs)

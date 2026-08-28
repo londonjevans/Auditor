@@ -62,6 +62,9 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReproductionResolution,
     CandidateReviewBatch,
+    ConsensusReviewArtifact,
+    ConsensusReviewerBatch,
+    ConsensusReviewerSlot,
     Evidence,
     FalsificationDecision,
     FalsificationVerdict,
@@ -308,7 +311,7 @@ def _tasks_for_pass(
             _task(
                 manifest,
                 pass_kind,
-                key="validation:verifier",
+                key="independent-verifier",
                 kind=SchedulerTaskKind.MODEL_REQUEST,
                 role="verifier",
                 candidate_ids=workset.selected_candidate_ids,
@@ -316,7 +319,7 @@ def _tasks_for_pass(
             _task(
                 manifest,
                 pass_kind,
-                key="validation:candidate-falsifier-1",
+                key="candidate-falsifier-1",
                 kind=SchedulerTaskKind.MODEL_REQUEST,
                 role="candidate_falsifier",
                 candidate_ids=workset.selected_candidate_ids,
@@ -324,7 +327,7 @@ def _tasks_for_pass(
             _task(
                 manifest,
                 pass_kind,
-                key="validation:candidate-falsifier-2",
+                key="candidate-falsifier-2",
                 kind=SchedulerTaskKind.MODEL_REQUEST,
                 role="candidate_falsifier",
                 candidate_ids=workset.selected_candidate_ids,
@@ -779,6 +782,110 @@ def _terminal_resolution() -> CandidateReproductionResolution:
         kind=ReproductionResolutionKind.INCONCLUSIVE,
         detail="The bounded synthetic reproduction remains inconclusive.",
     )
+
+
+def _terminal_consensus_review(
+    manifest: SchedulerCampaignManifest,
+    candidate: CandidateFinding,
+    *,
+    candidate_payload_sha256: str | None = None,
+) -> ConsensusReviewArtifact:
+    decisions = (
+        _terminal_verification(),
+        _terminal_verification().model_copy(
+            update={"verdict": VerificationVerdict.VERIFIED, "confidence": 0.8}
+        ),
+        _terminal_verification().model_copy(
+            update={"verdict": VerificationVerdict.REJECTED, "confidence": 0.7}
+        ),
+    )
+    reviewers = tuple(
+        ConsensusReviewerBatch.build(
+            slot=slot,
+            scheduler_task_id=f"scheduler-task-{index:064x}",
+            logical_request_id=f"scheduler-request-{index:064x}",
+            requested_model=f"synthetic/reviewer-{index}",
+            returned_model=f"synthetic/reviewer-{index}",
+            root_lineage=f"sha256:{index:064x}",
+            model_completion_evidence_sha256=f"{index + 10:064x}",
+            decisions=(decisions[index - 1],),
+        )
+        for index, slot in enumerate(
+            (
+                ConsensusReviewerSlot.VERIFIER,
+                ConsensusReviewerSlot.FALSIFIER_1,
+                ConsensusReviewerSlot.FALSIFIER_2,
+            ),
+            start=1,
+        )
+    )
+    return ConsensusReviewArtifact.build(
+        campaign_id=manifest.campaign_id,
+        manifest_sha256=manifest.manifest_sha256,
+        pass_plan_id=f"scheduler-plan-{hashlib.sha256(b'consensus-plan').hexdigest()}",
+        pass_plan_sha256=hashlib.sha256(b"consensus-plan-payload").hexdigest(),
+        candidate_workset_sha256=hashlib.sha256(b"consensus-workset").hexdigest(),
+        candidate_payload_sha256s={
+            candidate.candidate_id: (
+                candidate_payload_sha256
+                or scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+            )
+        },
+        reviewers=reviewers,
+    )
+
+
+def test_terminal_report_authority_binds_exact_consensus_candidate_and_primary_review() -> None:
+    manifest = _manifest()
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    candidate = _terminal_authority_candidate()
+    consensus_review = _terminal_consensus_review(manifest, candidate)
+
+    authority = SchedulerTerminalReportAuthority.build(
+        manifest=manifest,
+        summary=summary,
+        severity_threshold=Severity.MEDIUM,
+        candidates=(candidate,),
+        final_findings=(),
+        rejected_findings=(),
+        filtered_findings=(),
+        report_quality_review=None,
+        verification_decisions=(_terminal_verification(),),
+        cross_examination_decisions=(),
+        falsification_decisions=(),
+        reproduction_results=(),
+        reproduction_resolutions=(),
+        consensus_review=consensus_review,
+    )
+
+    assert authority.consensus_review is not None
+    assert authority.consensus_review.subject_id == manifest.campaign_id
+    assert authority.consensus_review.payload_sha256 == scheduler_canonical_sha256(
+        consensus_review.model_dump(mode="json")
+    )
+
+    wrong_payload_review = _terminal_consensus_review(
+        manifest,
+        candidate,
+        candidate_payload_sha256="f" * 64,
+    )
+    with pytest.raises(ValueError, match="differs from campaign candidate authority"):
+        SchedulerTerminalReportAuthority.build(
+            manifest=manifest,
+            summary=summary,
+            severity_threshold=Severity.MEDIUM,
+            candidates=(candidate,),
+            final_findings=(),
+            rejected_findings=(),
+            filtered_findings=(),
+            report_quality_review=None,
+            verification_decisions=(_terminal_verification(),),
+            cross_examination_decisions=(),
+            falsification_decisions=(),
+            reproduction_results=(),
+            reproduction_resolutions=(),
+            consensus_review=wrong_payload_review,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1501,19 +1608,37 @@ def test_cross_shard_boundary_requires_exact_surface_and_both_sources_delivered(
         )
 
 
-def test_pass_six_requires_two_independent_falsifier_lineages_per_candidate() -> None:
-    manifest = _manifest("two-falsifiers")
+def _pass_six_plan(
+    seed: str,
+    *,
+    candidate_ids: tuple[str, ...] = ("candidate-critical",),
+) -> tuple[SchedulerCampaignManifest, SchedulerPassPlan]:
+    manifest = _manifest(seed)
     prior: list[_PassBundle] = []
     for kind in SCHEDULER_PASS_ORDER[:5]:
-        prior.append(_pass_bundle(manifest, kind, prior))
-    valid = _pass_bundle(
+        prior.append(_pass_bundle(manifest, kind, prior, candidate_ids=candidate_ids))
+    return manifest, _pass_bundle(
         manifest,
         SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
         prior,
+        candidate_ids=candidate_ids,
     ).plan
-    falsifiers = tuple(task for task in valid.tasks if task.role == "candidate_falsifier")
-    assert len(falsifiers) == 2
-    with pytest.raises(ValidationError, match="two independent falsifier lineages"):
+
+
+def test_pass_six_requires_exact_closed_reviewer_slots() -> None:
+    manifest, valid = _pass_six_plan("closed-reviewer-slots")
+    assert valid.candidate_workset is not None
+    reviewers = tuple(
+        task for task in valid.tasks if task.role in {"verifier", "candidate_falsifier"}
+    )
+    assert {task.task_key for task in reviewers} == {
+        "independent-verifier",
+        "candidate-falsifier-1",
+        "candidate-falsifier-2",
+    }
+    falsifiers = tuple(task for task in reviewers if task.role == "candidate_falsifier")
+
+    with pytest.raises(ValidationError, match="exactly one independent verifier and two"):
         SchedulerPassPlan.build(
             manifest=manifest,
             pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
@@ -1521,6 +1646,145 @@ def test_pass_six_requires_two_independent_falsifier_lineages_per_candidate() ->
             tasks=tuple(task for task in valid.tasks if task != falsifiers[-1]),
             candidate_workset=valid.candidate_workset,
         )
+
+    extra_verifier = _task(
+        manifest,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        key="extra-verifier",
+        kind=SchedulerTaskKind.MODEL_REQUEST,
+        role="verifier",
+        candidate_ids=valid.candidate_workset.selected_candidate_ids,
+    )
+    with pytest.raises(ValidationError, match="exactly one independent verifier and two"):
+        SchedulerPassPlan.build(
+            manifest=manifest,
+            pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            dependencies=valid.dependencies,
+            tasks=(*valid.tasks, extra_verifier),
+            candidate_workset=valid.candidate_workset,
+        )
+
+    verifier = next(task for task in reviewers if task.role == "verifier")
+    wrong_key_verifier = _task(
+        manifest,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        key="not-the-independent-verifier",
+        kind=SchedulerTaskKind.MODEL_REQUEST,
+        role="verifier",
+        candidate_ids=valid.candidate_workset.selected_candidate_ids,
+    )
+    with pytest.raises(ValidationError, match="exactly one independent verifier and two"):
+        SchedulerPassPlan.build(
+            manifest=manifest,
+            pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            dependencies=valid.dependencies,
+            tasks=tuple(wrong_key_verifier if task == verifier else task for task in valid.tasks),
+            candidate_workset=valid.candidate_workset,
+        )
+
+
+def test_pass_six_reviewers_each_bind_the_complete_workset() -> None:
+    manifest, valid = _pass_six_plan(
+        "complete-review-workset",
+        candidate_ids=("candidate-critical-a", "candidate-critical-b"),
+    )
+    assert valid.candidate_workset is not None
+    second_falsifier = next(
+        task for task in valid.tasks if task.task_key == "candidate-falsifier-2"
+    )
+    partial_falsifier = _task(
+        manifest,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        key=second_falsifier.task_key,
+        kind=SchedulerTaskKind.MODEL_REQUEST,
+        role=second_falsifier.role,
+        candidate_ids=(valid.candidate_workset.selected_candidate_ids[0],),
+    )
+
+    with pytest.raises(ValidationError, match="exact complete validation workset"):
+        SchedulerPassPlan.build(
+            manifest=manifest,
+            pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            dependencies=valid.dependencies,
+            tasks=tuple(
+                partial_falsifier if task == second_falsifier else task for task in valid.tasks
+            ),
+            candidate_workset=valid.candidate_workset,
+        )
+
+
+def test_pass_six_reviewer_identities_are_pairwise_distinct() -> None:
+    manifest, valid = _pass_six_plan("distinct-reviewer-identities")
+    assert valid.candidate_workset is not None
+    reviewers = tuple(
+        task for task in valid.tasks if task.role in {"verifier", "candidate_falsifier"}
+    )
+    assert len({task.root_lineage for task in reviewers}) == 3
+    assert len({task.task_id for task in reviewers}) == 3
+    assert len({task.logical_request_id for task in reviewers}) == 3
+    first_falsifier = next(task for task in reviewers if task.task_key == "candidate-falsifier-1")
+    second_falsifier = next(task for task in reviewers if task.task_key == "candidate-falsifier-2")
+    reused_lineage = _task(
+        manifest,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        key=second_falsifier.task_key,
+        kind=SchedulerTaskKind.MODEL_REQUEST,
+        role=second_falsifier.role,
+        candidate_ids=valid.candidate_workset.selected_candidate_ids,
+        root_lineage=first_falsifier.root_lineage,
+    )
+
+    with pytest.raises(ValidationError, match="must be pairwise distinct"):
+        SchedulerPassPlan.build(
+            manifest=manifest,
+            pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            dependencies=valid.dependencies,
+            tasks=tuple(
+                reused_lineage if task == second_falsifier else task for task in valid.tasks
+            ),
+            candidate_workset=valid.candidate_workset,
+        )
+
+
+def test_pass_six_allows_nonreviewer_planner_falsifier_and_host_tasks() -> None:
+    manifest, valid = _pass_six_plan("allowed-nonreviewer-tasks")
+    assert valid.candidate_workset is not None
+    candidate_ids = valid.candidate_workset.selected_candidate_ids
+    additional_tasks = (
+        _task(
+            manifest,
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            key="test-generation-planner",
+            kind=SchedulerTaskKind.MODEL_REQUEST,
+            role="specialist:test_generation:exploit_test",
+            candidate_ids=candidate_ids,
+        ),
+        _task(
+            manifest,
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            key="independent-reproduction-falsifier",
+            kind=SchedulerTaskKind.MODEL_REQUEST,
+            role="falsifier",
+            candidate_ids=candidate_ids,
+        ),
+        _task(
+            manifest,
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            key="deterministic-reproduction",
+            kind=SchedulerTaskKind.HOST_COMPUTATION,
+            role="host:reproduction",
+        ),
+    )
+
+    expanded = SchedulerPassPlan.build(
+        manifest=manifest,
+        pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        dependencies=valid.dependencies,
+        tasks=(*valid.tasks, *additional_tasks),
+        candidate_workset=valid.candidate_workset,
+    )
+
+    assert {task.task_id for task in additional_tasks} <= {task.task_id for task in expanded.tasks}
 
 
 def test_conditional_empty_is_closed_to_passes_five_and_six_and_exact_dependency() -> None:

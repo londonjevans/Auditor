@@ -31,18 +31,21 @@ from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
     AuditRunOptions,
+    ModelRetryPolicy,
     canonical_audit_config_json,
     model_lineage_index,
     parse_canonical_audit_config,
 )
-from mmaudit.constants import ALL_MODEL_ROLES, VERSION
+from mmaudit.constants import ALL_MODEL_ROLES, SEVERITY_ORDER, VERSION
 from mmaudit.language_plugins import parse_language_capability_payload
+from mmaudit.models.candidate_review_stamping import stamp_candidate_review_findings
 from mmaudit.models.scheduler import (
     ABSENT_QUALIFICATION_SHA256,
     SchedulerAbsenceReason,
     SchedulerActivationStatus,
     SchedulerArtifact,
     SchedulerCampaignStatus,
+    SchedulerCandidatePayloadBinding,
     SchedulerCrossShardIntegrationOutput,
     SchedulerEvidenceCapJudgmentOutput,
     SchedulerEvidencePayloadBinding,
@@ -58,6 +61,7 @@ from mmaudit.models.scheduler import (
     SchedulerShardInventory,
     SchedulerTaskKind,
     SchedulerTaskOutput,
+    SchedulerTaskResult,
     SchedulerTerminalFindingState,
     SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
@@ -74,6 +78,9 @@ from mmaudit.models.schemas import (
     CandidateFindingArtifact,
     CandidateOriginKind,
     CandidateReproductionResolution,
+    CandidateReviewBatch,
+    ConsensusReviewArtifact,
+    ConsensusReviewerSlot,
     ExecutionEvidenceKind,
     ExecutionOriginDispositionKind,
     FalsificationBatch,
@@ -85,6 +92,7 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestSpec,
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
+    JudgeDecision,
     JudgeDecisionBatch,
     LanguageCapabilityArtifact,
     LanguageCapabilityProfile,
@@ -94,6 +102,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    ModelVote,
     PropertyCorpus,
     ReportQualityReview,
     ReproductionIntegrityStatus,
@@ -111,6 +120,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     StrictModel,
     VerificationBatch,
+    _validate_model_retry_routing_evidence,
     solidity_graph_occurrence_sha256,
     validate_audit_model_selection_usage_custody,
 )
@@ -126,7 +136,24 @@ from mmaudit.models.sharding import (
     SolidityShardsArtifact,
 )
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
-from mmaudit.orchestration.candidate_enrichment import attach_formal_counterexamples
+from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.orchestration.candidate_enrichment import (
+    apply_reproduction_results,
+    attach_consensus_review_votes,
+    attach_cross_examination_votes,
+    attach_formal_counterexamples,
+)
+from mmaudit.orchestration.consensus import (
+    enforce_critical_evidence_cap,
+    merge_group,
+    publication_groups,
+    status_bearing_candidate_ids,
+)
+from mmaudit.orchestration.consensus_evidence import (
+    ConsensusEvidenceError,
+    ConsensusReviewerEvidenceRecord,
+    build_consensus_review_artifact,
+)
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
     ContextManifestReportBinding,
@@ -137,11 +164,12 @@ from mmaudit.orchestration.context_manifest import (
     validate_context_manifest_against_usage,
 )
 from mmaudit.orchestration.execution_candidates import (
-    validate_invariant_execution_candidate_provenance,
+    validate_invariant_execution_candidate,
 )
 from mmaudit.orchestration.reproduction_resolution import (
     build_candidate_reproduction_resolutions,
 )
+from mmaudit.privacy import PrivacySourceClassification
 from mmaudit.reporting.bundle import (
     MANIFEST_BOUND_REPORT_DELIVERABLES,
     SCANNER_SOURCE_EVIDENCE_PATH,
@@ -203,6 +231,17 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
+_MODEL_RETRY_ROUTING_KEYS = frozenset(
+    {
+        "model_retry_policy",
+        "model_retry_policy_sha256",
+        "maximum_attempts_for_request",
+        "transient_retries_used",
+        "schema_validation_retries_used",
+        "model_retry_attempts",
+        "model_retry_evidence_sha256",
+    }
+)
 LANGUAGE_CAPABILITY_ARTIFACT_PATH = "language-capability.json"
 AUDIT_MODEL_SELECTION_EVIDENCE_PATH = "audit-model-selection-evidence.json"
 AUDIT_MODEL_REFRESH_EVIDENCE_PATH = "audit-model-refresh-evidence.json"
@@ -432,7 +471,7 @@ class RunConfigurationBinding(StrictModel):
 class RunEvidenceManifest(StrictModel):
     """Self-hashed manifest over source, run evidence projections, and artifacts."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     generated_by: Literal["mmaudit"] = "mmaudit"
     tool_version: str = Field(min_length=1, max_length=100)
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -447,7 +486,7 @@ class RunEvidenceManifest(StrictModel):
 
     @model_validator(mode="after")
     def hashes_and_paths_are_consistent(self) -> RunEvidenceManifest:
-        if (self.schema_version in {"1.1", "1.2"}) != (self.run_configuration is not None):
+        if (self.schema_version in {"1.1", "1.2", "1.3"}) != (self.run_configuration is not None):
             raise ValueError(
                 f"manifest {self.schema_version} requires run configuration provenance"
             )
@@ -488,7 +527,7 @@ class RunEvidenceManifest(StrictModel):
             not refresh_artifact_present or not selection_artifact_present
         ):
             raise ValueError("manifest refresh-pricing custody lacks refresh or selection")
-        if self.schema_version == "1.2":
+        if self.schema_version in {"1.2", "1.3"}:
             missing_report_artifacts = sorted(
                 (
                     MANIFEST_BOUND_REPORT_DELIVERABLES
@@ -501,7 +540,7 @@ class RunEvidenceManifest(StrictModel):
             )
             if missing_report_artifacts:
                 raise ValueError(
-                    "manifest 1.2 requires report artifact bindings: "
+                    f"manifest {self.schema_version} requires report artifact bindings: "
                     + ", ".join(missing_report_artifacts)
                 )
         if "run-evidence-manifest.json" in artifact_paths:
@@ -562,6 +601,46 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _require_report_model_retry_policy(
+    report: AuditReport,
+    config: AuditConfig,
+    *,
+    allow_legacy_default_retry_evidence_omission: bool = False,
+) -> None:
+    """Join every current retained model attempt to the selected split retry policy."""
+
+    policy = ModelRetryPolicy.build(
+        transient_retry_limit=config.execution.max_model_retries,
+        schema_validation_retry_limit=config.execution.max_schema_validation_retries,
+    )
+    if allow_legacy_default_retry_evidence_omission:
+        if not report.usage:
+            return
+        if policy.transient_retry_limit != 1 or policy.schema_validation_retry_limit != 0:
+            raise ValueError("legacy manifest requires the exact retry-off model policy")
+        if any(
+            _MODEL_RETRY_ROUTING_KEYS.intersection(record.routing)
+            or record.attempts > policy.maximum_attempts
+            for record in report.usage
+        ):
+            raise ValueError(
+                "legacy manifest usage is not exact retry-off evidence without split custody"
+            )
+        return
+    for record in report.usage:
+        routing = record.routing
+        if (
+            type(routing) is not dict
+            or not _MODEL_RETRY_ROUTING_KEYS.issubset(routing)
+            or routing.get("model_retry_policy_sha256") != policy.policy_sha256
+        ):
+            raise ValueError("current model usage differs from the selected split retry policy")
+        try:
+            _validate_model_retry_routing_evidence(routing, attempts=record.attempts)
+        except ValueError:
+            raise ValueError("current model retry evidence is inconsistent") from None
+
+
 def seal_run_evidence_manifest(
     *,
     run_id: str,
@@ -571,13 +650,13 @@ def seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
-    schema_version: Literal["1.1", "1.2"] = "1.2",
+    schema_version: Literal["1.1", "1.2", "1.3"] = "1.3",
     tool_version: str = VERSION,
 ) -> RunEvidenceManifest:
     """Issue a new complete report-bundle manifest using the current schema only."""
 
-    if schema_version != "1.2":
-        raise ValueError("new manifest issuance requires schema 1.2 and all report leaves")
+    if schema_version != "1.3":
+        raise ValueError("new manifest issuance requires schema 1.3 and exact split retry custody")
     return _seal_run_evidence_manifest(
         run_id=run_id,
         repository_root_name=repository_root_name,
@@ -600,7 +679,7 @@ def _seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
-    schema_version: Literal["1.1", "1.2"],
+    schema_version: Literal["1.1", "1.2", "1.3"],
     tool_version: str,
 ) -> RunEvidenceManifest:
     """Reconstruct a current or already-sealed legacy manifest deterministically."""
@@ -746,9 +825,26 @@ def _build_run_evidence_manifest(
         source_tree_sha256=source_tree_sha256,
         expected_source_classification=run_configuration.run_options.privacy_source_classification,
     )
-    report_bundle_required = (
-        sealed_verification_manifest is None or sealed_verification_manifest.schema_version == "1.2"
+    report_bundle_required = sealed_verification_manifest is None or (
+        sealed_verification_manifest.schema_version in {"1.2", "1.3"}
     )
+    retry_evidence_required = sealed_verification_manifest is None or (
+        sealed_verification_manifest.schema_version == "1.3"
+    )
+    if retry_evidence_required:
+        _require_report_model_retry_policy(
+            report,
+            effective_config,
+        )
+    elif (
+        sealed_verification_manifest is not None
+        and sealed_verification_manifest.schema_version == "1.2"
+    ):
+        _require_report_model_retry_policy(
+            report,
+            effective_config,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
     _validate_report_artifact_consistency(
         root,
         report,
@@ -821,6 +917,7 @@ def _build_run_evidence_manifest(
         root,
         report,
         config=effective_config,
+        run_options=invocation_options,
         qualification_runtime=qualification_runtime,
         scheduler_runtime_journal=scheduler_runtime_journal,
         require_retained_usage_custody=report_bundle_required,
@@ -909,12 +1006,15 @@ def _build_run_evidence_manifest(
         ),
     )
     artifacts = _collect_artifacts(root)
-    manifest_schema: Literal["1.1", "1.2"] = (
-        "1.1"
-        if sealed_verification_manifest is not None
-        and sealed_verification_manifest.schema_version == "1.1"
-        else "1.2"
-    )
+    manifest_schema: Literal["1.1", "1.2", "1.3"]
+    if sealed_verification_manifest is None:
+        manifest_schema = "1.3"
+    elif sealed_verification_manifest.schema_version == "1.1":
+        manifest_schema = "1.1"
+    elif sealed_verification_manifest.schema_version == "1.2":
+        manifest_schema = "1.2"
+    else:
+        manifest_schema = "1.3"
     return _seal_run_evidence_manifest(
         run_id=report.run_id,
         repository_root_name=report.repository.root_name,
@@ -1462,6 +1562,90 @@ def _validate_run_terminal_report_authority(
         achieved_profile.value if achieved_profile is not None else None
     ):
         raise ValueError("run achieved profile differs from private terminal report authority")
+
+
+def _validate_terminal_learning_capture(
+    root: Path,
+    report: AuditReport,
+    *,
+    scheduler_artifact: SchedulerArtifact | None,
+    run_options: AuditRunOptions,
+    expected_binding: ManifestFileBinding | None,
+) -> None:
+    """Require and join the private learning artifact for every eligible terminal audit."""
+
+    from mmaudit.models.learning import (
+        MAX_LEARNING_RECORD_JSON_BYTES,
+        TerminalAuditLearningRecord,
+    )
+    from mmaudit.orchestration.learning import (
+        TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH,
+        build_terminal_learning_capture,
+        terminal_learning_capture_is_eligible,
+    )
+
+    scope = run_options.learning_capture_scope
+    capture_base = (
+        not run_options.scanner_only
+        and run_options.privacy_source_classification
+        is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+        and report.schema_version == "1.2"
+        and report.completed
+        and report.run_status is AuditRunStatus.COMPLETE
+        and bool(report.usage)
+        and all(item.execution_evidence is ExecutionEvidenceKind.REAL for item in report.usage)
+    )
+    if capture_base and scope is None:
+        raise ValueError("eligible private terminal audit lacks its learning tenant scope")
+    required = terminal_learning_capture_is_eligible(
+        report=report,
+        scanner_only=run_options.scanner_only,
+        privacy_source_classification=run_options.privacy_source_classification,
+        tenant_scope_id=scope.tenant_scope_id if scope is not None else None,
+    )
+    present = expected_binding is not None
+    if present != required:
+        raise ValueError("terminal learning artifact presence differs from capture eligibility")
+    if not present:
+        return
+    assert scope is not None
+    raw = _read_json_artifact(
+        root,
+        TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH,
+        expected_binding=expected_binding,
+        max_bytes=MAX_LEARNING_RECORD_JSON_BYTES,
+    )
+    record = TerminalAuditLearningRecord.model_validate_json(
+        json.dumps(raw, sort_keys=True, separators=(",", ":")),
+        strict=True,
+    )
+    authority = RunTerminalReportAuthority.model_validate(
+        _read_json_artifact(root, RUN_TERMINAL_REPORT_AUTHORITY_PATH)
+    )
+    authority.require_exact_report(report, scheduler_artifact=scheduler_artifact)
+    if (
+        record.tenant_id != scope.tenant_scope_id
+        or record.audit_id != report.run_id
+        or record.terminal_report_authority_sha256 != authority.authority_sha256
+        or record.report_payload_sha256 != authority.report_payload_sha256
+        or record.completed_at != report.generated_at
+        or record.parent_record_sha256 is not None
+        or record.external_misses
+    ):
+        raise ValueError("terminal learning artifact differs from exact run custody")
+    candidates = CandidateFindingArtifact.model_validate(
+        _read_json_artifact(root, "candidate-findings.json")
+    )
+    expected_record = build_terminal_learning_capture(
+        tenant_id=scope.tenant_scope_id,
+        report=report,
+        candidate_projection=candidates.findings,
+        terminal_report_authority=authority,
+        scheduler_artifact=scheduler_artifact,
+        captured_at=record.captured_at,
+    )
+    if record != expected_record:
+        raise ValueError("terminal learning artifact differs from deterministic projection")
 
 
 def _validate_model_execution_cost_ledger_custody(
@@ -2341,8 +2525,8 @@ def _validate_report_artifact_consistency(
             if candidate.execution_provenance is None:
                 raise ValueError("execution-origin candidate lacks typed provenance")
             try:
-                validate_invariant_execution_candidate_provenance(
-                    candidate.execution_provenance,
+                validate_invariant_execution_candidate(
+                    candidate,
                     invariant_suite=report.invariants,
                     harnesses=planned_harnesses,
                     property_corpus=typed_corpus,
@@ -3221,6 +3405,7 @@ def validate_scheduler_artifact(
     report: AuditReport,
     *,
     config: AuditConfig | None = None,
+    run_options: AuditRunOptions | None = None,
     qualification_runtime: dict[str, Any] | None = None,
     scheduler_runtime_journal: SchedulerJournal | None = None,
     scheduler_reference_binding: ManifestFileBinding | None = None,
@@ -3338,6 +3523,8 @@ def validate_scheduler_artifact(
         report=report,
         public_artifact=artifact,
         expected_shard_inventory=expected_shard_inventory,
+        config=config,
+        run_options=run_options,
         runtime_journal=scheduler_runtime_journal,
         reference_binding=scheduler_reference_binding,
         require_retained_usage_custody=require_retained_usage_custody,
@@ -3534,6 +3721,8 @@ def _require_scheduler_journal_authority(
     report: AuditReport,
     public_artifact: SchedulerArtifact,
     expected_shard_inventory: SchedulerShardInventory,
+    config: AuditConfig | None,
+    run_options: AuditRunOptions | None,
     runtime_journal: SchedulerJournal | None,
     reference_binding: ManifestFileBinding | None,
     require_retained_usage_custody: bool,
@@ -3563,6 +3752,8 @@ def _require_scheduler_journal_authority(
                 report=report,
                 public_artifact=public_artifact,
                 journal=runtime_journal,
+                config=config,
+                run_options=run_options,
                 require_retained_usage_custody=require_retained_usage_custody,
             )
             if reconstructed != public_artifact:
@@ -3592,6 +3783,8 @@ def _require_scheduler_journal_authority(
                 report=report,
                 public_artifact=public_artifact,
                 journal=journal,
+                config=config,
+                run_options=run_options,
                 require_retained_usage_custody=require_retained_usage_custody,
             )
         finally:
@@ -3606,6 +3799,8 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     report: AuditReport,
     public_artifact: SchedulerArtifact,
     journal: SchedulerJournal,
+    config: AuditConfig | None,
+    run_options: AuditRunOptions | None,
     require_retained_usage_custody: bool,
 ) -> SchedulerArtifact:
     """Join exact privacy bytes to a descriptor-held scheduler manifest and report."""
@@ -3614,7 +3809,13 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     if expected_custody is None:
         reconstructed = journal.artifact()
         snapshot = _scheduler_report_authority_snapshot(journal)
-        _validate_scheduler_report_authority(root=root, report=report, snapshot=snapshot)
+        _validate_scheduler_report_authority(
+            root=root,
+            report=report,
+            snapshot=snapshot,
+            config=config,
+            run_options=run_options,
+        )
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
@@ -3632,7 +3833,13 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
         )
         reconstructed = journal.artifact()
         snapshot = _scheduler_report_authority_snapshot(journal)
-        _validate_scheduler_report_authority(root=root, report=report, snapshot=snapshot)
+        _validate_scheduler_report_authority(
+            root=root,
+            report=report,
+            snapshot=snapshot,
+            config=config,
+            run_options=run_options,
+        )
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
@@ -3768,6 +3975,8 @@ def _successful_scheduler_task_output(
 
 def _scheduler_accepted_candidate_authority(
     snapshot: _SchedulerReportAuthoritySnapshot,
+    *,
+    trusted_scanner_fingerprints: frozenset[str],
 ) -> tuple[
     dict[SchedulerPassKind, dict[str, str]],
     dict[SchedulerPassKind, dict[str, CandidateFinding]],
@@ -3799,6 +4008,43 @@ def _scheduler_accepted_candidate_authority(
             output_candidates = {
                 candidate.candidate_id: candidate for candidate in output.accepted_candidates
             }
+            if output_candidates:
+                task = next(
+                    (task for task in pass_result.plan.tasks if task.task_id == result.task_id),
+                    None,
+                )
+                completion = output.model_completion_evidence
+                if (
+                    task is None
+                    or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+                    or completion is None
+                ):
+                    raise ValueError(
+                        "scheduler accepted candidates lack exact model completion authority"
+                    )
+                raw_batch = _reconstruct_successful_scheduler_output(
+                    snapshot=snapshot,
+                    pass_result=pass_result,
+                    task_id=result.task_id,
+                    output_type=CandidateReviewBatch,
+                )
+                expected_candidates = tuple(
+                    sorted(
+                        stamp_candidate_review_findings(
+                            request_role=task.role,
+                            usage_record=completion.usage_record,
+                            trusted_scanner_fingerprints=tuple(
+                                sorted(trusted_scanner_fingerprints)
+                            ),
+                            raw_findings=raw_batch.findings,
+                        ),
+                        key=lambda candidate: candidate.candidate_id,
+                    )
+                )
+                if output.accepted_candidates != expected_candidates:
+                    raise ValueError(
+                        "scheduler accepted candidates differ from trusted host stamping"
+                    )
             if set(output_candidates) != set(output.accepted_candidate_payload_sha256s):
                 raise ValueError("scheduler accepted candidate objects differ from their hashes")
             for candidate_id, payload_sha256 in output.accepted_candidate_payload_sha256s.items():
@@ -3863,6 +4109,7 @@ def _successful_scheduler_host_output[OutputT: StrictModel](
 
 def _scheduler_evidence_payload_bindings(
     kind: Literal[
+        "consensus_review",
         "judge",
         "verification",
         "cross_examination",
@@ -3888,6 +4135,193 @@ def _scheduler_evidence_payload_bindings(
     if len(identities) != len(set(identities)):
         raise ValueError(f"scheduler {kind} evidence contains an exact duplicate")
     return ordered
+
+
+def _validate_scheduler_pass_four_candidate_subsets(
+    *,
+    integration: SchedulerCrossShardIntegrationOutput,
+    reduction: SchedulerFindingReductionOutput,
+    candidates: tuple[CandidateFinding, ...],
+    snapshot: _SchedulerReportAuthoritySnapshot,
+) -> None:
+    """Derive downstream candidate subsets from exact candidates and validation custody."""
+
+    candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    if tuple(candidate_by_id) != integration.candidate_ids:
+        candidate_by_id = dict(sorted(candidate_by_id.items()))
+    if tuple(candidate_by_id) != integration.candidate_ids:
+        raise ValueError("scheduler pass-four candidate objects differ from their inventory")
+    expected_high_critical = tuple(
+        candidate_id
+        for candidate_id, candidate in candidate_by_id.items()
+        if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+    )
+    if integration.high_critical_candidate_ids != expected_high_critical:
+        raise ValueError("scheduler pass-four high/critical subset is not candidate-derived")
+
+    integration_records = {record.candidate_id: record for record in integration.candidate_records}
+    reduction_records = {record.candidate_id: record for record in reduction.candidate_records}
+    if any(
+        integration_records[candidate_id].location_validation
+        != reduction_record.location_validation
+        for candidate_id, reduction_record in reduction_records.items()
+    ):
+        raise ValueError("scheduler pass-four validation differs from pass-three custody")
+    expected_valid = tuple(
+        candidate_id
+        for candidate_id in integration.candidate_ids
+        if integration_records[candidate_id].location_validation.valid
+    )
+    if integration.validation_candidate_ids != expected_valid:
+        raise ValueError("scheduler pass-four validation subset is not validation-derived")
+
+    expected_selected = {
+        SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION: expected_high_critical,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION: expected_valid,
+    }
+    for pass_kind, selected_ids in expected_selected.items():
+        pass_result = _scheduler_pass_result(snapshot, pass_kind)
+        if pass_result is None:
+            continue
+        workset = pass_result.plan.candidate_workset
+        if (
+            workset is None
+            or workset.candidate_ids != integration.candidate_ids
+            or workset.candidate_payload_bindings
+            != tuple(
+                SchedulerCandidatePayloadBinding.build(
+                    candidate_id=candidate_id,
+                    candidate_payload_sha256=integration.candidate_payload_sha256s[candidate_id],
+                )
+                for candidate_id in integration.candidate_ids
+            )
+            or workset.high_critical_candidate_ids != expected_high_critical
+            or workset.validation_candidate_ids != expected_valid
+            or workset.selected_candidate_ids != selected_ids
+        ):
+            raise ValueError("scheduler downstream candidate workset is not pass-four-derived")
+
+
+_CONSENSUS_SLOT_BY_TASK_KEY = MappingProxyType(
+    {
+        "independent-verifier": ConsensusReviewerSlot.VERIFIER,
+        "candidate-falsifier-1": ConsensusReviewerSlot.FALSIFIER_1,
+        "candidate-falsifier-2": ConsensusReviewerSlot.FALSIFIER_2,
+    }
+)
+
+
+def _reconstruct_scheduler_consensus_review(
+    *,
+    snapshot: _SchedulerReportAuthoritySnapshot,
+) -> ConsensusReviewArtifact | None:
+    """Rebuild the closed pass-six quorum from exact retained reviewer evidence."""
+
+    pass_result = _scheduler_pass_result(
+        snapshot,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+    )
+    if pass_result is None:
+        return None
+    plan = pass_result.plan
+    workset = plan.candidate_workset
+    if workset is None:
+        raise ValueError("scheduler consensus review lacks its pass-six candidate workset")
+    if not workset.selected_candidate_ids:
+        return None
+
+    reviewer_tasks = tuple(
+        task
+        for task in plan.tasks
+        if task.task_key in _CONSENSUS_SLOT_BY_TASK_KEY
+        or task.role in {"verifier", "candidate_falsifier"}
+    )
+    tasks_by_key = {task.task_key: task for task in reviewer_tasks}
+    if (
+        len(reviewer_tasks) != len(_CONSENSUS_SLOT_BY_TASK_KEY)
+        or set(tasks_by_key) != set(_CONSENSUS_SLOT_BY_TASK_KEY)
+        or any(
+            task.role
+            != ("verifier" if task_key == "independent-verifier" else "candidate_falsifier")
+            for task_key, task in tasks_by_key.items()
+        )
+    ):
+        raise ValueError("scheduler consensus review lacks its exact three reviewer tasks")
+
+    results_by_task: dict[str, SchedulerTaskResult] = {}
+    for task in tasks_by_key.values():
+        results = tuple(
+            result for result in pass_result.task_results if result.task_id == task.task_id
+        )
+        if len(results) != 1:
+            raise ValueError("scheduler consensus reviewer lacks one terminal result")
+        results_by_task[task.task_id] = results[0]
+    if any(
+        result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+        for result in results_by_task.values()
+    ):
+        return None
+
+    reviewers: list[ConsensusReviewerEvidenceRecord] = []
+    for task_key, slot in _CONSENSUS_SLOT_BY_TASK_KEY.items():
+        task = tasks_by_key[task_key]
+        result = results_by_task[task.task_id]
+        output = _successful_scheduler_task_output(
+            snapshot=snapshot,
+            pass_result=pass_result,
+            task_id=task.task_id,
+        )
+        completion = output.model_completion_evidence
+        if completion is None:
+            raise ValueError("successful scheduler consensus reviewer lacks completion evidence")
+        reviewers.append(
+            ConsensusReviewerEvidenceRecord(
+                slot=slot,
+                task=task,
+                result=result,
+                usage=completion.usage_record,
+                raw_batch=_reconstruct_successful_scheduler_output(
+                    snapshot=snapshot,
+                    pass_result=pass_result,
+                    task_id=task.task_id,
+                    output_type=VerificationBatch,
+                ),
+            )
+        )
+    try:
+        return build_consensus_review_artifact(
+            candidate_workset=workset,
+            reviewers=reviewers,
+        )
+    except ConsensusEvidenceError as exc:
+        raise ValueError(
+            "scheduler consensus review differs from exact retained pass-six evidence"
+        ) from exc
+
+
+def _validate_scheduler_consensus_review_authority(
+    *,
+    report: AuditReport,
+    reconstructed: ConsensusReviewArtifact | None,
+    authority: SchedulerTerminalReportAuthority | None = None,
+    judgment: SchedulerEvidenceCapJudgmentOutput | None = None,
+) -> None:
+    """Require every durable consensus projection to equal detached replay."""
+
+    if report.consensus_review != reconstructed:
+        raise ValueError("public consensus review differs from retained pass-six evidence")
+    binding = (
+        _scheduler_evidence_payload_bindings(
+            "consensus_review",
+            ((reconstructed.campaign_id, reconstructed),),
+        )[0]
+        if reconstructed is not None
+        else None
+    )
+    if authority is not None and authority.consensus_review != binding:
+        raise ValueError("scheduler terminal consensus review differs from retained pass six")
+    if judgment is not None and judgment.consensus_review != binding:
+        raise ValueError("scheduler judgment consensus review differs from retained pass six")
 
 
 def _scheduler_candidate_payload_sha256s(
@@ -4086,7 +4520,7 @@ def _validate_scheduler_retained_judge_decisions(
     judgment: SchedulerEvidenceCapJudgmentOutput,
     snapshot: _SchedulerReportAuthoritySnapshot,
     require_complete_pass: bool,
-) -> None:
+) -> tuple[JudgeDecision, ...]:
     """Join judgment bindings to exact retained judge outputs, including partial pass seven."""
 
     pass_result = _scheduler_pass_result(
@@ -4121,6 +4555,277 @@ def _validate_scheduler_retained_judge_decisions(
     )
     if judge_bindings != judgment.judge_decisions:
         raise ValueError("scheduler judgment differs from exact retained judge decisions")
+    return tuple(retained_judges)
+
+
+def _scheduler_judge_vote(
+    *,
+    decision: JudgeDecision | None,
+    snapshot: _SchedulerReportAuthoritySnapshot,
+) -> ModelVote | None:
+    """Reconstruct the exact public judge vote from its retained completion."""
+
+    if decision is None:
+        return None
+    pass_result = _scheduler_pass_result(
+        snapshot,
+        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+    )
+    if pass_result is None:
+        return None
+    judge_tasks = tuple(task for task in pass_result.plan.tasks if task.role == "judge")
+    if len(judge_tasks) != 1:
+        raise ValueError("scheduler terminal replay lacks one exact judge task")
+    output = _successful_scheduler_task_output(
+        snapshot=snapshot,
+        pass_result=pass_result,
+        task_id=judge_tasks[0].task_id,
+    )
+    completion = output.model_completion_evidence
+    if completion is None or not is_creditable_usage_record(completion.usage_record):
+        return None
+    usage = completion.usage_record
+    return ModelVote(
+        role="judge",
+        requested_model=usage.requested_model,
+        returned_model=usage.returned_model,
+        family=usage.model_family,
+        verdict=decision.status.value,
+        rationale=decision.rationale,
+    )
+
+
+def _terminal_finding_semantic_projection(finding: Finding) -> dict[str, Any]:
+    """Remove only source-range hashes already checked by excerpt custody."""
+
+    payload = finding.model_dump(mode="json")
+    locations = payload.get("locations")
+    if isinstance(locations, list):
+        payload["locations"] = [
+            {**location, "content_hash": None} if isinstance(location, dict) else location
+            for location in locations
+        ]
+    return payload
+
+
+def _validate_scheduler_terminal_policy(
+    *,
+    judgment: SchedulerEvidenceCapJudgmentOutput,
+    config: AuditConfig | None,
+    run_options: AuditRunOptions | None,
+) -> None:
+    """Bind replay policy to trusted effective configuration and invocation options."""
+
+    if config is not None and judgment.critical_confirmation_requires_execution != (
+        config.maximum_assurance.require_formal_or_reproduction_for_confirmed_critical
+    ):
+        raise ValueError("scheduler critical evidence cap differs from trusted configuration")
+    if run_options is not None and judgment.severity_threshold is not (
+        run_options.severity_threshold
+    ):
+        raise ValueError("scheduler severity threshold differs from trusted run options")
+
+
+def _validate_scheduler_terminal_finding_replay(
+    *,
+    report: AuditReport,
+    judgment: SchedulerEvidenceCapJudgmentOutput,
+    integration: SchedulerCrossShardIntegrationOutput,
+    candidates: tuple[CandidateFinding, ...],
+    trusted_scanner_fingerprints: frozenset[str],
+    snapshot: _SchedulerReportAuthoritySnapshot,
+    config: AuditConfig | None,
+    run_options: AuditRunOptions | None,
+    require_complete_pass: bool,
+) -> None:
+    """Replay claim-local merge, caps, and threshold partition from retained evidence."""
+
+    _validate_scheduler_terminal_policy(
+        judgment=judgment,
+        config=config,
+        run_options=run_options,
+    )
+    raw_candidate_by_id = dict(
+        sorted((candidate.candidate_id, candidate) for candidate in candidates)
+    )
+    if tuple(raw_candidate_by_id) != judgment.candidate_ids:
+        raise ValueError("scheduler terminal replay candidate inventory is incomplete")
+    validation_records = {
+        record.candidate_id: record.location_validation
+        for record in judgment.terminal_candidate_records
+    }
+    if set(validation_records) != set(raw_candidate_by_id):
+        raise ValueError("scheduler terminal replay lacks exact final candidate validations")
+    if any(
+        record.candidate_sha256 != integration.candidate_payload_sha256s[record.candidate_id]
+        for record in judgment.terminal_candidate_records
+    ):
+        raise ValueError("scheduler terminal validations differ from pass-four candidates")
+    validations = {
+        candidate_id: LocationValidation(
+            valid=record.valid,
+            content_hash=record.content_hash,
+            errors=list(record.errors),
+            validated_at=None,
+        )
+        for candidate_id, record in validation_records.items()
+    }
+
+    consensus_review = _reconstruct_scheduler_consensus_review(snapshot=snapshot)
+    replay_candidates = attach_cross_examination_votes(
+        list(candidates),
+        list(report.cross_examination_decisions),
+    )
+    replay_candidates = attach_consensus_review_votes(
+        replay_candidates,
+        consensus_review,
+    )
+    replay_candidates, deterministically_rejected_candidate_ids = apply_reproduction_results(
+        replay_candidates,
+        list(report.reproductions),
+        FalsificationBatch(decisions=list(report.falsification_decisions)),
+    )
+    retained_judges = _validate_scheduler_retained_judge_decisions(
+        judgment=judgment,
+        snapshot=snapshot,
+        require_complete_pass=require_complete_pass,
+    )
+    judges_by_group = {decision.group_id: decision for decision in retained_judges}
+    if len(judges_by_group) != len(retained_judges):
+        raise ValueError("scheduler terminal replay repeats a judge group")
+    verification_by_candidate = {
+        decision.candidate_id: decision for decision in report.verification_decisions
+    }
+
+    from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
+    from mmaudit.orchestration.pipeline import (
+        _enforce_post_judge_execution_severity_accounting,
+    )
+
+    scanner_findings = [
+        finding
+        for run in report.scanner_runs
+        if is_qualifying_real_scanner_run(run)
+        for finding in run.findings
+        if finding.fingerprint in trusted_scanner_fingerprints
+    ]
+    pre_judgment_high_critical_ids = {
+        candidate.candidate_id
+        for candidate in candidates
+        if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+    }
+
+    replayed: list[tuple[SchedulerTerminalFindingState, Finding]] = []
+    for group in publication_groups(replay_candidates):
+        judge = judges_by_group.get(group.group_id)
+        status_candidates = status_bearing_candidate_ids(
+            group,
+            decisions=verification_by_candidate,
+            validations=validations,
+            scanner_findings=scanner_findings,
+            consensus_review=consensus_review,
+            cross_examinations=report.cross_examination_decisions,
+            deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
+        )
+        finding = merge_group(
+            group,
+            decisions=verification_by_candidate,
+            validations=validations,
+            scanner_findings=scanner_findings,
+            judge=judge,
+            consensus_review=consensus_review,
+            cross_examinations=report.cross_examination_decisions,
+            deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
+        )
+        finding = enforce_critical_evidence_cap(
+            finding,
+            require_formal_or_reproduction=(judgment.critical_confirmation_requires_execution),
+        )
+        finding, _accounting_candidates, _limitation = (
+            _enforce_post_judge_execution_severity_accounting(
+                group=group,
+                finding=finding,
+                judge=judge,
+                pre_judgment_high_critical_ids=pre_judgment_high_critical_ids,
+                status_bearing_candidate_ids=status_candidates,
+            )
+        )
+        judge_vote = _scheduler_judge_vote(decision=judge, snapshot=snapshot)
+        if judge_vote is not None:
+            finding = finding.model_copy(update={"model_votes": [*finding.model_votes, judge_vote]})
+        if finding.status is FindingStatus.REJECTED:
+            state = SchedulerTerminalFindingState.REPORTED_REJECTED
+        elif (
+            finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+            or SEVERITY_ORDER[finding.severity.value]
+            >= SEVERITY_ORDER[judgment.severity_threshold.value]
+        ):
+            state = SchedulerTerminalFindingState.REPORTED_ACTIVE
+        else:
+            state = SchedulerTerminalFindingState.FILTERED_BELOW_THRESHOLD
+        replayed.append((state, finding))
+
+    public = [
+        *((SchedulerTerminalFindingState.REPORTED_ACTIVE, item) for item in report.findings),
+        *(
+            (SchedulerTerminalFindingState.REPORTED_REJECTED, item)
+            for item in report.rejected_findings
+        ),
+        *(
+            (SchedulerTerminalFindingState.FILTERED_BELOW_THRESHOLD, item)
+            for item in report.filtered_findings
+        ),
+    ]
+    replay_projection = sorted(
+        (
+            state.value,
+            finding.group_id,
+            _terminal_finding_semantic_projection(finding),
+        )
+        for state, finding in replayed
+    )
+    public_projection = sorted(
+        (
+            state.value,
+            finding.group_id,
+            _terminal_finding_semantic_projection(finding),
+        )
+        for state, finding in public
+    )
+    if public_projection != replay_projection:
+        raise ValueError("public terminal findings differ from deterministic consensus replay")
+
+
+def _validate_scheduler_reviewer_provider_generations(
+    snapshot: _SchedulerReportAuthoritySnapshot,
+) -> None:
+    """Reject reuse of one provider completion across authoritative model requests."""
+
+    generation_owners: dict[str, str] = {}
+    for pass_result in snapshot.pass_results_by_kind.values():
+        for task in pass_result.plan.tasks:
+            if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
+                continue
+            results = tuple(
+                result for result in pass_result.task_results if result.task_id == task.task_id
+            )
+            if (
+                len(results) != 1
+                or results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            ):
+                continue
+            output = _successful_scheduler_task_output(
+                snapshot=snapshot,
+                pass_result=pass_result,
+                task_id=task.task_id,
+            )
+            completion = output.model_completion_evidence
+            if completion is None or not completion.usage_record.openrouter_generation_id:
+                raise ValueError("scheduler model request lacks provider generation identity")
+            generation_id = completion.usage_record.openrouter_generation_id
+            if generation_id in generation_owners:
+                raise ValueError("scheduler model requests reuse one provider generation identity")
+            generation_owners[generation_id] = task.task_id
 
 
 def _validate_scheduler_prejudgment_evidence_authority(
@@ -4134,7 +4839,15 @@ def _validate_scheduler_prejudgment_evidence_authority(
     """Join current terminal evidence to exact successful pass-five/six outputs."""
 
     if authority.schema_version == "1.0":
+        if report.consensus_review is not None or authority.consensus_review is not None:
+            raise ValueError("legacy scheduler authority cannot publish a consensus review")
         return
+    _validate_scheduler_consensus_review_authority(
+        report=report,
+        reconstructed=_reconstruct_scheduler_consensus_review(snapshot=snapshot),
+        authority=authority,
+    )
+    _validate_scheduler_reviewer_provider_generations(snapshot)
     assert authority.cross_examination_decisions is not None
     assert authority.verification_decisions is not None
     assert authority.falsification_decisions is not None
@@ -4447,9 +5160,15 @@ def _validate_scheduler_terminal_report_authority(
     reproduction_artifact: _ManifestReproductionArtifact,
     judgment: SchedulerEvidenceCapJudgmentOutput,
     snapshot: _SchedulerReportAuthoritySnapshot,
+    require_complete_pass: bool,
 ) -> None:
     """Compare every terminal public decision to the exact private pass-seven authority."""
 
+    _validate_scheduler_consensus_review_authority(
+        report=report,
+        reconstructed=_reconstruct_scheduler_consensus_review(snapshot=snapshot),
+        judgment=judgment,
+    )
     if report.metadata.get("severity_threshold") != judgment.severity_threshold.value:
         raise ValueError("report severity threshold differs from scheduler judgment authority")
 
@@ -4553,7 +5272,7 @@ def _validate_scheduler_terminal_report_authority(
     _validate_scheduler_retained_judge_decisions(
         judgment=judgment,
         snapshot=snapshot,
-        require_complete_pass=True,
+        require_complete_pass=require_complete_pass,
     )
 
 
@@ -4562,6 +5281,8 @@ def _validate_scheduler_report_authority(
     root: Path,
     report: AuditReport,
     snapshot: _SchedulerReportAuthoritySnapshot,
+    config: AuditConfig | None,
+    run_options: AuditRunOptions | None,
 ) -> None:
     """Join public candidate and finding semantics to successful private host outputs."""
 
@@ -4574,8 +5295,24 @@ def _validate_scheduler_report_authority(
         _read_json_artifact(root, "reproduction-results.json")
     )
     candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
+    # Assurance imports manifest validation through its benchmark path, so keep
+    # this qualification predicate local to detached verification.
+    from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
+
+    replay_authorized_scanner_fingerprints = _validate_scanner_stream_artifact_custody(
+        root,
+        report.scanner_runs,
+    )
+    trusted_scanner_fingerprints = frozenset(
+        finding.fingerprint
+        for run in report.scanner_runs
+        if is_qualifying_real_scanner_run(run)
+        for finding in run.findings
+        if finding.fingerprint in replay_authorized_scanner_fingerprints
+    )
     accepted_hash_authority, accepted_candidate_authority = _scheduler_accepted_candidate_authority(
-        snapshot
+        snapshot,
+        trusted_scanner_fingerprints=trusted_scanner_fingerprints,
     )
     blind_candidates = accepted_candidate_authority[SchedulerPassKind.BLIND_SHARD_REVIEW]
     blind_authority = _scheduler_candidate_payload_sha256s(
@@ -4610,6 +5347,7 @@ def _validate_scheduler_report_authority(
         role="host:evidence_cap_judgment",
         output_type=SchedulerEvidenceCapJudgmentOutput,
     )
+    effective_judgment = judgment or retained_judgment
 
     if reduction is None:
         if cross_shard_authority:
@@ -4652,6 +5390,13 @@ def _validate_scheduler_report_authority(
             latest_candidate_authority = integration.candidate_payload_sha256s
         if candidate_hashes != latest_candidate_authority:
             raise ValueError("candidate artifact differs from scheduler host authority")
+        if integration is not None:
+            _validate_scheduler_pass_four_candidate_subsets(
+                integration=integration,
+                reduction=reduction,
+                candidates=tuple(candidate_artifact.findings),
+                snapshot=snapshot,
+            )
 
     terminal_authority = journal.terminal_report_authority
     terminal_authority_required = journal.manifest.terminal_report_authority_required
@@ -4673,10 +5418,10 @@ def _validate_scheduler_report_authority(
             reproduction_artifact=reproduction_artifact,
             snapshot=snapshot,
         )
-        if retained_judgment is not None:
+        if effective_judgment is not None:
             _validate_scheduler_terminal_authority_against_judgment(
                 authority=terminal_authority,
-                judgment=retained_judgment,
+                judgment=effective_judgment,
                 snapshot=snapshot,
             )
 
@@ -4684,21 +5429,33 @@ def _validate_scheduler_report_authority(
     _validate_scheduler_report_quality_authority(report=report, snapshot=snapshot)
     if campaign_complete and judgment is None:
         raise ValueError("complete scheduler report lacks successful pass-seven authority")
-    if judgment is None:
+    if effective_judgment is None:
         return
     if integration is None or (
-        judgment.candidate_ids != tuple(latest_candidate_authority)
-        or judgment.candidate_payload_sha256s != latest_candidate_authority
+        effective_judgment.candidate_ids != tuple(latest_candidate_authority)
+        or effective_judgment.candidate_payload_sha256s != latest_candidate_authority
     ):
         raise ValueError("scheduler pass-seven candidates differ from pass-four authority")
-    if candidate_hashes != judgment.candidate_payload_sha256s:
+    if candidate_hashes != effective_judgment.candidate_payload_sha256s:
         raise ValueError("candidate artifact differs from scheduler judgment authority")
 
     _validate_scheduler_terminal_report_authority(
         report=report,
         reproduction_artifact=reproduction_artifact,
-        judgment=judgment,
+        judgment=effective_judgment,
         snapshot=snapshot,
+        require_complete_pass=judgment is not None,
+    )
+    _validate_scheduler_terminal_finding_replay(
+        report=report,
+        judgment=effective_judgment,
+        integration=integration,
+        candidates=tuple(candidate_artifact.findings),
+        trusted_scanner_fingerprints=trusted_scanner_fingerprints,
+        snapshot=snapshot,
+        config=config,
+        run_options=run_options,
+        require_complete_pass=judgment is not None,
     )
 
 
@@ -5157,9 +5914,9 @@ def validate_manifest_artifacts(
         observed = actual[path]
         if observed.size != binding.size or observed.sha256 != binding.sha256:
             raise ValueError(f"run artifact hash mismatch: {path}")
-    if manifest.schema_version in {"1.1", "1.2"}:
+    if manifest.schema_version in {"1.1", "1.2", "1.3"}:
         required_artifacts = {"final-findings.json", "metadata.json"}
-        if manifest.schema_version == "1.2":
+        if manifest.schema_version in {"1.2", "1.3"}:
             required_artifacts.update(
                 MANIFEST_BOUND_REPORT_DELIVERABLES
                 | {
@@ -5186,11 +5943,11 @@ def validate_manifest_artifacts(
         _validate_report_artifact_consistency(
             root,
             report,
-            report_bundle_required=manifest.schema_version == "1.2",
+            report_bundle_required=manifest.schema_version in {"1.2", "1.3"},
         )
         language_artifact_bound = LANGUAGE_CAPABILITY_ARTIFACT_PATH in expected
         if (
-            manifest.schema_version == "1.2"
+            manifest.schema_version in {"1.2", "1.3"}
             or language_artifact_bound
             or report.language_capability is not None
         ):
@@ -5206,6 +5963,17 @@ def validate_manifest_artifacts(
         validate_solidity_shard_artifacts(root, report)
         if manifest.run_configuration is not None:
             effective_config = manifest.run_configuration.reconstruct_effective_config()
+            if manifest.schema_version == "1.3":
+                _require_report_model_retry_policy(
+                    report,
+                    effective_config,
+                )
+            elif manifest.schema_version == "1.2":
+                _require_report_model_retry_policy(
+                    report,
+                    effective_config,
+                    allow_legacy_default_retry_evidence_omission=True,
+                )
             qualification_path = root / "model-qualification-runtime.json"
             qualification_runtime = (
                 _read_json_artifact(root, "model-qualification-runtime.json")
@@ -5240,10 +6008,11 @@ def validate_manifest_artifacts(
                 root,
                 report,
                 config=effective_config,
+                run_options=manifest.run_configuration.run_options,
                 qualification_runtime=qualification_runtime,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
-                require_retained_usage_custody=manifest.schema_version == "1.2",
+                require_retained_usage_custody=manifest.schema_version in {"1.2", "1.3"},
             )
             context_manifest = _validated_context_manifest(
                 root,
@@ -5285,21 +6054,21 @@ def validate_manifest_artifacts(
                 report,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
-                require_retained_usage_custody=manifest.schema_version == "1.2",
+                require_retained_usage_custody=manifest.schema_version in {"1.2", "1.3"},
             )
             context_manifest = _validated_context_manifest(
                 root,
                 report,
                 scheduler_artifact=scheduler_artifact,
             )
-        if report.schema_version == "1.2" or manifest.schema_version == "1.2":
+        if report.schema_version == "1.2" or manifest.schema_version in {"1.2", "1.3"}:
             _validate_model_execution_cost_ledger_custody(
                 root,
                 report,
                 scheduler_artifact,
-                current_model_execution_required=manifest.schema_version == "1.2",
+                current_model_execution_required=manifest.schema_version in {"1.2", "1.3"},
             )
-        if manifest.schema_version == "1.2":
+        if manifest.schema_version in {"1.2", "1.3"}:
             assert manifest.run_configuration is not None
             _validate_run_terminal_report_authority(
                 root,
@@ -5307,6 +6076,13 @@ def validate_manifest_artifacts(
                 scheduler_artifact=scheduler_artifact,
                 achieved_profile=manifest.run_configuration.achieved_profile,
                 expected_binding=expected[RUN_TERMINAL_REPORT_AUTHORITY_PATH],
+            )
+            _validate_terminal_learning_capture(
+                root,
+                report,
+                scheduler_artifact=scheduler_artifact,
+                run_options=manifest.run_configuration.run_options,
+                expected_binding=expected.get("private/terminal-audit-learning.json"),
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification

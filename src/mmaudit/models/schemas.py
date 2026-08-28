@@ -3601,6 +3601,437 @@ class VerificationBatch(StrictModel):
     decisions: list[VerificationDecision]
 
 
+class ConsensusReviewerSlot(StrEnum):
+    """Closed reviewer identities for deterministic pass-six quorum evidence."""
+
+    VERIFIER = "verifier"
+    FALSIFIER_1 = "falsifier_1"
+    FALSIFIER_2 = "falsifier_2"
+
+
+CONSENSUS_REVIEWER_SLOTS = (
+    ConsensusReviewerSlot.VERIFIER,
+    ConsensusReviewerSlot.FALSIFIER_1,
+    ConsensusReviewerSlot.FALSIFIER_2,
+)
+
+
+def _consensus_candidate_id_is_canonical(candidate_id: str) -> bool:
+    return (
+        bool(candidate_id)
+        and len(candidate_id) <= 500
+        and candidate_id == candidate_id.strip()
+        and all(ord(character) >= 32 and ord(character) != 127 for character in candidate_id)
+    )
+
+
+class ConsensusQuorumOutcome(StrEnum):
+    """Deterministic disposition of one exact three-review vote."""
+
+    SUPPORTED = "supported"
+    REJECTED = "rejected"
+    INCONCLUSIVE = "inconclusive"
+
+
+class ConsensusReviewDecision(VerificationDecision):
+    """Frozen, self-hashed copy of one normalized reviewer decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    decision_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, decision: VerificationDecision) -> ConsensusReviewDecision:
+        """Copy and seal one normalized decision without trusting a caller-supplied hash."""
+
+        normalized = VerificationDecision.model_validate(decision.model_dump(mode="python"))
+        values = {
+            "schema_version": "1.0",
+            **normalized.model_dump(mode="json"),
+        }
+        return cls.model_validate(
+            {
+                **values,
+                "decision_sha256": _canonical_model_sha256(values),
+            }
+        )
+
+    @model_validator(mode="after")
+    def decision_is_hash_bound(self) -> ConsensusReviewDecision:
+        if self.decision_sha256 != self.expected_decision_sha256():
+            raise ValueError("consensus review decision hash does not match its fields")
+        return self
+
+    def expected_decision_sha256(self) -> str:
+        """Return the canonical hash of every non-derived decision field."""
+
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"decision_sha256"}))
+
+    def as_verification_decision(self) -> VerificationDecision:
+        """Return the original normalized decision projection."""
+
+        return VerificationDecision.model_validate(
+            self.model_dump(
+                mode="python",
+                exclude={"schema_version", "decision_sha256"},
+            )
+        )
+
+
+class ConsensusReviewerBatch(StrictModel):
+    """One exact, completed reviewer batch in the closed pass-six portfolio."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    slot: ConsensusReviewerSlot
+    scheduler_task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
+    logical_request_id: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
+    requested_model: str = Field(pattern=r"^[^\s/]+/[^\s/]+$")
+    returned_model: str | None = Field(default=None, pattern=r"^[^\s/]+/[^\s/]+$")
+    root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    model_completion_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decisions: tuple[ConsensusReviewDecision, ...] = Field(
+        min_length=1,
+        max_length=100_000,
+    )
+    batch_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        slot: ConsensusReviewerSlot,
+        scheduler_task_id: str,
+        logical_request_id: str,
+        requested_model: str,
+        returned_model: str | None,
+        root_lineage: str,
+        model_completion_evidence_sha256: str,
+        decisions: Sequence[VerificationDecision],
+    ) -> ConsensusReviewerBatch:
+        """Canonicalize and seal one reviewer batch."""
+
+        sealed_decisions = tuple(
+            sorted(
+                (ConsensusReviewDecision.build(decision) for decision in decisions),
+                key=lambda decision: decision.candidate_id,
+            )
+        )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "slot": slot,
+            "scheduler_task_id": scheduler_task_id,
+            "logical_request_id": logical_request_id,
+            "requested_model": requested_model,
+            "returned_model": returned_model,
+            "root_lineage": root_lineage,
+            "model_completion_evidence_sha256": model_completion_evidence_sha256,
+            "decisions": [decision.model_dump(mode="json") for decision in sealed_decisions],
+        }
+        return cls.model_validate(
+            {
+                **values,
+                "batch_sha256": _canonical_model_sha256(values),
+            }
+        )
+
+    @model_validator(mode="after")
+    def batch_is_canonical_and_hash_bound(self) -> ConsensusReviewerBatch:
+        if self.returned_model != self.requested_model:
+            raise ValueError(
+                "consensus reviewer batch requires an exact unsubstituted returned model"
+            )
+        candidate_ids = tuple(decision.candidate_id for decision in self.decisions)
+        if candidate_ids != tuple(sorted(set(candidate_ids))) or any(
+            not _consensus_candidate_id_is_canonical(candidate_id) for candidate_id in candidate_ids
+        ):
+            raise ValueError(
+                "consensus reviewer decisions require unique sorted bounded candidate IDs"
+            )
+        if self.batch_sha256 != self.expected_batch_sha256():
+            raise ValueError("consensus reviewer batch hash does not match its fields")
+        return self
+
+    @property
+    def candidate_ids(self) -> tuple[str, ...]:
+        """Return the exact canonical candidate inventory reviewed by this batch."""
+
+        return tuple(decision.candidate_id for decision in self.decisions)
+
+    def expected_batch_sha256(self) -> str:
+        """Return the canonical hash of every non-derived reviewer-batch field."""
+
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"batch_sha256"}))
+
+    def decision_for(self, candidate_id: str) -> ConsensusReviewDecision:
+        """Return the sole decision for one reviewed candidate."""
+
+        matches = tuple(
+            decision for decision in self.decisions if decision.candidate_id == candidate_id
+        )
+        if len(matches) != 1:
+            raise ValueError("consensus reviewer batch lacks one exact candidate decision")
+        return matches[0]
+
+
+class CandidateConsensusDecision(StrictModel):
+    """Derived closed-quorum result for one candidate, retaining all vote identities."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    candidate_id: str = Field(min_length=1, max_length=500)
+    outcome: ConsensusQuorumOutcome
+    verified_slots: tuple[ConsensusReviewerSlot, ...]
+    plausible_slots: tuple[ConsensusReviewerSlot, ...]
+    rejected_slots: tuple[ConsensusReviewerSlot, ...]
+    insufficient_context_slots: tuple[ConsensusReviewerSlot, ...]
+    review_decision_sha256s: dict[ConsensusReviewerSlot, str] = Field(
+        min_length=3,
+        max_length=3,
+    )
+    quorum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("candidate_id")
+    @classmethod
+    def candidate_id_is_canonical(cls, value: str) -> str:
+        if not _consensus_candidate_id_is_canonical(value):
+            raise ValueError("consensus candidate ID must be bounded and canonical")
+        return value
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        candidate_id: str,
+        reviewers: Sequence[ConsensusReviewerBatch],
+    ) -> CandidateConsensusDecision:
+        """Derive and seal the result from the exact reviewer decisions."""
+
+        reviewer_by_slot = {reviewer.slot: reviewer for reviewer in reviewers}
+        if tuple(reviewer_by_slot) != CONSENSUS_REVIEWER_SLOTS or len(reviewers) != 3:
+            raise ValueError("candidate quorum requires the exact ordered reviewer slots")
+        decisions = {
+            slot: reviewer_by_slot[slot].decision_for(candidate_id)
+            for slot in CONSENSUS_REVIEWER_SLOTS
+        }
+        slots_by_verdict = {
+            verdict: tuple(
+                slot for slot in CONSENSUS_REVIEWER_SLOTS if decisions[slot].verdict is verdict
+            )
+            for verdict in VerificationVerdict
+        }
+        support_count = len(slots_by_verdict[VerificationVerdict.VERIFIED]) + len(
+            slots_by_verdict[VerificationVerdict.PLAUSIBLE]
+        )
+        reject_count = len(slots_by_verdict[VerificationVerdict.REJECTED])
+        outcome = (
+            ConsensusQuorumOutcome.SUPPORTED
+            if support_count >= 2
+            else (
+                ConsensusQuorumOutcome.REJECTED
+                if reject_count >= 2
+                else ConsensusQuorumOutcome.INCONCLUSIVE
+            )
+        )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "candidate_id": candidate_id,
+            "outcome": outcome,
+            "verified_slots": slots_by_verdict[VerificationVerdict.VERIFIED],
+            "plausible_slots": slots_by_verdict[VerificationVerdict.PLAUSIBLE],
+            "rejected_slots": slots_by_verdict[VerificationVerdict.REJECTED],
+            "insufficient_context_slots": slots_by_verdict[
+                VerificationVerdict.INSUFFICIENT_CONTEXT
+            ],
+            "review_decision_sha256s": {
+                slot: decisions[slot].decision_sha256 for slot in CONSENSUS_REVIEWER_SLOTS
+            },
+        }
+        return cls.model_validate(
+            {
+                **values,
+                "quorum_sha256": _canonical_model_sha256(values),
+            }
+        )
+
+    @model_validator(mode="after")
+    def quorum_is_canonical_derived_and_hash_bound(
+        self,
+    ) -> CandidateConsensusDecision:
+        partitions = (
+            self.verified_slots,
+            self.plausible_slots,
+            self.rejected_slots,
+            self.insufficient_context_slots,
+        )
+        if any(
+            slots != tuple(sorted(set(slots), key=CONSENSUS_REVIEWER_SLOTS.index))
+            for slots in partitions
+        ):
+            raise ValueError("consensus quorum verdict slots must be unique and canonical")
+        flattened = tuple(slot for slots in partitions for slot in slots)
+        if set(flattened) != set(CONSENSUS_REVIEWER_SLOTS) or len(flattened) != 3:
+            raise ValueError("consensus quorum verdict slots must exactly partition reviewers")
+        if len(self.review_decision_sha256s) != len(CONSENSUS_REVIEWER_SLOTS) or set(
+            self.review_decision_sha256s
+        ) != set(CONSENSUS_REVIEWER_SLOTS):
+            raise ValueError("consensus quorum decision hashes must cover exact reviewer slots")
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", decision_sha256) is None
+            for decision_sha256 in self.review_decision_sha256s.values()
+        ):
+            raise ValueError("consensus quorum decision hashes must be sha256")
+        support_count = len(self.verified_slots) + len(self.plausible_slots)
+        expected_outcome = (
+            ConsensusQuorumOutcome.SUPPORTED
+            if support_count >= 2
+            else (
+                ConsensusQuorumOutcome.REJECTED
+                if len(self.rejected_slots) >= 2
+                else ConsensusQuorumOutcome.INCONCLUSIVE
+            )
+        )
+        if self.outcome is not expected_outcome:
+            raise ValueError("consensus quorum outcome does not match its exact vote partition")
+        if self.quorum_sha256 != self.expected_quorum_sha256():
+            raise ValueError("consensus quorum hash does not match its fields")
+        return self
+
+    def expected_quorum_sha256(self) -> str:
+        """Return the canonical hash of every non-derived quorum field."""
+
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"quorum_sha256"}))
+
+
+class ConsensusReviewArtifact(StrictModel):
+    """Closed three-review inventory whose run provenance requires manifest replay."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    algorithm: Literal["mmaudit.closed-three-review-quorum.v1"] = (
+        "mmaudit.closed-three-review-quorum.v1"
+    )
+    campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pass_plan_id: str = Field(pattern=r"^scheduler-plan-[0-9a-f]{64}$")
+    pass_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_workset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_ids: tuple[str, ...] = Field(min_length=1, max_length=100_000)
+    candidate_payload_sha256s: dict[str, str] = Field(min_length=1, max_length=100_000)
+    reviewers: tuple[ConsensusReviewerBatch, ...] = Field(min_length=3, max_length=3)
+    candidate_quorums: tuple[CandidateConsensusDecision, ...] = Field(
+        min_length=1,
+        max_length=100_000,
+    )
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        campaign_id: str,
+        manifest_sha256: str,
+        pass_plan_id: str,
+        pass_plan_sha256: str,
+        candidate_workset_sha256: str,
+        candidate_payload_sha256s: Mapping[str, str],
+        reviewers: Sequence[ConsensusReviewerBatch],
+    ) -> ConsensusReviewArtifact:
+        """Validate internal review custody, derive every quorum, and seal the artifact."""
+
+        canonical_payload_hashes = dict(sorted(candidate_payload_sha256s.items()))
+        candidate_ids = tuple(canonical_payload_hashes)
+        canonical_reviewers = tuple(
+            ConsensusReviewerBatch.model_validate(reviewer.model_dump(mode="python"))
+            for reviewer in reviewers
+        )
+        candidate_quorums = tuple(
+            CandidateConsensusDecision.build(
+                candidate_id=candidate_id,
+                reviewers=canonical_reviewers,
+            )
+            for candidate_id in candidate_ids
+        )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "algorithm": "mmaudit.closed-three-review-quorum.v1",
+            "campaign_id": campaign_id,
+            "manifest_sha256": manifest_sha256,
+            "pass_plan_id": pass_plan_id,
+            "pass_plan_sha256": pass_plan_sha256,
+            "candidate_workset_sha256": candidate_workset_sha256,
+            "candidate_ids": candidate_ids,
+            "candidate_payload_sha256s": canonical_payload_hashes,
+            "reviewers": [reviewer.model_dump(mode="json") for reviewer in canonical_reviewers],
+            "candidate_quorums": [quorum.model_dump(mode="json") for quorum in candidate_quorums],
+        }
+        return cls.model_validate(
+            {
+                **values,
+                "artifact_sha256": _canonical_model_sha256(values),
+            }
+        )
+
+    @model_validator(mode="after")
+    def artifact_is_exact_derived_and_hash_bound(self) -> ConsensusReviewArtifact:
+        if self.candidate_ids != tuple(sorted(set(self.candidate_ids))) or any(
+            not _consensus_candidate_id_is_canonical(candidate_id)
+            for candidate_id in self.candidate_ids
+        ):
+            raise ValueError("consensus candidate IDs must be unique, sorted, and bounded")
+        if tuple(self.candidate_payload_sha256s) != self.candidate_ids or any(
+            re.fullmatch(r"[0-9a-f]{64}", payload_sha256) is None
+            for payload_sha256 in self.candidate_payload_sha256s.values()
+        ):
+            raise ValueError("consensus candidate payload hashes must exactly match candidates")
+        if tuple(reviewer.slot for reviewer in self.reviewers) != CONSENSUS_REVIEWER_SLOTS:
+            raise ValueError("consensus artifact requires the exact ordered reviewer slots")
+        reviewer_identity_inventories = (
+            tuple(reviewer.scheduler_task_id for reviewer in self.reviewers),
+            tuple(reviewer.logical_request_id for reviewer in self.reviewers),
+            tuple(reviewer.model_completion_evidence_sha256 for reviewer in self.reviewers),
+            tuple(reviewer.root_lineage for reviewer in self.reviewers),
+        )
+        if any(len(values) != len(set(values)) for values in reviewer_identity_inventories):
+            raise ValueError(
+                "consensus reviewer task, request, completion, and lineage identities "
+                "must be pairwise unique"
+            )
+        if any(reviewer.candidate_ids != self.candidate_ids for reviewer in self.reviewers):
+            raise ValueError("consensus reviewer batches must cover the exact candidate inventory")
+        expected_quorums = tuple(
+            CandidateConsensusDecision.build(
+                candidate_id=candidate_id,
+                reviewers=self.reviewers,
+            )
+            for candidate_id in self.candidate_ids
+        )
+        if self.candidate_quorums != expected_quorums:
+            raise ValueError("consensus candidate quorums differ from exact reviewer decisions")
+        if self.artifact_sha256 != self.expected_artifact_sha256():
+            raise ValueError("consensus review artifact hash does not match its fields")
+        return self
+
+    def expected_artifact_sha256(self) -> str:
+        """Return the canonical hash of every non-derived artifact field."""
+
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"artifact_sha256"}))
+
+    def quorum_for(self, candidate_id: str) -> CandidateConsensusDecision:
+        """Return the sole derived quorum for one exact candidate."""
+
+        matches = tuple(
+            quorum for quorum in self.candidate_quorums if quorum.candidate_id == candidate_id
+        )
+        if len(matches) != 1:
+            raise ValueError("consensus artifact lacks one exact candidate quorum")
+        return matches[0]
+
+
 class JudgeBatch(StrictModel):
     findings: list[Finding]
 
@@ -12655,8 +13086,148 @@ class UsageRecord(StrictModel):
             and self.validation_status is not ModelRequestValidationStatus.VALID
         ):
             raise ValueError("bound model identity requires a validated provider response")
+        _validate_model_retry_routing_evidence(self.routing, attempts=self.attempts)
         _validate_refresh_pricing_attempt_inventory(self)
         return self
+
+
+_MODEL_RETRY_ROUTING_KEYS = frozenset(
+    {
+        "maximum_attempts_for_request",
+        "model_retry_attempts",
+        "model_retry_evidence_sha256",
+        "model_retry_policy",
+        "model_retry_policy_sha256",
+        "schema_validation_retries_used",
+        "transient_retries_used",
+    }
+)
+_MODEL_RETRY_POLICY_KEYS = frozenset(
+    {
+        "schema_version",
+        "transient_retry_scope",
+        "schema_retry_failure_code",
+        "schema_retry_route",
+        "exhaustion_disposition",
+        "transient_retry_limit",
+        "schema_validation_retry_limit",
+        "maximum_attempts",
+        "policy_sha256",
+    }
+)
+_MODEL_RETRY_ATTEMPT_OUTCOMES = frozenset(
+    {
+        "SUCCESS",
+        "TRANSIENT_NETWORK",
+        "TRANSIENT_STATUS",
+        "SCHEMA_VALIDATION_FAILED",
+        "TERMINAL_HTTP_STATUS",
+        "TERMINAL_TRANSPORT_ERROR",
+        "TERMINAL_OTHER_ERROR",
+        "RETRY_POLICY_DRIFT",
+    }
+)
+_MODEL_RETRY_ADMITTED_OUTCOMES = frozenset(
+    {"TRANSIENT_NETWORK", "TRANSIENT_STATUS", "SCHEMA_VALIDATION_FAILED"}
+)
+
+
+def _validate_model_retry_routing_evidence(
+    routing: Mapping[str, Any],
+    *,
+    attempts: int,
+) -> None:
+    """Validate the all-or-none split retry policy and ordered attempt inventory."""
+
+    present = _MODEL_RETRY_ROUTING_KEYS.intersection(routing)
+    if not present:
+        return
+    if present != _MODEL_RETRY_ROUTING_KEYS:
+        raise ValueError("usage model retry evidence is incomplete")
+    raw_policy = routing["model_retry_policy"]
+    raw_attempts = routing["model_retry_attempts"]
+    if (
+        type(raw_policy) is not dict
+        or frozenset(raw_policy) != _MODEL_RETRY_POLICY_KEYS
+        or type(raw_attempts) is not list
+        or type(attempts) is not int
+        or len(raw_attempts) != attempts
+        or not 1 <= attempts <= 32
+    ):
+        raise ValueError("usage model retry evidence has an invalid shape")
+    transient_limit = raw_policy["transient_retry_limit"]
+    schema_limit = raw_policy["schema_validation_retry_limit"]
+    policy_maximum = raw_policy["maximum_attempts"]
+    policy_sha256 = raw_policy["policy_sha256"]
+    if (
+        raw_policy["schema_version"] != "1.0"
+        or raw_policy["transient_retry_scope"] != "NETWORK_OR_STATUS"
+        or raw_policy["schema_retry_failure_code"] != "SCHEMA_VALIDATION_FAILED"
+        or raw_policy["schema_retry_route"] != "SAME_ROUTE"
+        or raw_policy["exhaustion_disposition"] != "EXPLICIT_FALLBACK_OR_TERMINATE"
+        or type(transient_limit) is not int
+        or not 0 <= transient_limit <= 5
+        or type(schema_limit) is not int
+        or not 0 <= schema_limit <= 31
+        or type(policy_maximum) is not int
+        or policy_maximum != 1 + transient_limit + schema_limit
+        or not 1 <= policy_maximum <= 32
+        or type(policy_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", policy_sha256) is None
+    ):
+        raise ValueError("usage model retry policy is invalid")
+    policy_values = {key: value for key, value in raw_policy.items() if key != "policy_sha256"}
+    if policy_sha256 != _canonical_model_sha256(
+        {"domain": "mmaudit.model-retry-policy.v1", **policy_values}
+    ):
+        raise ValueError("usage model retry policy self-hash is inconsistent")
+
+    outcomes: list[str] = []
+    for ordinal, raw_attempt in enumerate(raw_attempts, start=1):
+        if (
+            type(raw_attempt) is not dict
+            or frozenset(raw_attempt) != {"attempt_ordinal", "outcome"}
+            or type(raw_attempt["attempt_ordinal"]) is not int
+            or raw_attempt["attempt_ordinal"] != ordinal
+            or type(raw_attempt["outcome"]) is not str
+            or raw_attempt["outcome"] not in _MODEL_RETRY_ATTEMPT_OUTCOMES
+        ):
+            raise ValueError("usage model retry attempt inventory is invalid")
+        outcomes.append(raw_attempt["outcome"])
+    admitted = outcomes[:-1]
+    if any(outcome not in _MODEL_RETRY_ADMITTED_OUTCOMES for outcome in admitted):
+        raise ValueError("usage model retry attempt sequence is invalid")
+    expected_transient_retries = sum(
+        outcome in {"TRANSIENT_NETWORK", "TRANSIENT_STATUS"} for outcome in admitted
+    )
+    expected_schema_retries = admitted.count("SCHEMA_VALIDATION_FAILED")
+    maximum_for_request = routing["maximum_attempts_for_request"]
+    transient_used = routing["transient_retries_used"]
+    schema_used = routing["schema_validation_retries_used"]
+    if (
+        type(maximum_for_request) is not int
+        or not attempts <= maximum_for_request <= policy_maximum
+        or type(transient_used) is not int
+        or transient_used != expected_transient_retries
+        or transient_used > transient_limit
+        or type(schema_used) is not int
+        or schema_used != expected_schema_retries
+        or schema_used > schema_limit
+        or routing["model_retry_policy_sha256"] != policy_sha256
+    ):
+        raise ValueError("usage model retry counters or policy custody are inconsistent")
+    evidence_values = {
+        "model_retry_policy": raw_policy,
+        "model_retry_policy_sha256": policy_sha256,
+        "maximum_attempts_for_request": maximum_for_request,
+        "transient_retries_used": transient_used,
+        "schema_validation_retries_used": schema_used,
+        "model_retry_attempts": raw_attempts,
+    }
+    if routing["model_retry_evidence_sha256"] != _canonical_model_sha256(
+        {"domain": "mmaudit.model-retry-evidence.v1", **evidence_values}
+    ):
+        raise ValueError("usage model retry evidence self-hash is inconsistent")
 
 
 def _validate_refresh_pricing_attempt_inventory(record: UsageRecord) -> None:
@@ -14067,6 +14638,10 @@ class AuditReport(StrictModel):
         exclude_if=lambda value: value is None,
     )
     maximum_assurance: MaximumAssuranceAssessment | None = None
+    consensus_review: ConsensusReviewArtifact | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     verification_decisions: list[VerificationDecision] = Field(default_factory=list)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
         default_factory=list
@@ -14086,6 +14661,34 @@ class AuditReport(StrictModel):
     model_review_coverage: ModelReviewCoverage | None = None
     report_quality_review: ReportQualityReview | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def consensus_review_matches_report(self) -> AuditReport:
+        """Keep the public quorum artifact aligned with its primary review projection."""
+
+        if self.consensus_review is None:
+            return self
+        if self.schema_version != "1.2":
+            raise ValueError("typed consensus review requires report schema 1.2")
+        artifact = self.consensus_review
+        contributing_candidate_ids = {
+            candidate_id
+            for finding in (*self.findings, *self.rejected_findings, *self.filtered_findings)
+            for candidate_id in finding.contributing_candidate_ids
+        }
+        if not set(artifact.candidate_ids) <= contributing_candidate_ids:
+            raise ValueError("consensus review references a candidate absent from the report")
+        verifier = artifact.reviewers[0]
+        expected_verifications = tuple(
+            verifier.decision_for(candidate_id).as_verification_decision()
+            for candidate_id in artifact.candidate_ids
+        )
+        observed_verifications = tuple(
+            sorted(self.verification_decisions, key=lambda decision: decision.candidate_id)
+        )
+        if observed_verifications != expected_verifications:
+            raise ValueError("report verification decisions differ from consensus review")
+        return self
 
     @model_validator(mode="after")
     def audit_model_selection_matches_usage(self) -> AuditReport:

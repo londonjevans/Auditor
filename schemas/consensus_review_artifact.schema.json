@@ -1,0 +1,406 @@
+{
+  "$defs": {
+    "CandidateConsensusDecision": {
+      "additionalProperties": false,
+      "description": "Derived closed-quorum result for one candidate, retaining all vote identities.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "insufficient_context_slots": {
+          "items": {
+            "$ref": "#/$defs/ConsensusReviewerSlot"
+          },
+          "title": "Insufficient Context Slots",
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ConsensusQuorumOutcome"
+        },
+        "plausible_slots": {
+          "items": {
+            "$ref": "#/$defs/ConsensusReviewerSlot"
+          },
+          "title": "Plausible Slots",
+          "type": "array"
+        },
+        "quorum_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Quorum Sha256",
+          "type": "string"
+        },
+        "rejected_slots": {
+          "items": {
+            "$ref": "#/$defs/ConsensusReviewerSlot"
+          },
+          "title": "Rejected Slots",
+          "type": "array"
+        },
+        "review_decision_sha256s": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 3,
+          "minProperties": 3,
+          "propertyNames": {
+            "$ref": "#/$defs/ConsensusReviewerSlot"
+          },
+          "title": "Review Decision Sha256S",
+          "type": "object"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "verified_slots": {
+          "items": {
+            "$ref": "#/$defs/ConsensusReviewerSlot"
+          },
+          "title": "Verified Slots",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "outcome",
+        "verified_slots",
+        "plausible_slots",
+        "rejected_slots",
+        "insufficient_context_slots",
+        "review_decision_sha256s",
+        "quorum_sha256"
+      ],
+      "title": "CandidateConsensusDecision",
+      "type": "object"
+    },
+    "ConsensusQuorumOutcome": {
+      "description": "Deterministic disposition of one exact three-review vote.",
+      "enum": [
+        "supported",
+        "rejected",
+        "inconclusive"
+      ],
+      "title": "ConsensusQuorumOutcome",
+      "type": "string"
+    },
+    "ConsensusReviewDecision": {
+      "additionalProperties": false,
+      "description": "Frozen, self-hashed copy of one normalized reviewer decision.",
+      "properties": {
+        "authentication": {
+          "title": "Authentication",
+          "type": "string"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "decision_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Decision Sha256",
+          "type": "string"
+        },
+        "environmental_assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Environmental Assumptions",
+          "type": "array"
+        },
+        "false_positive_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "False Positive Conditions",
+          "type": "array"
+        },
+        "guards_and_controls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Guards And Controls",
+          "type": "array"
+        },
+        "privilege_requirements": {
+          "title": "Privilege Requirements",
+          "type": "string"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reachability": {
+          "title": "Reachability",
+          "type": "string"
+        },
+        "safe_verification_test": {
+          "$ref": "#/$defs/VerificationTest"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_to_sink": {
+          "title": "Source To Sink",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerificationVerdict"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "verdict",
+        "rationale",
+        "source_to_sink",
+        "reachability",
+        "authentication",
+        "privilege_requirements",
+        "environmental_assumptions",
+        "guards_and_controls",
+        "false_positive_conditions",
+        "safe_verification_test",
+        "confidence",
+        "decision_sha256"
+      ],
+      "title": "ConsensusReviewDecision",
+      "type": "object"
+    },
+    "ConsensusReviewerBatch": {
+      "additionalProperties": false,
+      "description": "One exact, completed reviewer batch in the closed pass-six portfolio.",
+      "properties": {
+        "batch_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Batch Sha256",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/ConsensusReviewDecision"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Decisions",
+          "type": "array"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "model_completion_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Completion Evidence Sha256",
+          "type": "string"
+        },
+        "requested_model": {
+          "pattern": "^[^\\s/]+/[^\\s/]+$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\s/]+/[^\\s/]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "scheduler_task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Scheduler Task Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "slot": {
+          "$ref": "#/$defs/ConsensusReviewerSlot"
+        }
+      },
+      "required": [
+        "slot",
+        "scheduler_task_id",
+        "logical_request_id",
+        "requested_model",
+        "root_lineage",
+        "model_completion_evidence_sha256",
+        "decisions",
+        "batch_sha256"
+      ],
+      "title": "ConsensusReviewerBatch",
+      "type": "object"
+    },
+    "ConsensusReviewerSlot": {
+      "description": "Closed reviewer identities for deterministic pass-six quorum evidence.",
+      "enum": [
+        "verifier",
+        "falsifier_1",
+        "falsifier_2"
+      ],
+      "title": "ConsensusReviewerSlot",
+      "type": "string"
+    },
+    "VerificationTest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "safe": {
+          "default": true,
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "local",
+          "default": "local",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "VerificationTest",
+      "type": "object"
+    },
+    "VerificationVerdict": {
+      "enum": [
+        "verified",
+        "plausible",
+        "rejected",
+        "insufficient_context"
+      ],
+      "title": "VerificationVerdict",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/consensus_review_artifact.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Closed three-review inventory whose run provenance requires manifest replay.",
+  "properties": {
+    "algorithm": {
+      "const": "mmaudit.closed-three-review-quorum.v1",
+      "default": "mmaudit.closed-three-review-quorum.v1",
+      "title": "Algorithm",
+      "type": "string"
+    },
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "campaign_id": {
+      "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "candidate_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Candidate Ids",
+      "type": "array"
+    },
+    "candidate_payload_sha256s": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "maxProperties": 100000,
+      "minProperties": 1,
+      "title": "Candidate Payload Sha256S",
+      "type": "object"
+    },
+    "candidate_quorums": {
+      "items": {
+        "$ref": "#/$defs/CandidateConsensusDecision"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Candidate Quorums",
+      "type": "array"
+    },
+    "candidate_workset_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Workset Sha256",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "pass_plan_id": {
+      "pattern": "^scheduler-plan-[0-9a-f]{64}$",
+      "title": "Pass Plan Id",
+      "type": "string"
+    },
+    "pass_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pass Plan Sha256",
+      "type": "string"
+    },
+    "reviewers": {
+      "items": {
+        "$ref": "#/$defs/ConsensusReviewerBatch"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Reviewers",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "campaign_id",
+    "manifest_sha256",
+    "pass_plan_id",
+    "pass_plan_sha256",
+    "candidate_workset_sha256",
+    "candidate_ids",
+    "candidate_payload_sha256s",
+    "reviewers",
+    "candidate_quorums",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit exact closed three-review consensus artifact",
+  "type": "object"
+}

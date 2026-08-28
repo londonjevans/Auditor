@@ -38,6 +38,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     CandidateFinding,
     CandidateReviewBatch,
+    ExecutionEvidenceKind,
     FormalEvidence,
     FormalResultKind,
     FormalToolRun,
@@ -117,6 +118,51 @@ from tests.fake_openrouter import FakeOpenRouter, _candidate_review_wire, _surfa
 from tests.integration.test_pipeline import StaticScannerRunner, _maximum_specialists, _run
 from tests.qualification_support import synthetic_production_qualification
 from tests.unit.test_semantic_sharding import _inventory, _shard_inputs
+
+
+def _qualifying_synthetic_formal_run(
+    *,
+    property_id: str,
+    property_description: str,
+    counterexample: dict[str, Any],
+    location: Location,
+) -> FormalToolRun:
+    evidence = FormalEvidence(
+        tool="synthetic-formal",
+        property_id=property_id,
+        property_description=property_description,
+        status=FormalToolStatus.SUCCESS,
+        result_kind=FormalResultKind.COUNTEREXAMPLE,
+        counterexample=counterexample,
+        locations=[location],
+        confidence=1,
+    )
+    provisional = FormalToolRun(
+        tool="synthetic-formal",
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="synthetic-formal 1.0.0",
+        executable_sha256="a" * 64,
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="b" * 64,
+        status=FormalToolStatus.SUCCESS,
+        command=["synthetic-formal", "--machine-output"],
+        evidence=[evidence],
+        coverage={"indexed_sources": 1},
+        stdout_path="synthetic-formal/stdout.txt",
+        stderr_path="synthetic-formal/stderr.txt",
+        process_exit_code=0,
+        stdout_sha256="c" * 64,
+        stderr_sha256="d" * 64,
+        stdout_bytes=1,
+        machine_output_validated=True,
+    )
+    return FormalToolRun.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "execution_observation_sha256": (provisional.expected_execution_observation_sha256()),
+        }
+    )
+
 
 _REPORT_QUALITY_MODEL_ID = "hotel/harbor-secure"
 
@@ -888,29 +934,16 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         for record in original_findings.records
         if record.source_excerpt is not None
     }
-    tampered_findings = build_findings_artifact(
-        public_report,
-        candidates=tampered_candidates,
-        reproduction_resolutions=original_findings.reproduction_resolutions,
-        source_excerpts=source_excerpts,
-    )
-    write_json(result.run_dir / "findings.json", tampered_findings)
-    (result.run_dir / "client-report.md").write_text(
-        render_client_markdown_from_artifact(public_report, tampered_findings),
-        encoding="utf-8",
-    )
-    (result.run_dir / "forensic-report.md").write_text(
-        render_forensic_markdown(public_report, findings_artifact=tampered_findings),
-        encoding="utf-8",
-    )
-    (result.run_dir / "audit-report.md").write_text(
-        render_markdown(public_report, findings_artifact=tampered_findings),
-        encoding="utf-8",
-    )
-    write_json(
-        result.run_dir / "audit-results.sarif",
-        generate_report_sarif(public_report, findings_artifact=tampered_findings),
-    )
+    with pytest.raises(
+        ValueError,
+        match="forensic consensus review differs from its candidate payload",
+    ):
+        build_findings_artifact(
+            public_report,
+            candidates=tampered_candidates,
+            reproduction_resolutions=original_findings.reproduction_resolutions,
+            source_excerpts=source_excerpts,
+        )
     candidate_tampered_manifest = seal_run_evidence_manifest(
         run_id=manifest.run_id,
         repository_root_name=manifest.repository_root_name,
@@ -922,10 +955,13 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     )
     reads_before_tamper = output_snapshot_reads
     pass_reads_before_tamper = pass_result_snapshot_reads
-    with pytest.raises(ValueError, match="candidate artifact differs from scheduler"):
+    with pytest.raises(
+        ValueError,
+        match="forensic consensus review differs from its candidate payload",
+    ):
         validate_manifest_artifacts(candidate_tampered_manifest, result.run_dir)
-    assert output_snapshot_reads == reads_before_tamper + 1
-    assert pass_result_snapshot_reads == pass_reads_before_tamper + 1
+    assert output_snapshot_reads == reads_before_tamper
+    assert pass_result_snapshot_reads == pass_reads_before_tamper
     for name, payload in original_public_bytes.items():
         (result.run_dir / name).write_bytes(payload)
 
@@ -1283,7 +1319,7 @@ async def test_manifest_rejects_incomplete_after_pass_five_cross_exam_coherent_r
 
 
 @pytest.mark.asyncio
-async def test_manifest_rejects_incomplete_after_pass_six_verification_coherent_reseal(
+async def test_report_rejects_incomplete_pass_six_verification_consensus_mismatch(
     config_factory: Any,
     vulnerable_repo: Path,
     tmp_path: Path,
@@ -1320,21 +1356,11 @@ async def test_manifest_rejects_incomplete_after_pass_six_verification_coherent_
             ]
         }
     )
-    _rewrite_public_report_bundle(result.run_dir, tampered_report)
-    verification_payload = json.loads(
-        (result.run_dir / "verification-results.json").read_text(encoding="utf-8")
-    )
-    verification_payload["decisions"] = [
-        item.model_dump(mode="json") for item in tampered_report.verification_decisions
-    ]
-    write_json(result.run_dir / "verification-results.json", verification_payload)
-    resealed = _reseal_scheduler_run(result.run_dir, manifest)
-
     with pytest.raises(
         ValueError,
-        match="public verification evidence differs from scheduler terminal authority",
+        match="report verification decisions differ from consensus review",
     ):
-        validate_manifest_artifacts(resealed, result.run_dir)
+        _rewrite_public_report_bundle(result.run_dir, tampered_report)
 
 
 @pytest.mark.asyncio
@@ -1366,6 +1392,67 @@ async def test_manifest_rejects_non_null_report_quality_coherent_reseal(
         match="public report quality differs from scheduler terminal authority",
     ):
         validate_manifest_artifacts(resealed, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_partial_report_quality_failure_replays_retained_terminal_judgment(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_report_quality_config(config_factory)
+    fake = FakeOpenRouter(
+        mode="timeout",
+        role="report_quality_review",
+        extra_model_ids=["golf/gale-secure", _REPORT_QUALITY_MODEL_ID],
+    )
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    assert not result.report.completed
+    assert result.report.report_quality_review is None
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    pass_seven = scheduler_artifact.summary.pass_results[-1]
+    assert pass_seven.plan.pass_kind is SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT
+    results_by_task_id = {item.task_id: item for item in pass_seven.task_results}
+    judgment_task = next(
+        task for task in pass_seven.plan.tasks if task.role == "host:evidence_cap_judgment"
+    )
+    report_quality_task = next(
+        task for task in pass_seven.plan.tasks if task.role == "specialist:report_quality"
+    )
+    assert (
+        results_by_task_id[judgment_task.task_id].terminal_status
+        is SchedulerTerminalStatus.SUCCEEDED
+    )
+    assert (
+        results_by_task_id[report_quality_task.task_id].terminal_status
+        is SchedulerTerminalStatus.FAILED
+    )
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    replay_calls = 0
+    original_replay = manifest_module._validate_scheduler_terminal_finding_replay
+
+    def counted_replay(**kwargs: Any) -> None:
+        nonlocal replay_calls
+        replay_calls += 1
+        original_replay(**kwargs)
+
+    monkeypatch.setattr(
+        manifest_module,
+        "_validate_scheduler_terminal_finding_replay",
+        counted_replay,
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+    assert replay_calls == 1
 
 
 @pytest.mark.asyncio
@@ -2533,7 +2620,7 @@ def test_finding_reduction_activation_binds_pending_and_formal_candidate_payload
         start_line=3,
         end_line=3,
     )
-    formal_run = FormalToolRun(
+    unverified_formal_run = FormalToolRun(
         tool="synthetic-formal",
         status=FormalToolStatus.SUCCESS,
         evidence=[
@@ -2548,6 +2635,22 @@ def test_finding_reduction_activation_binds_pending_and_formal_candidate_payload
                 confidence=1,
             )
         ],
+    )
+    unverified_candidates = _attach_formal_counterexamples(
+        [blind, execution],
+        [unverified_formal_run],
+    )
+    assert all(
+        evidence.type != "formal"
+        for candidate in unverified_candidates
+        for evidence in candidate.evidence
+    )
+
+    formal_run = _qualifying_synthetic_formal_run(
+        property_id="synthetic-accounting-property",
+        property_description="Observed accounting must equal the committed delta.",
+        counterexample={"observed_delta": 0, "committed_delta": 1},
+        location=Location(path="config.py", start_line=3, end_line=3),
     )
     candidates = _attach_formal_counterexamples([blind, execution], [formal_run])
     activation_input = _finding_reduction_activation_input(
@@ -2601,21 +2704,11 @@ async def test_pipeline_activates_pass_three_after_overlapping_formal_evidence_i
     class OverlappingFormalRunner:
         def run(self, **_kwargs: Any) -> list[FormalToolRun]:
             return [
-                FormalToolRun(
-                    tool="synthetic-formal",
-                    status=FormalToolStatus.SUCCESS,
-                    evidence=[
-                        FormalEvidence(
-                            tool="synthetic-formal",
-                            property_id="synthetic-withdrawal-property",
-                            property_description="Withdrawal authorization must be preserved.",
-                            status=FormalToolStatus.SUCCESS,
-                            result_kind=FormalResultKind.COUNTEREXAMPLE,
-                            counterexample={"authorized": False},
-                            locations=[Location(path="src/Vault.sol", start_line=20, end_line=22)],
-                            confidence=1,
-                        )
-                    ],
+                _qualifying_synthetic_formal_run(
+                    property_id="synthetic-withdrawal-property",
+                    property_description="Withdrawal authorization must be preserved.",
+                    counterexample={"authorized": False},
+                    location=Location(path="src/Vault.sol", start_line=20, end_line=22),
                 )
             ]
 

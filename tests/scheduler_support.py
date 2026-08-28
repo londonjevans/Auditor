@@ -315,6 +315,18 @@ def build_scheduler_test_host_payload(
             "semantic_inventory_sha256": semantic_inventory_sha256,
             "candidate_ids": candidates,
             "candidate_payload_sha256s": candidate_hashes,
+            "candidate_records": tuple(
+                SchedulerFindingReductionCandidate(
+                    candidate_id=candidate_id,
+                    candidate_sha256=candidate_hashes[candidate_id],
+                    location_validation=SchedulerFindingReductionValidation(
+                        valid=True,
+                        content_hash=None,
+                        errors=(),
+                    ),
+                )
+                for candidate_id in candidates
+            ),
             "shard_ids": plan.manifest.shard_ids,
             "semantic_relationship_ids": (),
             "boundary_review_artifact_sha256s": (),
@@ -403,10 +415,25 @@ def build_scheduler_test_host_payload(
             "schema_version": "2.0",
             "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
             "severity_threshold": "medium",
+            "critical_confirmation_requires_execution": True,
             "group_ids": group_ids,
             "judge_decision_ids": group_ids,
             "candidate_ids": bound_candidates,
             "candidate_payload_sha256s": candidate_hashes,
+            "terminal_candidate_records": tuple(
+                {
+                    "candidate_id": candidate_id,
+                    "candidate_sha256": candidate_hashes[candidate_id],
+                    "location_validation": {
+                        "valid": True,
+                        "content_hash": scheduler_canonical_sha256(
+                            {"candidate_id": candidate_id, "location": "terminal"}
+                        ),
+                        "errors": [],
+                    },
+                }
+                for candidate_id in bound_candidates
+            ),
             "candidate_grouping_sha256": scheduler_canonical_sha256(
                 [
                     {
@@ -470,6 +497,9 @@ def scheduler_test_host_activation_input_sha256(
         activation_input = {
             "candidate_ids": list(payload.candidate_ids),
             "candidate_payload_sha256s": payload.candidate_payload_sha256s,
+            "candidate_records": [
+                item.model_dump(mode="json") for item in payload.candidate_records
+            ],
             "semantic_inventory_sha256": payload.semantic_inventory_sha256,
             "shard_ids": list(payload.shard_ids),
             "semantic_relationship_ids": list(payload.semantic_relationship_ids),
@@ -1756,7 +1786,7 @@ def _task_plans(
         descriptors.extend(
             (
                 (
-                    "validation:verifier",
+                    "independent-verifier",
                     "verifier",
                     SchedulerTaskKind.MODEL_REQUEST,
                     SchedulerScope.global_scope(),
@@ -1765,7 +1795,7 @@ def _task_plans(
                     None,
                 ),
                 (
-                    "validation:candidate-falsifier-1",
+                    "candidate-falsifier-1",
                     "candidate_falsifier",
                     SchedulerTaskKind.MODEL_REQUEST,
                     SchedulerScope.global_scope(),
@@ -1774,7 +1804,7 @@ def _task_plans(
                     None,
                 ),
                 (
-                    "validation:candidate-falsifier-2",
+                    "candidate-falsifier-2",
                     "candidate_falsifier",
                     SchedulerTaskKind.MODEL_REQUEST,
                     SchedulerScope.global_scope(),

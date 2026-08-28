@@ -43,6 +43,7 @@ from mmaudit.models.refresh import (
     load_model_refresh_source_evidence,
 )
 from mmaudit.reporting.json_report import stable_json
+from tests.unit import test_model_refresh as refresh_fixtures
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = ROOT / "config" / "models.candidates.toml"
@@ -371,6 +372,58 @@ def test_models_refresh_rejects_future_registry_before_secret_or_provider(
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "candidate registry is future-dated" in " ".join(result.stdout.split())
     assert not secret_accessed
+
+
+def test_models_refresh_rejects_revoked_registry_before_secret_or_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    base = refresh_fixtures._registry(
+        model_ids=(model_id,),
+        created_at=datetime.now(UTC).replace(microsecond=0),
+    )
+    model = base.candidates[0].model_copy(
+        update={
+            "canonical_model_slug": "deepseek/deepseek-v4-pro-20260813",
+            "approved_provider_endpoint": "parasail/fp8",
+        }
+    )
+    registry = seal_candidate_registry(
+        created_at=base.created_at,
+        discovery_run_sha256=base.discovery_run_sha256,
+        candidates=(model,),
+    )
+    registry_path = tmp_path / "revoked-candidate-registry.json"
+    registry_path.write_text(stable_json(registry), encoding="utf-8")
+    registry_path.chmod(0o600)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(registry_path),
+            "--selected-route",
+            f"{model_id}=parasail/fp8",
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate assignment is ineligible" in " ".join(result.stdout.split())
+    assert not secret_accessed
+    assert not (tmp_path / "output").exists()
 
 
 def test_models_refresh_rejects_untrusted_client_before_secret_access(

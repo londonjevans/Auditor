@@ -16,6 +16,7 @@ from mmaudit.models.coverage_planning import (
     build_model_surface_coverage_plan,
     build_model_surface_resource_preflight,
 )
+from mmaudit.models.openrouter import OpenRouterModelError, OpenRouterProviderPolicy
 from mmaudit.models.scheduler import (
     SchedulerPassKind,
     SchedulerPassStatus,
@@ -23,7 +24,16 @@ from mmaudit.models.scheduler import (
     SchedulerShardInventory,
     SchedulerSourceDescriptor,
 )
-from mmaudit.models.schemas import Location, ModelReviewSurfaceKind, ModelSurfaceReviewRequest
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    Location,
+    ModelReviewSurfaceKind,
+    ModelSurfaceReviewRequest,
+    ScannerFinding,
+    ScannerRun,
+    ScannerStatus,
+    Severity,
+)
 from mmaudit.orchestration.cost_ledger import (
     CostPortfolioHold,
     CostPortfolioSlot,
@@ -33,6 +43,7 @@ from mmaudit.orchestration.cost_ledger import (
 )
 from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
 from mmaudit.orchestration.pipeline import (
+    AuditPipeline,
     _load_private_coverage_preflight,
     _matching_model_portfolio_holds,
     _model_portfolio_dispatch_is_closed,
@@ -40,8 +51,52 @@ from mmaudit.orchestration.pipeline import (
     _model_surface_reviewer_bindings,
     _model_surface_scheduler_scopes,
     _persist_private_coverage_evidence,
+    _qualifying_consensus_scanner_findings,
 )
 from tests.conftest import MODEL_IDS
+
+
+@pytest.mark.asyncio
+async def test_direct_pipeline_model_validation_rejects_revoked_route_before_provider_access(
+    tmp_path: Path,
+    config_factory: Any,
+) -> None:
+    base = config_factory()
+    config = config_factory(
+        models={
+            "provider_policy": {
+                "only": ["parasail/fp8"],
+                "order": [],
+                "allow_fallbacks": False,
+            },
+            "threat_model": {
+                **base.models.threat_model.model_dump(mode="python"),
+                "primary": "deepseek/deepseek-v4-pro-0813",
+                "fallbacks": [],
+            },
+        }
+    )
+    client = SimpleNamespace(
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        )
+    )
+    subject = SimpleNamespace(
+        client=client,
+        config=config,
+        output=tmp_path / "output",
+    )
+
+    with pytest.raises(OpenRouterModelError, match="route is revoked"):
+        await AuditPipeline._validate_models(
+            subject,  # type: ignore[arg-type]
+            tmp_path / "run",
+            refresh=True,
+            source_egress_requested=True,
+        )
+    assert not (tmp_path / "output").exists()
+    assert not (tmp_path / "run").exists()
 
 
 def _source(path: str, content: str) -> tuple[SchedulerSourceDescriptor, str]:
@@ -56,6 +111,59 @@ def _shard(shard_digit: str, source: SchedulerSourceDescriptor) -> SchedulerShar
         semantic_shard_sha256=shard_digit * 64,
         sources=(source,),
     )
+
+
+def _qualifying_scanner_run() -> ScannerRun:
+    observed_at = datetime(2026, 8, 27, tzinfo=UTC)
+    finding = ScannerFinding(
+        scanner="semgrep",
+        rule_id="synthetic-sql-injection",
+        title="Synthetic SQL injection",
+        severity=Severity.HIGH,
+        message="Formatted SQL query",
+        locations=[Location(path="app.py", start_line=13, end_line=13)],
+        cwe=["CWE-89"],
+        fingerprint="scanner-fingerprint",
+    )
+    provisional = ScannerRun(
+        scanner="semgrep",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="synthetic-1.0",
+        executable_sha256="a" * 64,
+        command=["semgrep", "--json"],
+        started_at=observed_at,
+        finished_at=observed_at,
+        duration_seconds=0,
+        findings=[finding],
+        raw_output_path="semgrep/output.json",
+        raw_output_sha256="b" * 64,
+        raw_output_bytes=1,
+        process_exit_code=0,
+        isolation_backend="bubblewrap",
+        isolation_attestation_sha256="c" * 64,
+        machine_output_validated=True,
+    )
+    return ScannerRun.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "execution_observation_sha256": provisional.expected_execution_observation_sha256(),
+        }
+    )
+
+
+def test_consensus_scanner_inventory_requires_qualified_real_run() -> None:
+    qualifying = _qualifying_scanner_run()
+    assert _qualifying_consensus_scanner_findings([qualifying]) == qualifying.findings
+
+    unverified = ScannerRun.model_validate(
+        {
+            **qualifying.model_dump(mode="json"),
+            "execution_evidence": ExecutionEvidenceKind.UNVERIFIED.value,
+            "execution_observation_sha256": None,
+        }
+    )
+    assert _qualifying_consensus_scanner_findings([unverified]) == []
 
 
 def test_surface_scope_mapping_is_exact_for_single_and_cross_shard_requests() -> None:

@@ -279,6 +279,46 @@ def test_two_charged_attempts_join_one_exact_usage_record(tmp_path: Path) -> Non
     assert artifact.accounted_cost_usd_exact == "0.3"
 
 
+def test_seventh_charged_attempt_remains_reconcilable_under_retry_policy_cap(
+    tmp_path: Path,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "seven-attempt-retry.json",
+        cap_usd=Decimal("250"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    for attempt_index in range(1, 8):
+        request_id = (
+            LOGICAL_REQUEST_ID
+            if attempt_index == 1
+            else f"{LOGICAL_REQUEST_ID}:attempt:{attempt_index}"
+        )
+        reservation = ledger.reserve(request_id, Decimal("0.1"))
+        ledger.reconcile(reservation, Decimal("0.1"))
+    usage = _usage(attempts=7, cost="0.7")
+
+    evidence = build_run_cost_ledger_evidence(
+        baseline=baseline,
+        final_snapshot=ledger.snapshot(),
+        campaign_logical_request_ids=(LOGICAL_REQUEST_ID,),
+        usage_records=(usage,),
+    )
+    artifact = build_model_execution_artifact(
+        _report().model_copy(
+            update={
+                "usage": [usage],
+                "accounted_cost_usd": 0.7,
+                "accounted_cost_usd_exact": "0.7",
+            }
+        ),
+        cost_ledger_evidence=evidence,
+    )
+
+    assert [attempt.attempt_index for attempt in evidence.attempts] == list(range(1, 8))
+    assert evidence.run_accounted_cost_usd_exact == "0.7"
+    assert artifact.accounted_cost_usd_exact == "0.7"
+
+
 def test_release_only_attempt_joins_zero_cost_logical_usage(tmp_path: Path) -> None:
     ledger = AtomicCostLedger.initialize(
         tmp_path / "release-only.json",

@@ -30,6 +30,7 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationVerdict,
     CandidateFinding,
     CandidateReproductionResolution,
+    ConsensusReviewArtifact,
     CoverageMetric,
     CoverageProvenance,
     ExecutionEvidenceKind,
@@ -167,6 +168,9 @@ def _exact_money_difference(minuend: Decimal, *subtrahends: Decimal) -> Decimal:
         for subtrahend in subtrahends:
             result -= subtrahend
         return result
+
+
+_MAX_MODEL_ATTEMPTS_PER_ROUTE = 32
 
 
 def _attempt_request_id(logical_request_id: str, attempt_index: int) -> str:
@@ -696,6 +700,10 @@ class FindingsArtifact(ReportStatusProjection):
     filtered_findings: list[Finding]
     records: list[ForensicFindingRecord]
     candidate_findings: list[CandidateFinding] = Field(max_length=100_000)
+    consensus_review: ConsensusReviewArtifact | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     terminal_candidate_dispositions: list[CandidateTerminalDisposition] = Field(max_length=100_000)
     verification_decisions: list[VerificationDecision] = Field(max_length=100_000)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(max_length=100_000)
@@ -898,6 +906,35 @@ class FindingsArtifact(ReportStatusProjection):
                 raise ValueError(f"forensic records omit or duplicate top-level {label}")
         return self
 
+    @model_validator(mode="after")
+    def consensus_review_matches_forensic_inventory(self) -> FindingsArtifact:
+        """Bind the optional closed quorum to retained candidates and primary review."""
+
+        if self.consensus_review is None:
+            return self
+        candidate_ids = {candidate.candidate_id for candidate in self.candidate_findings}
+        if not set(self.consensus_review.candidate_ids) <= candidate_ids:
+            raise ValueError("forensic consensus review references an unknown candidate")
+        candidate_by_id = {
+            candidate.candidate_id: candidate for candidate in self.candidate_findings
+        }
+        if any(
+            scheduler_canonical_sha256(candidate_by_id[candidate_id].model_dump(mode="json"))
+            != self.consensus_review.candidate_payload_sha256s[candidate_id]
+            for candidate_id in self.consensus_review.candidate_ids
+        ):
+            raise ValueError("forensic consensus review differs from its candidate payload")
+        verifier = self.consensus_review.reviewers[0]
+        expected_verifications = [
+            verifier.decision_for(candidate_id).as_verification_decision()
+            for candidate_id in self.consensus_review.candidate_ids
+        ]
+        if self.verification_decisions != expected_verifications:
+            raise ValueError(
+                "forensic verification decisions differ from consensus primary reviewer"
+            )
+        return self
+
 
 class CoverageArtifact(ReportStatusProjection):
     """Compact typed coverage projection with full typed coverage bodies retained."""
@@ -1007,7 +1044,7 @@ class CostLedgerAttemptEvidence(StrictModel):
 
     schema_version: Literal["1.0"] = "1.0"
     logical_request_id: str = Field(pattern=_SCHEDULER_REQUEST_PATTERN)
-    attempt_index: int = Field(ge=1, le=6)
+    attempt_index: int = Field(ge=1, le=_MAX_MODEL_ATTEMPTS_PER_ROUTE)
     request_id: str = Field(min_length=1, max_length=128)
     reservation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     status: CostEntryStatus
@@ -1131,9 +1168,30 @@ class CostLedgerAttemptEvidence(StrictModel):
 class RunCostLedgerEvidence(StrictModel):
     """Exact campaign-only delta between immutable atomic ledger snapshots."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     state: Literal["RUN_SCOPED_CLOSED"] = "RUN_SCOPED_CLOSED"
     status: Literal["VALIDATED"] = "VALIDATED"
+    campaign_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-campaign-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    campaign_manifest_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    campaign_logical_request_inventory_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    campaign_logical_request_count: int | None = Field(
+        default=None,
+        ge=0,
+        le=1_000_000,
+        exclude_if=lambda value: value is None,
+    )
     baseline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     baseline_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     final_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -1163,6 +1221,10 @@ class RunCostLedgerEvidence(StrictModel):
         final_snapshot: CostLedgerSnapshot,
         attempts: Sequence[CostLedgerAttemptEvidence],
         baseline_has_reservation_overrun: bool,
+        campaign_id: str | None = None,
+        campaign_manifest_sha256: str | None = None,
+        campaign_logical_request_inventory_sha256: str | None = None,
+        campaign_logical_request_count: int | None = None,
     ) -> RunCostLedgerEvidence:
         canonical_attempts = sorted(
             attempts,
@@ -1178,10 +1240,32 @@ class RunCostLedgerEvidence(StrictModel):
         )
         if final_snapshot.remaining_usd != exact_final_remaining:
             raise ValueError("final cost-ledger remaining amount is not exact")
+        campaign_values = (
+            campaign_id,
+            campaign_manifest_sha256,
+            campaign_logical_request_inventory_sha256,
+            campaign_logical_request_count,
+        )
+        if any(value is not None for value in campaign_values) and any(
+            value is None for value in campaign_values
+        ):
+            raise ValueError("run cost-ledger campaign binding must be complete")
         values = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if campaign_id is not None else "1.0",
             "state": "RUN_SCOPED_CLOSED",
             "status": "VALIDATED",
+            **(
+                {
+                    "campaign_id": campaign_id,
+                    "campaign_manifest_sha256": campaign_manifest_sha256,
+                    "campaign_logical_request_inventory_sha256": (
+                        campaign_logical_request_inventory_sha256
+                    ),
+                    "campaign_logical_request_count": campaign_logical_request_count,
+                }
+                if campaign_id is not None
+                else {}
+            ),
             "baseline_sha256": baseline.baseline_sha256,
             "baseline_snapshot_sha256": baseline.ledger_snapshot_sha256,
             "final_snapshot_sha256": cost_ledger_snapshot_sha256(final_snapshot),
@@ -1216,6 +1300,16 @@ class RunCostLedgerEvidence(StrictModel):
 
     @model_validator(mode="after")
     def delta_totals_closure_and_hash_are_exact(self) -> RunCostLedgerEvidence:
+        campaign_values = (
+            self.campaign_id,
+            self.campaign_manifest_sha256,
+            self.campaign_logical_request_inventory_sha256,
+            self.campaign_logical_request_count,
+        )
+        if (self.schema_version == "1.1") != all(
+            value is not None for value in campaign_values
+        ) or (self.schema_version == "1.0" and any(value is not None for value in campaign_values)):
+            raise ValueError("run cost-ledger campaign binding differs from its schema version")
         if self.attempts != sorted(
             self.attempts,
             key=lambda item: (item.logical_request_id, item.attempt_index),
@@ -1233,6 +1327,12 @@ class RunCostLedgerEvidence(StrictModel):
         by_logical: dict[str, list[CostLedgerAttemptEvidence]] = {}
         for attempt in self.attempts:
             by_logical.setdefault(attempt.logical_request_id, []).append(attempt)
+        if (
+            self.schema_version == "1.1"
+            and self.campaign_logical_request_count is not None
+            and self.campaign_logical_request_count < len(by_logical)
+        ):
+            raise ValueError("run cost-ledger campaign inventory understates observed requests")
         for attempts in by_logical.values():
             if [item.attempt_index for item in attempts] != list(range(1, len(attempts) + 1)):
                 raise ValueError("run cost-ledger attempt indices are not contiguous")
@@ -1365,6 +1465,8 @@ def build_run_cost_ledger_evidence(
     final_snapshot: CostLedgerSnapshot,
     campaign_logical_request_ids: Sequence[str],
     usage_records: Sequence[UsageRecord],
+    campaign_id: str | None = None,
+    campaign_manifest_sha256: str | None = None,
 ) -> RunCostLedgerEvidence:
     """Project only one scheduler campaign's exact terminal atomic-ledger delta."""
 
@@ -1374,6 +1476,9 @@ def build_run_cost_ledger_evidence(
         re.fullmatch(_SCHEDULER_REQUEST_PATTERN, item) is None for item in campaign_ids
     ):
         raise ValueError("campaign cost custody requires unique scheduler request identities")
+    if (campaign_id is None) != (campaign_manifest_sha256 is None):
+        raise ValueError("campaign cost custody requires both campaign identity bindings")
+    canonical_campaign_ids = tuple(sorted(campaign_ids))
     usage = tuple(
         UsageRecord.model_validate(record.model_dump(mode="python")) for record in usage_records
     )
@@ -1455,7 +1560,7 @@ def build_run_cost_ledger_evidence(
         logical_request_id = match.group(1)
         attempt_index = 1 if match.group(2) is None else int(match.group(2))
         if (
-            attempt_index > 6
+            attempt_index > _MAX_MODEL_ATTEMPTS_PER_ROUTE
             or (logical_request_id.startswith("scheduler-recovery-request-") and attempt_index != 1)
             or _attempt_request_id(logical_request_id, attempt_index) != entry.request_id
         ):
@@ -1473,6 +1578,14 @@ def build_run_cost_ledger_evidence(
         final_snapshot=final_snapshot,
         attempts=attempts,
         baseline_has_reservation_overrun=reconstructed_baseline.has_reservation_overrun,
+        campaign_id=campaign_id,
+        campaign_manifest_sha256=campaign_manifest_sha256,
+        campaign_logical_request_inventory_sha256=(
+            scheduler_canonical_sha256(canonical_campaign_ids) if campaign_id is not None else None
+        ),
+        campaign_logical_request_count=(
+            len(canonical_campaign_ids) if campaign_id is not None else None
+        ),
     )
     _validate_usage_cost_joins(usage, evidence.attempts)
     return evidence
@@ -1601,6 +1714,7 @@ def effective_run_status(report: AuditReport) -> AuditRunStatus:
 
 def _disposition(
     finding: Finding,
+    consensus_review: ConsensusReviewArtifact | None,
     verifications: Sequence[VerificationDecision],
     cross_examinations: Sequence[CandidateCrossExaminationDecision],
     falsifications: Sequence[FalsificationDecision],
@@ -1610,6 +1724,16 @@ def _disposition(
     if finding.status is FindingStatus.REJECTED:
         return ForensicDisposition.REJECTED
     contributor_ids = set(finding.contributing_candidate_ids)
+    if consensus_review is not None and bool(contributor_ids & set(consensus_review.candidate_ids)):
+        if finding.status in {
+            FindingStatus.NEEDS_REVIEW,
+            FindingStatus.INSUFFICIENT_CONTEXT,
+            FindingStatus.UNSUPPORTED,
+        }:
+            return ForensicDisposition.INCONCLUSIVE
+        if finding.status is FindingStatus.CONFIRMED:
+            return ForensicDisposition.CONFIRMED
+        return ForensicDisposition.SUPPORTED
     if (
         any(
             decision.candidate_id in contributor_ids
@@ -1733,6 +1857,7 @@ def build_findings_artifact(
                 finding_id=finding.id,
                 disposition=_disposition(
                     finding,
+                    report.consensus_review,
                     linked_verifications,
                     linked_cross_examinations,
                     linked_falsifications,
@@ -1796,6 +1921,7 @@ def build_findings_artifact(
         filtered_findings=list(report.filtered_findings),
         records=records,
         candidate_findings=sorted(candidates, key=lambda item: item.candidate_id),
+        consensus_review=report.consensus_review,
         terminal_candidate_dispositions=terminal_dispositions,
         verification_decisions=_sorted_verifications(report.verification_decisions),
         cross_examination_decisions=_sorted_cross_examinations(report.cross_examination_decisions),

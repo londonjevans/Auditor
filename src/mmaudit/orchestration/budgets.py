@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 from pathlib import Path
-from typing import Any, Final, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,6 +24,7 @@ from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostBudgetExceededError,
     CostEntryStatus,
+    CostLedgerSnapshot,
     CostPortfolioReservation,
     CostReservation,
     CostReservationOverrunError,
@@ -33,7 +34,11 @@ from mmaudit.orchestration.cost_ledger import (
     PortfolioSlotStatus,
     ReleaseReason,
     cost_entry_sha256,
+    cost_ledger_snapshot_sha256,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.models.prepurchase_quote import AcceptedPrepurchaseQuote
 
 
 class BudgetExhaustedError(RuntimeError):
@@ -72,6 +77,12 @@ _MAX_SHARED_RECOVERY_ROOTS: Final = 16
 _MAX_SHARED_RECOVERY_RECORDS: Final = 48
 _MAX_SHARED_RECOVERY_REQUESTS_PER_ROOT: Final = 33
 _MAX_PORTFOLIO_ATTEMPT_SLOTS: Final = 1024
+_SCHEDULER_RECOVERY_REQUEST_PATTERN: Final = re.compile(
+    r"scheduler-recovery-request-[0-9a-f]{64}\Z"
+)
+_CANDIDATE_FALSIFIER_REVIEW_ROLE_PATTERN: Final = re.compile(
+    r"candidate_falsifier:[0-9a-f]{64}:reviewer_[12]\Z"
+)
 _TRUSTED_PATH_TYPE: Final = type(Path("/"))
 _TRUSTED_ATOMIC_COST_LEDGER_TYPE: Final = AtomicCostLedger
 _TRUSTED_ATOMIC_LEDGER_SNAPSHOT: Final = AtomicCostLedger.snapshot
@@ -1237,6 +1248,398 @@ class _Reconciliation:
     token_overrun: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _AcceptedQuoteRouteCeiling:
+    """Immutable runtime projection of one accepted paid-route envelope."""
+
+    task_class: str
+    request_role: str
+    runtime_role_kind: str
+    exact_model_id: str
+    request_envelope_recipe_sha256: str
+    endpoint_policy_snapshot_sha256: str
+    endpoint_policy_pricing_sha256: str
+    provider_endpoint: str
+    endpoint_pricing_snapshot_sha256: str
+    maximum_task_count: int
+    maximum_attempts_per_task: int
+    maximum_input_tokens_per_attempt: int
+    maximum_output_tokens_per_attempt: int
+    maximum_cost_usd_per_attempt_exact: Decimal
+    ceiling_sha256: str
+
+    @property
+    def worst_case_request_count(self) -> int:
+        return self.maximum_task_count * self.maximum_attempts_per_task
+
+
+@dataclass(frozen=True, slots=True)
+class _AcceptedQuoteBudgetBinding:
+    """Validated immutable projection of one accepted incremental run ceiling."""
+
+    quote_sha256: str
+    acceptance_sha256: str
+    retry_policy_sha256: str
+    baseline_sha256: str
+    baseline_snapshot_sha256: str
+    baseline_spent_usd_exact: Decimal
+    run_hard_ceiling_usd_exact: Decimal
+    effective_total_usd_exact: Decimal
+    route_ceilings: tuple[_AcceptedQuoteRouteCeiling, ...]
+
+
+def _accepted_quote_role_family(role: str) -> str:
+    """Map only the scheduler's exact per-candidate reviewer role to its quote family."""
+
+    if _CANDIDATE_FALSIFIER_REVIEW_ROLE_PATTERN.fullmatch(role) is not None:
+        return "candidate_falsifier"
+    return role
+
+
+def _accepted_quote_route_key(
+    *,
+    role: str,
+    exact_model_id: str,
+    provider_endpoint: str,
+    endpoint_pricing_snapshot_sha256: str,
+) -> tuple[str, str, str, str, str]:
+    dynamic_role = _CANDIDATE_FALSIFIER_REVIEW_ROLE_PATTERN.fullmatch(role) is not None
+    return (
+        _accepted_quote_role_family(role),
+        "candidate_falsifier_sha256_reviewer" if dynamic_role else "exact",
+        exact_model_id,
+        provider_endpoint,
+        endpoint_pricing_snapshot_sha256,
+    )
+
+
+def _accepted_quote_ceiling_key(
+    ceiling: _AcceptedQuoteRouteCeiling,
+) -> tuple[str, str, str, str, str]:
+    return (
+        ceiling.request_role,
+        ceiling.runtime_role_kind,
+        ceiling.exact_model_id,
+        ceiling.provider_endpoint,
+        ceiling.endpoint_pricing_snapshot_sha256,
+    )
+
+
+def _accepted_quote_route_projection(
+    accepted_quote: AcceptedPrepurchaseQuote,
+) -> tuple[_AcceptedQuoteRouteCeiling, ...]:
+    projected: list[_AcceptedQuoteRouteCeiling] = []
+    for ceiling in accepted_quote.quote.task_ceilings:
+        if ceiling.maximum_task_count == 0:
+            continue
+        route_fields = (
+            ceiling.request_role,
+            ceiling.requested_model,
+            ceiling.request_envelope_recipe_sha256,
+            ceiling.endpoint_policy_snapshot_sha256,
+            ceiling.endpoint_policy_pricing_sha256,
+            ceiling.provider_endpoint,
+            ceiling.endpoint_pricing_snapshot_sha256,
+        )
+        if ceiling.runtime_role_kind is None or any(value is None for value in route_fields):
+            raise BudgetReservationStateError(
+                "accepted pre-purchase quote contains an incomplete paid-route ceiling"
+            )
+        (
+            request_role,
+            exact_model_id,
+            envelope_sha256,
+            policy_sha256,
+            policy_pricing_sha256,
+            provider_endpoint,
+            pricing_sha256,
+        ) = cast(tuple[str, str, str, str, str, str, str], route_fields)
+        projected.append(
+            _AcceptedQuoteRouteCeiling(
+                task_class=ceiling.task_class.value,
+                request_role=request_role,
+                runtime_role_kind=ceiling.runtime_role_kind.value,
+                exact_model_id=exact_model_id,
+                request_envelope_recipe_sha256=envelope_sha256,
+                endpoint_policy_snapshot_sha256=policy_sha256,
+                endpoint_policy_pricing_sha256=policy_pricing_sha256,
+                provider_endpoint=provider_endpoint,
+                endpoint_pricing_snapshot_sha256=pricing_sha256,
+                maximum_task_count=ceiling.maximum_task_count,
+                maximum_attempts_per_task=ceiling.maximum_attempts_per_task,
+                maximum_input_tokens_per_attempt=(ceiling.maximum_input_tokens_per_attempt),
+                maximum_output_tokens_per_attempt=(ceiling.maximum_output_tokens_per_attempt),
+                maximum_cost_usd_per_attempt_exact=_parse_usd_cap(
+                    ceiling.maximum_cost_usd_per_attempt_exact,
+                    scope="accepted quote route",
+                ),
+                ceiling_sha256=ceiling.ceiling_sha256,
+            )
+        )
+    if not projected:
+        raise BudgetReservationStateError(
+            "accepted pre-purchase quote contains no enabled paid-route ceiling"
+        )
+    return tuple(projected)
+
+
+def _bind_accepted_quote_budget(
+    accepted_quote: AcceptedPrepurchaseQuote | None,
+    *,
+    ledger: AtomicCostLedger | None,
+    snapshot: CostLedgerSnapshot | None,
+    configured_total_usd_exact: Decimal,
+) -> _AcceptedQuoteBudgetBinding | None:
+    from mmaudit.models.prepurchase_quote import AcceptedPrepurchaseQuote
+
+    if accepted_quote is None:
+        return None
+    if type(accepted_quote) is not AcceptedPrepurchaseQuote:
+        raise BudgetReservationStateError("accepted pre-purchase quote type is invalid")
+    if ledger is None or snapshot is None:
+        raise BudgetReservationStateError(
+            "accepted pre-purchase quote requires a durable atomic ledger"
+        )
+    try:
+        normalized = AcceptedPrepurchaseQuote.model_validate(
+            accepted_quote.model_dump(mode="python")
+        )
+        baseline = normalized.quote.ledger_baseline
+        baseline_cap = _parse_usd_cap(baseline.cap_usd_exact, scope="quote baseline")
+        baseline_spent = _parse_usd_cap(
+            baseline.spent_usd_exact,
+            scope="quote baseline spent",
+        )
+        baseline_active = _parse_usd_cap(
+            baseline.active_reserved_usd_exact,
+            scope="quote baseline active reservation",
+        )
+        baseline_remaining = _parse_usd_cap(
+            baseline.remaining_usd_exact,
+            scope="quote baseline remaining",
+        )
+        run_ceiling = _parse_usd_cap(
+            normalized.run_hard_ceiling_usd_exact,
+            scope="accepted quote run hard ceiling",
+        )
+        quoted_worst_case = _parse_usd_cap(
+            normalized.quote.cost_range.worst_case_usd_exact,
+            scope="quote accepted spend ceiling",
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise BudgetReservationStateError("accepted pre-purchase quote is invalid") from exc
+    if normalized != accepted_quote:
+        raise BudgetReservationStateError("accepted pre-purchase quote is not canonical")
+    if run_ceiling != quoted_worst_case:
+        raise BudgetReservationStateError(
+            "accepted run hard ceiling differs from the quoted spend ceiling"
+        )
+    if baseline_active != 0 or snapshot.active_reserved_usd != 0:
+        raise BudgetReservationStateError(
+            "accepted quote requires a zero-active-reservation ledger baseline"
+        )
+    if (
+        baseline.ledger_identity_sha256 != ledger.identity_sha256
+        or baseline.ledger_snapshot_sha256 != cost_ledger_snapshot_sha256(snapshot)
+        or baseline_cap != snapshot.cap_usd
+        or baseline_spent != snapshot.spent_usd
+        or baseline_remaining != snapshot.remaining_usd
+    ):
+        raise BudgetReservationStateError(
+            "accepted quote ledger baseline differs from the current durable snapshot"
+        )
+    effective_total = _exact_decimal_add(baseline_spent, run_ceiling)
+    if ledger.cap_usd < effective_total:
+        raise BudgetReservationStateError(
+            "atomic ledger cap cannot cover the accepted incremental run ceiling"
+        )
+    if configured_total_usd_exact < effective_total:
+        raise BudgetReservationStateError(
+            "manager total cannot cover the accepted incremental run ceiling"
+        )
+    return _AcceptedQuoteBudgetBinding(
+        quote_sha256=normalized.quote_sha256,
+        acceptance_sha256=normalized.acceptance_sha256,
+        retry_policy_sha256=normalized.quote.retry_policy.policy_sha256,
+        baseline_sha256=baseline.baseline_sha256,
+        baseline_snapshot_sha256=baseline.ledger_snapshot_sha256,
+        baseline_spent_usd_exact=baseline_spent,
+        run_hard_ceiling_usd_exact=run_ceiling,
+        effective_total_usd_exact=effective_total,
+        route_ceilings=_accepted_quote_route_projection(normalized),
+    )
+
+
+def _accepted_quote_route_fits(
+    ceiling: _AcceptedQuoteRouteCeiling,
+    *,
+    maximum_input_tokens: int,
+    maximum_output_tokens: int,
+    maximum_cost_usd: Decimal,
+) -> bool:
+    return (
+        maximum_input_tokens <= ceiling.maximum_input_tokens_per_attempt
+        and maximum_output_tokens <= ceiling.maximum_output_tokens_per_attempt
+        and maximum_cost_usd <= ceiling.maximum_cost_usd_per_attempt_exact
+    )
+
+
+def _require_accepted_quote_portfolio_slots(
+    binding: _AcceptedQuoteBudgetBinding | None,
+    slots: tuple[PortfolioTaskSlot, ...],
+) -> None:
+    """Require every durable early slot to fit one exact accepted route envelope."""
+
+    if binding is None:
+        return
+    primary = tuple(
+        ceiling for ceiling in binding.route_ceilings if ceiling.task_class != "truncation_recovery"
+    )
+    tasks: dict[str, tuple[PortfolioTaskSlot, ...]] = {}
+    for slot in slots:
+        tasks.setdefault(slot.task_id, ())
+        tasks[slot.task_id] = (*tasks[slot.task_id], slot)
+    assigned_counts: dict[str, int] = {}
+    for task_id, attempts in sorted(tasks.items()):
+        first = attempts[0]
+        matches = tuple(
+            ceiling
+            for ceiling in primary
+            if (
+                ceiling.runtime_role_kind == "exact"
+                and first.role == ceiling.request_role
+                and first.exact_model_id == ceiling.exact_model_id
+                and first.provider_endpoint == ceiling.provider_endpoint
+                and first.endpoint_policy_snapshot_sha256 == ceiling.endpoint_policy_snapshot_sha256
+                and first.endpoint_policy_pricing_sha256 == ceiling.endpoint_policy_pricing_sha256
+                and first.endpoint_pricing_snapshot_sha256
+                == ceiling.endpoint_pricing_snapshot_sha256
+                and first.envelope_recipe_sha256 == ceiling.request_envelope_recipe_sha256
+                and len(attempts) <= ceiling.maximum_attempts_per_task
+                and _accepted_quote_route_fits(
+                    ceiling,
+                    maximum_input_tokens=first.planned_prompt_tokens,
+                    maximum_output_tokens=first.planned_completion_tokens,
+                    maximum_cost_usd=first.maximum_cost_usd,
+                )
+                and assigned_counts.get(ceiling.ceiling_sha256, 0) < ceiling.maximum_task_count
+            )
+        )
+        if not matches:
+            raise BudgetReservationStateError(
+                f"portfolio task {task_id} differs from every accepted quote route ceiling"
+            )
+        selected = min(
+            matches,
+            key=lambda item: (item.maximum_task_count, item.ceiling_sha256),
+        )
+        assigned_counts[selected.ceiling_sha256] = (
+            assigned_counts.get(selected.ceiling_sha256, 0) + 1
+        )
+
+
+def _require_accepted_quote_request(
+    binding: _AcceptedQuoteBudgetBinding | None,
+    *,
+    identifier: str,
+    role: str,
+    endpoint_cost_bound: EndpointRequestCostBound | None,
+    model_retry_policy_sha256: str | None,
+    maximum_cost_usd: Decimal,
+    issued: Mapping[str, Reservation],
+) -> None:
+    """Join one live priced request to accepted route identity and finite capacity."""
+
+    if binding is None:
+        return
+    if model_retry_policy_sha256 != binding.retry_policy_sha256:
+        raise BudgetReservationStateError("live model retry policy differs from the accepted quote")
+    if endpoint_cost_bound is None:
+        raise BudgetReservationStateError(
+            "accepted quote dispatch requires an exact live endpoint cost bound"
+        )
+    maximum_input_tokens = _trusted_endpoint_request_maximum_units_for(
+        endpoint_cost_bound,
+        "prompt",
+    )
+    maximum_output_tokens = _trusted_endpoint_request_maximum_units_for(
+        endpoint_cost_bound,
+        "completion",
+    )
+    route_key = _accepted_quote_route_key(
+        role=role,
+        exact_model_id=endpoint_cost_bound.exact_model_id,
+        provider_endpoint=endpoint_cost_bound.provider_endpoint,
+        endpoint_pricing_snapshot_sha256=endpoint_cost_bound.pricing_snapshot_sha256,
+    )
+    primary = tuple(
+        ceiling
+        for ceiling in binding.route_ceilings
+        if ceiling.task_class != "truncation_recovery"
+        and _accepted_quote_ceiling_key(ceiling) == route_key
+        and _accepted_quote_route_fits(
+            ceiling,
+            maximum_input_tokens=maximum_input_tokens,
+            maximum_output_tokens=maximum_output_tokens,
+            maximum_cost_usd=maximum_cost_usd,
+        )
+    )
+    if not primary:
+        raise BudgetReservationStateError(
+            "live request route, pricing, tokens, or cost differs from the accepted quote"
+        )
+
+    recovery_prefix = identifier.startswith("scheduler-recovery-request-")
+    is_recovery = _SCHEDULER_RECOVERY_REQUEST_PATTERN.fullmatch(identifier) is not None
+    if recovery_prefix and not is_recovery:
+        raise BudgetReservationStateError("scheduler recovery request identity is invalid")
+    if is_recovery:
+        recovery = tuple(
+            ceiling
+            for ceiling in binding.route_ceilings
+            if ceiling.task_class == "truncation_recovery"
+            and _accepted_quote_route_fits(
+                ceiling,
+                maximum_input_tokens=maximum_input_tokens,
+                maximum_output_tokens=maximum_output_tokens,
+                maximum_cost_usd=maximum_cost_usd,
+            )
+        )
+        if not recovery:
+            raise BudgetReservationStateError(
+                "live recovery request exceeds the accepted global recovery ceiling"
+            )
+        prior_count = sum(
+            _SCHEDULER_RECOVERY_REQUEST_PATTERN.fullmatch(request_id) is not None
+            for request_id in issued
+        )
+        maximum_count = sum(item.worst_case_request_count for item in recovery)
+        if prior_count >= maximum_count:
+            raise BudgetExhaustedError("accepted global recovery request ceiling is exhausted")
+        return
+
+    prior_count = 0
+    for request_id, reservation in issued.items():
+        if _SCHEDULER_RECOVERY_REQUEST_PATTERN.fullmatch(request_id) is not None:
+            continue
+        bound = reservation.endpoint_cost_bound
+        if bound is None or reservation.role is None:
+            continue
+        if (
+            _accepted_quote_route_key(
+                role=reservation.role,
+                exact_model_id=bound.exact_model_id,
+                provider_endpoint=bound.provider_endpoint,
+                endpoint_pricing_snapshot_sha256=bound.pricing_snapshot_sha256,
+            )
+            == route_key
+        ):
+            prior_count += 1
+    maximum_count = sum(item.worst_case_request_count for item in primary)
+    if prior_count >= maximum_count:
+        raise BudgetExhaustedError("accepted quote route request ceiling is exhausted")
+
+
 class BudgetManager:
     """Reserve conservative request costs and reconcile actual usage."""
 
@@ -1253,6 +1656,7 @@ class BudgetManager:
         global_output_token_budget: int | None = None,
         per_model_usd_caps: Mapping[str, str | Decimal | int] | None = None,
         per_role_usd_caps: Mapping[str, str | Decimal | int] | None = None,
+        accepted_quote: AcceptedPrepurchaseQuote | None = None,
     ) -> None:
         if type(require_endpoint_cost_bound) is not bool:
             raise ValueError("endpoint cost-bound requirement must be boolean")
@@ -1321,6 +1725,17 @@ class BudgetManager:
             raise BudgetReservationStateError(
                 "persistent model-cost ledger requires explicit recovery"
             )
+        self._accepted_quote_budget = _bind_accepted_quote_budget(
+            accepted_quote,
+            ledger=atomic_ledger,
+            snapshot=snapshot,
+            configured_total_usd_exact=Decimal(str(self.total_usd)),
+        )
+        self._effective_total_usd_exact = (
+            Decimal(str(self.total_usd))
+            if self._accepted_quote_budget is None
+            else self._accepted_quote_budget.effective_total_usd_exact
+        )
         self._spent = float(snapshot.spent_usd) if snapshot is not None else 0.0
         self._spent_exact = snapshot.spent_usd if snapshot is not None else Decimal(0)
         self._reserved: dict[str, Decimal] = {}
@@ -1395,6 +1810,40 @@ class BudgetManager:
         return self._spent_exact
 
     @property
+    def accepted_quote_sha256(self) -> str | None:
+        """Return the accepted quote hash constraining this manager, when present."""
+
+        binding = self._accepted_quote_budget
+        return None if binding is None else binding.quote_sha256
+
+    @property
+    def accepted_quote_acceptance_sha256(self) -> str | None:
+        """Return the acceptance hash constraining this manager, when present."""
+
+        binding = self._accepted_quote_budget
+        return None if binding is None else binding.acceptance_sha256
+
+    @property
+    def accepted_quote_retry_policy_sha256(self) -> str | None:
+        """Return the exact split retry policy constraining quoted reservations."""
+
+        binding = self._accepted_quote_budget
+        return None if binding is None else binding.retry_policy_sha256
+
+    @property
+    def accepted_quote_run_hard_ceiling_usd_exact(self) -> Decimal | None:
+        """Return the exact accepted incremental run ceiling, when present."""
+
+        binding = self._accepted_quote_budget
+        return None if binding is None else binding.run_hard_ceiling_usd_exact
+
+    @property
+    def effective_total_usd_exact(self) -> Decimal:
+        """Return the exact total ledger head this manager may reach."""
+
+        return self._effective_total_usd_exact
+
+    @property
     def reserved_usd(self) -> float:
         return float(
             _exact_decimal_sum(
@@ -1408,7 +1857,18 @@ class BudgetManager:
 
     @property
     def remaining_usd(self) -> float:
-        return max(0.0, self.total_usd - self._spent - self.reserved_usd)
+        remaining = _exact_decimal_subtract(
+            self._effective_total_usd_exact,
+            self._spent_exact,
+            _exact_decimal_sum(
+                (
+                    *self._reserved.values(),
+                    *(slot.maximum_cost_usd for slot in self._portfolio_remaining.values()),
+                    *self._portfolio_pending_claim_costs.values(),
+                )
+            ),
+        )
+        return float(max(Decimal(0), remaining))
 
     @property
     def reserved_input_tokens(self) -> int:
@@ -1537,6 +1997,10 @@ class BudgetManager:
             )
         async with self._lock:
             _require_trusted_budget_accounting_state(self)
+            _require_accepted_quote_portfolio_slots(
+                self._accepted_quote_budget,
+                exact_slots,
+            )
             if self.recovery_required:
                 raise BudgetReservationStateError(
                     "persistent budget counters require exact recovery before portfolio reservation"
@@ -1657,7 +2121,7 @@ class BudgetManager:
                         "active budget portfolio contains a released request slot"
                     )
             self._require_portfolio_absolute_limits(exact_slots)
-            if snapshot.spent_usd + snapshot.active_reserved_usd > Decimal(str(self.total_usd)):
+            if snapshot.spent_usd + snapshot.active_reserved_usd > self._effective_total_usd_exact:
                 raise BudgetReservationStateError(
                     "durable portfolio exceeds the manager global USD budget"
                 )
@@ -2528,6 +2992,10 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "persistent model-cost ledger contains unbound recovery entries"
                 )
+            if snapshot.spent_usd + snapshot.active_reserved_usd > self._effective_total_usd_exact:
+                raise BudgetReservationStateError(
+                    "recovered ledger exceeds the effective global USD budget"
+                )
             if (
                 self.global_input_token_budget is not None
                 and spent_input_tokens > self.global_input_token_budget
@@ -2614,7 +3082,9 @@ class BudgetManager:
         planned_reasoning_tokens: int | None = None,
         planned_completion_tokens: int | None = None,
         request_token_plan_sha256: str | None = None,
+        model_retry_policy_sha256: str | None = None,
         request_limit_scope: _TrustedRequestLimitScope | None = None,
+        _accepted_quote_request_guard: Callable[..., None] = _require_accepted_quote_request,
     ) -> Reservation:
         """Reserve before send, requiring exact endpoint pricing in certification mode."""
 
@@ -2664,6 +3134,19 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "request reservation identifier was already issued"
                 )
+            if _accepted_quote_request_guard is not _require_accepted_quote_request:
+                raise BudgetReservationStateError(
+                    "accepted quote request guard provenance is invalid"
+                )
+            _accepted_quote_request_guard(
+                self._accepted_quote_budget,
+                identifier=identifier,
+                role=role,
+                endpoint_cost_bound=endpoint_cost_bound,
+                model_retry_policy_sha256=model_retry_policy_sha256,
+                maximum_cost_usd=maximum_cost,
+                issued=self._issued,
+            )
             pending_adoption = self._pending_adoptions.get(identifier)
             if self._pending_adoptions and pending_adoption is None:
                 raise BudgetReservationStateError(
@@ -2829,7 +3312,7 @@ class BudgetManager:
             estimated = float(accounted_maximum_cost)
             if portfolio_slot is None:
                 remaining_usd = _exact_decimal_subtract(
-                    Decimal(str(self.total_usd)),
+                    self._effective_total_usd_exact,
                     self._spent_exact,
                     _exact_decimal_sum(self._reserved.values()),
                 )
@@ -3157,7 +3640,7 @@ class BudgetManager:
         self._require_portfolio_absolute_limits(slots)
         maximum_cost = _exact_decimal_sum(slot.maximum_cost_usd for slot in slots)
         remaining_usd = _exact_decimal_subtract(
-            Decimal(str(self.total_usd)),
+            self._effective_total_usd_exact,
             self._spent_exact,
             _exact_decimal_sum(self._reserved.values()),
         )
@@ -3808,6 +4291,121 @@ def _accounting_decimal(value: object, *, field: str) -> Decimal:
     return value
 
 
+def _accounting_accepted_quote_budget_material(
+    value: object,
+) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    if type(value) is not _AcceptedQuoteBudgetBinding:
+        raise BudgetReservationStateError(
+            "budget accounting accepted-quote binding type is invalid"
+        )
+    hashes = (
+        value.quote_sha256,
+        value.acceptance_sha256,
+        value.retry_policy_sha256,
+        value.baseline_sha256,
+        value.baseline_snapshot_sha256,
+    )
+    if any(type(item) is not str or _SHA256_PATTERN.fullmatch(item) is None for item in hashes):
+        raise BudgetReservationStateError(
+            "budget accounting accepted-quote binding hash is invalid"
+        )
+    baseline_spent = _accounting_decimal(
+        value.baseline_spent_usd_exact,
+        field="accepted-quote baseline spent",
+    )
+    run_ceiling = _accounting_decimal(
+        value.run_hard_ceiling_usd_exact,
+        field="accepted-quote run hard ceiling",
+    )
+    effective_total = _accounting_decimal(
+        value.effective_total_usd_exact,
+        field="accepted-quote effective total",
+    )
+    if _exact_decimal_add(baseline_spent, run_ceiling) != effective_total:
+        raise BudgetReservationStateError(
+            "budget accounting accepted-quote ceiling is inconsistent"
+        )
+    route_material: list[tuple[object, ...]] = []
+    for route in value.route_ceilings:
+        if type(route) is not _AcceptedQuoteRouteCeiling:
+            raise BudgetReservationStateError(
+                "budget accounting accepted-quote route type is invalid"
+            )
+        strings = (
+            route.task_class,
+            route.request_role,
+            route.runtime_role_kind,
+            route.exact_model_id,
+            route.request_envelope_recipe_sha256,
+            route.endpoint_policy_snapshot_sha256,
+            route.endpoint_policy_pricing_sha256,
+            route.provider_endpoint,
+            route.endpoint_pricing_snapshot_sha256,
+            route.ceiling_sha256,
+        )
+        if (
+            type(route.task_class) is not str
+            or route.runtime_role_kind not in {"exact", "candidate_falsifier_sha256_reviewer"}
+            or _ROLE_ID_PATTERN.fullmatch(route.request_role) is None
+            or _MODEL_ID_PATTERN.fullmatch(route.exact_model_id) is None
+            or _ENDPOINT_ID_PATTERN.fullmatch(route.provider_endpoint) is None
+            or any(type(item) is not str for item in strings)
+            or any(
+                _SHA256_PATTERN.fullmatch(item) is None
+                for item in (
+                    route.request_envelope_recipe_sha256,
+                    route.endpoint_policy_snapshot_sha256,
+                    route.endpoint_policy_pricing_sha256,
+                    route.endpoint_pricing_snapshot_sha256,
+                    route.ceiling_sha256,
+                )
+            )
+            or any(
+                type(item) is not int or item < 1
+                for item in (
+                    route.maximum_task_count,
+                    route.maximum_attempts_per_task,
+                    route.maximum_input_tokens_per_attempt,
+                    route.maximum_output_tokens_per_attempt,
+                )
+            )
+            or route.worst_case_request_count > _MAX_METERED_UNITS
+            or _accounting_decimal(
+                route.maximum_cost_usd_per_attempt_exact,
+                field="accepted-quote route maximum cost",
+            )
+            <= 0
+        ):
+            raise BudgetReservationStateError("budget accounting accepted-quote route is invalid")
+        route_material.append(
+            (
+                id(route),
+                *strings,
+                route.maximum_task_count,
+                route.maximum_attempts_per_task,
+                route.maximum_input_tokens_per_attempt,
+                route.maximum_output_tokens_per_attempt,
+                route.maximum_cost_usd_per_attempt_exact,
+            )
+        )
+    if not route_material or len({route.ceiling_sha256 for route in value.route_ceilings}) != len(
+        value.route_ceilings
+    ):
+        raise BudgetReservationStateError(
+            "budget accounting accepted-quote route inventory is invalid"
+        )
+    return (
+        id(value),
+        *hashes,
+        baseline_spent,
+        run_ceiling,
+        tuple(route_material),
+        effective_total,
+    )
+
+
 def _accounting_active_request_cost_scope_material(
     value: object,
     *,
@@ -4317,9 +4915,22 @@ def _project_trusted_budget_accounting_state(
     )
     if type(portfolio_recovery_required) is not bool:
         raise BudgetReservationStateError("budget accounting portfolio recovery flag is invalid")
+    accepted_quote_material = _accounting_accepted_quote_budget_material(
+        object.__getattribute__(manager, "_accepted_quote_budget")
+    )
+    effective_total = _accounting_decimal(
+        object.__getattribute__(manager, "_effective_total_usd_exact"),
+        field="effective total USD",
+    )
+    if accepted_quote_material is not None and effective_total != accepted_quote_material[-1]:
+        raise BudgetReservationStateError(
+            "budget accounting effective total differs from its accepted quote"
+        )
     material: tuple[object, ...] = (
         scalar_spent,
         exact_spent,
+        accepted_quote_material,
+        effective_total,
         reserved_material,
         issued_material,
         reconciled_material,
@@ -4383,6 +4994,8 @@ def _trusted_budget_accounting_state_registry() -> tuple[
     Callable[[BudgetManager], None],
     Callable[[BudgetManager], None],
 ]:
+    accepted_quote_request_guard = _require_accepted_quote_request
+    module_globals = globals()
     states: weakref.WeakKeyDictionary[BudgetManager, _TrustedBudgetAccountingState] = (
         weakref.WeakKeyDictionary()
     )
@@ -4403,6 +5016,11 @@ def _trusted_budget_accounting_state_registry() -> tuple[
             states[manager] = projection
 
     def require(manager: BudgetManager) -> None:
+        if (
+            module_globals.get("_require_accepted_quote_request")
+            is not accepted_quote_request_guard
+        ):
+            raise BudgetReservationStateError("accepted quote request guard provenance is invalid")
         projection = _project_trusted_budget_accounting_state(manager)
         with registry_lock:
             expected = states.get(manager)

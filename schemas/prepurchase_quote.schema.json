@@ -1,0 +1,1093 @@
+{
+  "$comment": "Runtime validation additionally proves canonical ordering, exact task-class and route coverage, derived aggregate bounds, artifact self-hashes, acceptance custody, and status-dependent terminal reconciliation fields.",
+  "$defs": {
+    "ModelRetryPolicy": {
+      "additionalProperties": false,
+      "description": "Exact split retry policy bound independently of its combined attempt ceiling.",
+      "properties": {
+        "exhaustion_disposition": {
+          "const": "EXPLICIT_FALLBACK_OR_TERMINATE",
+          "default": "EXPLICIT_FALLBACK_OR_TERMINATE",
+          "title": "Exhaustion Disposition",
+          "type": "string"
+        },
+        "maximum_attempts": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "schema_retry_failure_code": {
+          "const": "SCHEMA_VALIDATION_FAILED",
+          "default": "SCHEMA_VALIDATION_FAILED",
+          "title": "Schema Retry Failure Code",
+          "type": "string"
+        },
+        "schema_retry_route": {
+          "const": "SAME_ROUTE",
+          "default": "SAME_ROUTE",
+          "title": "Schema Retry Route",
+          "type": "string"
+        },
+        "schema_validation_retry_limit": {
+          "maximum": 31,
+          "minimum": 0,
+          "title": "Schema Validation Retry Limit",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "transient_retry_limit": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Transient Retry Limit",
+          "type": "integer"
+        },
+        "transient_retry_scope": {
+          "const": "NETWORK_OR_STATUS",
+          "default": "NETWORK_OR_STATUS",
+          "title": "Transient Retry Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transient_retry_limit",
+        "schema_validation_retry_limit",
+        "maximum_attempts",
+        "policy_sha256"
+      ],
+      "title": "ModelRetryPolicy",
+      "type": "object"
+    },
+    "PrepurchaseQuoteCostRange": {
+      "additionalProperties": false,
+      "description": "Derived spend range clipped to the current durable ledger capacity.",
+      "properties": {
+        "artifact_kind": {
+          "const": "prepurchase_quote_cost_range",
+          "default": "prepurchase_quote_cost_range",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "lower_bound_usd_exact": {
+          "const": "0",
+          "default": "0",
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Lower Bound Usd Exact",
+          "type": "string"
+        },
+        "range_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Range Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "standard_bound_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Standard Bound Usd Exact",
+          "type": "string"
+        },
+        "worst_case_usd_exact": {
+          "description": "Accepted hard spend ceiling under the current ledger; use unconstrained_workflow_worst_usd_exact for the complete-work worst case.",
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Worst Case Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "standard_bound_usd_exact",
+        "worst_case_usd_exact",
+        "range_sha256"
+      ],
+      "title": "PrepurchaseQuoteCostRange",
+      "type": "object"
+    },
+    "PrepurchaseQuoteLedgerBaselineBinding": {
+      "additionalProperties": false,
+      "description": "Exact terminal persistent-ledger head frozen before the quoted run.",
+      "properties": {
+        "active_reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Active Reserved Usd Exact",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "prepurchase_quote_ledger_baseline",
+          "default": "prepurchase_quote_ledger_baseline",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "baseline_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Binding Sha256",
+          "type": "string"
+        },
+        "baseline_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Sha256",
+          "type": "string"
+        },
+        "cap_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Cap Usd Exact",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "ledger_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Identity Sha256",
+          "type": "string"
+        },
+        "ledger_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Snapshot Sha256",
+          "type": "string"
+        },
+        "remaining_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Remaining Usd Exact",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "spent_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Spent Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_sha256",
+        "ledger_snapshot_sha256",
+        "ledger_identity_sha256",
+        "cap_usd_exact",
+        "spent_usd_exact",
+        "active_reserved_usd_exact",
+        "remaining_usd_exact",
+        "baseline_binding_sha256"
+      ],
+      "title": "PrepurchaseQuoteLedgerBaselineBinding",
+      "type": "object"
+    },
+    "PrepurchaseQuoteLocalAnalysisCeiling": {
+      "additionalProperties": false,
+      "description": "Finite wall-clock ceiling for deterministic analysis and local scanners.",
+      "properties": {
+        "analysis_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Analysis Input Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "prepurchase_quote_local_analysis_ceiling",
+          "default": "prepurchase_quote_local_analysis_ceiling",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "ceiling_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ceiling Sha256",
+          "type": "string"
+        },
+        "execution_limits_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Limits Sha256",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "maximum_wall_clock_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Maximum Wall Clock Seconds",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "standard_wall_clock_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Wall Clock Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "analysis_input_sha256",
+        "execution_limits_sha256",
+        "standard_wall_clock_seconds",
+        "maximum_wall_clock_seconds",
+        "ceiling_sha256"
+      ],
+      "title": "PrepurchaseQuoteLocalAnalysisCeiling",
+      "type": "object"
+    },
+    "PrepurchaseQuoteRuntimeRoleKind": {
+      "description": "How a quoted semantic role maps to concrete runtime role identities.",
+      "enum": [
+        "exact",
+        "candidate_falsifier_sha256_reviewer"
+      ],
+      "title": "PrepurchaseQuoteRuntimeRoleKind",
+      "type": "string"
+    },
+    "PrepurchaseQuoteTargetBinding": {
+      "additionalProperties": false,
+      "description": "Exact deterministic repository, scheduler, index, graph, and shard identity.",
+      "properties": {
+        "analysis_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Analysis Input Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "prepurchase_quote_target_binding",
+          "default": "prepurchase_quote_target_binding",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "audit_selected_model_set_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selected Model Set Sha256"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Config Sha256",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "graph_edge_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Graph Edge Count",
+          "type": "integer"
+        },
+        "graph_node_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Graph Node Count",
+          "type": "integer"
+        },
+        "graph_set_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Context Sha256",
+          "type": "string"
+        },
+        "graph_set_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Projection Sha256",
+          "type": "string"
+        },
+        "graph_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Sha256",
+          "type": "string"
+        },
+        "indexed_entity_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Indexed Entity Count",
+          "type": "integer"
+        },
+        "repository_source_bytes": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Repository Source Bytes",
+          "type": "integer"
+        },
+        "repository_source_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Repository Source Count",
+          "type": "integer"
+        },
+        "scheduler_bindings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Bindings Sha256",
+          "type": "string"
+        },
+        "scheduler_campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Scheduler Campaign Id",
+          "type": "string"
+        },
+        "scheduler_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Manifest Sha256",
+          "type": "string"
+        },
+        "scheduler_shard_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Scheduler Shard Count",
+          "type": "integer"
+        },
+        "scheduler_shard_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Shard Inventory Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "solidity_shard_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Solidity Shard Count",
+          "type": "integer"
+        },
+        "solidity_shard_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Solidity Shard Inventory Sha256",
+          "type": "string"
+        },
+        "solidity_source_bytes": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Solidity Source Bytes",
+          "type": "integer"
+        },
+        "solidity_source_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Solidity Source Count",
+          "type": "integer"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "storage_entry_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Storage Entry Count",
+          "type": "integer"
+        },
+        "symbol_index_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Context Sha256",
+          "type": "string"
+        },
+        "symbol_index_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Projection Sha256",
+          "type": "string"
+        },
+        "symbol_index_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Sha256",
+          "type": "string"
+        },
+        "target_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Binding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "analysis_input_sha256",
+        "effective_config_sha256",
+        "scheduler_campaign_id",
+        "scheduler_manifest_sha256",
+        "scheduler_bindings_sha256",
+        "scheduler_shard_inventory_sha256",
+        "solidity_shard_inventory_sha256",
+        "source_inventory_sha256",
+        "symbol_index_context_sha256",
+        "symbol_index_sha256",
+        "symbol_index_projection_sha256",
+        "graph_set_context_sha256",
+        "graph_set_sha256",
+        "graph_set_projection_sha256",
+        "repository_source_count",
+        "repository_source_bytes",
+        "solidity_source_count",
+        "solidity_source_bytes",
+        "indexed_entity_count",
+        "graph_node_count",
+        "graph_edge_count",
+        "storage_entry_count",
+        "scheduler_shard_count",
+        "solidity_shard_count",
+        "target_binding_sha256"
+      ],
+      "title": "PrepurchaseQuoteTargetBinding",
+      "type": "object"
+    },
+    "PrepurchaseQuoteTaskCeiling": {
+      "additionalProperties": false,
+      "description": "Finite route, retry, token, price, task-count, and duration ceiling.",
+      "properties": {
+        "artifact_kind": {
+          "const": "prepurchase_quote_task_ceiling",
+          "default": "prepurchase_quote_task_ceiling",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "ceiling_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ceiling Sha256",
+          "type": "string"
+        },
+        "endpoint_policy_pricing_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Policy Pricing Sha256"
+        },
+        "endpoint_policy_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Policy Snapshot Sha256"
+        },
+        "endpoint_pricing_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Pricing Snapshot Sha256"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "maximum_attempts_per_task": {
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Maximum Attempts Per Task",
+          "type": "integer"
+        },
+        "maximum_cost_usd_per_attempt_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Maximum Cost Usd Per Attempt Exact",
+          "type": "string"
+        },
+        "maximum_distinct_runtime_roles": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Maximum Distinct Runtime Roles",
+          "type": "integer"
+        },
+        "maximum_input_tokens_per_attempt": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Input Tokens Per Attempt",
+          "type": "integer"
+        },
+        "maximum_output_tokens_per_attempt": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Output Tokens Per Attempt",
+          "type": "integer"
+        },
+        "maximum_task_count": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Maximum Task Count",
+          "type": "integer"
+        },
+        "maximum_wall_clock_seconds_per_task": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Wall Clock Seconds Per Task",
+          "type": "integer"
+        },
+        "provider_endpoint": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,255}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Endpoint"
+        },
+        "request_envelope_recipe_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Envelope Recipe Sha256"
+        },
+        "request_role": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Role"
+        },
+        "requested_model": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Model"
+        },
+        "runtime_role_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrepurchaseQuoteRuntimeRoleKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "standard_attempts_per_task": {
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Standard Attempts Per Task",
+          "type": "integer"
+        },
+        "standard_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Standard Cost Usd Exact",
+          "type": "string"
+        },
+        "standard_request_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Request Count",
+          "type": "integer"
+        },
+        "standard_task_count": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Standard Task Count",
+          "type": "integer"
+        },
+        "standard_wall_clock_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Wall Clock Seconds",
+          "type": "integer"
+        },
+        "standard_wall_clock_seconds_per_task": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Standard Wall Clock Seconds Per Task",
+          "type": "integer"
+        },
+        "task_class": {
+          "$ref": "#/$defs/PrepurchaseQuoteTaskClass"
+        },
+        "worst_case_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+          "title": "Worst Case Cost Usd Exact",
+          "type": "string"
+        },
+        "worst_case_request_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Worst Case Request Count",
+          "type": "integer"
+        },
+        "worst_case_wall_clock_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Worst Case Wall Clock Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task_class",
+        "maximum_distinct_runtime_roles",
+        "standard_task_count",
+        "maximum_task_count",
+        "standard_attempts_per_task",
+        "maximum_attempts_per_task",
+        "maximum_input_tokens_per_attempt",
+        "maximum_output_tokens_per_attempt",
+        "maximum_cost_usd_per_attempt_exact",
+        "standard_wall_clock_seconds_per_task",
+        "maximum_wall_clock_seconds_per_task",
+        "standard_request_count",
+        "worst_case_request_count",
+        "standard_cost_usd_exact",
+        "worst_case_cost_usd_exact",
+        "standard_wall_clock_seconds",
+        "worst_case_wall_clock_seconds",
+        "ceiling_sha256"
+      ],
+      "title": "PrepurchaseQuoteTaskCeiling",
+      "type": "object"
+    },
+    "PrepurchaseQuoteTaskClass": {
+      "description": "Closed paid-work classes that a whole-run quote must bound explicitly.",
+      "enum": [
+        "orientation",
+        "compact_coverage",
+        "source_audit",
+        "whole_protocol",
+        "invariant_review",
+        "cross_shard_integration",
+        "adversarial_cross_examination",
+        "multi_lineage_validation_falsification",
+        "evidence_capped_judgment",
+        "report_quality",
+        "truncation_recovery"
+      ],
+      "title": "PrepurchaseQuoteTaskClass",
+      "type": "string"
+    },
+    "PrepurchaseQuoteWallClockRange": {
+      "additionalProperties": false,
+      "description": "Derived serial wall-clock range in exact integral seconds.",
+      "properties": {
+        "artifact_kind": {
+          "const": "prepurchase_quote_wall_clock_range",
+          "default": "prepurchase_quote_wall_clock_range",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_release_authority": {
+          "const": false,
+          "default": false,
+          "title": "Grants Release Authority",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "lower_bound_seconds": {
+          "const": 0,
+          "default": 0,
+          "title": "Lower Bound Seconds",
+          "type": "integer"
+        },
+        "maximum_local_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Maximum Local Seconds",
+          "type": "integer"
+        },
+        "maximum_paid_task_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Paid Task Seconds",
+          "type": "integer"
+        },
+        "range_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Range Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "standard_bound_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Bound Seconds",
+          "type": "integer"
+        },
+        "standard_local_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Local Seconds",
+          "type": "integer"
+        },
+        "standard_paid_task_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Standard Paid Task Seconds",
+          "type": "integer"
+        },
+        "worst_case_seconds": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Worst Case Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "standard_local_seconds",
+        "maximum_local_seconds",
+        "standard_paid_task_seconds",
+        "maximum_paid_task_seconds",
+        "standard_bound_seconds",
+        "worst_case_seconds",
+        "range_sha256"
+      ],
+      "title": "PrepurchaseQuoteWallClockRange",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/prepurchase_quote.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete deterministic quote for one exact target and bounded paid-work plan.",
+  "properties": {
+    "artifact_kind": {
+      "const": "prepurchase_quote",
+      "default": "prepurchase_quote",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "authorizes_dispatch": {
+      "const": false,
+      "default": false,
+      "title": "Authorizes Dispatch",
+      "type": "boolean"
+    },
+    "completion_within_hard_ceiling_guaranteed": {
+      "const": false,
+      "default": false,
+      "title": "Completion Within Hard Ceiling Guaranteed",
+      "type": "boolean"
+    },
+    "cost_range": {
+      "$ref": "#/$defs/PrepurchaseQuoteCostRange"
+    },
+    "covered_task_classes": {
+      "items": {
+        "$ref": "#/$defs/PrepurchaseQuoteTaskClass"
+      },
+      "maxItems": 11,
+      "minItems": 11,
+      "title": "Covered Task Classes",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "grants_completion_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Completion Credit",
+      "type": "boolean"
+    },
+    "grants_release_authority": {
+      "const": false,
+      "default": false,
+      "title": "Grants Release Authority",
+      "type": "boolean"
+    },
+    "grants_review_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Review Credit",
+      "type": "boolean"
+    },
+    "hard_budget_limited": {
+      "description": "True when the accepted spend ceiling cannot cover the complete workflow.",
+      "title": "Hard Budget Limited",
+      "type": "boolean"
+    },
+    "ledger_baseline": {
+      "$ref": "#/$defs/PrepurchaseQuoteLedgerBaselineBinding"
+    },
+    "local_analysis_ceiling": {
+      "$ref": "#/$defs/PrepurchaseQuoteLocalAnalysisCeiling"
+    },
+    "maximum_input_tokens": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Maximum Input Tokens",
+      "type": "integer"
+    },
+    "maximum_output_tokens": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Maximum Output Tokens",
+      "type": "integer"
+    },
+    "maximum_request_count": {
+      "maximum": 9223372036854775807,
+      "minimum": 1,
+      "title": "Maximum Request Count",
+      "type": "integer"
+    },
+    "planned_model_count": {
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Planned Model Count",
+      "type": "integer"
+    },
+    "planned_role_count": {
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Planned Role Count",
+      "type": "integer"
+    },
+    "portfolio_preflight_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Portfolio Preflight Sha256",
+      "type": "string"
+    },
+    "quote_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Quote Sha256",
+      "type": "string"
+    },
+    "retry_policy": {
+      "$ref": "#/$defs/ModelRetryPolicy"
+    },
+    "schema_version": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target_binding": {
+      "$ref": "#/$defs/PrepurchaseQuoteTargetBinding"
+    },
+    "task_ceilings": {
+      "items": {
+        "$ref": "#/$defs/PrepurchaseQuoteTaskCeiling"
+      },
+      "maxItems": 10000,
+      "minItems": 11,
+      "title": "Task Ceilings",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "unconstrained_workflow_worst_usd_exact": {
+      "description": "Complete-work worst-case cost before applying the durable spend cap.",
+      "pattern": "^(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,30})?$",
+      "title": "Unconstrained Workflow Worst Usd Exact",
+      "type": "string"
+    },
+    "wall_clock_range": {
+      "$ref": "#/$defs/PrepurchaseQuoteWallClockRange"
+    }
+  },
+  "required": [
+    "target_binding",
+    "ledger_baseline",
+    "local_analysis_ceiling",
+    "retry_policy",
+    "portfolio_preflight_sha256",
+    "task_ceilings",
+    "covered_task_classes",
+    "planned_role_count",
+    "planned_model_count",
+    "maximum_request_count",
+    "maximum_input_tokens",
+    "maximum_output_tokens",
+    "unconstrained_workflow_worst_usd_exact",
+    "hard_budget_limited",
+    "cost_range",
+    "wall_clock_range",
+    "quote_sha256"
+  ],
+  "title": "mmaudit deterministic non-authorizing whole-run pre-purchase quote",
+  "type": "object"
+}

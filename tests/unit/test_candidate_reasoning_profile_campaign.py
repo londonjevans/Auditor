@@ -16,10 +16,13 @@ from mmaudit.benchmark.model_portfolio import (
 from mmaudit.benchmark.models import ModelBenchmarkDimension, load_model_benchmark_corpus
 from mmaudit.config import AuditConfig
 from mmaudit.models.candidate_benchmark import (
+    CandidateReasoningProfileBenchmarkPlan,
+    CandidateReasoningProfileBenchmarkRoute,
     build_candidate_reasoning_profile_benchmark_plan,
     run_candidate_reasoning_profile_benchmarks,
     run_candidate_registry_benchmarks,
 )
+from mmaudit.models.candidate_revocation import CandidateSelectionRevocationError
 from mmaudit.models.qualification import (
     QualificationBindings,
     QualificationDimensionResult,
@@ -28,6 +31,7 @@ from mmaudit.models.qualification import (
     seal_model_qualification_artifact,
     seal_model_qualification_result,
 )
+from mmaudit.models.reasoning import reasoning_qualification_benchmark_role
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -277,3 +281,92 @@ def test_reasoning_campaign_authority_has_no_public_registrar() -> None:
 
     assert not hasattr(module, "_register_reasoning_campaign")
     assert not hasattr(module, "_reasoning_campaign_live_bindings")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exact_model_id",
+    (
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-pro-observed-0813",
+    ),
+)
+async def test_reasoning_profile_campaign_rejects_revoked_exact_or_canonical_route_first(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    exact_model_id: str,
+) -> None:
+    config = _config(config_factory)
+    manifest, evidence, registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "inputs",
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id=exact_model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Revoked Provider",
+            ),
+        ),
+    )
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    reasoning_policy = build_reasoning_policy(config)
+    profile = reasoning_policy.role_policy("judge").control
+    route = CandidateReasoningProfileBenchmarkRoute(
+        exact_model_id=exact_model_id,
+        request_role=reasoning_qualification_benchmark_role(
+            qualified_role="judge",
+            configured_policy_role="judge",
+        ),
+        control_profile=profile,
+        control_profile_sha256=profile.profile_sha256,
+        qualified_roles=("judge",),
+        qualification_result_sha256=_sha("revoked-qualification-result"),
+        primary_report_sha256=_sha("revoked-primary-report"),
+    )
+    payload = {
+        "schema_version": "1.0",
+        "qualification_artifact_sha256": _sha("revoked-qualification-artifact"),
+        "reasoning_policy_sha256": reasoning_policy.artifact_sha256,
+        "routes": [route.model_dump(mode="json")],
+    }
+    plan = CandidateReasoningProfileBenchmarkPlan.model_validate(
+        {**payload, "plan_sha256": canonical_sha256(payload)}
+    )
+    budget = fixtures._budget(tmp_path / "ledger", config)
+    assert budget.atomic_ledger is not None
+    ledger_before = budget.atomic_ledger.snapshot()
+    usage = UsageLedger()
+    factory = fixtures._MockClientFactory()
+    sink_calls: list[str] = []
+
+    class _UnusedSink:
+        plan_sha256 = plan.plan_sha256
+        runs: tuple[()] = ()
+
+        def require_live_authority(self) -> None:
+            sink_calls.append("require_live_authority")
+
+    try:
+        with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked"):
+            await run_candidate_reasoning_profile_benchmarks(
+                config=config,
+                discovery_manifest=manifest,
+                discovery_evidence=evidence,
+                candidate_registry=registry,
+                benchmark_suite=suite,
+                plan=plan,
+                budget=budget,
+                usage=usage,
+                operator_api_key="synthetic-secret",
+                explicitly_allow_synthetic_egress=True,
+                evidence_sink=_UnusedSink(),  # type: ignore[arg-type]
+                client_factory=factory,
+            )
+    finally:
+        await factory.close()
+    assert sink_calls == []
+    assert factory.calls == []
+    assert factory.request_bodies == []
+    assert usage.records == []
+    assert budget.atomic_ledger.snapshot() == ledger_before

@@ -12,12 +12,19 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
+import mmaudit.models.candidate_revocation as candidate_revocation_module
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationError,
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+    require_selection_plan_routes_eligible,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     OpenRouterModelDiscoveryEvidence,
@@ -60,6 +67,16 @@ _MAX_PLAN_BYTES = 2_000_000
 _MAX_SOURCE_BYTES = 2_000_000
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 _NONBLOCK_FLAG = getattr(os, "O_NONBLOCK", 0)
+type _CandidateRevocationCallRoots = tuple[
+    Callable[[], bool],
+    Callable[..., None],
+    Callable[..., None],
+]
+_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
+    candidate_revocation_callables_are_pristine,
+    require_candidate_assignment_eligible,
+    require_selection_plan_routes_eligible,
+)
 
 
 class CandidateSelectionError(ValueError):
@@ -592,6 +609,67 @@ def validate_candidate_selection_routes(
     return canonical
 
 
+def require_candidate_selection_plan_currently_eligible(
+    plan: CandidateSelectionPlan,
+    *,
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
+) -> CandidateSelectionPlan:
+    """Reject tombstoned runner routes without changing historical plan validity."""
+
+    function_defaults = require_candidate_selection_plan_currently_eligible.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 3:
+        raise CandidateSelectionError("candidate selection revocation boundary changed")
+    trusted_pristine, trusted_assignment_gate, trusted_plan_gate = (
+        _candidate_revocation_call_roots
+    )
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or require_selection_plan_routes_eligible is not trusted_plan_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or candidate_revocation_module.require_selection_plan_routes_eligible
+        is not trusted_plan_gate
+        or not trusted_pristine()
+    ):
+        raise CandidateSelectionError("candidate selection revocation boundary changed")
+    canonical = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    selection = canonical.authenticated_runner_selection
+    if selection is None:
+        return canonical
+    routes = tuple(
+        sorted(
+            (
+                (
+                    constraint.role,
+                    constraint.exact_model_id,
+                    constraint.provider_endpoint,
+                    constraint.constraint_sha256,
+                )
+                for constraint in selection.route_constraints
+            ),
+            key=lambda item: (item[0].value, item[1], item[2].casefold(), item[3]),
+        )
+    )
+    try:
+        trusted_plan_gate(canonical.plan_sha256, routes)
+    except CandidateSelectionRevocationError as exc:
+        raise CandidateSelectionError(
+            f"candidate selection plan is not currently eligible: {exc}"
+        ) from exc
+    return canonical
+
+
 def authenticated_runner_route_constraint(
     plan: CandidateSelectionPlan,
     *,
@@ -741,17 +819,88 @@ def derive_pending_candidate_registry_from_selection_plan(
     plan: CandidateSelectionPlan,
     run_manifest: OpenRouterModelDiscoveryRunManifest,
     evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
+    _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
+        _CANDIDATE_REVOCATION_CALL_ROOTS
+    ),
 ) -> CandidateRegistry:
     """Build a rootless pending registry using runtime fields only from fresh evidence."""
 
-    canonical_plan = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    function_defaults = derive_pending_candidate_registry_from_selection_plan.__kwdefaults__
+    if type(_candidate_revocation_call_roots) is not tuple or len(
+        _candidate_revocation_call_roots
+    ) != 3:
+        raise CandidateSelectionError("candidate selection revocation boundary changed")
+    trusted_pristine, trusted_assignment_gate, trusted_plan_gate = (
+        _candidate_revocation_call_roots
+    )
+    if (
+        type(function_defaults) is not dict
+        or function_defaults.get("_candidate_revocation_call_roots")
+        is not _candidate_revocation_call_roots
+        or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+        or candidate_revocation_callables_are_pristine is not trusted_pristine
+        or require_candidate_assignment_eligible is not trusted_assignment_gate
+        or require_selection_plan_routes_eligible is not trusted_plan_gate
+        or candidate_revocation_module.candidate_revocation_callables_are_pristine
+        is not trusted_pristine
+        or candidate_revocation_module.require_candidate_assignment_eligible
+        is not trusted_assignment_gate
+        or candidate_revocation_module.require_selection_plan_routes_eligible
+        is not trusted_plan_gate
+        or not trusted_pristine()
+    ):
+        raise CandidateSelectionError("candidate selection revocation boundary changed")
+    canonical_plan = require_candidate_selection_plan_currently_eligible(plan)
+    selection = canonical_plan.authenticated_runner_selection
+    if selection is not None:
+        routes = tuple(
+            sorted(
+                (
+                    (
+                        constraint.role,
+                        constraint.exact_model_id,
+                        constraint.provider_endpoint,
+                        constraint.constraint_sha256,
+                    )
+                    for constraint in selection.route_constraints
+                ),
+                key=lambda item: (item[0].value, item[1], item[2].casefold(), item[3]),
+            )
+        )
+        try:
+            trusted_plan_gate(canonical_plan.plan_sha256, routes)
+        except CandidateSelectionRevocationError as exc:
+            raise CandidateSelectionError(
+                f"candidate selection plan is not currently eligible: {exc}"
+            ) from exc
     manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
         run_manifest.model_dump(mode="python")
     )
+    try:
+        for route in manifest.run_provenance.candidate_routes:
+            trusted_assignment_gate(
+                exact_model_id=route.exact_model_id,
+                provider_endpoint=route.approved_provider_endpoint,
+            )
+    except CandidateSelectionRevocationError as exc:
+        raise CandidateSelectionError(
+            f"candidate selection discovery route is not currently eligible: {exc}"
+        ) from exc
     records = tuple(
         OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="python"))
         for item in evidence
     )
+    try:
+        for item in records:
+            for model_id in {item.exact_model_id, item.canonical_slug}:
+                trusted_assignment_gate(
+                    exact_model_id=model_id,
+                    provider_endpoint=item.approved_provider_endpoint,
+                )
+    except CandidateSelectionRevocationError as exc:
+        raise CandidateSelectionError(
+            f"candidate discovery identity is not currently eligible: {exc}"
+        ) from exc
     record_ids = tuple(item.exact_model_id for item in records)
     route_ids = tuple(route.exact_model_id for route in manifest.run_provenance.candidate_routes)
     if record_ids != route_ids or record_ids != tuple(sorted(set(record_ids))):

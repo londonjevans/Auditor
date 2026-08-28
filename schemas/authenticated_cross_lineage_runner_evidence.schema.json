@@ -286,6 +286,50 @@
   "$id": "https://mmaudit.local/schemas/authenticated_cross_lineage_runner_evidence.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_config_sha256": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_config_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "effective_config_sha256"
+        ]
+      }
+    }
+  ],
   "description": "Serializable runner evidence that deliberately grants no runtime authority.",
   "properties": {
     "adjudication_credit_authorized": {
@@ -320,6 +364,19 @@
       "title": "Case Ids",
       "type": "array",
       "uniqueItems": true
+    },
+    "effective_config_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Config Sha256"
     },
     "evidence_sha256": {
       "pattern": "^[0-9a-f]{64}$",
@@ -476,8 +533,11 @@
       "uniqueItems": true
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

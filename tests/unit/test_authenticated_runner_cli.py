@@ -64,6 +64,8 @@ def _required_arguments(
     allow_egress: bool = True,
     include_secret_file: bool = True,
     preflight_only: bool = False,
+    include_runtime_evidence: bool = False,
+    include_retry_continuity: bool = False,
 ) -> list[str]:
     arguments = [
         "models",
@@ -109,6 +111,20 @@ def _required_arguments(
     ]
     if include_secret_file:
         arguments.extend(("--secrets-env-file", str(tmp_path / "operator-secrets.env")))
+    if include_runtime_evidence:
+        arguments.extend(
+            (
+                "--runtime-evidence-smoke-bundle",
+                str(tmp_path / "runtime-smoke-evidence.json"),
+            )
+        )
+    if include_retry_continuity:
+        arguments.extend(
+            (
+                "--retry-continuity-config",
+                str(tmp_path / "retry-continuity.toml"),
+            )
+        )
     arguments.append("--no-color")
     if allow_egress:
         arguments.append("--allow-code-egress")
@@ -143,7 +159,10 @@ def _result() -> AuthenticatedRunnerOpenRouterResult:
         for index in range(2)
     )
     execution = AuthenticatedRunnerOpenRouterExecutionSnapshot(
-        inventory=cast(Any, object()),
+        inventory=cast(
+            Any,
+            SimpleNamespace(effective_config_sha256="e" * 64),
+        ),
         runs=runs,
     )
     return AuthenticatedRunnerOpenRouterResult(
@@ -157,7 +176,8 @@ def _result() -> AuthenticatedRunnerOpenRouterResult:
 
 def _durable_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
     return AuthenticatedRunnerDurableEvidenceBundle.model_construct(
-        schema_version="1.1",
+        schema_version="1.2",
+        effective_config_sha256="e" * 64,
         runner_evidence_sha256="f" * 64,
         closed_ledger_evidence=SimpleNamespace(
             entries=(object(), object()),
@@ -182,6 +202,18 @@ def _legacy_durable_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
     return _durable_bundle().model_copy(update={"schema_version": "1.0"})
 
 
+def _verification_config() -> object:
+    return SimpleNamespace(
+        stable_hash=lambda: "e" * 64,
+        execution=SimpleNamespace(
+            model_dump=lambda **_kwargs: {"synthetic": "execution-config"},
+            max_model_retries=1,
+            max_schema_validation_retries=3,
+            maximum_model_attempts=5,
+        ),
+    )
+
+
 def test_verify_authenticated_runner_help_exposes_offline_bundle_input() -> None:
     result = RUNNER.invoke(
         cli_module.app,
@@ -191,6 +223,8 @@ def test_verify_authenticated_runner_help_exposes_offline_bundle_input() -> None
 
     assert result.exit_code == 0
     assert "--bundle" in result.stdout
+    assert "--config" in result.stdout
+    assert "--retry-continuity-config" in result.stdout
     assert "nonauthorizing" in result.stdout.lower()
 
 
@@ -200,6 +234,7 @@ def test_verify_authenticated_runner_is_offline_and_nonauthorizing(
 ) -> None:
     bundle = _durable_bundle()
     observed: list[Path] = []
+    binding: dict[str, object] = {}
 
     def load(path: Path) -> AuthenticatedRunnerDurableEvidenceBundle:
         observed.append(path)
@@ -209,6 +244,16 @@ def test_verify_authenticated_runner_is_offline_and_nonauthorizing(
         raise AssertionError("offline verification must not access external state")
 
     monkeypatch.setattr(cli_module, "load_authenticated_runner_durable_bundle", load)
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_default_config",
+        lambda path: observed.append(path) or _verification_config(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_durable_config_binding",
+        lambda supplied, **kwargs: binding.update(kwargs) or supplied,
+    )
     for name in ("load_config", "load_operator_secrets", "_budget_and_usage"):
         monkeypatch.setattr(cli_module, name, external_state_forbidden)
 
@@ -220,12 +265,22 @@ def test_verify_authenticated_runner_is_offline_and_nonauthorizing(
             "verify-authenticated-runner",
             "--bundle",
             str(path),
+            "--config",
+            str(tmp_path / "default.toml"),
             "--no-color",
         ],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert observed == [path]
+    assert observed == [tmp_path / "default.toml", path]
+    assert binding["effective_config_sha256"] == "e" * 64
+    assert binding["maximum_attempts_per_logical_request"] == 5
+    assert binding["model_retry_policy_sha256"] == (
+        cli_module.ModelRetryPolicy.build(
+            transient_retry_limit=1,
+            schema_validation_retry_limit=3,
+        ).policy_sha256
+    )
     assert "VALID / NONAUTHORIZING" in result.stdout
     assert f"Bundle SHA-256: {bundle.bundle_sha256}" in result.stdout
     assert f"Runner SHA-256: {bundle.runner_evidence_sha256}" in result.stdout
@@ -240,8 +295,22 @@ def test_verify_authenticated_runner_rejects_legacy_v10_without_calling_it_valid
     bundle = _legacy_durable_bundle()
     monkeypatch.setattr(
         cli_module,
+        "load_authenticated_runner_default_config",
+        lambda _path: _verification_config(),
+    )
+    monkeypatch.setattr(
+        cli_module,
         "load_authenticated_runner_durable_bundle",
         lambda _path: bundle,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_durable_config_binding",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AuthenticatedRunnerDurableBundleError(
+                "durable AUTHRUNNER evidence is legacy and lacks effective config custody"
+            )
+        ),
     )
 
     result = RUNNER.invoke(
@@ -251,17 +320,22 @@ def test_verify_authenticated_runner_rejects_legacy_v10_without_calling_it_valid
             "verify-authenticated-runner",
             "--bundle",
             str(tmp_path / "legacy-v10.json"),
+            "--config",
+            str(tmp_path / "default.toml"),
             "--no-color",
         ],
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "legacy" in result.stdout.lower()
-    assert "lacks exact staged request-cost admission" in " ".join(result.stdout.split())
+    assert "lacks effective config custody" in " ".join(result.stdout.split())
     assert "VALID / NONAUTHORIZING" not in result.stdout
 
 
-def test_verify_authenticated_runner_replays_real_private_file(tmp_path: Path) -> None:
+def test_verify_authenticated_runner_replays_real_private_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bundle = _rejected_bundle()
     parent = tmp_path / "private"
     parent.mkdir(mode=0o700)
@@ -269,6 +343,16 @@ def test_verify_authenticated_runner_replays_real_private_file(tmp_path: Path) -
     path = parent / "runner-evidence.json"
     path.write_bytes(authenticated_runner_durable_bundle_bytes(bundle))
     path.chmod(0o600)
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_default_config",
+        lambda _path: _verification_config(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_durable_config_binding",
+        lambda supplied, **_kwargs: supplied,
+    )
 
     result = RUNNER.invoke(
         cli_module.app,
@@ -277,6 +361,8 @@ def test_verify_authenticated_runner_replays_real_private_file(tmp_path: Path) -
             "verify-authenticated-runner",
             "--bundle",
             str(path),
+            "--config",
+            str(tmp_path / "default.toml"),
             "--no-color",
         ],
     )
@@ -301,6 +387,11 @@ def test_verify_authenticated_runner_rejects_invalid_bundle_without_external_sta
             AuthenticatedRunnerDurableBundleError("synthetic invalid durable evidence")
         ),
     )
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_default_config",
+        lambda _path: _verification_config(),
+    )
     for name in ("load_config", "load_operator_secrets", "_budget_and_usage"):
         monkeypatch.setattr(cli_module, name, external_state_forbidden)
 
@@ -311,6 +402,8 @@ def test_verify_authenticated_runner_rejects_invalid_bundle_without_external_sta
             "verify-authenticated-runner",
             "--bundle",
             str(tmp_path / "invalid.json"),
+            "--config",
+            str(tmp_path / "default.toml"),
         ],
     )
 
@@ -346,8 +439,89 @@ def test_authenticated_runner_help_exposes_explicit_operator_inputs() -> None:
         "--cost-ledger",
         "--allow-code-egress",
         "--preflight-only",
+        "--runtime-evidence-smoke-bundle",
+        "--retry-continuity-config",
     ):
         assert option in result.stdout
+
+
+def test_authenticated_runner_rejects_implicit_schema_retry_before_other_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 3,
+            "max_requests_per_agent": 480,
+        }
+    )
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("implicit schema retry must reject before other runner inputs")
+
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", forbidden)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, preflight_only=True),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "explicit --retry-continuity-config" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_loads_only_the_explicit_retry_continuity_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=4_096,
+    )
+    captured: list[tuple[Path, Path]] = []
+
+    def load_continuity(*, default_path: Path, continuity_path: Path) -> object:
+        captured.append((default_path, continuity_path))
+        return config
+
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_retry_continuity_config",
+        load_continuity,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("explicit continuity must not use the ordinary config loader")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_benchmark_corpus",
+        lambda _path: (_ for _ in ()).throw(ConfigError("stop after continuity load")),
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(
+            tmp_path,
+            preflight_only=True,
+            include_retry_continuity=True,
+        ),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "stop after continuity load" in " ".join(result.stdout.split())
+    assert captured == [
+        (
+            tmp_path / "mmaudit.toml",
+            tmp_path / "retry-continuity.toml",
+        )
+    ]
 
 
 def test_authenticated_runner_budget_factory_binds_exact_cost_and_token_configuration(
@@ -481,6 +655,9 @@ def test_authenticated_runner_full_admission_rejects_before_ledger_secret_or_out
         )
 
     for name in (
+        "_load_authenticated_runner_smoke_evidence_bundle",
+        "build_route_runtime_evidence_artifact",
+        "verify_route_runtime_evidence",
         "_selected_cost_ledger_path",
         "_budget_and_usage",
         "_preflight_authenticated_runner_cli_paths",
@@ -508,6 +685,7 @@ def test_authenticated_runner_full_admission_rejects_before_ledger_secret_or_out
     assert "VALID / NONAUTHORIZING" not in result.stdout
     assert len(admission_calls) == 1
     assert admission_calls[0]["purpose"] is RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION
+    assert admission_calls[0]["runtime_evidence"] is None
     assert admission_calls[0]["runtime_required_output_tokens"] == 2_048
     assert not (tmp_path / "cost-ledger.json").exists()
     for name in (
@@ -518,6 +696,277 @@ def test_authenticated_runner_full_admission_rejects_before_ledger_secret_or_out
         "runner-evidence.json",
     ):
         assert not (tmp_path / name).exists()
+
+
+def test_authenticated_runner_runtime_evidence_is_derived_and_passed_through_before_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=2_048,
+    )
+    policy = object()
+    smoke_bundle = object()
+    runtime_artifact = object()
+    runtime_capability = object()
+    ledger = SimpleNamespace(
+        path=tmp_path / "cost-ledger.json",
+        lock_path=tmp_path / "cost-ledger.json.lock",
+    )
+    budget = SimpleNamespace(atomic_ledger=ledger)
+    events: list[str] = []
+    path_calls: list[tuple[Path, ...]] = []
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_retry_continuity_config",
+        lambda **_kwargs: config,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("explicit continuity must not use the ordinary config loader")
+        ),
+    )
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_frozen_ground_truth_provenance",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_frozen_ground_truth",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(cli_module, "resolve_verified_public_model_lineage", object)
+    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_discovery_run",
+        lambda _path: (object(), (object(),)),
+    )
+    monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: policy)
+    monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+
+    def preflight_paths(**kwargs: object) -> None:
+        events.append("paths")
+        path_calls.append(cast(tuple[Path, ...], kwargs["source_paths"]))
+
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_cli_paths",
+        preflight_paths,
+    )
+
+    def load_smoke(path: Path) -> object:
+        events.append("load-smoke")
+        assert path == tmp_path / "runtime-smoke-evidence.json"
+        return smoke_bundle
+
+    monkeypatch.setattr(
+        cli_module,
+        "_load_authenticated_runner_smoke_evidence_bundle",
+        load_smoke,
+    )
+
+    def build_runtime(**kwargs: object) -> object:
+        events.append("build-runtime")
+        assert kwargs == {
+            "smoke_bundle": smoke_bundle,
+            "qualification_policy": policy,
+        }
+        return runtime_artifact
+
+    monkeypatch.setattr(cli_module, "build_route_runtime_evidence_artifact", build_runtime)
+
+    def verify_runtime(artifact: object, qualification_policy: object) -> object:
+        events.append("verify-runtime")
+        assert artifact is runtime_artifact
+        assert qualification_policy is policy
+        return runtime_capability
+
+    monkeypatch.setattr(cli_module, "verify_route_runtime_evidence", verify_runtime)
+
+    def admit_routes(**kwargs: object) -> tuple[()]:
+        events.append("route-admission")
+        captured["admission"] = kwargs
+        return ()
+
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_three_route_admission",
+        admit_routes,
+    )
+
+    def select_ledger(_config: object, path: Path | None) -> Path:
+        events.append("select-ledger")
+        assert path == ledger.path
+        return tmp_path / "cost-ledger.json"
+
+    monkeypatch.setattr(cli_module, "_selected_cost_ledger_path", select_ledger)
+
+    def open_ledger(*_args: object, **_kwargs: object) -> tuple[object, object]:
+        events.append("open-ledger")
+        return budget, object()
+
+    monkeypatch.setattr(cli_module, "_budget_and_usage", open_ledger)
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_output",
+        lambda _path: events.append("output-preflight"),
+    )
+
+    def reject_after_launch(launch: AuthenticatedRunnerOpenRouterLaunch) -> object:
+        events.append("launch-preflight")
+        captured["launch"] = launch
+        raise AuthenticatedRunnerExecutionError("stop after runtime evidence launch capture")
+
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_openrouter_launch",
+        reject_after_launch,
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("runtime evidence preflight must not select secrets or dispatch")
+
+    for name in (
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "execute_authenticated_openrouter_runner",
+        "_write_authenticated_runner_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(
+            tmp_path,
+            preflight_only=True,
+            include_runtime_evidence=True,
+            include_retry_continuity=True,
+        ),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "stop after runtime evidence launch capture" in " ".join(result.stdout.split())
+    assert events == [
+        "paths",
+        "load-smoke",
+        "build-runtime",
+        "verify-runtime",
+        "route-admission",
+        "select-ledger",
+        "open-ledger",
+        "paths",
+        "output-preflight",
+        "launch-preflight",
+    ]
+    admission = cast(dict[str, object], captured["admission"])
+    assert admission["runtime_evidence"] is runtime_capability
+    launch = cast(AuthenticatedRunnerOpenRouterLaunch, captured["launch"])
+    assert launch.runtime_route_evidence is runtime_capability
+    runtime_path = tmp_path / "runtime-smoke-evidence.json"
+    retry_path = tmp_path / "retry-continuity.toml"
+    assert runtime_path in path_calls[0]
+    assert retry_path in path_calls[0]
+    assert ledger.path not in path_calls[0]
+    assert runtime_path in path_calls[1]
+    assert retry_path in path_calls[1]
+    assert ledger.path in path_calls[1]
+
+
+def test_authenticated_runner_runtime_evidence_failure_precedes_ledger_and_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        effective_reserved_output_tokens=2_048,
+    )
+    policy = object()
+    events: list[str] = []
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_frozen_ground_truth_provenance",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_frozen_ground_truth",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(cli_module, "resolve_verified_public_model_lineage", object)
+    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_discovery_run",
+        lambda _path: (object(), (object(),)),
+    )
+    monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: policy)
+    monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_cli_paths",
+        lambda **_kwargs: events.append("paths"),
+    )
+
+    def load_smoke(_path: Path) -> object:
+        events.append("load-smoke")
+        return object()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_load_authenticated_runner_smoke_evidence_bundle",
+        load_smoke,
+    )
+
+    def build_runtime(**_kwargs: object) -> object:
+        events.append("build-runtime")
+        return object()
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_route_runtime_evidence_artifact",
+        build_runtime,
+    )
+
+    def reject_runtime(*_args: object, **_kwargs: object) -> object:
+        events.append("verify-runtime")
+        raise ValueError("runtime evidence verification failed")
+
+    monkeypatch.setattr(cli_module, "verify_route_runtime_evidence", reject_runtime)
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("invalid runtime evidence must reject before mutable state")
+
+    for name in (
+        "require_authenticated_runner_three_route_admission",
+        "_selected_cost_ledger_path",
+        "_budget_and_usage",
+        "_preflight_authenticated_runner_output",
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "execute_authenticated_openrouter_runner",
+        "_write_authenticated_runner_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, include_runtime_evidence=True),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "runtime evidence verification failed" in " ".join(result.stdout.split())
+    assert events == ["paths", "load-smoke", "build-runtime", "verify-runtime"]
 
 
 @pytest.mark.parametrize(
@@ -629,7 +1078,13 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
 ) -> None:
     events: list[str] = []
     config = SimpleNamespace(
-        execution=SimpleNamespace(cost_ledger_path=None),
+        stable_hash=lambda: "e" * 64,
+        execution=SimpleNamespace(
+            cost_ledger_path=None,
+            max_model_retries=1,
+            max_schema_validation_retries=0,
+            model_dump=lambda **_kwargs: {"synthetic": "execution-config"},
+        ),
         effective_reserved_output_tokens=2_048,
     )
     suite = object()
@@ -763,6 +1218,13 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
 
     monkeypatch.setattr(cli_module, "build_authenticated_runner_durable_bundle", build_bundle)
 
+    durable_binding: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli_module,
+        "require_authenticated_runner_durable_config_binding",
+        lambda supplied, **kwargs: durable_binding.update(kwargs) or supplied,
+    )
+
     def write_output(path: Path, value: AuthenticatedRunnerDurableEvidenceBundle) -> int:
         events.append("write")
         captured["output_path"] = path
@@ -808,6 +1270,7 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
     assert captured["output"] is durable_bundle
     bundle_inputs = cast(dict[str, object], captured["bundle_inputs"])
     assert set(bundle_inputs) == {
+        "effective_config_sha256",
         "runner_evidence",
         "candidate_cost_plans",
         "judge_cost_plans",
@@ -818,7 +1281,16 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
         "authseal_decision_projections",
         "authseal_rejection_kind",
     }
+    assert bundle_inputs["effective_config_sha256"] == "e" * 64
     assert "EXECUTION-CAPABILITY-CANARY" not in repr(bundle_inputs)
+    assert durable_binding["effective_config_sha256"] == "e" * 64
+    assert durable_binding["maximum_attempts_per_logical_request"] == 2
+    assert durable_binding["model_retry_policy_sha256"] == (
+        cli_module.ModelRetryPolicy.build(
+            transient_retry_limit=1,
+            schema_validation_retry_limit=0,
+        ).policy_sha256
+    )
 
 
 def test_authenticated_runner_budget_drift_rejects_before_secret_selection_or_mutation(
@@ -1190,4 +1662,5 @@ def test_authenticated_runner_durable_output_delegates_exact_retained_runs(
     assert observed["authseal_collision_map"] is result.authseal_collision_map
     assert observed["authseal_decision_projections"] == result.authseal_decision_projections
     assert observed["authseal_rejection_kind"] == result.authseal_rejection_kind
+    assert observed["effective_config_sha256"] == "e" * 64
     assert "EXECUTION-CAPABILITY-CANARY" not in repr(observed)

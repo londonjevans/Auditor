@@ -353,10 +353,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   truth, cross-lineage automated adjudication, and exact REAL calibration custody remain absent.
   Stop after recording this ticket `COMPLETE`: do not select AUTHSEAL, launch a campaign, emit a
   command, or infer a run index.
-- **Current reconciliation:** The later `2026-08-27T06:37Z` operator record reports that exact P1
-  materialization cleared the immediate qualification-input gate and the next preflight failed on
-  `EMPIRICAL_SCHEMA_CONFORMANCE` plus `TOKEN_DETAIL_REPORTING_CONVENTION`. That nonauthorizing
-  record queues `V3-RUNTIMEADMIT-001`; it does not reopen this completed coverage ticket.
+- **Current reconciliation:** The latest `2026-08-27T10:28Z` operator record reports that a private
+  provider-free index-21/r21 replay satisfied `EMPIRICAL_SCHEMA_CONFORMANCE` and exposed a pre-fix
+  token-detail digest mismatch. `V3-RUNTIMEADMIT-001` is now complete at its corrected provider-free
+  boundary; no post-fix private replay or current FULL admission exists. This nonauthorizing record
+  does not reopen the completed coverage ticket.
 
 ### V3-BENCHMARK-001 — Blind contamination-controlled benchmark harness
 
@@ -1106,8 +1107,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `425502c`; the unresolved empirical
   schema and token-detail gates still prohibit any campaign.
   Current operator record `50d72b5e00040ccbdf2b5558809d39f35e51892a3e549209b100599e9891a820`
-  reports that exact P1 and fresh r22 evidence reach those two gates; `V3-RUNTIMEADMIT-001` is queued
-  but not selected or started. The record is nonauthorizing and supplies no current command or index.
+  reports that exact P1 and fresh r22 evidence reached those two gates at its recorded source
+  boundary. `V3-RUNTIMEADMIT-001` now completes the provider-free promotion mechanism, but no
+  private evidence was replayed and current FULL admission remains rejected. The record is
+  nonauthorizing and supplies no current command or index.
   `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
 
@@ -1175,10 +1178,95 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   compatibility are unchanged; this local evidence is not a claim about private bundle contents.
   The later operator-reported attempt to enable `3` retries in the hash-pinned qualification config
   failed the canonical-hash regressions and was reverted. Using retries in that campaign requires a
-  deliberate release re-pin or a separate non-pinned continuity path; neither is part of this ticket.
+  deliberate release re-pin or a separate continuity path; neither was part of this ticket. The
+  later `V3-RETRYCONT-001` successor completed a separate package-pinned path without changing this
+  ticket's frozen default profile.
 - **Next action:** None for this ticket. Stop after recording `COMPLETE`; do not launch a campaign,
   emit an operator command, infer a run index, or claim qualification, calibration, or release
   authority from this provider-free change.
+
+### V3-RETRYCONT-001 — Explicit campaign-continuity retry activation
+
+- **Objective:** Expose the completed schema-only same-route retry through an explicit provider-free
+  continuity configuration path while preserving the frozen default qualification profile and every
+  evidence and scoring boundary.
+- **Files/modules:** Separate explicit configuration profile or isolated typed activation path,
+  configuration/effective-hash custody, authenticated-runner preflight, documentation, and focused
+  regressions.
+- **Acceptance criteria:** The existing qualification profile bytes/hash and generic retry-off
+  defaults remain unchanged. Explicit continuity selection enables exactly `3` schema retries while
+  transient retry remains exactly `1`; preflight proves attempt/request/cost capacity; downstream
+  evidence binds the distinct effective config hash; old default-off evidence is non-substitutive;
+  fallback order, first-attempt-only scoring, per-attempt ledger custody, and the 32-attempt cap are
+  unchanged; no authority or external action is granted.
+- **Dependencies:** `V3-RETRY-001` (`COMPLETE`) and the recorded operator choice of exactly `3`
+  schema retries.
+- **Status:** `COMPLETE`
+- **Evidence:** The exact frozen retry-off base bytes and semantic hash remain unchanged. A separate
+  package-pinned profile enables exactly three schema retries plus one transient retry, proves five
+  maximum attempts and `480 <= 576` request capacity, and binds distinct full/execution hashes
+  through runner evidence v1.1, all four staged plans, durable bundle v1.2, and offline verification.
+  Historical v1.0/v1.1 evidence cannot substitute; fallback, first-attempt-only scoring, and exact
+  per-attempt cost/ledger provenance remain unchanged. Focused tests and static/generated gates pass.
+- **Remaining limitation:** No provider execution, replacement candidate, qualification, campaign,
+  runtime authority, or release is proven or authorized. Route-only smoke is noncrediting for this
+  configuration binding.
+- **Next action:** Stop after provider-free closure. `V3-QUOTE-001` remains queued and unstarted;
+  candidate reselection and all REAL/provider/operator work remain separately gated.
+
+### V3-QUOTE-001 — Pre-purchase cost and runtime estimate
+
+- **Objective:** Produce a deterministic, bounded pre-purchase cost and wall-clock quote from
+  local target analysis, complete planned paid work, and frozen route pricing before any paid work.
+- **Files/modules:** `src/mmaudit/cli.py`, `src/mmaudit/orchestration/budgets.py`, typed quote and
+  reconciliation models, generated schemas, and focused provider-free regressions.
+- **Acceptance criteria:** Bind exact source/index/graph/shard inputs, the complete bounded paid-task
+  envelope, planned roles/models, retry and recovery bounds, local execution limits, and frozen
+  pricing. Expose a range and explicit worst case; refuse any unbounded task or target; enforce the
+  accepted worst case as a separate exact per-run spend ceiling; and record terminal deltas only
+  from fully reconciled ledger evidence. Serialized quote/acceptance remains nonauthorizing.
+- **Dependencies:** `V3-SHARD-001` (`COMPLETE`).
+- **Status:** `COMPLETE`
+- **Evidence:** Provider-free quote creation binds the exact scheduler campaign, target/index/graph/
+  shard inventory, scheduler-selected model set, early and later paid routes, dynamic reviewer-role
+  multiplicity, transient-attempt and campaign-global recovery ceilings, local timeout bounds, and
+  frozen request-specific endpoint pricing. Acceptance installs a separate exact incremental ledger
+  ceiling and rejects route, role, model, endpoint, pricing, token, cost, task-count, or campaign
+  drift before durable mutation. Terminal reconciliation requires campaign-bound v1.1 ledger
+  evidence. Canonical schemas, governance inventory, strict production typing, and focused quote,
+  budget, CLI, forensic, integration, config, and candidate-bound regressions pass.
+- **Remaining limitation:** The accepted spend ceiling may be lower than the complete-work worst
+  case; the quote exposes both values, sets `hard_budget_limited`, and promises no completion. No
+  provider execution or completed real audit is claimed.
+- **Next action:** Stop after provider-free closure. `V3-SCHEMARETRY-001` is queued for the
+  operator-selected same-route schema retry; this quote ticket changed neither retry code nor retry
+  configuration.
+
+### V3-SCHEMARETRY-001 — Operator-selected same-route schema retry
+
+- **Objective:** Implement the operator-selected retry of schema-invalid structured output on the
+  applicable audit route without treating transient network/status retry as schema retry.
+- **Files/modules:** Structured-output route control, explicit retry configuration custody,
+  per-attempt budget/evidence handling, and focused regressions.
+- **Acceptance criteria:** `max_model_retries` remains transient-only. A schema-invalid response is
+  `SCHEMA_VALIDATION_FAILED` and uses explicit fallback or terminates unless a separate exact
+  same-route schema-retry policy is configured. The selected policy is bounded, budgeted, recorded
+  per attempt, and covered by success, exhaustion, fallback, configuration-drift, and no-implicit-
+  retry regressions.
+- **Dependencies:** `V3-RETRY-001` (`COMPLETE`) and `V3-QUOTE-001` (`COMPLETE`).
+- **Status:** `COMPLETE`
+- **Evidence:** Ordinary paid `run` and provider-free `quote create` accept an explicit bounded
+  `--schema-validation-retries` selection while omission remains retry-off and
+  `max_model_retries` remains transient-only. The exact split policy and hash are bound through
+  quote, acceptance, budget, usage, durable runner, current smoke v1.3, and manifest v1.3 evidence;
+  explicit v1.2 legacy verification is retry-off only. Provider-free regressions cover success,
+  exhaustion, fallback, exact accounting, failure classification, equal-total policy substitution,
+  partial/mixed evidence, helper retargeting, and mid-attempt drift.
+- **Remaining limitation:** No provider-backed retry, replacement candidate, successful real audit,
+  qualification, runtime authority, or release is proven. The historical failed campaign used zero
+  schema retries and is unchanged; the frozen qualification profile remains retry-off.
+- **Next action:** Stop after closure. `V3-REVOKERECON-001` is the next dependency-ready queued
+  provider-free ticket, but it is not selected in this work unit.
 
 ### V3-RUNTIMEADMIT-001 — Promote runtime evidence into campaign admission predicates
 
@@ -1213,17 +1301,145 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   negatives, evidence-age expiry, tamper and reseal negatives, the full purpose matrix across all
   four `RouteConstraintPurpose` values, default-unavailable byte identity, schema drift, Ruff, and
   strict mypy.
-- **Dependencies:** Confirmed `2026-08-27` by operator inspection: both predicate ids appear only in
-  `route_constraints.py`, are always produced by `_unavailable_result`, and have no satisfying code
-  path anywhere in `src/`. A campaign `--preflight-only` with a materialized qualification policy and
-  fresh `r22` evidence for all three roles fails exactly here with
-  `route predicate report does not satisfy its closed purpose`.
+- **Dependencies:** The latest operator-supplied record
+  `955b5d3e75c7cb0fe3f4ef571829dfde55a337bd704d140268b3dffa66485808` reports that
+  index-21 plus matching r21 evidence satisfied `EMPIRICAL_SCHEMA_CONFORMANCE` and exposed the
+  pre-fix token-detail digest mismatch. It reports no new smoke, provider completion, spend, or
+  launch and is nonauthorizing and not independently authenticated by Codex. The corrected code has
+  not been replayed against those private bytes.
+- **Status:** `COMPLETE`
+- **Evidence:** The provider-free runtime-evidence carrier, canonical schema, exact three-route
+  projection, sealed same-process consumer, bounded-age policy, authenticated-runner/CLI plumbing,
+  and predicate/reason diagnostics are implemented. Exact candidate, PRIMARY, and REPLAY positives;
+  every route/model/endpoint/profile/discovery/facts/report/policy mismatch; staleness; tamper,
+  coherent reseal, origin, and caller-substitution negatives; all four purposes; default-byte
+  identity; schema generation; Ruff; and strict mypy pass. The final correction separately joins
+  usage/token evidence to the full `RequestTokenPlan.plan_sha256` and the preview to the stable
+  domain-separated projection, rejects the former impossible equality, enforces that projection in
+  base smoke replay, and seals the shared projector in the provider callable graph.
+- **Selection state:** completed provider-free and nonauthorizing at `2026-08-27T11:08:16Z`; no
+  external action or successor ticket is selected.
+- **Remaining limitation:** The operator-supplied index-21/r21 replay predates the final digest fix:
+  it proved `EMPIRICAL_SCHEMA_CONFORMANCE` and exposed the invalid token-detail equality, but the
+  corrected code has not been replayed against those private bytes. Current evidence-backed
+  `FULL_CAMPAIGN_ADMISSION` therefore remains unproven/rejected. Serialized smoke provenance retains
+  the repository's existing structural/self-hash custody rather than independent provider-origin
+  authentication. No campaign, provider, qualification, audit, runtime, or release authority follows.
+- **Next action:** None for this ticket. Stop without launching a smoke/campaign, emitting an operator
+  command, inferring a run index, selecting a successor, or granting authority.
+
+### V3-CONSENSUS-001 — Independent cross-examination and adjudication
+
+- **Objective:** Apply blind discovery, adversarial cross-examination, multiple independent
+  validators/falsifiers, and evidence-capped deterministic judgment.
+- **Files/modules:** `src/mmaudit/orchestration/consensus.py`, pass-six pipeline evidence plumbing,
+  deterministic judge payloads, focused unit/integration regressions, generated autonomy inventory,
+  and governance records.
+- **Acceptance criteria:** A single verifier cannot suppress a candidate group; model agreement alone
+  cannot confirm; high/critical decisions satisfy exact lineage and evidence constraints; incomplete,
+  duplicated, reused, or forged reviewer inventories fail closed; every dissenting vote is retained.
+- **Tests:** Closed three-review vote matrix, exact-inventory and distinct-lineage negatives,
+  judge-cap preservation, high/critical evidence caps, pipeline artifact/replay coverage, schema and
+  static gates.
+- **Dependencies:** `V3-COVERAGE-001` (`COMPLETE`).
+- **Status:** `COMPLETE`
+- **Selection state:** Completed provider-free and nonauthorizing at `2026-08-27T17:10:18Z`; no
+  external action or successor ticket is selected.
+- **Evidence:** Pass six retains exactly one verifier and two lineage-distinct falsifiers, with exact
+  task/request/completion/root custody, globally unique provider generations, all dissent, and a
+  closed deterministic quorum. Runtime and detached replay share vote/reproduction enrichment,
+  consume exact final candidate validation, reconstruct every active/rejected/filtered finding, and
+  bind evidence-cap and severity policy to trusted inputs. A single reviewer cannot suppress a
+  two-review majority, and model agreement alone never confirms. Latest-tree validation passed
+  `614` affected unit tests and `7` selected synthetic local integrations; independent final review
+  found no HIGH/blocking defect.
+- **Remaining limitation:** The bundle is self-sealed rather than externally authenticated; scanner
+  evidence is deliberately nonconfirming until trusted host code provides exact full-claim binding;
+  and the provider-free regressions do not claim a real provider run, a completed real audit, or
+  release/runtime authority.
+- **Next action:** None for this ticket. `V3-MULTI-AUDIT-001` remains queued and unselected because
+  `V3-SINGLE-AUDIT-001` is unresolved. Stop without launching a campaign, issuing an operator
+  command, inferring a run index, changing retry/configuration behavior, or granting authority.
+
+### V3-LEARNING-001 — Cross-audit learning corpus
+
+- **Objective:** Capture what each completed audit established before the first real audit makes
+  that terminal evidence unrecoverable.
+- **Files/modules:** New versioned learning-corpus model/schema, terminal orchestration capture,
+  generated schemas, focused unit/integration regressions, and governance records.
+- **Acceptance criteria for this Phase 1 slice:** Tenant-scoped bounded records retain confirmed
+  findings, rejected candidates and reasons, reviewer attribution and misses, reviewed surfaces and
+  outcomes, and per-role cost/runtime. Benchmark and time-split inputs are rejected by construction.
+  Corpus-derived material remains a nonauthorizing lead and cannot supply finding evidence,
+  confidence, coverage, or consensus credit.
+- **Dependencies:** None for Phase 1; completion/Phase 2 remains behind `V3-TIMESPLIT-001` and a
+  measured unprimed baseline.
+- **Status:** `PARTIAL`
+- **Result:** Phase 1 is complete provider-free. A versioned, self-hashed, size-bounded record binds
+  one opaque tenant scope to exact terminal-report authority, confirmed/rejected outcomes, exact
+  reviewer and specialist attribution, reviewed surfaces, later-established misses, and per-role
+  cost/runtime. Eligible private REAL runs persist it mode `0600` before manifest sealing; strict
+  deterministic manifest replay detects resealed drift, and `latest` excludes/purges the payload.
+  Every durable authority/credit flag is false. Registered synthetic/public benchmark routes cannot
+  enable capture, and Phase 2 application remains disabled.
+- **Remaining limitation:** Phase 1 trusts the registered operator source classification and cannot
+  detect deliberate relabeling of undisclosed holdout/time-split bytes. `V3-TIMESPLIT-001` must add
+  non-overridable purpose/provenance binding before introducing such a route. A COMPLETE report with
+  no reviewed surfaces fails capture closed. Corpus application/priming and its measured A/B gate
+  remain unimplemented behind `V3-TIMESPLIT-001`.
+- **Selection state:** Phase 1 closed `PARTIAL` provider-free and nonauthorizing; no successor ticket,
+  current operator command, run index, authority, or Phase 2 priming is selected. The later
+  operator-supplied record `f3569e3eac39391a9b09566ccc5a2b83a5eed6e963fb8ce417c03c850166e617`
+  reports a separate FULL-admitted campaign that failed closed after nine schema failures and 15
+  unbound identities, with 57 reconciled ledger entries / `0.68118684` USD and zero completed real
+  audits. That evidence is nonauthorizing and not independently authenticated by Codex.
+- **Next action:** Keep Phase 2 disabled until `V3-TIMESPLIT-001`. The next canonical ticket is
+  `V3-SINGLE-AUDIT-001`, still queued. Do not reuse the frozen DeepSeek/`parasail/fp8` candidate;
+  separate reselection, empirical structured-output validation, and resolution of unbound generation
+  identity are required. Same-route schema retry was future work at this learning-ticket boundary;
+  later `V3-RETRYCONT-001` completed the separate package-pinned path. This learning ticket itself
+  changed neither retry code nor configuration.
+
+### V3-REVOKERECON-001 — Reconcile candidate revocation with pinned plan selection
+
+- **Objective:** Restore candidate selectability after a revocation. Revoking one route must disqualify
+  that route from being **assigned**; it must not invalidate an entire pinned selection plan that
+  merely lists it. At present the single correct revocation of
+  `deepseek/deepseek-v4-pro-0813=parasail/fp8` makes **every** candidate discovery fail, so the
+  reselection that the campaign failure made mandatory is impossible and the build cannot progress.
+- **Files/modules:** Route-set revocation evaluation in `src/mmaudit/models/candidate_revocation.py`,
+  its call sites in `candidate_selection.py` and `cli.py`, any supported successor-plan emission path,
+  and focused regressions.
+- **Acceptance criteria:**
+  - **Primary acceptance test:** with `deepseek/deepseek-v4-pro-0813=parasail/fp8` revoked for
+    `role=candidate`, a provider-free discovery requesting a **different, unrevoked** candidate
+    succeeds; a discovery requesting the revoked route still fails closed with a named reason.
+  - Revocation is evaluated against the route actually being **assigned**, rather than against every
+    entry in the validated route set, **or** a supported path emits a successor plan whose candidate
+    constraint names a live route. Either design is acceptable; hand-editing a hash-pinned plan is not.
+  - Judge-role selection is unaffected by a candidate-role revocation, and vice versa; role scoping is
+    exact.
+  - The existing tombstone remains effective and non-bypassable: no plan regeneration, refresh, or
+    successor artifact may resurrect a revoked route, and revocation matching must not depend on
+    `selection_plan_sha256` such that changing the plan silently un-revokes.
+  - Fail-closed default is preserved and the refusal names the offending role, model, endpoint, and
+    reason, so a rejected selection is diagnosable without reading source.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions covering revoked-route refusal, unrevoked-alternative
+  admission, cross-role isolation, resurrection attempts via plan change, tombstone persistence,
+  named-reason rendering, schema drift, Ruff, and strict mypy.
+- **Dependencies:** Operator record of `2026-08-28`. Revocation resource holds exactly one entry
+  (`EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`). Plan
+  `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f` pins the revoked route as
+  `authenticated_runner_selection.route_constraints[0]`. Observed: `minimax/minimax-m3=coreweave/fp4`,
+  `google/gemma-4-26b-a4b-it=deepinfra/fp8`, and `tencent/hy3=novita` are all refused
+  `candidate selection route is revoked`.
 - **Status:** `QUEUED`
-- **Selection state:** not selected or started.
-- **Next action:** Implement only the evidence-promotion mechanism and its negatives. Do not launch a
-  campaign, emit an operator command, infer a run index, or grant any qualification, calibration, or
-  release authority from this ticket. Surface the failing predicate ids and reasons in
-  `RoutePredicateRequirementError` so a rejected admission names its causes.
+- **Next action:** Implement only the reconciliation and its negatives. Do not select a replacement
+  candidate, launch a campaign, emit an operator command, or grant any qualification, calibration, or
+  release authority from this ticket. Candidate selection remains an operator decision informed by a
+  provider-free sweep.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -1310,9 +1526,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   bounded typed successful-usage errors preserve the cause, keep case mismatch separate, and do not
   fetch generation evidence prematurely. Items 2, 3, 4, and 6 remain
   `OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`; none grants command or launch authority.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Implement the missing
-  provider-free route-bound evidence mechanism only under queued `V3-RUNTIMEADMIT-001`; separately
-  authorized runtime evidence may be evaluated only after that mechanism exists. No operator action,
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. The provider-free route-bound
+  evidence mechanism is complete under `V3-RUNTIMEADMIT-001`; separately supplied fresh canonical
+  private evidence must still pass it before FULL admission can succeed. No operator action,
   provider access, inferred index, command, or campaign is current; `V3-AUTONOMY-001` Phase 2 remains
   paused.
 
@@ -1339,12 +1555,21 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Result:** The provider-free refresh/runtime/pricing custody slice is green. The
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
-- **Next action:** No provider or operator action is current. Preserve the provider-free mechanism;
-  `V3-PLANCONSTRAINTS-001` is complete after repair checkpoint `425502c`, with `7ef4717` retained as
-  its historical implementation base, and this ticket remains
-  noncurrent. Resume this ticket only
-  under separate future authorization with fresh exact provider evidence and the stock
-  live authority quartet; do not emit or rerun an authenticated refresh command from this ticket.
+- **Resumed provider-free slice 2026-08-27:** Add a strict, negative-only tombstone for the exact
+  rejected DeepSeek/`parasail/fp8` selection assignment. Preserve historical plan, registry, and run
+  bytes as parseable evidence, but reject new discovery and every live execution path before secret,
+  reservation, ledger, or provider transport. The tombstone cannot select or qualify a successor.
+- **Candidate-revocation result 2026-08-27:** A versioned, self-hashed, package-bound negative
+  registry now tombstones the exact and canonical DeepSeek identities on `parasail/fp8`. Discovery,
+  plan derivation, benchmark, qualification, CLI, direct pipeline validation, selected metadata,
+  completion, and generation-refetch boundaries reject before secrets, reservation, usage/ledger
+  mutation, or provider transport. Immutable closure seals reject coherent anchor replacement and
+  selected instance-delegator retargeting. Adjacent explicitly pinned endpoints remain eligible.
+- **Next action:** No provider or operator action is current. Fresh candidate reselection,
+  qualification, and promotion remain separate prerequisites before `V3-SINGLE-AUDIT-001`; do not
+  infer a run index or reuse the rejected assignment. Schema-invalid structured output was not
+  retried on the same route at this ticket boundary; later `V3-RETRYCONT-001` completed the explicit
+  package-pinned path. This ticket itself changed neither retry code nor retry configuration.
 
 ### QUEUE-BOOTSTRAP-001
 
@@ -2089,11 +2314,13 @@ and report serialization.
 
 ## Current next action
 
-`V3-RUNTIMEADMIT-001` is the next queued bounded provider-free ticket and is not selected or started
-in this work unit. Its scope is the missing exact route-bound runtime-evidence promotion for
-`EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`, plus diagnostic predicate
-ids/reasons on rejection. No provider call, campaign launch, command, run index, qualification,
-runtime authority, or release action is current.
+`V3-SCHEMARETRY-001` is `COMPLETE` provider-free and nonauthorizing. `V3-REVOKERECON-001` is the next
+dependency-ready queued ticket but remains unselected until a separate work-unit boundary. The
+closure grants no provider, operator, campaign, qualification, runtime, or release authority; no
+external action is current.
+`V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No provider
+action, campaign, operator command, run index, candidate selection, qualification, runtime authority,
+or release action is current.
 
 ## Historical next action — c627 replay boundary (superseded)
 

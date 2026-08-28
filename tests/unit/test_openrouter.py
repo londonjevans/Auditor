@@ -20,10 +20,12 @@ import httpx
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
+import mmaudit.config as config_module
 import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.truncation as truncation_module
 import mmaudit.models.usage as usage_module
+import mmaudit.orchestration.budgets as budgets_module
 from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkClassification,
@@ -82,6 +84,7 @@ from mmaudit.models.openrouter import (
     OpenRouterReasoning,
     OpenRouterRequestLimitError,
     OpenRouterResponseIdentityError,
+    OpenRouterRetryPolicyDriftError,
     OpenRouterSchemaError,
     OpenRouterSchemaValidationRetryExhaustedError,
     OpenRouterStructuredOutputError,
@@ -1052,8 +1055,22 @@ def _as_two_attempt_v3_unknown_token_smoke_usage(
         request_limit_count_before=1,
         request_limit_maximum=first_request.request_limit_maximum,
     )
+    raw_retry_policy = record.routing.get("model_retry_policy")
+    assert type(raw_retry_policy) is dict
+    retry_policy = config_module.ModelRetryPolicy.model_validate(raw_retry_policy, strict=True)
+    if retry_policy.schema_validation_retry_limit > 0:
+        intermediate_outcome = "SCHEMA_VALIDATION_FAILED"
+    else:
+        assert retry_policy.transient_retry_limit > 0
+        intermediate_outcome = "TRANSIENT_STATUS"
     routing = {
         **record.routing,
+        **openrouter_module._model_retry_routing_evidence(
+            retry_policy,
+            maximum_attempts_for_request=2,
+            attempts=2,
+            attempt_outcomes=(intermediate_outcome, "SUCCESS"),
+        ),
         "request_cost_preview_sha256": "c" * 64,
         "atomic_token_reservations": [
             first_token.model_dump(mode="json"),
@@ -2179,6 +2196,134 @@ def _mock_real_control_flow(
         return original(subject)
 
     monkeypatch.setattr(openrouter_module, "trusted_openrouter_execution_evidence", classify)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_id",
+    (
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-pro-20260813",
+    ),
+)
+@pytest.mark.parametrize(
+    "provider_policy",
+    (
+        OpenRouterProviderPolicy(only=("parasail/fp8",), allow_fallbacks=False),
+        OpenRouterProviderPolicy(order=("parasail/bf16",), allow_fallbacks=True),
+        OpenRouterProviderPolicy(),
+    ),
+)
+async def test_direct_completion_rejects_tombstoned_route_before_dispatch_or_reservation(
+    config_factory,
+    tmp_path: Path,
+    model_id: str,
+    provider_policy: OpenRouterProviderPolicy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    tmp_path.chmod(0o700)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "revoked-route-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _completion_response('{"answer":"unexpected"}')
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=provider_policy,
+        privacy_models=(model_id,),
+        budget=budget,
+    )
+    before = ledger.snapshot()
+    try:
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            await client.complete_with_evidence(
+                role="source_audit",
+                models=[model_id],
+                system_prompt="synthetic system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="revoked-route-probe",
+            )
+        with monkeypatch.context() as context:
+            context.setattr(
+                openrouter_module,
+                "require_candidate_assignment_eligible",
+                lambda **_kwargs: None,
+            )
+            with pytest.raises(OpenRouterModelError, match="revocation boundary changed"):
+                await client.complete_with_evidence(
+                    role="source_audit",
+                    models=[model_id],
+                    system_prompt="synthetic system",
+                    user_prompt="synthetic local input",
+                    response_model=Answer,
+                    schema_name="answer",
+                    logical_request_id="revoked-route-probe",
+                )
+        with monkeypatch.context() as context:
+
+            def forged_pristine() -> bool:
+                return True
+
+            def forged_gate(**_kwargs: object) -> None:
+                return None
+
+            context.setattr(
+                openrouter_module,
+                "candidate_revocation_callables_are_pristine",
+                forged_pristine,
+            )
+            context.setattr(
+                openrouter_module,
+                "require_candidate_assignment_eligible",
+                forged_gate,
+            )
+            context.setattr(
+                openrouter_module.candidate_revocation_module,
+                "candidate_revocation_callables_are_pristine",
+                forged_pristine,
+            )
+            context.setattr(
+                openrouter_module.candidate_revocation_module,
+                "require_candidate_assignment_eligible",
+                forged_gate,
+            )
+            with pytest.raises(OpenRouterModelError, match="revocation boundary changed"):
+                await client.complete_with_evidence(
+                    role="source_audit",
+                    models=[model_id],
+                    system_prompt="synthetic system",
+                    user_prompt="synthetic local input",
+                    response_model=Answer,
+                    schema_name="answer",
+                    logical_request_id="revoked-route-probe",
+                )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert requests == []
+    assert usage.records == []
+    assert client._claimed_request_ids == set()
+    assert ledger.snapshot() == before
 
 
 @pytest.mark.asyncio
@@ -3557,6 +3702,22 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             "_detach_exact_discovery_json_mapping",
             "_TRUSTED_DETACH_EXACT_DISCOVERY_JSON_MAPPING",
         ),
+        (
+            "request_token_plan_projection_sha256",
+            "_TRUSTED_REQUEST_TOKEN_PLAN_PROJECTION_SHA256",
+        ),
+        (
+            "_require_current_model_retry_policy",
+            "_TRUSTED_REQUIRE_CURRENT_MODEL_RETRY_POLICY",
+        ),
+        (
+            "_terminal_model_retry_attempt_outcome",
+            "_TRUSTED_TERMINAL_MODEL_RETRY_ATTEMPT_OUTCOME",
+        ),
+        (
+            "_model_retry_routing_evidence",
+            "_TRUSTED_MODEL_RETRY_ROUTING_EVIDENCE",
+        ),
     ],
 )
 def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
@@ -3569,6 +3730,154 @@ def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
     for name in binding_names:
         monkeypatch.setattr(openrouter_module, name, replacement)
     assert not openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_token_plan_projection_alias_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            openrouter_module,
+            "request_token_plan_projection_sha256",
+            lambda _plan: "0" * 64,
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_accepted_quote_request_guard_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+    with monkeypatch.context() as patch:
+        patch.setattr(budgets_module, "_require_accepted_quote_request", lambda *_a, **_k: None)
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_execution_retry_policy_property_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory,
+) -> None:
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+    execution = config_factory().execution
+    getter_calls = 0
+
+    def replacement_getter(_execution: object) -> config_module.ModelRetryPolicy:
+        nonlocal getter_calls
+        getter_calls += 1
+        return config_module.ModelRetryPolicy.build(
+            transient_retry_limit=0,
+            schema_validation_retry_limit=1,
+        )
+
+    replacement = property(replacement_getter)
+    with monkeypatch.context() as patch:
+        patch.setattr(config_module.ExecutionConfig, "model_retry_policy", replacement)
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(OpenRouterRetryPolicyDriftError, match="custody"):
+            openrouter_module._require_current_model_retry_policy(
+                execution,
+                None,
+                phase="during regression",
+            )
+        assert getter_calls == 0
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_coherent_accepted_quote_guard_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pristine_defaults = openrouter_module._openrouter_client_callables_are_pristine.__kwdefaults__
+    assert pristine_defaults is not None
+
+    def forged_guard(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(budgets_module, "_require_accepted_quote_request", forged_guard)
+        patch.setattr(
+            openrouter_module,
+            "_TRUSTED_ACCEPTED_QUOTE_REQUEST_GUARD",
+            forged_guard,
+        )
+        patch.setitem(pristine_defaults, "_accepted_quote_request_guard", forged_guard)
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_coherent_execution_retry_property_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pristine_defaults = openrouter_module._openrouter_client_callables_are_pristine.__kwdefaults__
+    assert pristine_defaults is not None
+    replacement = property(
+        lambda _execution: config_module.ModelRetryPolicy.build(
+            transient_retry_limit=0,
+            schema_validation_retry_limit=1,
+        )
+    )
+    replacement_fget = replacement.fget
+    assert replacement_fget is not None
+    with monkeypatch.context() as patch:
+        patch.setattr(config_module.ExecutionConfig, "model_retry_policy", replacement)
+        patch.setattr(
+            openrouter_module,
+            "_TRUSTED_EXECUTION_MODEL_RETRY_POLICY_PROPERTY",
+            replacement,
+        )
+        patch.setattr(
+            openrouter_module,
+            "_TRUSTED_EXECUTION_MODEL_RETRY_POLICY_FGET",
+            replacement_fget,
+        )
+        patch.setitem(
+            pristine_defaults,
+            "_execution_model_retry_policy_property",
+            replacement,
+        )
+        patch.setitem(
+            pristine_defaults,
+            "_execution_model_retry_policy_fget",
+            replacement_fget,
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_model_retry_policy_model_validate_retarget_is_rejected_without_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory,
+) -> None:
+    execution = config_factory().execution
+    swapped = config_module.ModelRetryPolicy.build(
+        transient_retry_limit=0,
+        schema_validation_retry_limit=1,
+    )
+    validator_calls = 0
+
+    def forged_model_validate(cls: type[object], *_args: object, **_kwargs: object) -> object:
+        del cls
+        nonlocal validator_calls
+        validator_calls += 1
+        return swapped
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            config_module.ModelRetryPolicy,
+            "model_validate",
+            classmethod(forged_model_validate),
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(OpenRouterRetryPolicyDriftError, match="custody"):
+            openrouter_module._require_current_model_retry_policy(
+                execution,
+                None,
+                phase="during model-validate regression",
+            )
+        assert validator_calls == 0
+    assert openrouter_module._openrouter_client_callables_are_pristine()
 
 
 @pytest.mark.parametrize(
@@ -3606,6 +3915,11 @@ def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
         "_revalidate_openrouter_discovery_payload",
         "_detach_exact_discovery_json_object",
         "_detach_exact_discovery_json_mapping",
+        "_candidate_review_request_token_plan_projection_sha256",
+        "request_token_plan_projection_sha256",
+        "_require_current_model_retry_policy",
+        "_terminal_model_retry_attempt_outcome",
+        "_model_retry_routing_evidence",
     ),
 )
 def test_receipt_authority_function_code_retarget_is_not_pristine(
@@ -9010,6 +9324,20 @@ async def test_schema_validation_retry_is_default_off_even_with_transient_retry_
     assert usage.records[0].attempts == 1
     assert usage.records[0].request_id == "schema-default-off"
     assert Decimal(usage.records[0].accounted_cost_usd_exact) == Decimal("0.01")
+    assert usage.records[0].routing["model_retry_policy"] == {
+        "schema_version": "1.0",
+        "transient_retry_scope": "NETWORK_OR_STATUS",
+        "schema_retry_failure_code": "SCHEMA_VALIDATION_FAILED",
+        "schema_retry_route": "SAME_ROUTE",
+        "exhaustion_disposition": "EXPLICIT_FALLBACK_OR_TERMINATE",
+        "transient_retry_limit": 1,
+        "schema_validation_retry_limit": 0,
+        "maximum_attempts": 2,
+        "policy_sha256": config.execution.model_retry_policy.policy_sha256,
+    }
+    assert usage.records[0].routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -9076,6 +9404,26 @@ async def test_schema_validation_retry_succeeds_on_same_route_with_exact_attempt
         "schema-retry-success",
         "schema-retry-success:attempt:2",
     ]
+    assert record.routing["transient_retries_used"] == 0
+    assert record.routing["schema_validation_retries_used"] == 1
+    assert record.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"},
+        {"attempt_ordinal": 2, "outcome": "SUCCESS"},
+    ]
+    retry_values = {
+        key: record.routing[key]
+        for key in (
+            "model_retry_policy",
+            "model_retry_policy_sha256",
+            "maximum_attempts_for_request",
+            "transient_retries_used",
+            "schema_validation_retries_used",
+            "model_retry_attempts",
+        )
+    }
+    assert record.routing["model_retry_evidence_sha256"] == canonical_sha256(
+        {"domain": "mmaudit.model-retry-evidence.v1", **retry_values}
+    )
 
 
 @pytest.mark.asyncio
@@ -9134,6 +9482,78 @@ async def test_schema_validation_retry_exhaustion_is_typed_and_exactly_accounted
     assert [item.request_id for item in atomic_token_reservations_from_usage(record)] == [
         "schema-retry-exhausted",
         "schema-retry-exhausted:attempt:2",
+    ]
+    assert record.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"},
+        {"attempt_ordinal": 2, "outcome": "SCHEMA_VALIDATION_FAILED"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_equal_total_retry_policy_drift_fails_closed_before_second_dispatch(
+    config_factory,
+) -> None:
+    calls = 0
+    client: OpenRouterClient | None = None
+    initial_config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    swapped_config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 0,
+            "max_requests_per_agent": 2,
+        }
+    )
+    assert (
+        initial_config.execution.maximum_model_attempts
+        == swapped_config.execution.maximum_model_attempts
+        == 2
+    )
+    assert (
+        initial_config.execution.model_retry_policy.policy_sha256
+        != swapped_config.execution.model_retry_policy.policy_sha256
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert client is not None
+        object.__setattr__(client, "execution", swapped_config.execution)
+        return _completion_response('{"unexpected":"schema miss"}', cost=0.01)
+
+    client, http_client, usage = _client(initial_config, handler)
+    try:
+        with pytest.raises(OpenRouterRetryPolicyDriftError, match="changed"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="equal-total-retry-policy-drift",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert client.budget.reserved_usd == 0
+    assert len(usage.records) == 1
+    record = usage.records[0]
+    assert record.request_id == "equal-total-retry-policy-drift"
+    assert record.status == "failed:OpenRouterRetryPolicyDriftError"
+    assert record.attempts == 1
+    assert record.retry_count == 0
+    assert record.routing["model_retry_policy_sha256"] == (
+        initial_config.execution.model_retry_policy.policy_sha256
+    )
+    assert record.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "RETRY_POLICY_DRIFT"}
     ]
 
 
@@ -9293,6 +9713,16 @@ async def test_transient_and_schema_validation_retry_quotas_are_independent(
     record = usage.records[0]
     assert record.attempts == 3
     assert record.retry_count == 2
+    assert record.routing["transient_retries_used"] == 1
+    assert record.routing["schema_validation_retries_used"] == 1
+    expected_outcomes = (
+        ["SCHEMA_VALIDATION_FAILED", "TRANSIENT_STATUS", "SUCCESS"]
+        if schema_first
+        else ["TRANSIENT_STATUS", "SCHEMA_VALIDATION_FAILED", "SUCCESS"]
+    )
+    assert [item["outcome"] for item in record.routing["model_retry_attempts"]] == (
+        expected_outcomes
+    )
     assert [item.request_id for item in atomic_token_reservations_from_usage(record)] == [
         "transient-and-schema-retry",
         "transient-and-schema-retry:attempt:2",
@@ -9360,6 +9790,10 @@ async def test_schema_retry_exhaustion_uses_explicit_fallback_only_after_primary
     assert failed.reported_cost_usd_exact == "0.01"
     assert Decimal(failed.accounted_cost_usd_exact) == Decimal("0.02")
     assert failed.routing["structured_output_failure_code"] == "SCHEMA_VALIDATION_FAILED"
+    assert failed.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"},
+        {"attempt_ordinal": 2, "outcome": "SCHEMA_VALIDATION_FAILED"},
+    ]
     assert [item.request_id for item in atomic_token_reservations_from_usage(failed)] == [
         "schema-exhaustion-fallback",
         "schema-exhaustion-fallback:attempt:2",
@@ -9371,7 +9805,65 @@ async def test_schema_retry_exhaustion_uses_explicit_fallback_only_after_primary
     assert succeeded.reported_cost_usd_exact == "0.02"
     assert Decimal(succeeded.accounted_cost_usd_exact) == Decimal("0.02")
     assert succeeded.fallback_used is True
+    assert succeeded.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SUCCESS"}
+    ]
     assert client.budget.spent_usd == pytest.approx(0.04)
+
+
+@pytest.mark.asyncio
+async def test_default_off_schema_failure_uses_explicit_fallback_without_same_route_retry(
+    config_factory,
+) -> None:
+    requested_models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        requested_models.append(model)
+        if model == "alpha/atlas-secure":
+            return _completion_response(
+                '{"unexpected":"primary schema miss"}',
+                cost=0.01,
+                model=model,
+            )
+        return _completion_response(
+            '{"answer":"explicit fallback"}',
+            cost=0.02,
+            model=model,
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 0,
+            "max_requests_per_agent": 2,
+        }
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        privacy_models=("alpha/atlas-secure", "bravo/borealis-secure"),
+    )
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="schema-default-off-fallback",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert completion.value.answer == "explicit fallback"
+    assert requested_models == ["alpha/atlas-secure", "bravo/borealis-secure"]
+    assert [record.attempts for record in usage.records] == [1, 1]
+    assert usage.records[0].routing["schema_validation_retries_used"] == 0
+    assert usage.records[0].routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -9631,6 +10123,186 @@ async def test_schema_generation_drift_after_schema_miss_fails_closed_without_re
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drift_kind", ("execution_instance", "policy_property"))
+async def test_retry_policy_drift_after_schema_classification_closes_exact_attempt(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    drift_kind: str,
+) -> None:
+    calls = 0
+    forged_getter_calls = 0
+    client: OpenRouterClient | None = None
+    initial_config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    swapped_config = config_factory(
+        execution={
+            "max_model_retries": 1,
+            "max_schema_validation_retries": 0,
+            "max_requests_per_agent": 2,
+        }
+    )
+    initial_policy_sha256 = initial_config.execution.model_retry_policy.policy_sha256
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "schema-classification-policy-drift.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=initial_config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(
+            initial_config.execution.conservative_usd_per_million_tokens
+        ),
+        max_requests_per_agent=2,
+        global_input_token_budget=initial_config.token_budgets.global_input_token_budget,
+        global_output_token_budget=initial_config.token_budgets.global_output_token_budget,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"unexpected":"schema miss"}',
+            cost=0.01,
+            provider="Approved Provider",
+        )
+
+    original_decode = openrouter_module._decode_structured_output_with_schema_generation
+
+    def swap_after_schema_classification(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return original_decode(*args, **kwargs)
+        except StructuredOutputDecodeError:
+            assert client is not None
+            if drift_kind == "execution_instance":
+                object.__setattr__(client, "execution", swapped_config.execution)
+            else:
+
+                def forged_getter(_execution: object) -> config_module.ModelRetryPolicy:
+                    nonlocal forged_getter_calls
+                    forged_getter_calls += 1
+                    return swapped_config.execution.model_retry_policy
+
+                monkeypatch.setattr(
+                    config_module.ExecutionConfig,
+                    "model_retry_policy",
+                    property(forged_getter),
+                )
+            raise
+
+    monkeypatch.setattr(
+        openrouter_module,
+        "_decode_structured_output_with_schema_generation",
+        swap_after_schema_classification,
+    )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000001",
+            "completion": "0.001",
+            "request": "0",
+        }
+    )
+    client, usage, http_client = await _paid_control_client_with_mock_transport(
+        initial_config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+        with pytest.raises(OpenRouterRetryPolicyDriftError, match=r"changed|custody"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="schema-classification-policy-drift",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 1
+    assert forged_getter_calls == 0
+    assert len(usage.records) == 1
+    record = usage.records[0]
+    assert record.status == "failed:OpenRouterRetryPolicyDriftError"
+    assert record.attempts == 1
+    assert record.routing["model_retry_policy_sha256"] == initial_policy_sha256
+    assert record.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"}
+    ]
+    snapshot = ledger.snapshot()
+    assert snapshot.active_reserved_usd == 0
+    assert len(snapshot.entries) == 1
+    assert snapshot.entries[0].status.value == "reconciled"
+    assert snapshot.entries[0].accounted_cost_usd == Decimal("0.01")
+
+
+@pytest.mark.asyncio
+async def test_usage_rejects_tampered_or_partial_model_retry_evidence(config_factory) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"unexpected":"schema miss"}' if calls == 1 else '{"answer":"valid"}',
+            cost=0.01,
+        )
+
+    config = config_factory(
+        execution={
+            "max_model_retries": 0,
+            "max_schema_validation_retries": 1,
+            "max_requests_per_agent": 2,
+        }
+    )
+    client, http_client, _usage = _client(config, handler)
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="retry-evidence-validation",
+        )
+    finally:
+        await http_client.aclose()
+
+    for tamper in ("partial", "policy_hash", "counter", "ordinal", "evidence_hash"):
+        payload = completion.usage_record.model_dump(mode="json")
+        routing = payload["routing"]
+        if tamper == "partial":
+            routing.pop("model_retry_attempts")
+        elif tamper == "policy_hash":
+            routing["model_retry_policy"]["policy_sha256"] = "f" * 64
+        elif tamper == "counter":
+            routing["schema_validation_retries_used"] = 0
+        elif tamper == "ordinal":
+            routing["model_retry_attempts"][1]["attempt_ordinal"] = 1
+        else:
+            routing["model_retry_evidence_sha256"] = "f" * 64
+        with pytest.raises(ValidationError, match="model retry"):
+            UsageRecord.model_validate(payload)
+
+
+@pytest.mark.asyncio
 async def test_retry_success_emits_complete_ordered_atomic_inventory(
     config_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -9762,6 +10434,11 @@ async def test_retry_reservation_rejection_records_one_attempt_and_plan_bound_pr
     failed = usage.records[0]
     assert failed.attempts == 1
     assert failed.retry_count == 0
+    assert failed.routing["transient_retries_used"] == 0
+    assert failed.routing["schema_validation_retries_used"] == 0
+    assert failed.routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "TRANSIENT_STATUS"}
+    ]
     assert len(failed.routing["atomic_token_reservations"]) == 1
     assert failed.routing["atomic_token_reservations"][0]["request_id"] == failed.request_id
 
@@ -11156,6 +11833,352 @@ async def test_refresh_exact_endpoint_metadata_preserves_withdrawn_empty_set(
     finally:
         await http_client.aclose()
     assert usage.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method_name",
+    (
+        "get_model_endpoint_metadata",
+        "get_refresh_model_endpoint_metadata",
+        "get_model_metadata",
+        "list_model_endpoints",
+    ),
+)
+async def test_selected_metadata_rejects_tombstoned_route_before_transport(
+    config_factory,
+    method_name: str,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+    try:
+        method = getattr(client, method_name)
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            await method("deepseek/deepseek-v4-pro-0813")
+    finally:
+        await http_client.aclose()
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "override_name"),
+    (
+        ("get_model_endpoint_metadata", "get_refresh_model_endpoint_metadata"),
+        ("list_model_endpoints", "get_model_endpoint_metadata"),
+    ),
+)
+async def test_selected_metadata_delegator_rejects_instance_retarget_before_transport(
+    config_factory,
+    method_name: str,
+    override_name: str,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "deepseek/deepseek-v4-pro-0813",
+                    "endpoints": [{"name": "parasail/fp8"}],
+                }
+            },
+        )
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+
+    async def forged_delegate(model_id: str) -> dict[str, Any]:
+        return await OpenRouterClient._request_metadata(
+            client,
+            openrouter_endpoint_query(model_id),
+        )
+
+    object.__setattr__(client, override_name, forged_delegate)
+    try:
+        method = getattr(client, method_name)
+        with pytest.raises(OpenRouterModelError, match="boundary changed"):
+            await method("deepseek/deepseek-v4-pro-0813")
+    finally:
+        object.__delattr__(client, override_name)
+        await http_client.aclose()
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_preflight_kwdefault_replacement(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    def forged_preflight(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    defaults = OpenRouterClient.get_refresh_model_endpoint_metadata.__kwdefaults__
+    assert type(defaults) is dict
+    original = defaults["_candidate_revocation_preflight"]
+    defaults["_candidate_revocation_preflight"] = forged_preflight
+    try:
+        with pytest.raises(OpenRouterModelError, match="boundary changed"):
+            await client.get_refresh_model_endpoint_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        defaults["_candidate_revocation_preflight"] = original
+        await http_client.aclose()
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_preflight_code_replacement(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    def forged_preflight(
+        _self: object,
+        *,
+        model_ids: tuple[str, ...],
+        provider_endpoints: tuple[str | None, ...] | None = None,
+        _candidate_revocation_call_roots: object = None,
+    ) -> None:
+        del model_ids, provider_endpoints, _candidate_revocation_call_roots
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    preflight = OpenRouterClient._require_candidate_revocation_preflight
+    original_code = preflight.__code__
+    preflight.__code__ = forged_preflight.__code__
+    try:
+        with pytest.raises(OpenRouterModelError, match="boundary changed"):
+            await client.get_refresh_model_endpoint_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        preflight.__code__ = original_code
+        await http_client.aclose()
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_coherent_preflight_anchor_retarget(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    def forged_preflight(
+        _self: object,
+        *,
+        model_ids: tuple[str, ...],
+        provider_endpoints: tuple[str | None, ...] | None = None,
+        _candidate_revocation_call_roots: object = None,
+    ) -> None:
+        del model_ids, provider_endpoints, _candidate_revocation_call_roots
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+    defaults = OpenRouterClient.get_refresh_model_endpoint_metadata.__kwdefaults__
+    assert type(defaults) is dict
+    original_default = defaults["_candidate_revocation_preflight"]
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(
+                openrouter_module,
+                "_TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT",
+                forged_preflight,
+            )
+            context.setattr(
+                openrouter_module,
+                "_TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT_CODE",
+                forged_preflight.__code__,
+            )
+            context.setattr(
+                OpenRouterClient,
+                "_require_candidate_revocation_preflight",
+                forged_preflight,
+            )
+            defaults["_candidate_revocation_preflight"] = forged_preflight
+            with pytest.raises(OpenRouterModelError, match="boundary changed"):
+                await client.get_refresh_model_endpoint_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        defaults["_candidate_revocation_preflight"] = original_default
+        await http_client.aclose()
+    assert observed == []
+
+
+def _revoked_generation_request(
+    *,
+    exact_model_id: str,
+    canonical_model_id: str,
+) -> GenerationVerificationRequest:
+    catalog_binding = canonical_sha256(
+        {
+            "canonical_slug": canonical_model_id,
+            "id": exact_model_id,
+        }
+    )
+    discovery_binding = "d" * 64
+    provider_name = "Synthetic Revoked Provider"
+    usage_record = UsageRecord(
+        request_id="synthetic-generation-request",
+        role="model_benchmark",
+        requested_model=exact_model_id,
+        returned_model=canonical_model_id,
+        actual_model=canonical_model_id,
+        provider="OpenRouter",
+        model_family="deepseek",
+        timestamp=datetime(2026, 8, 27, tzinfo=UTC),
+        routing={
+            "certification_request": True,
+            "selected_model": canonical_model_id,
+            "canonical_model": canonical_model_id,
+            "catalog_identity_binding_sha256": catalog_binding,
+            "discovery_evidence_sha256": discovery_binding,
+            "selected_provider_name": provider_name,
+        },
+        prompt_sha256="a" * 64,
+        openrouter_generation_id="generation-revoked-route",
+        configured_provider_endpoints=["parasail/fp8"],
+        actual_provider_endpoint="parasail/fp8",
+        status="success",
+        attempts=1,
+    )
+    return GenerationVerificationRequest(
+        benchmark_report_sha256="b" * 64,
+        case_id="synthetic-revoked-route",
+        exact_model_id=exact_model_id,
+        canonical_model_id=canonical_model_id,
+        catalog_identity_binding_sha256=catalog_binding,
+        discovery_evidence_sha256=discovery_binding,
+        expected_provider_name=provider_name,
+        usage_record=usage_record,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exact_model_id", "canonical_model_id"),
+    (
+        (
+            "deepseek/deepseek-v4-pro-0813",
+            "deepseek/deepseek-v4-pro-observed",
+        ),
+        (
+            "deepseek/deepseek-v4-pro-observed",
+            "deepseek/deepseek-v4-pro-20260813",
+        ),
+    ),
+)
+@pytest.mark.parametrize("boundary", ("generation", "verification"))
+async def test_generation_refetch_rejects_tombstoned_route_before_transport(
+    config_factory,
+    exact_model_id: str,
+    canonical_model_id: str,
+    boundary: str,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+    request = _revoked_generation_request(
+        exact_model_id=exact_model_id,
+        canonical_model_id=canonical_model_id,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            if boundary == "generation":
+                await client.get_generation_evidence(
+                    "generation-revoked-route",
+                    reconciliation_request=request.reconciliation_expectation(),
+                )
+            else:
+                await client.create_trusted_generation_verification((request,))
+    finally:
+        await http_client.aclose()
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_single_model_metadata_rejects_fresh_tombstoned_canonical_identity(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+    exact_model_id = "deepseek/deepseek-v4-pro-observed-0813"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": exact_model_id,
+                    "canonical_slug": "deepseek/deepseek-v4-pro-20260813",
+                }
+            },
+        )
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            await client.get_model_metadata(exact_model_id)
+    finally:
+        await http_client.aclose()
+    assert len(observed) == 1
 
 
 @pytest.mark.asyncio
@@ -13040,6 +14063,200 @@ async def test_candidate_review_completion_preserves_wire_and_normalized_custody
     response_schema = observed[0]["response_format"]["json_schema"]["schema"]
     assert response_schema["title"] == CandidateReviewFramedDocument.__name__
     assert set(response_schema["properties"]) == {"frames"}
+
+
+@pytest.mark.parametrize(
+    ("invalid_content", "expected_failure"),
+    (
+        ("not json", StructuredOutputFailureCode.INVALID_JSON_SYNTAX),
+        (
+            '{"frames":[],"frames":[]}',
+            StructuredOutputFailureCode.DUPLICATE_OBJECT_KEY,
+        ),
+        ('{"frames":[NaN]}', StructuredOutputFailureCode.NON_FINITE_NUMBER),
+    ),
+)
+@pytest.mark.asyncio
+async def test_candidate_review_syntax_failure_does_not_use_schema_retry_budget(
+    config_factory,
+    invalid_content: str,
+    expected_failure: StructuredOutputFailureCode,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(invalid_content, provider="approved-provider")
+
+    client, http_client, usage = _client(
+        config_factory(
+            execution={
+                "max_model_retries": 0,
+                "max_schema_validation_retries": 1,
+                "max_requests_per_agent": 2,
+            }
+        ),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=[
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ]
+        )
+    )
+    try:
+        with pytest.raises(OpenRouterStructuredOutputError) as raised:
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+                logical_request_id="candidate-review-syntax-no-retry",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert raised.value.failure_code is expected_failure
+    assert calls == 1
+    assert usage.records[0].attempts == 1
+    assert usage.records[0].routing["schema_validation_retries_used"] == 0
+    assert usage.records[0].routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "TERMINAL_OTHER_ERROR"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_schema_failure_uses_explicit_same_route_retry(
+    config_factory,
+) -> None:
+    calls = 0
+    batch, valid_content = _empty_candidate_review_wire()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = '{"frames":[]}' if calls == 1 else valid_content
+        return _completion_response(content, provider="approved-provider")
+
+    client, http_client, usage = _client(
+        config_factory(
+            execution={
+                "max_model_retries": 0,
+                "max_schema_validation_retries": 1,
+                "max_requests_per_agent": 2,
+            }
+        ),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=[
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ]
+        )
+    )
+    try:
+        completion = await client.complete_candidate_review_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            schema_name="candidate_review_framed",
+            logical_request_id="candidate-review-schema-retry",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert completion.value == batch
+    assert calls == 2
+    assert usage.records[0].routing["schema_validation_retries_used"] == 1
+    assert usage.records[0].routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "SCHEMA_VALIDATION_FAILED"},
+        {"attempt_ordinal": 2, "outcome": "SUCCESS"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_bound_kind", ("frame_bytes", "json_depth"))
+async def test_candidate_review_raw_frame_bound_failure_does_not_use_schema_retry_budget(
+    config_factory,
+    raw_bound_kind: str,
+) -> None:
+    calls = 0
+    _batch, content = _empty_candidate_review_wire()
+    raw_bound_content = (
+        content.replace(
+            '{"frames":[{',
+            '{"frames":[{' + (" " * 513_000),
+            1,
+        )
+        if raw_bound_kind == "frame_bytes"
+        else content.replace(
+            '{"frames":[{',
+            '{"frames":[{"raw_bound_probe":' + ("[" * 129) + "0" + ("]" * 129) + ",",
+            1,
+        )
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(raw_bound_content, provider="approved-provider")
+
+    client, http_client, usage = _client(
+        config_factory(
+            execution={
+                "max_model_retries": 0,
+                "max_schema_validation_retries": 1,
+                "max_requests_per_agent": 2,
+            }
+        ),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=[
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ]
+        )
+    )
+    try:
+        with pytest.raises(OpenRouterCandidateReviewBoundaryError, match="raw bound"):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+                logical_request_id="candidate-review-raw-bound-no-retry",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert usage.records[0].attempts == 1
+    assert usage.records[0].routing["schema_validation_retries_used"] == 0
+    assert usage.records[0].routing["model_retry_attempts"] == [
+        {"attempt_ordinal": 1, "outcome": "TERMINAL_OTHER_ERROR"}
+    ]
 
 
 @pytest.mark.asyncio

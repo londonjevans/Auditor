@@ -243,6 +243,7 @@ def test_run_help_lists_fork_aliases() -> None:
     assert "--model-qualification-release-source-root" in result.stdout
     assert "--model-qualification-corpus" in result.stdout
     assert "--model-qualification-ground-truth" in result.stdout
+    assert "--schema-validation-retries" in result.stdout
 
 
 def test_run_help_lists_explicit_privacy_authorization_options() -> None:
@@ -771,6 +772,103 @@ def test_explicit_cost_ledger_is_recorded_as_canonical_cli_provenance(
         }
     ]
     assert "secret" not in overrides.model_dump_json().lower()
+
+
+def test_explicit_schema_retry_is_recorded_as_canonical_cli_provenance() -> None:
+    overrides = _audit_config_overrides(
+        budget_usd=None,
+        max_files=None,
+        max_file_bytes=None,
+        max_context_bytes=None,
+        concurrency=None,
+        schema_validation_retries=3,
+        require_zdr=False,
+    )
+
+    assert [entry.model_dump(mode="json") for entry in overrides.entries] == [
+        {
+            "path": "execution.max_schema_validation_retries",
+            "value": 3,
+        }
+    ]
+
+
+def test_paid_run_applies_explicit_schema_retry_without_changing_transient_quota(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory(execution={"max_model_retries": 1})
+    observed: dict[str, AuditConfig] = {}
+    _patch_loaded_audit_config(monkeypatch, config)
+
+    def stop_after_retry_policy(effective_config: AuditConfig, **_kwargs: object) -> None:
+        observed["config"] = effective_config
+        raise ConfigError("synthetic stop after retry-policy selection")
+
+    monkeypatch.setattr(
+        "mmaudit.cli.build_openrouter_runtime_controls",
+        stop_after_retry_policy,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_operator_secrets",
+        lambda *_args, **_kwargs: pytest.fail("secrets loaded before retry-policy capture"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--schema-validation-retries",
+            "2",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    selected = observed["config"].execution
+    assert selected.max_model_retries == 1
+    assert selected.max_schema_validation_retries == 2
+    assert selected.model_retry_policy.maximum_attempts == 4
+    assert "synthetic stop after retry-policy selection" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("configured_retries", "selection", "message"),
+    [
+        (1, None, "require explicit --schema-validation-retries selection"),
+        (2, 1, "selection conflicts with the configured schema-retry quota"),
+    ],
+)
+def test_paid_run_rejects_implicit_or_conflicting_schema_retry_before_controls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+    configured_retries: int,
+    selection: int | None,
+    message: str,
+) -> None:
+    config = config_factory(execution={"max_schema_validation_retries": configured_retries})
+    _patch_loaded_audit_config(monkeypatch, config)
+    monkeypatch.setattr(
+        "mmaudit.cli.build_openrouter_runtime_controls",
+        lambda *_args, **_kwargs: pytest.fail("runtime controls built before selection rejection"),
+    )
+    arguments = [
+        "run",
+        "--config",
+        str(tmp_path / "synthetic.toml"),
+        "--no-color",
+    ]
+    if selection is not None:
+        arguments.extend(["--schema-validation-retries", str(selection)])
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert message in " ".join(result.stdout.split())
 
 
 def test_models_help_lists_release_observation_command() -> None:
@@ -1404,6 +1502,66 @@ def test_provider_run_missing_ledger_fails_before_secret_access(
     assert not secret_accessed
 
 
+def test_provider_run_rejects_revoked_route_before_ledger_secret_or_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    base = config_factory()
+    revoked_model = "deepseek/deepseek-v4-pro-0813"
+    revoked_registry_entry = model_registry_entry(revoked_model)
+    config = config_factory(
+        privacy={
+            "approved_model_lineages": [
+                *base.privacy.approved_model_lineages,
+                revoked_registry_entry["root_lineage"],
+            ]
+        },
+        models={
+            "provider_policy": {
+                "only": ["parasail/fp8"],
+                "order": [],
+                "allow_fallbacks": False,
+            },
+            "threat_model": {
+                **base.models.threat_model.model_dump(mode="python"),
+                "primary": revoked_model,
+                "fallbacks": [],
+            },
+            "registry": [
+                *(entry.model_dump(mode="python") for entry in base.models.registry),
+                revoked_registry_entry,
+            ],
+        },
+    )
+    _patch_loaded_audit_config(monkeypatch, config)
+    downstream: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        downstream.append("reached")
+        raise AssertionError("revoked provider audit reached downstream state")
+
+    monkeypatch.setattr("mmaudit.cli.AtomicCostLedger.open_existing", forbidden)
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden)
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", forbidden)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(tmp_path),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate assignment is ineligible" in result.stdout
+    assert "assignment is revoked" in result.stdout
+    assert downstream == []
+
+
 def test_provider_run_deleted_ledger_fails_without_recreating_budget_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1542,6 +1700,8 @@ def test_provider_run_uses_existing_configured_campaign_ledger(
                 str(repository),
                 "--output",
                 str(output),
+                "--learning-tenant-scope-id",
+                f"tenant-scope-{'a' * 64}",
                 "--no-color",
             ],
         )
@@ -1597,6 +1757,78 @@ def test_models_benchmark_missing_ledger_fails_before_secret_access(
     assert not output.exists()
     assert not (tmp_path / "missing-cost-ledger.json").exists()
     assert not (tmp_path / ".missing-cost-ledger.json.lock").exists()
+
+
+def test_models_benchmark_rejects_revoked_route_before_ledger_output_secret_or_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    base = config_factory()
+    revoked_model = "deepseek/deepseek-v4-pro-0813"
+    revoked_registry_entry = model_registry_entry(revoked_model)
+    config = config_factory(
+        privacy={
+            "approved_model_lineages": [
+                *base.privacy.approved_model_lineages,
+                revoked_registry_entry["root_lineage"],
+            ]
+        },
+        models={
+            "provider_policy": {
+                "only": ["parasail/fp8"],
+                "order": [],
+                "allow_fallbacks": False,
+            },
+            "threat_model": {
+                **base.models.threat_model.model_dump(mode="python"),
+                "primary": revoked_model,
+                "fallbacks": [],
+            },
+            "registry": [
+                *(entry.model_dump(mode="python") for entry in base.models.registry),
+                revoked_registry_entry,
+            ],
+        },
+    )
+    downstream: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        downstream.append("reached")
+        raise AssertionError("revoked benchmark reached downstream state")
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr("mmaudit.cli._budget_and_usage", forbidden)
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden)
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", forbidden)
+    output = tmp_path / "revoked-benchmark.json"
+    ledger_path = tmp_path / "missing-ledger.json"
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "benchmark",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--corpus",
+            str(ROOT / "benchmarks" / "model_corpus" / "manifest.json"),
+            "--model",
+            revoked_model,
+            "--output",
+            str(output),
+            "--cost-ledger",
+            str(ledger_path),
+            "--allow-code-egress",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate assignment is ineligible" in result.stdout
+    assert "assignment is revoked" in result.stdout
+    assert downstream == []
+    assert not output.exists()
+    assert not ledger_path.exists()
 
 
 def test_models_benchmark_output_path_does_not_select_or_create_budget_state(
@@ -2986,6 +3218,53 @@ def test_models_check_rejects_empty_provider_endpoint_policy_before_network(
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "explicit provider endpoint" in result.stdout
     assert "allowlist" in result.stdout
+
+
+def test_models_check_rejects_revoked_config_route_before_secret_budget_or_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    base = config_factory()
+    config = config_factory(
+        models={
+            "provider_policy": {
+                "only": ["parasail/fp8"],
+                "order": [],
+                "allow_fallbacks": False,
+            },
+            "threat_model": {
+                **base.models.threat_model.model_dump(mode="python"),
+                "primary": "deepseek/deepseek-v4-pro-0813",
+                "fallbacks": [],
+            },
+        }
+    )
+    downstream: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        downstream.append("reached")
+        raise AssertionError("revoked models check reached downstream state")
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden)
+    monkeypatch.setattr("mmaudit.cli._budget_and_usage", forbidden)
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", forbidden)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "check",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate assignment is ineligible" in result.stdout
+    assert "assignment is revoked" in result.stdout
+    assert downstream == []
 
 
 def test_models_check_rejects_unavailable_exact_provider_endpoint(

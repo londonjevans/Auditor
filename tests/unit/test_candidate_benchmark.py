@@ -36,6 +36,7 @@ from mmaudit.models.candidate_benchmark import (
     validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
 )
+from mmaudit.models.candidate_revocation import CandidateSelectionRevocationError
 from mmaudit.models.candidate_selection import (
     seal_authenticated_runner_route_predicate_profile,
 )
@@ -1064,6 +1065,60 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         assert case.usage_record.routing["privacy_source_sha256"] == suite.corpus_sha256
     assert all(not client._credential for client in factory.clients)
     assert canary not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_id",
+    (
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-pro-20260813",
+    ),
+)
+async def test_candidate_benchmark_rejects_tombstoned_route_before_state_mutation(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    model_id: str,
+) -> None:
+    config = _config(config_factory)
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            _CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Parasail",
+            ),
+        ),
+    )
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    budget = _budget(tmp_path / "budget", config)
+    ledger = budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    usage = UsageLedger()
+    factory = _MockClientFactory()
+
+    with pytest.raises(CandidateSelectionRevocationError, match="revoked"):
+        await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=suite,
+            budget=budget,
+            usage=usage,
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert factory.request_bodies == []
+    assert usage.records == []
+    assert ledger.snapshot() == before
 
 
 def test_authenticated_runner_candidate_request_descriptors_are_closed_and_deterministic(

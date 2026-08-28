@@ -1329,28 +1329,33 @@ class FakeOpenRouter:
         elif schema_name == "mmaudit_verification":
             user = body["messages"][1]["content"]
             candidates = _extract_json(user, "SUBMITTED_CANDIDATES_JSON")
+
+            def rejects_candidate(candidate: dict[str, Any]) -> bool:
+                is_primary_verifier_route = body["model"] == MODEL_IDS["verifier"]
+                asymmetric_rejection = (
+                    self.mode == "verifier_rejects_falsifiers_verify" and is_primary_verifier_route
+                ) or (
+                    self.mode == "verifier_verifies_falsifiers_reject"
+                    and not is_primary_verifier_route
+                )
+                return bool(
+                    self.reject_verifier
+                    or self.mode == "verifier_rejection"
+                    or asymmetric_rejection
+                    or (
+                        self.mode == "maximum_assurance"
+                        and candidate["locations"][0]["path"] == "src/SafeControls.sol"
+                    )
+                )
+
             content = {
                 "decisions": [
                     {
                         "candidate_id": candidate["candidate_id"],
-                        "verdict": (
-                            "rejected"
-                            if self.reject_verifier
-                            or self.mode == "verifier_rejection"
-                            or (
-                                self.mode == "maximum_assurance"
-                                and candidate["locations"][0]["path"] == "src/SafeControls.sol"
-                            )
-                            else "verified"
-                        ),
+                        "verdict": "rejected" if rejects_candidate(candidate) else "verified",
                         "rationale": (
                             "Nearby control disproves the claim"
-                            if self.reject_verifier
-                            or self.mode == "verifier_rejection"
-                            or (
-                                self.mode == "maximum_assurance"
-                                and candidate["locations"][0]["path"] == "src/SafeControls.sol"
-                            )
+                            if rejects_candidate(candidate)
                             else "The source and sink are directly reachable"
                         ),
                         "source_to_sink": "Direct in supplied fixture",
@@ -1360,12 +1365,7 @@ class FakeOpenRouter:
                         "environmental_assumptions": [],
                         "guards_and_controls": (
                             ["Nearby authorization or reentrancy guard"]
-                            if self.reject_verifier
-                            or self.mode == "verifier_rejection"
-                            or (
-                                self.mode == "maximum_assurance"
-                                and candidate["locations"][0]["path"] == "src/SafeControls.sol"
-                            )
+                            if rejects_candidate(candidate)
                             else []
                         ),
                         "false_positive_conditions": [
@@ -1376,16 +1376,7 @@ class FakeOpenRouter:
                             "description": "Use only the synthetic local fixture",
                             "safe": True,
                         },
-                        "confidence": (
-                            0.1
-                            if self.reject_verifier
-                            or self.mode == "verifier_rejection"
-                            or (
-                                self.mode == "maximum_assurance"
-                                and candidate["locations"][0]["path"] == "src/SafeControls.sol"
-                            )
-                            else 0.94
-                        ),
+                        "confidence": 0.1 if rejects_candidate(candidate) else 0.94,
                     }
                     for candidate in candidates
                 ]
@@ -1401,13 +1392,17 @@ class FakeOpenRouter:
                         "group_id": group["group_id"],
                         "status": group["consensus_status_cap"],
                         "severity": (
-                            "high"
-                            if self.mode == "execution_origin_post_judge"
-                            and any(
-                                candidate.get("origin_kind") == "deterministic_execution"
-                                for candidate in group["candidates"]
+                            "informational"
+                            if self.mode == "judge_lowers_severity"
+                            else (
+                                "high"
+                                if self.mode == "execution_origin_post_judge"
+                                and any(
+                                    candidate.get("origin_kind") == "deterministic_execution"
+                                    for candidate in group["candidates"]
+                                )
+                                else group["candidates"][0]["severity"]
                             )
-                            else group["candidates"][0]["severity"]
                         ),
                         "confidence": 0.9,
                         "cwe": group["candidates"][0]["cwe"],
@@ -1564,19 +1559,20 @@ class FakeOpenRouter:
             },
         }
 
-    @staticmethod
     def _completion(
+        self,
         body: dict[str, Any],
         content: str,
         *,
         finish_reason: str = "stop",
         native_finish_reason: str = "stop",
     ) -> httpx.Response:
+        generation_id = f"synthetic-generation-{self.chat_calls:06d}"
         return httpx.Response(
             200,
-            headers={"X-Generation-Id": "synthetic-generation"},
+            headers={"X-Generation-Id": generation_id},
             json={
-                "id": "synthetic-generation",
+                "id": generation_id,
                 "model": body["model"],
                 "provider": "Synthetic Provider",
                 "choices": [

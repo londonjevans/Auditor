@@ -31,6 +31,7 @@ from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictProjection,
 )
 from mmaudit.models.calibration import ModelCalibrationArtifact
+from mmaudit.models.candidate_revocation import CandidateSelectionRevocationRegistry
 from mmaudit.models.candidate_selection import CandidateSelectionPlan
 from mmaudit.models.coverage_planning import (
     ModelPortfolioResourcePreflight,
@@ -41,6 +42,7 @@ from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEviden
 from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
 from mmaudit.models.ground_truth_authority import FrozenGroundTruthProvenance
 from mmaudit.models.identifiers import EXACT_MODEL_ID_PATTERN
+from mmaudit.models.learning import TerminalAuditLearningRecord
 from mmaudit.models.lineage_authority import (
     ModelLineageAuthorityEnvelope,
     ModelLineageTrustAnchor,
@@ -64,6 +66,11 @@ from mmaudit.models.policy_selection import (
     AuditModelSelection,
     AuditModelSelectionEvidenceBundle,
 )
+from mmaudit.models.prepurchase_quote import (
+    AcceptedPrepurchaseQuote,
+    PrepurchaseQuote,
+    PrepurchaseQuoteReconciliation,
+)
 from mmaudit.models.public_lineage_authority import (
     PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME,
     PublicModelLineageEvidenceBundle,
@@ -81,9 +88,11 @@ from mmaudit.models.refresh_runtime import (
     AuditModelRefreshPricingEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
+from mmaudit.models.route_runtime_evidence import RouteRuntimeEvidenceArtifact
 from mmaudit.models.scheduler import SchedulerArtifact, SchedulerRetainedJournalReference
 from mmaudit.models.schemas import (
     AuditModelRefreshPricingAttemptEvidence,
+    ConsensusReviewArtifact,
     HardhatInventoryPhaseRequest,
     HardhatReporterExecution,
     HardhatReporterInventory,
@@ -161,9 +170,11 @@ MODELS: dict[str, type[BaseModel]] = {
     ),
     "audit_model_refresh_pricing_evidence.schema.json": AuditModelRefreshPricingEvidence,
     "benchmark_report.schema.json": BenchmarkReport,
+    "candidate_selection_revocation_registry.schema.json": (CandidateSelectionRevocationRegistry),
     "candidate_selection_plan.schema.json": CandidateSelectionPlan,
     "audit_model_selection.schema.json": AuditModelSelection,
     "audit_model_selection_evidence.schema.json": AuditModelSelectionEvidenceBundle,
+    "consensus_review_artifact.schema.json": ConsensusReviewArtifact,
     "context_manifest.schema.json": ContextManifest,
     "coverage_artifact.schema.json": CoverageArtifact,
     "cross_lineage_adjudication_report.schema.json": CrossLineageAdjudicationReport,
@@ -212,6 +223,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "policy_eligibility_evaluation.schema.json": PolicyEligibilityEvaluation,
     "policy_eligibility_source_observation.schema.json": PolicyEligibilitySourceObservation,
     "policy_review_signal.schema.json": PolicyReviewSignal,
+    "prepurchase_quote.schema.json": PrepurchaseQuote,
+    "accepted_prepurchase_quote.schema.json": AcceptedPrepurchaseQuote,
+    "prepurchase_quote_reconciliation.schema.json": PrepurchaseQuoteReconciliation,
     "public_model_lineage_provenance.schema.json": PublicModelLineageEvidenceBundle,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
     "release_bound_gate_result.schema.json": BoundReleaseGateResult,
@@ -221,10 +235,12 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_binding.schema.json": ReleaseRunBinding,
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
+    "route_runtime_evidence_artifact.schema.json": RouteRuntimeEvidenceArtifact,
     "run_terminal_report_authority.schema.json": RunTerminalReportAuthority,
     "scanner_source_evidence.schema.json": ScannerSourceEvidenceArtifact,
     "scheduler_state.schema.json": SchedulerArtifact,
     "scheduler_retained_journal_reference.schema.json": SchedulerRetainedJournalReference,
+    "terminal_audit_learning_record.schema.json": TerminalAuditLearningRecord,
     "semantic_shard_inventory.schema.json": SolidityShardsArtifact,
     "solidity_graphs.schema.json": SolidityGraphsArtifact,
     "solidity_coverage.schema.json": SolidityCoverageArtifact,
@@ -260,6 +276,12 @@ TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
     "candidate_selection_plan.schema.json": (
         "mmaudit non-authorizing operator-staged model selection plan"
+    ),
+    "candidate_selection_revocation_registry.schema.json": (
+        "mmaudit negative-only candidate selection revocation registry"
+    ),
+    "consensus_review_artifact.schema.json": (
+        "mmaudit exact closed three-review consensus artifact"
     ),
     "coverage_artifact.schema.json": "mmaudit forensic coverage artifact",
     "cross_lineage_adjudication_report.schema.json": (
@@ -327,8 +349,20 @@ TITLE_OVERRIDES = {
         "mmaudit current policy eligibility source observation"
     ),
     "policy_review_signal.schema.json": "mmaudit model policy review signal",
+    "prepurchase_quote.schema.json": (
+        "mmaudit deterministic non-authorizing whole-run pre-purchase quote"
+    ),
+    "accepted_prepurchase_quote.schema.json": (
+        "mmaudit non-authorizing accepted pre-purchase quote constraint"
+    ),
+    "prepurchase_quote_reconciliation.schema.json": (
+        "mmaudit terminal actual-versus-quote cost reconciliation"
+    ),
     "public_model_lineage_provenance.schema.json": (
         "mmaudit documentary public model lineage provenance"
+    ),
+    "route_runtime_evidence_artifact.schema.json": (
+        "mmaudit nonauthorizing exact route runtime evidence"
     ),
     "run_terminal_report_authority.schema.json": "mmaudit private terminal report authority",
     "scanner_source_evidence.schema.json": "mmaudit private scanner source evidence",
@@ -343,11 +377,11 @@ TITLE_OVERRIDES = {
 
 
 def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
-    """Return the published schema-1.2 contract for every manifest-bound report leaf."""
+    """Return the published schema-1.2+ contract for every manifest-bound report leaf."""
 
     return {
         "if": {
-            "properties": {"schema_version": {"const": "1.2"}},
+            "properties": {"schema_version": {"enum": ["1.2", "1.3"]}},
             "required": ["schema_version"],
         },
         "then": {
@@ -596,7 +630,7 @@ def run_evidence_manifest_audit_model_refresh_pricing_rules() -> list[dict[str, 
 
 
 def _run_evidence_manifest_contract_is_current() -> bool:
-    """Verify the hand-authored manifest schema retains the generated 1.2 leaf contract."""
+    """Verify the hand-authored manifest schema retains the generated report-leaf contract."""
 
     path = SCHEMA_ROOT / "run_evidence_manifest.schema.json"
     try:
@@ -1341,6 +1375,87 @@ def _strengthen_authenticated_runner_cost_plan_contract(schema: dict[str, Any]) 
     )
 
 
+def _strengthen_prepurchase_quote_contract(schema: dict[str, Any]) -> None:
+    """Publish canonical money and closed-set constraints enforced by typed validation."""
+
+    canonical_money_pattern = r"^(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,30})?$"
+    money_fields = {
+        "active_reserved_usd_exact",
+        "actual_cost_usd_exact",
+        "cap_usd_exact",
+        "lower_bound_usd_exact",
+        "maximum_cost_usd_per_attempt_exact",
+        "remaining_usd_exact",
+        "run_hard_ceiling_usd_exact",
+        "spent_usd_exact",
+        "standard_bound_usd_exact",
+        "standard_cost_usd_exact",
+        "standard_delta_usd_exact",
+        "unconstrained_workflow_worst_usd_exact",
+        "worst_case_cost_usd_exact",
+        "worst_case_delta_usd_exact",
+        "worst_case_usd_exact",
+    }
+
+    object_schemas = [schema, *schema.get("$defs", {}).values()]
+    for object_schema in object_schemas:
+        properties = object_schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        for field_name in money_fields & properties.keys():
+            property_schema = properties[field_name]
+            if property_schema.get("type") == "string":
+                property_schema["pattern"] = canonical_money_pattern
+                continue
+            options = property_schema.get("anyOf", [])
+            string_options = [option for option in options if option.get("type") == "string"]
+            if len(string_options) != 1:
+                raise ValueError(
+                    f"pre-purchase quote money field {field_name!r} has an unexpected schema"
+                )
+            string_options[0]["pattern"] = canonical_money_pattern
+
+        if "covered_task_classes" in properties:
+            properties["covered_task_classes"]["uniqueItems"] = True
+        if "task_ceilings" in properties:
+            properties["task_ceilings"]["uniqueItems"] = True
+
+    schema["$comment"] = (
+        "Runtime validation additionally proves canonical ordering, exact task-class and route "
+        "coverage, derived aggregate bounds, artifact self-hashes, acceptance custody, and "
+        "status-dependent terminal reconciliation fields."
+    )
+
+
+def _strengthen_authenticated_runner_config_version_contract(
+    schema: dict[str, Any],
+) -> None:
+    schema["allOf"] = [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.0"}},
+                "required": ["schema_version"],
+            },
+            "then": {"properties": {"effective_config_sha256": {"type": "null"}}},
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.1"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "effective_config_sha256": {
+                        "pattern": r"^[0-9a-f]{64}$",
+                        "type": "string",
+                    }
+                },
+                "required": ["effective_config_sha256"],
+            },
+        },
+    ]
+
+
 def _strengthen_authenticated_runner_contract(
     schema: dict[str, Any],
     *,
@@ -1356,13 +1471,15 @@ def _strengthen_authenticated_runner_contract(
         _strengthen_authenticated_runner_cost_plan_contract(
             definitions["AuthenticatedRunnerStagedCostPlan"]
         )
+        runner_evidence_definition = definitions["AuthenticatedCrossLineageRunnerEvidence"]
         _strengthen_authenticated_runner_contract(
             {
                 "$defs": definitions,
-                "properties": definitions["AuthenticatedCrossLineageRunnerEvidence"]["properties"],
+                "properties": runner_evidence_definition["properties"],
             },
             filename="authenticated_cross_lineage_runner_evidence.schema.json",
         )
+        _strengthen_authenticated_runner_config_version_contract(runner_evidence_definition)
         _strengthen_authenticated_runner_contract(
             {
                 "$defs": definitions,
@@ -1427,7 +1544,8 @@ def _strengthen_authenticated_runner_contract(
             },
         ]
         schema["required"] = sorted({*schema.get("required", []), "schema_version"})
-        for version in ("1.0", "1.1"):
+        for version in ("1.0", "1.1", "1.2"):
+            run_version = "1.0" if version == "1.0" else "1.1"
             version_properties: dict[str, Any] = {
                 "runs": {
                     "prefixItems": [
@@ -1435,7 +1553,7 @@ def _strengthen_authenticated_runner_contract(
                             "allOf": [
                                 {"$ref": "#/$defs/AuthenticatedRunnerDurableRunEvidence"},
                                 {
-                                    "properties": {"schema_version": {"const": version}},
+                                    "properties": {"schema_version": {"const": run_version}},
                                     "required": ["schema_version"],
                                 },
                             ]
@@ -1444,7 +1562,7 @@ def _strengthen_authenticated_runner_contract(
                     ]
                 }
             }
-            if version == "1.1":
+            if version in ("1.1", "1.2"):
                 version_properties["closed_ledger_evidence"] = {
                     "properties": {
                         "entries": {
@@ -1460,13 +1578,41 @@ def _strengthen_authenticated_runner_contract(
                         }
                     }
                 }
+            if version in ("1.0", "1.1"):
+                version_properties["effective_config_sha256"] = {"type": "null"}
+                version_properties["runner_evidence"] = {
+                    "allOf": [
+                        {"$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"},
+                        {
+                            "properties": {"schema_version": {"const": "1.0"}},
+                            "required": ["schema_version"],
+                        },
+                    ]
+                }
+            else:
+                version_properties["effective_config_sha256"] = {
+                    "pattern": r"^[0-9a-f]{64}$",
+                    "type": "string",
+                }
+                version_properties["runner_evidence"] = {
+                    "allOf": [
+                        {"$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"},
+                        {
+                            "properties": {"schema_version": {"const": "1.1"}},
+                            "required": ["schema_version", "effective_config_sha256"],
+                        },
+                    ]
+                }
             schema.setdefault("allOf", []).append(
                 {
                     "if": {
                         "properties": {"schema_version": {"const": version}},
                         "required": ["schema_version"],
                     },
-                    "then": {"properties": version_properties},
+                    "then": {
+                        "properties": version_properties,
+                        **({"required": ["effective_config_sha256"]} if version == "1.2" else {}),
+                    },
                 }
             )
         runs = schema["properties"]["runs"]
@@ -1532,6 +1678,7 @@ def _strengthen_authenticated_runner_contract(
         )
         return
     if filename == "authenticated_cross_lineage_runner_evidence.schema.json":
+        _strengthen_authenticated_runner_config_version_contract(schema)
         _exact_authenticated_runner_case_inventory(schema["properties"]["case_ids"])
         schema["properties"]["case_ids"]["items"] = {
             "pattern": r"^case-[0-9a-f]{16}$",
@@ -1740,6 +1887,12 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
             schema["$defs"]["OpenRouterStructuredRequestCostPreview"]
         )
         _strengthen_authenticated_runner_cost_plan_contract(schema)
+    if filename in {
+        "accepted_prepurchase_quote.schema.json",
+        "prepurchase_quote.schema.json",
+        "prepurchase_quote_reconciliation.schema.json",
+    }:
+        _strengthen_prepurchase_quote_contract(schema)
     if filename == "audit_model_selection_evidence.schema.json":
         schema["required"] = sorted({*schema.get("required", []), "technical_evidence_mode"})
     if filename == "model_execution_artifact.schema.json":

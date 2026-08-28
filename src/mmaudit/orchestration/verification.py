@@ -234,7 +234,7 @@ def verify_run_evidence(
         None,
     )
     emitted_metadata, metadata_present = _load_metadata_artifact(root, metadata_binding)
-    if manifest.schema_version in {"1.1", "1.2"} and not metadata_present:
+    if manifest.schema_version in {"1.1", "1.2", "1.3"} and not metadata_present:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
@@ -247,7 +247,7 @@ def verify_run_evidence(
                 expected_sha256=(metadata_binding.sha256 if metadata_binding is not None else None),
             )
         )
-    elif manifest.schema_version in {"1.1", "1.2"} and metadata_binding is None:
+    elif manifest.schema_version in {"1.1", "1.2", "1.3"} and metadata_binding is None:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
@@ -537,7 +537,7 @@ def _language_capability_source_mismatches(
         None,
     )
     if binding is None:
-        if manifest.schema_version != "1.2":
+        if manifest.schema_version not in {"1.2", "1.3"}:
             return []
         return [
             RunVerificationMismatch(
@@ -922,7 +922,7 @@ def _metadata_artifact_mismatches(
         if run_configuration is not None
         else report.metadata.get("configuration_provenance")
     )
-    if manifest.schema_version == "1.2":
+    if manifest.schema_version in {"1.2", "1.3"}:
         status_metadata = report_status_metadata(report)
         status_comparisons: tuple[
             tuple[RunVerificationCategory, str, Any, Any],

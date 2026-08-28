@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from mmaudit.config import AuditRunOptions
 from mmaudit.models.scheduler import (
     SchedulerAbsenceReason,
     SchedulerCampaignSummary,
@@ -44,7 +45,9 @@ from mmaudit.models.schemas import (
 from mmaudit.orchestration.manifest import (
     _ManifestReproductionArtifact,
     _scheduler_report_authority_snapshot,
+    _validate_scheduler_pass_four_candidate_subsets,
     _validate_scheduler_prejudgment_evidence_authority,
+    _validate_scheduler_terminal_policy,
 )
 from mmaudit.orchestration.pipeline import _scheduled_reproduction_candidate_ids
 from mmaudit.orchestration.reproduction_resolution import (
@@ -157,6 +160,17 @@ def _cross_shard_payload(seed: str) -> dict[str, Any]:
         "semantic_inventory_sha256": manifest.shard_inventory.semantic_inventory_sha256,
         "candidate_ids": ["candidate-a"],
         "candidate_payload_sha256s": {"candidate-a": _sha256("candidate-a:payload")},
+        "candidate_records": [
+            SchedulerFindingReductionCandidate(
+                candidate_id="candidate-a",
+                candidate_sha256=_sha256("candidate-a:payload"),
+                location_validation=SchedulerFindingReductionValidation(
+                    valid=True,
+                    content_hash=_sha256("source"),
+                    errors=(),
+                ),
+            ).model_dump(mode="json")
+        ],
         "shard_ids": list(manifest.shard_ids),
         "semantic_relationship_ids": [relationship.relationship_id],
         "boundary_review_artifact_sha256s": [decision.review_artifact_sha256],
@@ -174,6 +188,7 @@ def _cross_shard_activation_input(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "candidate_ids": payload["candidate_ids"],
         "candidate_payload_sha256s": payload["candidate_payload_sha256s"],
+        "candidate_records": payload["candidate_records"],
         "high_critical_candidate_ids": payload["high_critical_candidate_ids"],
         "validation_candidate_ids": payload["validation_candidate_ids"],
         "shard_ids": payload["shard_ids"],
@@ -230,12 +245,24 @@ def _judgment_payload(
         "schema_version": "2.0",
         "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
         "severity_threshold": "medium",
+        "critical_confirmation_requires_execution": True,
         "group_ids": [group_id],
         "judge_decision_ids": [group_id],
         "candidate_ids": [candidate_id],
         "candidate_payload_sha256s": {
             candidate_id: _sha256(f"{candidate_id}:complete-candidate-payload")
         },
+        "terminal_candidate_records": [
+            {
+                "candidate_id": candidate_id,
+                "candidate_sha256": _sha256(f"{candidate_id}:complete-candidate-payload"),
+                "location_validation": {
+                    "valid": True,
+                    "content_hash": _sha256(f"{candidate_id}:terminal-location"),
+                    "errors": [],
+                },
+            }
+        ],
         "candidate_grouping_sha256": scheduler_canonical_sha256(
             [{"group_id": group_id, "candidate_ids": [candidate_id]}]
         ),
@@ -294,6 +321,71 @@ def _judgment_payload(
 def test_host_contracts_reject_generic_payload(model: type[BaseModel]) -> None:
     with pytest.raises(ValidationError):
         model.model_validate({"unvalidated_generic_summary": True})
+
+
+def test_terminal_policy_rejects_coherently_resealed_configuration_drift(
+    config_factory: Any,
+) -> None:
+    config = config_factory().effective()
+    run_options = AuditRunOptions(severity_threshold=Severity.MEDIUM)
+    judgment = SchedulerEvidenceCapJudgmentOutput.model_validate(_judgment_payload())
+    _validate_scheduler_terminal_policy(
+        judgment=judgment,
+        config=config,
+        run_options=run_options,
+    )
+
+    changed_cap = _judgment_payload()
+    changed_cap["critical_confirmation_requires_execution"] = False
+    changed_cap["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed_cap.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValueError, match="critical evidence cap"):
+        _validate_scheduler_terminal_policy(
+            judgment=SchedulerEvidenceCapJudgmentOutput.model_validate(changed_cap),
+            config=config,
+            run_options=run_options,
+        )
+
+    changed_threshold = _judgment_payload()
+    changed_threshold["severity_threshold"] = Severity.HIGH.value
+    changed_threshold["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed_threshold.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValueError, match="severity threshold"):
+        _validate_scheduler_terminal_policy(
+            judgment=SchedulerEvidenceCapJudgmentOutput.model_validate(changed_threshold),
+            config=config,
+            run_options=run_options,
+        )
+
+
+def test_evidence_cap_requires_exact_terminal_candidate_validation_records() -> None:
+    missing = _judgment_payload()
+    missing.pop("terminal_candidate_records")
+    missing["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in missing.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="terminal_candidate_records"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(missing)
+
+    changed_hash = _judgment_payload()
+    changed_hash["terminal_candidate_records"][0]["candidate_sha256"] = _sha256(
+        "different-candidate"
+    )
+    changed_hash["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed_hash.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="partitions are inconsistent"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(changed_hash)
+
+    omitted = _judgment_payload()
+    omitted["terminal_candidate_records"] = []
+    omitted["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in omitted.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="partitions are inconsistent"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(omitted)
 
 
 def test_finding_reduction_rejects_omission_duplicate_and_hash_tamper() -> None:
@@ -405,6 +497,44 @@ def test_cross_shard_contract_rejects_omitted_duplicate_and_tampered_relationshi
             {**payload, "integration_sha256": _sha256("tampered-integration")}
         )
 
+    suppressed_validation = {**payload, "validation_candidate_ids": []}
+    suppressed_validation["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in suppressed_validation.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValidationError, match="inventory is inconsistent"):
+        SchedulerCrossShardIntegrationOutput.model_validate(suppressed_validation)
+
+
+def test_detached_replay_derives_high_critical_subset_from_exact_candidates(
+    candidate_factory: Any,
+) -> None:
+    payload = _cross_shard_payload("cross-shard-derived-subsets")
+    integration = SchedulerCrossShardIntegrationOutput.model_validate(payload)
+    reduction = SchedulerFindingReductionOutput.model_validate(_reduction_payload())
+    candidate = candidate_factory(candidate_id="candidate-a").model_copy(
+        update={"severity": Severity.HIGH}
+    )
+    snapshot = cast(Any, SimpleNamespace(pass_results_by_kind={}))
+
+    _validate_scheduler_pass_four_candidate_subsets(
+        integration=integration,
+        reduction=reduction,
+        candidates=(candidate,),
+        snapshot=snapshot,
+    )
+
+    suppressed = integration.model_dump(mode="python", exclude={"integration_sha256"})
+    suppressed["high_critical_candidate_ids"] = ()
+    suppressed["integration_sha256"] = scheduler_canonical_sha256(suppressed)
+    coherently_resealed = SchedulerCrossShardIntegrationOutput.model_validate(suppressed)
+    with pytest.raises(ValueError, match="not candidate-derived"):
+        _validate_scheduler_pass_four_candidate_subsets(
+            integration=coherently_resealed,
+            reduction=reduction,
+            candidates=(candidate,),
+            snapshot=snapshot,
+        )
+
 
 def test_cross_shard_relationship_descriptor_and_scope_are_activation_bound() -> None:
     seed = "cross-shard-activation"
@@ -470,7 +600,7 @@ def test_cross_shard_relationship_descriptor_and_scope_are_activation_bound() ->
     suppressed_validation["integration_sha256"] = scheduler_canonical_sha256(
         {key: value for key, value in suppressed_validation.items() if key != "integration_sha256"}
     )
-    with pytest.raises(ValueError, match="activated input"):
+    with pytest.raises(ValueError, match="violates its typed contract"):
         _parse_scheduler_host_payload(
             plan=plan,
             task=host_task,
@@ -656,6 +786,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         plan=SimpleNamespace(
             pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
             tasks=(absence_task,),
+            candidate_workset=SimpleNamespace(selected_candidate_ids=()),
             conditional_absence=SimpleNamespace(
                 reason=SchedulerAbsenceReason.NO_VALIDATION_CANDIDATES
             ),
@@ -1007,6 +1138,41 @@ def test_evidence_cap_contract_rejects_terminal_partition_and_evidence_drift() -
     )
     with pytest.raises(ValidationError, match="hash or disposition"):
         SchedulerEvidenceCapJudgmentOutput.model_validate(tampered_hash)
+
+
+def test_evidence_cap_contract_hash_binds_optional_consensus_review() -> None:
+    payload = _judgment_payload()
+    subject_id = f"scheduler-campaign-{_sha256('consensus-campaign')}"
+    consensus_payload_sha256 = _sha256("closed-three-review-artifact")
+    consensus_binding = {
+        "record_id": scheduler_canonical_sha256(
+            {
+                "kind": "consensus_review",
+                "subject_id": subject_id,
+                "payload_sha256": consensus_payload_sha256,
+            }
+        ),
+        "subject_id": subject_id,
+        "payload_sha256": consensus_payload_sha256,
+    }
+    with_consensus = {**payload, "consensus_review": consensus_binding}
+    with_consensus["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in with_consensus.items() if key != "judgment_sha256"}
+    )
+
+    validated = SchedulerEvidenceCapJudgmentOutput.model_validate(with_consensus)
+    assert validated.consensus_review is not None
+    assert validated.consensus_review.payload_sha256 == consensus_payload_sha256
+
+    tampered = {
+        **with_consensus,
+        "consensus_review": {**consensus_binding, "record_id": _sha256("forged-record")},
+    }
+    tampered["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="consensus-review evidence binding"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(tampered)
 
 
 def test_evidence_cap_contract_retains_execution_origin_below_reporting_threshold() -> None:

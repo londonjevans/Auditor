@@ -42,38 +42,38 @@ _GATE_ID_PATTERN = r"^gate-[a-z0-9][a-z0-9-]{0,98}$"
 _MAX_SOURCES = 4_096
 _MAX_GATES = 128
 _FROZEN_AUDIT_CONFIG_PATHS_SHA256 = (
-    "e85213984bdb6be856714d1b102c2d9311845f4d8d17a64b62f900adf41dcbc4"
+    "8256308697e907f2bd9a389fdc664920d574b1a4f20a0403139015eadd7b033a"
 )
 _FROZEN_AUDIT_RUN_OPTION_PATHS_SHA256 = (
-    "094721b7521af2a8a7349d0fd8a7a7f66c8988f2698497e682bef593640f234e"
+    "f38d9261cd2d800e74e2ebeb73819e2d8bbcc0010ebd627a4a751aa68abf658a"
 )
 _FROZEN_AUDIT_OVERRIDE_PATHS_SHA256 = (
-    "97a1e35e1a3df16ad624b2434c71fe63556e48e399280a90321f51c801ab5b17"
+    "67191e0672193937ebbf7a48360aa1c54d8deb981eefeb2f98202c99f3fa51b8"
 )
 _FROZEN_ENVIRONMENT_OVERRIDE_PAIRS_SHA256 = (
     "9f4ff8a30f85a148c52b097ea7550a55efb8ee04815ef7563879c7a6281f8d23"
 )
 _FROZEN_CLI_RUN_PARAMETERS_SHA256 = (
-    "f63198206c04996ef7fcf1a651287ba09751ab55c179cd7c7fa6faffe5521196"
+    "cef83d47a117042e0edae8e40e0701d69114c221bc6d3e68288cb9a9835ba4cf"
 )
 _FROZEN_PIPELINE_INIT_PARAMETERS_SHA256 = (
-    "f7a1a4cc728b3221e8fa9a1af0ebc032d48fd58d9cfcec8d72f69ec26ad4c342"
+    "a22584594adb4e7a7d349de01503cd36dcf12da770d59326e91eae98c479ad5e"
 )
 _FROZEN_PIPELINE_RUN_PARAMETERS_SHA256 = (
-    "9568fe158cae81dbd5c220f65cc3bbeb4d43ba529466c5597b783745cfe93957"
+    "55123fbc974864c8cae44eef98ac34c9c46bb625ea6784420290870367fe4748"
 )
 _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
-    "9693cc6613f1a5ecbb5de2ae8cdde79ad7e5e1b96b99305107923a6dab8a1e9c"
+    "0df2886a62bef5dd22bc4dc5c5a34520a14cbbbe7f598d17f48496e92c52b054"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "a4ebabe9ec53adc6b9ec2d394655fd519d847d9c5032089e0b017a5da4eaa5b6"
+    "33807a982d1c1077d700a71b16a3c8e3258eb499d455f233a18ec69ae314fcfa"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "40f3dbb784de6ad21a04a0ef909cd10c75807d17e12bb9474656087923c4ed92"
+    "f9571d5d99af0e85f922208691f8173db738a7bf55afa29bd5d441f8d715577a"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "45ba8aa1ccab7087fc6339d85ec8532aa7f3790d4b7052e4caf02268a95c17de"
+    "3e2e6bd333ed5553fd6f602fad2e257040b2cebd4ead3860849647957eef2352"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -225,16 +225,16 @@ class AutonomyGateInventory(StrictModel):
     )
     source_count: int = Field(ge=1, le=_MAX_SOURCES)
     source_occurrence_count: int = Field(ge=1, le=_MAX_SOURCES)
-    audit_config_leaf_locator_count: Literal[506]
-    audit_config_leaf_occurrence_count: Literal[509]
+    audit_config_leaf_locator_count: Literal[507]
+    audit_config_leaf_occurrence_count: Literal[510]
     audit_config_shared_locator_count: Literal[3]
-    audit_run_option_leaf_count: Literal[13]
-    audit_override_path_count: Literal[45]
+    audit_run_option_leaf_count: Literal[16]
+    audit_override_path_count: Literal[46]
     environment_override_count: Literal[28]
-    cli_run_parameter_count: Literal[50]
-    pipeline_init_parameter_count: Literal[25]
-    pipeline_run_parameter_count: Literal[15]
-    completion_entrypoint_parameter_count: Literal[300]
+    cli_run_parameter_count: Literal[53]
+    pipeline_init_parameter_count: Literal[26]
+    pipeline_run_parameter_count: Literal[16]
+    completion_entrypoint_parameter_count: Literal[323]
     source_kind_counts: dict[CompletionInputSourceKind, int] = Field(
         min_length=len(CompletionInputSourceKind),
         max_length=len(CompletionInputSourceKind),
@@ -1203,6 +1203,7 @@ def _audit_gate_for_path(path: str) -> str | None:
 
 
 _CLI_GATE_IDS: dict[str, str] = {
+    "accepted_quote": "gate-budget-ceiling",
     "config_path": "gate-managed-profile",
     "secrets_env_file": "gate-provider-secret-transport",
     "repo": "gate-client-audit-scope",
@@ -1219,6 +1220,7 @@ _CLI_GATE_IDS: dict[str, str] = {
     "max_file_bytes": "gate-full-quality-analysis",
     "max_context_bytes": "gate-full-quality-analysis",
     "concurrency": "gate-full-quality-analysis",
+    "schema_validation_retries": "gate-full-quality-analysis",
     "severity_threshold": "gate-client-audit-scope",
     "fail_on": "gate-client-audit-scope",
     "scanner_only": "gate-full-quality-analysis",
@@ -1228,6 +1230,7 @@ _CLI_GATE_IDS: dict[str, str] = {
     "privacy_profile": "gate-client-privacy-consent",
     "retention_consent": "gate-client-privacy-consent",
     "privacy_source_classification": "gate-synthetic-public-scope",
+    "learning_tenant_scope_id": "gate-client-audit-scope",
     "profile": "gate-full-quality-analysis",
     "language_profile": "gate-client-audit-scope",
     "scope": "gate-client-audit-scope",
@@ -1273,9 +1276,13 @@ _AUDIT_RUN_OPTION_GATE_IDS: dict[str, str] = {
     "benchmark_repository_git_commit": "gate-benchmark-evidence-authority",
     "privacy_source_classification": "gate-synthetic-public-scope",
     "retention_consent_file_sha256": "gate-client-privacy-consent",
+    "learning_capture_scope.input_kind": "gate-client-audit-scope",
+    "learning_capture_scope.schema_version": "gate-client-audit-scope",
+    "learning_capture_scope.tenant_scope_id": "gate-client-audit-scope",
 }
 
 _PIPELINE_INIT_GATE_IDS: dict[str, str] = {
+    "accepted_prepurchase_quote": "gate-budget-ceiling",
     "config": "gate-managed-profile",
     "repo": "gate-client-audit-scope",
     "output": "gate-managed-output-provisioning",
@@ -1314,6 +1321,7 @@ _PIPELINE_RUN_GATE_IDS: dict[str, str] = {
     "allow_maximum_assurance_downgrade": "gate-full-quality-analysis",
     "benchmark_verification": "gate-benchmark-evidence-authority",
     "benchmark_repository_git_commit": "gate-benchmark-evidence-authority",
+    "learning_capture_scope": "gate-client-audit-scope",
     "changed_since": "gate-client-audit-scope",
     "severity_threshold": "gate-client-audit-scope",
     "fail_on": "gate-client-audit-scope",
@@ -1575,6 +1583,21 @@ def _command_parameter_classification(
         return SourceCoverageClassification.GATE, "gate-managed-provisioning"
     if (command_name, parameter_name) == ("scan_command", "framework"):
         return SourceCoverageClassification.GATE, "gate-full-quality-analysis"
+    if command_name in {"quote_accept", "quote_reconcile"} and parameter_name in {
+        "acceptance_path",
+        "quote_path",
+    }:
+        return SourceCoverageClassification.GATE, "gate-budget-ceiling"
+    if command_name == "quote_create" and parameter_name == "portfolio_preflight":
+        return SourceCoverageClassification.GATE, "gate-budget-ceiling"
+    if command_name == "quote_create" and parameter_name == "campaign_manifest":
+        return SourceCoverageClassification.GATE, "gate-authenticated-real-campaign"
+    if command_name == "quote_create" and parameter_name == "solidity_shards":
+        return SourceCoverageClassification.GATE, "gate-full-quality-analysis"
+    if command_name == "quote_reconcile" and parameter_name == "cost_ledger_evidence":
+        return SourceCoverageClassification.GATE, "gate-cost-ledger-provisioning"
+    if command_name == "quote_reconcile" and parameter_name == "model_execution":
+        return SourceCoverageClassification.GATE, "gate-release-evidence-pipeline"
     if command_name == "models_discover" and parameter_name in {
         "candidate",
         "candidate_registry_template",
@@ -1645,7 +1668,7 @@ def _command_parameter_classification(
         return SourceCoverageClassification.GATE, "gate-cost-ledger-provisioning"
     if any(token in parameter_name for token in ("budget", "cost_cap", "cost_tripwire")):
         return SourceCoverageClassification.GATE, "gate-budget-ceiling"
-    if parameter_name == "config_path":
+    if parameter_name in {"config_path", "retry_continuity_config"}:
         return SourceCoverageClassification.GATE, "gate-managed-profile"
     if parameter_name in {
         "repo",
@@ -1674,6 +1697,7 @@ def _command_parameter_classification(
         "run_slither",
         "ci_mode",
         "ci_baseline_run",
+        "schema_validation_retries",
     }:
         return SourceCoverageClassification.GATE, "gate-full-quality-analysis"
     if parameter_name in {
@@ -1729,6 +1753,7 @@ def _command_parameter_classification(
         "primary_judge_discovery_run",
         "replay_judge_registry",
         "replay_judge_discovery_run",
+        "runtime_evidence_smoke_bundle",
         "qualification_policy",
         "policy",
         "discovery_run",
@@ -2394,7 +2419,11 @@ def _direct_environment_gate(
             return "gate-benchmark-evidence-authority"
         if relative_path == "orchestration/budgets.py":
             return "gate-cost-ledger-provisioning"
-        if relative_path in {"models/openrouter.py", "models/usage.py"}:
+        if relative_path in {
+            "models/openrouter.py",
+            "models/route_runtime_evidence.py",
+            "models/usage.py",
+        }:
             return "gate-authenticated-real-campaign"
         if relative_path.startswith("models/authenticated_runner"):
             return "gate-authenticated-real-campaign"
@@ -2852,6 +2881,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/authenticated_runner_smoke_corpus.py": "gate-authenticated-real-campaign",
     "models/calibration.py": "gate-benchmark-evidence-authority",
     "models/candidate_registry_bridge.py": "gate-autonomous-model-authority",
+    "models/candidate_revocation.py": "gate-autonomous-model-authority",
     "models/candidate_selection.py": "gate-autonomous-model-authority",
     "models/discovery.py": "gate-autonomous-model-authority",
     "models/lineage_authority.py": "gate-human-signoff-boundary",
@@ -2863,12 +2893,14 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/refresh_staging.py": "gate-autonomous-model-authority",
     "models/registry.py": "gate-autonomous-model-authority",
     "models/release_attestation.py": "gate-autonomous-model-authority",
+    "models/retry_continuity.py": "gate-managed-profile",
     "operator_secrets.py": "gate-provider-secret-transport",
     "orchestration/autonomy_gate_inventory.py": "gate-runtime-package-integrity",
     "orchestration/certification.py": "gate-release-evidence-pipeline",
     "orchestration/ci.py": "gate-release-evidence-pipeline",
     "orchestration/context_manifest.py": "gate-full-quality-analysis",
     "orchestration/cost_ledger.py": "gate-cost-ledger-provisioning",
+    "orchestration/learning.py": "gate-managed-output-provisioning",
     "orchestration/manifest.py": "gate-release-evidence-pipeline",
     "orchestration/managed_toolchain.py": "gate-managed-toolchain-bundle",
     "orchestration/pipeline.py": "gate-full-quality-analysis",
@@ -3000,6 +3032,7 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
                 return "gate-managed-output-provisioning"
         if scope in {
             "AuditPipeline._write_artifacts",
+            "_refresh_latest_artifacts",
             "_refresh_latest_artifact",
             "_resolve_scheduler_resume_journal",
             "_safe_output_directory",
@@ -3605,16 +3638,16 @@ def build_autonomy_gate_inventory(
         "logical_gates": [item.model_dump(mode="json") for item in logical_gates],
         "source_count": len(source_coverage),
         "source_occurrence_count": sum(item.source_occurrence_count for item in source_coverage),
-        "audit_config_leaf_locator_count": 506,
-        "audit_config_leaf_occurrence_count": 509,
+        "audit_config_leaf_locator_count": 507,
+        "audit_config_leaf_occurrence_count": 510,
         "audit_config_shared_locator_count": 3,
-        "audit_run_option_leaf_count": 13,
-        "audit_override_path_count": 45,
+        "audit_run_option_leaf_count": 16,
+        "audit_override_path_count": 46,
         "environment_override_count": 28,
-        "cli_run_parameter_count": 50,
-        "pipeline_init_parameter_count": 25,
-        "pipeline_run_parameter_count": 15,
-        "completion_entrypoint_parameter_count": 300,
+        "cli_run_parameter_count": 53,
+        "pipeline_init_parameter_count": 26,
+        "pipeline_run_parameter_count": 16,
+        "completion_entrypoint_parameter_count": 323,
         "source_kind_counts": {
             kind.value: sum(item.source_kind is kind for item in source_coverage)
             for kind in CompletionInputSourceKind

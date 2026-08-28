@@ -178,6 +178,50 @@
     },
     "AuthenticatedCrossLineageRunnerEvidence": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.0"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "effective_config_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "effective_config_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "effective_config_sha256"
+            ]
+          }
+        }
+      ],
       "description": "Serializable runner evidence that deliberately grants no runtime authority.",
       "properties": {
         "adjudication_credit_authorized": {
@@ -212,6 +256,19 @@
           "title": "Case Ids",
           "type": "array",
           "uniqueItems": true
+        },
+        "effective_config_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Config Sha256"
         },
         "evidence_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -368,8 +425,11 @@
           "uniqueItems": true
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -5002,7 +5062,12 @@
                   "identity_snapshot_sha256",
                   "identity_strength",
                   "latency_ms",
+                  "maximum_attempts_for_request",
                   "model_metadata_snapshot_sha256",
+                  "model_retry_attempts",
+                  "model_retry_evidence_sha256",
+                  "model_retry_policy",
+                  "model_retry_policy_sha256",
                   "native_finish_reason",
                   "output_capability_sha256",
                   "privacy_authorization",
@@ -5058,6 +5123,7 @@
                   "router_pipeline",
                   "router_strategy",
                   "schema_sha256",
+                  "schema_validation_retries_used",
                   "selected_model",
                   "selected_provider_endpoint",
                   "selected_provider_identity",
@@ -5076,6 +5142,7 @@
                   "structured_output_response_format",
                   "structured_output_supported_modes",
                   "structured_output_validated_response_sha256",
+                  "transient_retries_used",
                   "validation_status",
                   "zdr_requested"
                 ]
@@ -5227,6 +5294,26 @@
       },
       "then": {
         "properties": {
+          "effective_config_sha256": {
+            "type": "null"
+          },
+          "runner_evidence": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"
+              },
+              {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                },
+                "required": [
+                  "schema_version"
+                ]
+              }
+            ]
+          },
           "runs": {
             "prefixItems": [
               {
@@ -5298,6 +5385,26 @@
               }
             }
           },
+          "effective_config_sha256": {
+            "type": "null"
+          },
+          "runner_evidence": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"
+              },
+              {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                },
+                "required": [
+                  "schema_version"
+                ]
+              }
+            ]
+          },
           "runs": {
             "prefixItems": [
               {
@@ -5337,6 +5444,102 @@
             ]
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "closed_ledger_evidence": {
+            "properties": {
+              "entries": {
+                "items": {
+                  "properties": {
+                    "reserved_usd": {
+                      "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reserved_usd"
+                  ]
+                }
+              }
+            }
+          },
+          "effective_config_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "runner_evidence": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"
+              },
+              {
+                "properties": {
+                  "schema_version": {
+                    "const": "1.1"
+                  }
+                },
+                "required": [
+                  "schema_version",
+                  "effective_config_sha256"
+                ]
+              }
+            ]
+          },
+          "runs": {
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/AuthenticatedRunnerDurableRunEvidence"
+                  },
+                  {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.1"
+                      }
+                    },
+                    "required": [
+                      "schema_version"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/AuthenticatedRunnerDurableRunEvidence"
+                  },
+                  {
+                    "properties": {
+                      "schema_version": {
+                        "const": "1.1"
+                      }
+                    },
+                    "required": [
+                      "schema_version"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "effective_config_sha256"
+        ]
       }
     }
   ],
@@ -5384,6 +5587,19 @@
       "pattern": "^[0-9a-f]{64}$",
       "title": "Closed Ledger Evidence Sha256",
       "type": "string"
+    },
+    "effective_config_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Config Sha256"
     },
     "model_qualification_authorized": {
       "const": false,
@@ -5501,7 +5717,8 @@
       "default": "1.0",
       "enum": [
         "1.0",
-        "1.1"
+        "1.1",
+        "1.2"
       ],
       "title": "Schema Version",
       "type": "string"

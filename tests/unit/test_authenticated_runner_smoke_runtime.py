@@ -34,7 +34,7 @@ from mmaudit.benchmark.models import (
     authenticated_runner_smoke_model_benchmark_request_descriptor,
     load_model_benchmark_corpus,
 )
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, ModelRetryPolicy
 from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageLedgerEntryEvidence,
     AuthenticatedCrossLineageLedgerIntervalEvidence,
@@ -47,6 +47,7 @@ from mmaudit.models.authenticated_runner_smoke import (
     AuthenticatedRunnerSmokeRunEvidence,
     authenticated_runner_smoke_evidence_bytes,
     build_authenticated_runner_smoke_cost_plan,
+    require_authenticated_runner_smoke_config_binding,
     revalidate_authenticated_runner_smoke_evidence_bytes,
     seal_authenticated_runner_smoke_evidence_bundle,
     seal_authenticated_runner_smoke_run_evidence,
@@ -81,7 +82,10 @@ from mmaudit.models.route_constraints import (
     RoutePredicateId,
 )
 from mmaudit.models.schemas import UsageRecord
-from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.models.token_planning import (
+    RequestTokenPlan,
+    request_token_plan_projection_sha256,
+)
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OPENROUTER_API_KEY_NAME, OperatorSecrets
 from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
@@ -153,6 +157,19 @@ _TOKEN_ROUTING_FIELDS = (
     "atomic_token_reservation_sha256",
     "atomic_token_reservations",
     "atomic_token_reservation_sha256s",
+)
+_MODEL_RETRY_ROUTING_KEYS = {
+    "maximum_attempts_for_request",
+    "model_retry_attempts",
+    "model_retry_evidence_sha256",
+    "model_retry_policy",
+    "model_retry_policy_sha256",
+    "schema_validation_retries_used",
+    "transient_retries_used",
+}
+_SMOKE_RETRY_POLICY = ModelRetryPolicy.build(
+    transient_retry_limit=1,
+    schema_validation_retry_limit=0,
 )
 
 
@@ -711,6 +728,7 @@ def _current_smoke_usage_and_preview(
     *,
     index: int,
     user_prompt_sha256: str | None = None,
+    retry_policy: ModelRetryPolicy | None = None,
 ) -> tuple[UsageRecord, OpenRouterStructuredRequestCostPreview]:
     """Upgrade one synthetic smoke usage and cost preview to current token accounting."""
 
@@ -754,7 +772,7 @@ def _current_smoke_usage_and_preview(
     preview_payload.update(
         {
             "schema_version": "1.1",
-            "request_token_plan_projection_sha256": plan.plan_sha256,
+            "request_token_plan_projection_sha256": (request_token_plan_projection_sha256(plan)),
             "token_detail_accounting_method": plan.token_detail_accounting_method,
             "wire_max_tokens": plan.wire_max_tokens,
         }
@@ -780,6 +798,27 @@ def _current_smoke_usage_and_preview(
             ),
         }
     )
+    for key in _MODEL_RETRY_ROUTING_KEYS:
+        routing.pop(key, None)
+    if retry_policy is not None:
+        retry_values = {
+            "model_retry_policy": retry_policy.model_dump(mode="json"),
+            "model_retry_policy_sha256": retry_policy.policy_sha256,
+            "maximum_attempts_for_request": retry_policy.maximum_attempts,
+            "transient_retries_used": 0,
+            "schema_validation_retries_used": 0,
+            "model_retry_attempts": [
+                {"attempt_ordinal": 1, "outcome": "SUCCESS"},
+            ],
+        }
+        routing.update(
+            {
+                **retry_values,
+                "model_retry_evidence_sha256": canonical_sha256(
+                    {"domain": "mmaudit.model-retry-evidence.v1", **retry_values}
+                ),
+            }
+        )
     payload["routing"] = routing
     return reattest_synthetic_real_usage(UsageRecord.model_validate(payload)), preview
 
@@ -823,6 +862,7 @@ def _current_candidate_smoke_report(
     *,
     run_kind: CrossLineageAdjudicationRunKind,
     index: int,
+    retry_policy: ModelRetryPolicy | None = None,
 ) -> tuple[
     NoncreditingModelBenchmarkSmokeReport,
     OpenRouterStructuredRequestCostPreview,
@@ -861,6 +901,7 @@ def _current_candidate_smoke_report(
         usage,
         index=index,
         user_prompt_sha256=hashlib.sha256(descriptor.user_prompt.encode("utf-8")).hexdigest(),
+        retry_policy=retry_policy,
     )
     generation = _rebound_generation(source_generation, usage=usage)
     result = ModelBenchmarkCaseResult.model_validate(
@@ -897,6 +938,8 @@ def _canonical_decimal(value: Decimal) -> str:
 
 def _sealed_current_smoke_bundle(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    retry_policy: ModelRetryPolicy | None = None,
 ) -> AuthenticatedRunnerSmokeEvidenceBundle:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     smoke = load_authenticated_runner_smoke_corpus_bundle(SMOKE_CORPUS_PATH)
@@ -912,6 +955,7 @@ def _sealed_current_smoke_bundle(
             suite,
             run_kind=run_kind,
             index=index,
+            retry_policy=retry_policy,
         )
         candidate_usage = candidate_report.result.usage_record
         assert candidate_usage is not None
@@ -955,6 +999,7 @@ def _sealed_current_smoke_bundle(
         judge_usage, judge_preview = _current_smoke_usage_and_preview(
             judge_usage,
             index=index + 2,
+            retry_policy=retry_policy,
         )
         judge_generation = _rebound_generation(judge_generation, usage=judge_usage)
         judge_result = build_cross_lineage_adjudication_case_result(
@@ -1103,6 +1148,135 @@ def test_smoke_revalidator_round_trips_genuine_sealed_current_bundle(
     assert len(usages) == 4
     assert all(usage.token_detail_accounting_evidence is not None for usage in usages)
     assert authenticated_runner_smoke_evidence_bytes(replayed) == raw
+
+
+def test_smoke_config_binding_accepts_exact_current_split_retry_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _sealed_current_smoke_bundle(
+        monkeypatch,
+        retry_policy=_SMOKE_RETRY_POLICY,
+    )
+
+    validated = require_authenticated_runner_smoke_config_binding(
+        bundle,
+        effective_config_sha256=bundle.effective_config_sha256,
+        maximum_attempts_per_logical_request=_SMOKE_RETRY_POLICY.maximum_attempts,
+        model_retry_policy_sha256=_SMOKE_RETRY_POLICY.policy_sha256,
+    )
+
+    assert validated == bundle
+    assert all(
+        usage is not None
+        and usage.routing["model_retry_policy_sha256"] == _SMOKE_RETRY_POLICY.policy_sha256
+        for run in validated.runs
+        for usage in (
+            run.candidate_report.result.usage_record,
+            run.adjudication_report.cases[0].usage_record,
+        )
+    )
+
+
+def test_smoke_config_binding_accepts_historical_retry_evidence_omission_for_default_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _sealed_current_smoke_bundle(monkeypatch, retry_policy=None)
+
+    validated = require_authenticated_runner_smoke_config_binding(
+        bundle,
+        effective_config_sha256=bundle.effective_config_sha256,
+        maximum_attempts_per_logical_request=_SMOKE_RETRY_POLICY.maximum_attempts,
+        model_retry_policy_sha256=_SMOKE_RETRY_POLICY.policy_sha256,
+        allow_legacy_default_retry_evidence_omission=True,
+    )
+
+    assert validated == bundle
+    with pytest.raises(AuthenticatedRunnerSmokeError, match="current split retry custody"):
+        require_authenticated_runner_smoke_config_binding(
+            bundle,
+            effective_config_sha256=bundle.effective_config_sha256,
+            maximum_attempts_per_logical_request=_SMOKE_RETRY_POLICY.maximum_attempts,
+            model_retry_policy_sha256=_SMOKE_RETRY_POLICY.policy_sha256,
+        )
+
+
+def test_smoke_config_binding_rejects_partial_retry_evidence_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _sealed_current_smoke_bundle(monkeypatch, retry_policy=None)
+    run = bundle.runs[0]
+    report = run.candidate_report
+    result = report.result
+    usage = result.usage_record
+    assert usage is not None
+    partial_usage = usage.model_copy(
+        update={
+            "routing": {
+                **usage.routing,
+                "model_retry_policy_sha256": _SMOKE_RETRY_POLICY.policy_sha256,
+            }
+        }
+    )
+    partial_result = result.model_copy(update={"usage_record": partial_usage})
+    partial_report = report.model_copy(update={"result": partial_result})
+    partial_run = run.model_copy(update={"candidate_report": partial_report})
+    partial_bundle = bundle.model_copy(update={"runs": (partial_run, bundle.runs[1])})
+
+    with pytest.raises(ValidationError, match="usage model retry evidence is incomplete"):
+        require_authenticated_runner_smoke_config_binding(
+            partial_bundle,
+            effective_config_sha256=bundle.effective_config_sha256,
+            maximum_attempts_per_logical_request=_SMOKE_RETRY_POLICY.maximum_attempts,
+            model_retry_policy_sha256=_SMOKE_RETRY_POLICY.policy_sha256,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
+
+
+def test_smoke_config_binding_rejects_retry_evidence_omission_for_equal_total_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swapped_policy = ModelRetryPolicy.build(
+        transient_retry_limit=0,
+        schema_validation_retry_limit=1,
+    )
+    assert swapped_policy.maximum_attempts == _SMOKE_RETRY_POLICY.maximum_attempts
+    bundle = _sealed_current_smoke_bundle(monkeypatch, retry_policy=None)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeError,
+        match="differs from the selected retry policy",
+    ):
+        require_authenticated_runner_smoke_config_binding(
+            bundle,
+            effective_config_sha256=bundle.effective_config_sha256,
+            maximum_attempts_per_logical_request=swapped_policy.maximum_attempts,
+            model_retry_policy_sha256=swapped_policy.policy_sha256,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
+
+
+def test_smoke_config_binding_rejects_equal_total_split_retry_policy_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swapped_policy = ModelRetryPolicy.build(
+        transient_retry_limit=0,
+        schema_validation_retry_limit=1,
+    )
+    assert swapped_policy.maximum_attempts == _SMOKE_RETRY_POLICY.maximum_attempts
+    assert swapped_policy.policy_sha256 != _SMOKE_RETRY_POLICY.policy_sha256
+    bundle = _sealed_current_smoke_bundle(monkeypatch, retry_policy=swapped_policy)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeError,
+        match="differs from the selected retry policy",
+    ):
+        require_authenticated_runner_smoke_config_binding(
+            bundle,
+            effective_config_sha256=bundle.effective_config_sha256,
+            maximum_attempts_per_logical_request=_SMOKE_RETRY_POLICY.maximum_attempts,
+            model_retry_policy_sha256=_SMOKE_RETRY_POLICY.policy_sha256,
+            allow_legacy_default_retry_evidence_omission=True,
+        )
 
 
 def test_smoke_revalidator_omits_call_level_strict_and_requires_exact_parser_type(
@@ -1830,6 +2004,33 @@ def test_usage_preview_join_binds_full_token_reasoning_discovery_and_output_proj
     bound = _usage_with_cost_preview(usage, preview)
 
     smoke_evidence_module._require_usage_preview_join(bound, preview)
+
+    token_plan = RequestTokenPlan.model_validate_json(
+        json.dumps(
+            bound.routing["request_token_plan"],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    assert preview.request_token_plan_projection_sha256 == (
+        request_token_plan_projection_sha256(token_plan)
+    )
+    assert preview.request_token_plan_projection_sha256 != token_plan.plan_sha256
+
+    wrong_projection = _replace_preview(
+        preview,
+        request_token_plan_projection_sha256=token_plan.plan_sha256,
+    )
+    payload = bound.model_dump(mode="python")
+    routing = dict(payload["routing"])
+    routing["request_cost_preview_sha256"] = wrong_projection.preview_sha256
+    payload["routing"] = routing
+    coherently_resealed = reattest_synthetic_real_usage(UsageRecord.model_validate(payload))
+    with pytest.raises(ValueError, match="exact cost preview"):
+        smoke_evidence_module._require_usage_preview_join(
+            coherently_resealed,
+            wrong_projection,
+        )
 
     drifted = _replace_preview(
         preview,

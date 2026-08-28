@@ -43,6 +43,8 @@ from mmaudit.models.policy_selection import (
 )
 from mmaudit.models.public_lineage_authority import PublicModelLineageEvidenceBundle
 from mmaudit.models.qualification import QualificationPolicy
+from mmaudit.models.route_runtime_evidence import RouteRuntimeEvidenceArtifact
+from mmaudit.models.schemas import ConsensusReviewArtifact
 from mmaudit.orchestration.autonomy_gate_inventory import (
     AutonomousGateDisposition,
     AutonomyGateInventory,
@@ -115,6 +117,18 @@ def test_autonomy_inventory_schema_is_closed_nonauthorizing_and_unsatisfied() ->
     assert "HUMAN_REQUIRED" not in schema["$defs"]["AutonomousGateDisposition"]["enum"]
 
 
+def test_consensus_review_schema_is_closed_exact_and_bounded() -> None:
+    filename = "consensus_review_artifact.schema.json"
+    assert MODELS[filename] is ConsensusReviewArtifact
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["algorithm"]["const"] == ("mmaudit.closed-three-review-quorum.v1")
+    assert schema["properties"]["reviewers"]["minItems"] == 3
+    assert schema["properties"]["reviewers"]["maxItems"] == 3
+    assert schema["properties"]["candidate_ids"]["minItems"] == 1
+    assert "artifact_sha256" in schema["required"]
+
+
 def test_managed_toolchain_schema_is_closed_partial_and_nonauthorizing() -> None:
     filename = "managed_toolchain_bundle.schema.json"
     assert MODELS[filename] is ManagedToolchainBundle
@@ -151,6 +165,25 @@ def test_release_schemas_are_exact_strict_generated_models() -> None:
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["$id"] == f"https://mmaudit.local/schemas/{filename}"
         assert schema["additionalProperties"] is False
+
+
+def test_route_runtime_evidence_schema_is_exact_nonauthorizing_and_bounded() -> None:
+    filename = "route_runtime_evidence_artifact.schema.json"
+    assert MODELS[filename] is RouteRuntimeEvidenceArtifact
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+
+    observations = schema["properties"]["observations"]
+    assert observations["minItems"] == observations["maxItems"] == 3
+    for field_name in (
+        "full_corpus_execution_completed",
+        "benchmark_authorized",
+        "model_qualification_authorized",
+        "runner_authority_authorized",
+        "provider_call_authorized",
+        "campaign_admission_authorized",
+        "release_authorized",
+    ):
+        assert schema["properties"][field_name]["const"] is False
 
 
 def _assert_non_authorizing_model_schema(definition: dict[str, object]) -> None:
@@ -212,7 +245,7 @@ def test_authenticated_runner_cost_schemas_require_exact_nonauthorizing_boundari
         durable_run["required"]
     )
     assert len(durable_run["allOf"]) == 2
-    assert len(durable["allOf"]) == 2
+    assert len(durable["allOf"]) == 3
     ledger_entry = durable["$defs"]["AuthenticatedCrossLineageLedgerEntryEvidence"]
     reserved_options = ledger_entry["properties"]["reserved_usd"]["anyOf"]
     assert {option.get("type") for option in reserved_options} == {"string", "null"}
@@ -226,6 +259,18 @@ def test_authenticated_runner_cost_schemas_require_exact_nonauthorizing_boundari
     ]["entries"]["items"]
     assert current_reserved["required"] == ["reserved_usd"]
     assert current_reserved["properties"]["reserved_usd"]["type"] == "string"
+    continuity_condition = next(
+        item
+        for item in durable["allOf"]
+        if item["if"]["properties"]["schema_version"] == {"const": "1.2"}
+    )
+    assert continuity_condition["then"]["required"] == ["effective_config_sha256"]
+    assert (
+        continuity_condition["then"]["properties"]["runs"]["prefixItems"][0]["allOf"][1][
+            "properties"
+        ]["schema_version"]["const"]
+        == "1.1"
+    )
 
 
 def test_model_surface_coverage_plan_schema_is_closed_bounded_and_non_authorizing() -> None:
@@ -2163,6 +2208,7 @@ def test_operator_templates_select_the_solidity_evm_capability_explicitly() -> N
         ROOT / "mmaudit.example.toml",
         ROOT / "src" / "mmaudit" / "templates" / "mmaudit.example.toml",
         ROOT / "config" / "openrouter-qualification.toml",
+        ROOT / "config" / "openrouter-authenticated-runner-retry-continuity.toml",
     ):
         payload = tomllib.loads(path.read_text(encoding="utf-8"))
         assert payload["language_profile"] == "solidity-evm"
@@ -2227,6 +2273,13 @@ def test_authenticated_cross_lineage_runner_release_schema_is_exact_and_non_auth
         "type": "array",
         "uniqueItems": True,
     }
+    assert len(schema["allOf"]) == 2
+    current_config_condition = next(
+        item
+        for item in schema["allOf"]
+        if item["if"]["properties"]["schema_version"] == {"const": "1.1"}
+    )
+    assert current_config_condition["then"]["required"] == ["effective_config_sha256"]
     runs = schema["properties"]["runs"]
     assert runs["minItems"] == runs["maxItems"] == 2
     assert runs["uniqueItems"] is True
