@@ -2940,8 +2940,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert schema_retry["legacy_verification_requires_explicit_offline_flag"]
     assert schema_retry["structured_output_compliance_scope"] == "FIRST_ATTEMPT_ONLY"
     assert schema_retry["provider_backed_retry_execution_proven"] is False
-    assert schema_retry["source_checkpoint_commit"] is None
-    assert schema_retry["source_checkpoint_uncommitted_worktree"] is True
+    assert schema_retry["source_checkpoint_commit"] == ("f8960d92569cb9d8865ada9284981458699e4dab")
+    assert schema_retry["source_checkpoint_uncommitted_worktree"] is False
+    assert schema_retry["source_checkpoint_pushed"] is False
+    assert schema_retry["source_checkpoint_remote_resolved"] is False
     for authority_key in (
         "provider_or_network_accessed",
         "credential_or_secret_material_read",

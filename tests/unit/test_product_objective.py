@@ -238,10 +238,12 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert consensus["retry_configuration_changed"] is False
     assert consensus["successor_ticket_selected"] is False
     current_inventory = runtime_status["autonomy_phase_zero_inventory"]
-    assert current_inventory["current_reconciliation_commit"] is None
+    assert current_inventory["current_reconciliation_commit"] == (
+        "f8960d92569cb9d8865ada9284981458699e4dab"
+    )
     assert current_inventory["current_reconciliation_commit_pushed"] is False
     assert current_inventory["current_reconciliation_commit_remote_resolved"] is False
-    assert current_inventory["current_reconciliation_uncommitted_worktree"] is True
+    assert current_inventory["current_reconciliation_uncommitted_worktree"] is False
     assert runtime_status["candidate_commit_pushed"] is True
     assert runtime_status["candidate_commit_remote_resolved"] is True
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
