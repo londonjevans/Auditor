@@ -3,6 +3,78 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-28T12:56Z — **REVOCATION RECONCILED AND WORKING; replacement candidates still unusable — plan succession needed**
+
+`V3-REVOKERECON-001` works. Two viable replacement candidates were found. **They still cannot be
+used**, for a second and distinct reason. All provider-free; ledger unchanged at 57 entries /
+`0.68118684` USD.
+
+### 1. The reconciliation is correct
+
+Acceptance test passes. The revoked route still fails closed, now with a fully named reason —
+a real diagnosability improvement:
+
+```
+candidate selection assignment is revoked: role=candidate;
+model=deepseek/deepseek-v4-pro-0813; endpoint=parasail/fp8;
+reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE
+```
+
+And unrevoked alternatives are no longer refused by revocation:
+
+| route | discovery |
+|---|---|
+| `google/gemma-4-26b-a4b-it=deepinfra/fp8` | **PASS** |
+| `tencent/hy3=novita` | **PASS** |
+| `minimax/minimax-m3=coreweave/fp4` | fails `configured endpoint is not operational` — ordinary drift, not revocation |
+| `deepseek/deepseek-v4-pro-0813=parasail/fp8` | correctly revoked |
+
+Both passing candidates satisfy lineage independence against the Zhipu primary judge and Moonshot
+replay judge, and both have documentary lineage sources already sealed in the public-lineage bundle
+(`google-deepmind` gemma-4-26B-A4B-it, `tencent` Hy3).
+
+### 2. But a replacement cannot reach a gate
+
+`google/gemma-4-26b-a4b-it=deepinfra/fp8` was discovered fresh alongside both judges, all three
+`PASS`. The live-route gate then refuses:
+
+```
+mmaudit failed safely: authenticated runner route lacks constrained discovery evidence
+```
+
+`route_admission.py:648-655` requires the endpoint snapshot to carry `route_predicate_profile`,
+`exact_route_constraint`, `normalized_route_facts`, and `route_predicate_report`. Direct comparison of
+the two discovery artifacts:
+
+- plan-pinned `deepseek` (`r23`): **all four present**
+- replacement `gemma` (`g24`): **none of the four present**
+
+Discovery emits *constrained* route evidence only for routes named in the plan's
+`authenticated_runner_selection.route_constraints`, and that list still contains only
+`deepseek/deepseek-v4-pro-0813=parasail/fp8` for `role=candidate`. So a replacement discovers
+successfully and is then structurally inadmissible.
+
+### 3. Operator error to record
+
+The `V3-REVOKERECON-001` acceptance test as written asked only that discovery for an unrevoked
+candidate **succeed**. It does. The test was under-specified: it should have required the replacement
+to be **usable** — to reach a successful live-route gate. That gap is the operator's, not Codex's, and
+`V3-PLANSUCCESSOR-001` now states the stronger test explicitly.
+
+### 4. Requested
+
+Queued as **`V3-PLANSUCCESSOR-001`** in `docs/codex_work_queue.md`: a deterministic, hash-custodied
+path to emit a successor selection plan whose candidate constraint names a live unrevoked route,
+carrying judge constraints forward unchanged, with revocation remaining non-bypassable and the
+predecessor digest recorded. Primary acceptance test: **a provider-free live-route gate for the
+replacement candidate succeeds.**
+
+Candidate choice itself remains an operator decision. Once a replacement is admissible, the plan is
+to measure first-attempt structured-output conformance empirically across several `$0.04` smokes
+before committing to a campaign — advertised `structured_outputs` has now been demonstrated worthless
+as a predictor, and `structured_output_compliance` is gated at `1.0` across all 24 cases, which
+requires roughly `99%`+ per-request reliability to pass with any consistency.
+
 ## 2026-08-28T07:56Z — **REGRESSION: candidate revocation deadlocks ALL candidate discovery; reselection sweep cannot run**
 
 The operator authorized a candidate reselection sweep. **It cannot run.** Candidate revocation landed

@@ -1435,11 +1435,64 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `authenticated_runner_selection.route_constraints[0]`. Observed: `minimax/minimax-m3=coreweave/fp4`,
   `google/gemma-4-26b-a4b-it=deepinfra/fp8`, and `tencent/hy3=novita` are all refused
   `candidate selection route is revoked`.
+- **Status:** `COMPLETE`
+- **Result:** Requested-assignment discovery now admits unrevoked routes even when a separately
+  listed route in the validated pinned plan is tombstoned. Exact candidate, PRIMARY, and REPLAY role
+  custody reaches selection, discovery, admission, benchmark, smoke, and concrete OpenRouter
+  transport boundaries. The revoked DeepSeek/Parasail exact and canonical identities still fail
+  closed with role, model, endpoint, and
+  `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`; plan/constraint hash changes, mutable role shadows,
+  and transport-registry mutation cannot resurrect or rescope the tombstone.
+- **Remaining limitation:** The unchanged pinned plan still selects the revoked candidate and is not
+  runnable. This ticket selected no replacement, performed no provider call, and granted no
+  qualification, campaign, runtime, audit, or release authority. The operator-reported pre-fix
+  whole-plan deadlock remains historical evidence rather than a post-fix provider result.
+- **Next action:** Stop after closure. No successor ticket is selected. Candidate replacement,
+  empirical validation, and any later paid run require separate work and fresh authorization.
+
+### V3-PLANSUCCESSOR-001 — Emit a successor selection plan naming a live candidate route
+
+- **Objective:** Make candidate replacement actually usable. `V3-REVOKERECON-001` correctly scoped
+  revocation to the assigned route, so an unrevoked candidate now passes discovery. But
+  `config/models.selection-plan.json` still carries `authenticated_runner_selection.route_constraints`
+  naming only the revoked `deepseek/deepseek-v4-pro-0813=parasail/fp8` for `role=candidate`, and
+  discovery emits **constrained** route evidence only for routes the plan pins. A replacement
+  candidate therefore discovers successfully but produces evidence the runner rejects with
+  `authenticated runner route lacks constrained discovery evidence`
+  (`route_admission.py:655`), so no replacement can reach a live-route gate, smoke, or campaign.
+- **Files/modules:** Selection-plan emission/succession, `models.selection-plan.json` custody and
+  `plan_sha256` derivation, discovery constrained-evidence emission, `cli.py` wiring, and focused
+  regressions.
+- **Acceptance criteria:**
+  - **Primary acceptance test:** starting from the current plan with
+    `deepseek/deepseek-v4-pro-0813=parasail/fp8` revoked, an operator can obtain a successor plan whose
+    `role=candidate` route constraint names a different, live, unrevoked route, and with it a
+    provider-free `--live-route-preflight-only` gate for that candidate **succeeds**. Discovery
+    succeeding is not sufficient; the replacement must be usable end to end.
+  - Successor emission is deterministic and hash-custodied: `plan_sha256`, per-entry `entry_sha256`,
+    `constraint_sha256`, and `profile_sha256` are all derived, never caller-supplied, and the
+    predecessor plan digest is recorded so the succession chain is auditable.
+  - Revocation remains non-bypassable: a successor plan cannot name a tombstoned route, and emitting a
+    successor cannot un-revoke anything.
+  - Judge-role constraints are carried forward unchanged unless explicitly replaced; a candidate
+    replacement does not disturb judge selection or lineage independence.
+  - Frozen evidence bound to the predecessor plan remains valid as historical evidence and is never
+    silently reinterpreted under the successor.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free succession/derivation regressions, revoked-route rejection in a successor,
+  predecessor-digest custody, judge carry-forward, constrained-evidence emission for the new candidate,
+  gate admission for the replacement, tamper and reseal negatives, schema drift, Ruff, strict mypy.
+- **Dependencies:** Operator record of `2026-08-28`. `V3-REVOKERECON-001` `COMPLETE`. Observed: with
+  the reconciliation in place, `google/gemma-4-26b-a4b-it=deepinfra/fp8` and `tencent/hy3=novita` both
+  pass discovery, but the gemma discovery artifact contains none of
+  `route_predicate_profile`/`exact_route_constraint`/`normalized_route_facts`/`route_predicate_report`
+  while the plan-pinned deepseek artifact contains all four. Plan
+  `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`.
 - **Status:** `QUEUED`
-- **Next action:** Implement only the reconciliation and its negatives. Do not select a replacement
+- **Next action:** Implement only successor emission and its negatives. Do not choose the replacement
   candidate, launch a campaign, emit an operator command, or grant any qualification, calibration, or
-  release authority from this ticket. Candidate selection remains an operator decision informed by a
-  provider-free sweep.
+  release authority. Candidate choice remains an operator decision informed by a provider-free sweep.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2314,10 +2367,11 @@ and report serialization.
 
 ## Current next action
 
-`V3-SCHEMARETRY-001` is `COMPLETE` provider-free and nonauthorizing. `V3-REVOKERECON-001` is the next
-dependency-ready queued ticket but remains unselected until a separate work-unit boundary. The
-closure grants no provider, operator, campaign, qualification, runtime, or release authority; no
-external action is current.
+`V3-SCHEMARETRY-001` and `V3-REVOKERECON-001` are `COMPLETE` provider-free and nonauthorizing. The
+requested-assignment path admits unrevoked alternatives while the existing tombstone continues to
+refuse the revoked route with exact diagnostics and exact role isolation. No successor ticket or
+replacement candidate is selected, and no provider, operator, campaign, qualification, runtime,
+audit, or release authority is current.
 `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No provider
 action, campaign, operator command, run index, candidate selection, qualification, runtime authority,
 or release action is current.
