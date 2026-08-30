@@ -1580,9 +1580,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   which endpoints an exact model currently has. The mechanism is therefore complete and unusable,
   which is why that ticket is `PARTIAL` with real route restoration unproven. Expose the enumeration
   the client already performs internally.
-- **Files/modules:** A metadata-only CLI surface over the existing
-  `OpenRouterClient.list_model_endpoints` / `list_zdr_endpoints` (`openrouter.py:11208`, `11218`),
-  `cli.py` wiring, and focused regressions.
+- **Files/modules:** A metadata-only CLI surface over a dedicated nonauthorizing exact-model
+  endpoint-inventory read plus the existing ZDR metadata read, a strict typed diagnostic and
+  generated schema, `cli.py` wiring, and focused regressions.
 - **Acceptance criteria:**
   - An operator can enumerate, for one exact model id, the current live endpoint tags/slugs together
     with the facts candidate admission depends on: operational status, ZDR eligibility, native
@@ -1605,9 +1605,71 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `meta/muse-spark-1.2=novita` all refuse with `candidate endpoint inventory refresh requires a
   previously unlisted endpoint`, while those same slugs are reported unavailable by discovery. No
   discovery artifact or snapshot on disk carries an endpoint inventory for these models.
+- **Status:** `COMPLETE`
+- **Reopened 2026-08-30:** Operator-reported live use found that all 112 surveyed endpoints lacked
+  endpoint-level reasoning-effort inventory while admission separately falls back to model-level
+  inventory. The diagnostic must report model-level and exact effective resolved efforts before it
+  satisfies its original route-choice acceptance criterion.
+- **Result:** Schema v1.1 now joins the exact `/models` catalog fact used by admission to each exact
+  endpoint and reports separate model, endpoint, and admission-effective reasoning inventories,
+  including source, absence-only fallback, explicit-empty veto, and contradiction. Model and
+  endpoint structured-output facts are separately visible, and both the diagnostic and admission
+  consume one shared resolver. Exact tags/slugs, raw operational status, ZDR identity joins,
+  provider-name injectivity, and unique successor arguments remain strict and self-hashed. The
+  metadata-only command opens no cost ledger, issues no completion, records no usage, persists no
+  secret, and grants no authority.
+- **Validation:** Corrected integrated projection/schema/CLI/OpenRouter/route-constraint validation
+  passed `621` tests; adjacent discovery/snapshot/refresh/schema isolation passed `292` tests;
+  CLI-only validation passed `27`. Canonical generation, Ruff, and strict mypy pass. Independent
+  adversarial review found no blocker or HIGH issue. The wider affected run retained the known `16`
+  `test_openrouter_refresh_runtime.py` baseline failures and receives no full-matrix pass credit.
+- **Remaining limitation:** The operator-reported schema-v1.0 survey enumerated `112` endpoints
+  across `12` models and exposed this gap, but no corrected v1.1 live run exists and Codex did not
+  perform or authenticate the external reads. That survey found zero admissible candidates; the
+  active plan remains unchanged, no route is selected, and `V3-CANDROUTE-001` remains `PARTIAL`.
+- **Next action:** Select `V3-ACTORMODEL-001` as the next dependency-ready local work unit. Resume
+  `V3-CANDROUTE-001` only with admissible-route evidence or a separately reviewed policy decision;
+  do not relax the shared effort-high predicate or issue an external command here.
+
+### V3-PRICEFORM-001 — Decide exact-price handling for the only viable candidate route
+
+- **Objective:** A live survey of 112 endpoints across 12 models found **exactly one** route that
+  satisfies every substantive candidate constraint: `x-ai/grok-4.6=amazon-bedrock/us-west-2`. It is
+  operational, ZDR-eligible, natively structured-output capable, unambiguously routed, publishes an
+  effective reasoning-effort inventory, and its xAI lineage is independent of both the `z-ai` primary
+  judge and the `moonshotai` replay judge. It is rejected solely by a **pricing representation**
+  check, not by any capability or integrity constraint. Decide whether that rejection is correct.
+- **Files/modules:** `_validate_endpoint_pricing` / `_canonical_price` in
+  `src/mmaudit/models/endpoint_snapshots.py` (raise at `:1429`), and focused regressions.
+- **Acceptance criteria:**
+  - **Question to settle first, with the answer recorded:** `endpoint_snapshots.py:1428` requires each
+    billable price to be a `str` and rejects anything else as
+    `endpoint prices must be exact decimal strings`. Determine what this provider actually publishes
+    for this route, and decide whether a non-string numeric price may be admitted **only** when it
+    converts to the identical exact decimal without loss, or whether rejection must stand.
+  - If admission is justified, it is exact and conservative: no binary float is ever accepted where it
+    cannot round-trip to the identical decimal, canonical price strings remain the stored form, cost
+    reserve/spend/reconcile arithmetic is unchanged, and any value that cannot be represented exactly
+    still fails closed.
+  - If rejection must stand, record why, and record the consequence explicitly: under the current
+    constraint set there is **no admissible candidate route in existence**, and the frozen objective
+    cannot be met without either relaxing a different constraint or a provider publishing conforming
+    metadata.
+  - No constraint is weakened for convenience. ZDR, operational status, native structured-output mode,
+    display-name injectivity, reasoning-effort inventory, and lineage independence remain fully
+    enforced.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions for exact-decimal round-trip acceptance and non-representable
+  rejection, canonical storage form, ledger arithmetic parity, recorded-fixture pricing shapes from
+  this provider, schema drift, Ruff, strict mypy.
+- **Dependencies:** Operator survey of `2026-08-30`, provider-free at `$0`, using
+  `models list-endpoints` v1.1. Full results in the operator record. Note the effective reasoning
+  fields added in v1.1 were what made this determination possible.
 - **Status:** `QUEUED`
-- **Next action:** Implement only the enumeration surface. Do not select a candidate, emit a
-  successor plan, launch a campaign, or grant any authority.
+- **Next action:** Settle the pricing question and record the answer. Do not select the candidate,
+  emit a successor plan, launch a campaign, or grant any authority. Candidate selection remains an
+  operator decision.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2482,13 +2544,15 @@ and report serialization.
 
 ## Current next action
 
-`V3-SCHEMARETRY-001`, `V3-REVOKERECON-001`, and `V3-PLANSUCCESSOR-001` are `COMPLETE` provider-free
-and nonauthorizing. `V3-CANDROUTE-001` is `PARTIAL`: its explicit unverified endpoint-refresh
-mechanism passes synthetic constrained discovery and live-route preflight, but the latest operator
-record still reports zero admissible real candidates, the active plan is unchanged, and no
-replacement is selected. No new ticket is selected. `V3-SINGLE-AUDIT-001` and
-`V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No provider action, campaign,
-operator command, run index, qualification, runtime authority, audit, or release action is current.
+`V3-SCHEMARETRY-001`, `V3-REVOKERECON-001`, `V3-PLANSUCCESSOR-001`, and corrected schema-v1.1
+`V3-ENDPOINTLIST-001` are `COMPLETE` provider-free at their local implementation boundaries and
+nonauthorizing. The operator-reported v1.0 live survey exposed the endpoint-list model-fallback gap;
+the v1.1 correction is locally regressed but has not been exercised live. `V3-CANDROUTE-001` remains
+`PARTIAL`: the current operator record reports zero admissible real candidates, the active plan is
+unchanged, and no replacement is selected. Select `V3-ACTORMODEL-001` as the next dependency-ready
+local work unit. `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind
+their prerequisites. No provider action, campaign, operator command, run index, qualification,
+runtime authority, audit, or release action is current.
 
 ## Historical next action — c627 replay boundary (superseded)
 
