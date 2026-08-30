@@ -1450,9 +1450,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   qualification, campaign, runtime, audit, or release authority. Current operator evidence reports
   that unrevoked discovery now succeeds, but the replacement live-route gate lacks constrained
   discovery evidence under the unchanged plan.
-- **Next action:** Stop after closure. `V3-PLANSUCCESSOR-001` is queued but unselected. Candidate
-  choice, successor-plan work, empirical validation, and any later paid run remain separate and
-  require a new work-unit selection and fresh authorization.
+- **Next action:** Historical handoff completed by provider-free `V3-PLANSUCCESSOR-001`. Candidate
+  choice, empirical validation, and any later paid run remain separate and require a new work-unit
+  selection and fresh authorization.
 
 ### V3-PLANSUCCESSOR-001 — Emit a successor selection plan naming a live candidate route
 
@@ -1493,10 +1493,30 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `route_predicate_profile`/`exact_route_constraint`/`normalized_route_facts`/`route_predicate_report`
   while the plan-pinned deepseek artifact contains all four. Plan
   `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Implement and validate only successor emission and its negatives. Do not choose the replacement
-  candidate, launch a campaign, emit an operator command, or grant any qualification, calibration, or
-  release authority. Candidate choice remains an operator decision informed by a provider-free sweep.
+- **Status:** `COMPLETE`
+- **Result:** Deterministic schema-v1.5 succession records the exact predecessor plan digest and
+  derives every entry, constraint, profile, role-assignment, and plan hash while preserving the
+  byte-identical schema-v1.4 root plan. The provider-free
+  `models emit-selection-plan-successor` command publishes only a fresh mode-0600 artifact for one
+  explicit operator-supplied route. Judge constraints carry forward unchanged; current revocation
+  remains fail-closed; predecessor-bound discovery remains historical; schema-level v1.4/v1.5
+  predecessor custody is exact; and frozen derive/validation/eligibility/publication roots reject
+  callable replacement and code mutation before output. A synthetic revoked-predecessor-to-live-
+  successor regression passes constrained discovery and the actual
+  `--live-route-preflight-only` path without completion transport, usage, ledger mutation, output
+  publication, provider network, secrets, or authority. Publication now retains directory-descriptor
+  custody, requires a private owned parent, revalidates parent identity, and proves exact-inode
+  cleanup after rejection. The affected matrix passed `366` tests; canonical generation, Ruff
+  format/check, strict mypy, py_compile, strict JSON, diff integrity, and independent no-blocker
+  review pass. The latest operator record reports the mechanism working and successor plan
+  `00b6aa8f...` emitted for a complete provider-free constrained sweep.
+- **Remaining limitation:** The active plan remains unchanged and non-runnable. Codex did not inspect
+  or activate the operator-reported sweep artifact, the sweep found zero admissible candidates, and
+  no replacement candidate is selected. This ticket proves only the provider-free mechanism;
+  candidate-route restoration and every external action remain separate.
+- **Next action:** Stop after closure. `V3-CANDROUTE-001` is the next queued route-restoration work
+  unit and its operator-sweep dependency is reconciled, but it remains unselected. Do not choose a
+  replacement, launch a campaign, emit or run an operator command, or grant authority in this ticket.
 
 ### V3-CANDROUTE-001 — Restore an admissible candidate route
 
@@ -1533,10 +1553,61 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   the revoked route and of genuinely non-conforming routes, schema drift, Ruff, strict mypy.
 - **Dependencies:** Operator sweep of `2026-08-30`, provider-free at `$0`, covering every
   plan-allowed candidate route. Results recorded in the operator record.
+- **Status:** `PARTIAL`
+- **Reasoning-effort decision:** `REASONING_EFFORT_SUPPORT` is genuinely required for the candidate
+  under the current shared AUTHRUNNER profile. Candidate benchmark and smoke requests emit exact
+  `effort=high`, reserve reasoning tokens, and independently require compatible endpoint inventory
+  during preview, registration, and preflight. A purpose-only candidate exemption would therefore
+  weaken fail-before-dispatch evidence without making the route runnable. It remains required for
+  all three roles and all four purposes; no predicate relaxation is authorized by this ticket.
+- **Provider-free implementation evidence:** Schema v1.6 adds explicit predecessor-bound,
+  self-hashed `OPERATOR_STAGED_UNVERIFIED` endpoint refresh custody. It embeds no provider metadata or
+  discovery evidence, grants no endpoint authority, and requires fresh constrained discovery. A
+  lineage-distinct synthetic Gemma route passes constrained discovery and the mocked live-route
+  preflight; missing-effort, revoked, nonconforming, tampered, and schema-null routes fail closed.
+- **Remaining limitation:** The synthetic proof does not establish a current real endpoint. The
+  latest operator record still reports zero admissible real candidates, the active v1.4 plan is
+  unchanged, and no replacement is selected. The route-restoration objective therefore remains
+  `PARTIAL` despite the completed provider-free mechanism.
+- **Next action:** Stop this work unit. Resume `V3-CANDROUTE-001` only with fresh nonauthorizing
+  operator evidence for a current real route, then replay schema v1.6 constrained discovery and
+  provider-free live-route preflight. Do not launch a campaign, emit a command, or grant authority.
+
+### V3-ENDPOINTLIST-001 — Provider-free endpoint enumeration for candidate selection
+
+- **Objective:** `--refresh-endpoint-inventory` (from `V3-CANDROUTE-001`) refuses unless the operator
+  names a **previously unlisted** endpoint, but nothing in the repository lets an operator discover
+  which endpoints an exact model currently has. The mechanism is therefore complete and unusable,
+  which is why that ticket is `PARTIAL` with real route restoration unproven. Expose the enumeration
+  the client already performs internally.
+- **Files/modules:** A metadata-only CLI surface over the existing
+  `OpenRouterClient.list_model_endpoints` / `list_zdr_endpoints` (`openrouter.py:11208`, `11218`),
+  `cli.py` wiring, and focused regressions.
+- **Acceptance criteria:**
+  - An operator can enumerate, for one exact model id, the current live endpoint tags/slugs together
+    with the facts candidate admission depends on: operational status, ZDR eligibility, native
+    structured-output mode, provider display name, and reasoning-effort inventory presence.
+  - The command is metadata-only and provider-free in the paid sense: no completion is issued, the
+    cost ledger is untouched, and it is usable under the same unattended `$0` conditions as
+    `models discover`.
+  - Output is sufficient to choose a `MODEL_ID=PROVIDER_ENDPOINT` argument for
+    `emit-selection-plan-successor --refresh-endpoint-inventory` without guessing.
+  - Secrets are never displayed, logged, hashed, copied, or persisted; the existing control-plane
+    dotenv handling is reused unchanged.
+  - No authority is granted and no selection is made: enumeration is diagnostic only. Every durable
+    authority, provider, runner, qualification, selection, egress, completion, and release flag
+    remains literal false.
+- **Tests:** Provider-free regressions with recorded metadata fixtures covering enumeration output
+  shape, ledger non-mutation, secret non-disclosure, absent/unknown model handling, schema drift,
+  Ruff, and strict mypy.
+- **Dependencies:** `V3-CANDROUTE-001` (`PARTIAL`). Observed `2026-08-30`: successor emission with
+  `--refresh-endpoint-inventory` for `google/gemini-3.7-flash=novita`, `x-ai/grok-4.6=novita` and
+  `meta/muse-spark-1.2=novita` all refuse with `candidate endpoint inventory refresh requires a
+  previously unlisted endpoint`, while those same slugs are reported unavailable by discovery. No
+  discovery artifact or snapshot on disk carries an endpoint inventory for these models.
 - **Status:** `QUEUED`
-- **Next action:** Settle the reasoning-effort question first and record the answer, then implement
-  whichever of role-scoping or endpoint refresh the answer justifies. Do not select the replacement
-  candidate, launch a campaign, emit an operator command, or grant any authority.
+- **Next action:** Implement only the enumeration surface. Do not select a candidate, emit a
+  successor plan, launch a campaign, or grant any authority.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2411,14 +2482,13 @@ and report serialization.
 
 ## Current next action
 
-`V3-SCHEMARETRY-001` and `V3-REVOKERECON-001` are `COMPLETE` provider-free and nonauthorizing. The
-requested-assignment path admits unrevoked alternatives while the existing tombstone continues to
-refuse the revoked route with exact diagnostics and exact role isolation. No successor ticket or
-replacement candidate is selected, and no provider, operator, campaign, qualification, runtime,
-audit, or release authority is current.
-`V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No provider
-action, campaign, operator command, run index, candidate selection, qualification, runtime authority,
-or release action is current.
+`V3-SCHEMARETRY-001`, `V3-REVOKERECON-001`, and `V3-PLANSUCCESSOR-001` are `COMPLETE` provider-free
+and nonauthorizing. `V3-CANDROUTE-001` is `PARTIAL`: its explicit unverified endpoint-refresh
+mechanism passes synthetic constrained discovery and live-route preflight, but the latest operator
+record still reports zero admissible real candidates, the active plan is unchanged, and no
+replacement is selected. No new ticket is selected. `V3-SINGLE-AUDIT-001` and
+`V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No provider action, campaign,
+operator command, run index, qualification, runtime authority, audit, or release action is current.
 
 ## Historical next action — c627 replay boundary (superseded)
 
