@@ -3,6 +3,75 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-30T19:00Z — **`list-endpoints` WORKS. Live survey of 112 endpoints across 12 models: still NO admissible candidate**
+
+`V3-ENDPOINTLIST-001` works and was exercised live — the enumeration Codex could not run. The result
+is a complete, evidence-based picture of why no candidate is admissible. All provider-free; ledger
+unchanged at 57 entries / `0.68118684` USD.
+
+### 1. Live endpoint survey
+
+| model | endpoints | native structured output | endpoint-level reasoning inventory |
+|---|---|---|---|
+| `deepseek/deepseek-v4-pro-0813` | 16 | 8 | **0** |
+| `z-ai/glm-5.2` | 33 | 28 | **0** |
+| `moonshotai/kimi-k3` | 17 | 16 | **0** |
+| `minimax/minimax-m3` | 11 | 3 | **0** |
+| `google/gemma-4-26b-a4b-it` | 9 | 7 | **0** |
+| `tencent/hy3` | 7 | 1 | **0** |
+| `x-ai/grok-4.6` | 5 | 5 | **0** |
+| `google/gemini-3.7-flash` | 6 | 6 | **0** |
+| `anthropic/claude-opus-5` | 9 | 6 | **0** |
+| `openai/gpt-5.6-sol` | 7 | 6 | **0** |
+| `qwen/qwen3.8-max`, `meta/muse-spark-1.2` | 1 each | 1 each | **0** |
+
+**Endpoint-level reasoning-effort inventory is absent on all 112 endpoints of all 12 models**,
+including the two judges that currently pass and the candidate that previously passed.
+
+### 2. Consequent gap in `list-endpoints`
+
+Admission does **not** use the endpoint-level value alone. `_reasoning_effort_result`
+(`route_constraints.py`) reads
+`effective = endpoint_supported_reasoning_efforts if not None else model_supported_reasoning_efforts`,
+so a route is admissible when the **model-level** inventory exists even though the endpoint-level one
+does not. `list-endpoints` reports only the endpoint-level field, so its reasoning-effort column
+cannot discriminate admissible from inadmissible routes — `deepseek` shows `0/16` and passes, `gemma`
+shows `0/9` and fails. **Request:** add the model-level inventory (and the effective resolved value)
+to the enumeration output, otherwise the command cannot serve the purpose it was built for.
+
+### 3. Live routes tested through successor + constrained discovery
+
+Using real `selection_arguments` from the enumeration, with `--refresh-endpoint-inventory`:
+
+| route | outcome |
+|---|---|
+| `x-ai/grok-4.6=amazon-bedrock/us-west-2` | `endpoint prices must be exact decimal strings` |
+| `anthropic/claude-opus-5=anthropic` | endpoint absent from the exact-model ZDR snapshot |
+| `google/gemma-4-26b-a4b-it=google-vertex/global` | constrained predicate failure |
+| `google/gemma-4-26b-a4b-it=parasail/bf16` | constrained predicate failure |
+
+`google/gemini-3.7-flash` and `openai/gpt-5.6-sol` have **zero** endpoints that are simultaneously
+operational, natively structured-output capable, and unambiguously routed, so neither has a testable
+route at all.
+
+### 4. Standing conclusion
+
+**No admissible candidate exists**, and the binding constraints are now identified in order of impact:
+
+1. **Model-level reasoning-effort inventory absent** — the sole failure for `gemma-4-26b-a4b-it` and
+   `minimax-m3`, both otherwise clean and both lineage-independent of the judges. Still the single
+   highest-leverage question: is `REASONING_EFFORT_SUPPORT` genuinely required of a **candidate**, or
+   is it a judge-role requirement applied to all four purposes? It remains required for all four and
+   is not role-scoped. `V3-CANDROUTE-001` is `PARTIAL` and this question is still unanswered.
+2. **ZDR unavailable** — `claude-opus-5`, `gemini-3.7-flash`, `muse-spark-1.2`.
+3. **Pricing metadata not exact decimal strings** — `grok-4.6=amazon-bedrock/us-west-2`.
+4. **Structured-output mode unsupported** — `tencent/hy3`.
+
+This may be the constraint set correctly refusing everything currently on offer rather than a defect.
+If so, that is itself a product finding worth recording: under the present constraints the frozen
+objective has no eligible candidate, and either a constraint is role-scoped with recorded rationale or
+the campaign cannot proceed. `completed_real_audits` remains `0`.
+
 ## 2026-08-30T15:18Z — **V3-PLANSUCCESSOR-001 WORKS. But NO candidate route is admissible — complete sweep, $0**
 
 Successor plans emit and bind correctly. A full constrained sweep of **every** plan-allowed candidate
