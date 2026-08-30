@@ -3,6 +3,66 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-30T15:18Z — **V3-PLANSUCCESSOR-001 WORKS. But NO candidate route is admissible — complete sweep, $0**
+
+Successor plans emit and bind correctly. A full constrained sweep of **every** plan-allowed candidate
+route then found **zero admissible candidates**. Provider-free throughout; ledger unchanged at 57
+entries / `0.68118684` USD.
+
+### 1. Plan succession is correct
+
+`models emit-selection-plan-successor` produced
+`00b6aa8fb1d23640a6b65dae7883d7265e416b9ba4383c3240329e62500f34b3` from predecessor
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, naming the new candidate and
+carrying both judge constraints forward unchanged, with the predecessor digest recorded. Constrained
+discovery then correctly evaluates the replacement instead of emitting unconstrained evidence.
+
+**A correction to the previous operator entry:** the two "viable" candidates reported there were
+found with the **predecessor** plan, i.e. unconstrained for those routes. Under constrained discovery
+both fail. Unconstrained discovery passing is not evidence of admissibility, and that entry
+overstated the result.
+
+### 2. Complete constrained sweep — every plan-allowed candidate route
+
+| route | outcome |
+|---|---|
+| `deepseek/deepseek-v4-pro-0813=parasail/fp8` | REVOKED — `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE` |
+| `google/gemma-4-26b-a4b-it=deepinfra/fp8` | `REASONING_EFFORT_INVENTORY_UNAVAILABLE` |
+| `minimax/minimax-m3=coreweave/fp4` | `REASONING_EFFORT_INVENTORY_UNAVAILABLE` |
+| `tencent/hy3=novita` | endpoint lacks the required structured-output mode |
+| `qwen/qwen3.8-max=alibaba` | endpoint absent from the exact-model ZDR snapshot |
+| `anthropic/claude-opus-5=amazon-bedrock` | provider display name is ambiguous |
+| `openai/gpt-5.6-sol=novita` | catalog metadata omits the required request parameters |
+| `google/gemini-3.7-flash` (novita, deepinfra, google-vertex) | endpoint tag or slug unavailable |
+| `x-ai/grok-4.6` (novita, together) | endpoint tag or slug unavailable |
+| `meta/muse-spark-1.2` (novita, together, deepinfra) | endpoint tag or slug unavailable |
+
+`minimax-m3` on `deepinfra/fp8` and `parasail/fp8` was refused at successor emission because those
+endpoints are outside its plan `allowed_provider_endpoints`, so routes cannot simply be invented.
+
+### 3. The two highest-leverage observations
+
+**(a) `REASONING_EFFORT_SUPPORT` is required for all four `RouteConstraintPurpose` values and is not
+role-scoped.** It is the *sole* failure for `gemma-4-26b-a4b-it` and `minimax-m3` — two routes that
+are otherwise clean and whose Google and MiniMax lineages are both independent of the `z-ai` primary
+judge and `moonshotai` replay judge. If reasoning effort is not semantically required of a
+**candidate** — as opposed to a judge — role-scoping that predicate restores two candidates
+immediately. **If it is genuinely required, say so and record why; this must not be relaxed for
+convenience.** This is the single question most worth answering.
+
+**(b) The plan's `allowed_provider_endpoints` are stale.** `gemini-3.7-flash`, `grok-4.6` and
+`muse-spark-1.2` name slugs that no longer exist, so three models cannot be evaluated on their merits
+at all. This is the same staleness previously recorded for `gpt-5.6-sol`.
+
+### 4. Requested
+
+Queued as **`V3-CANDROUTE-001`**. Primary acceptance test: at least one lineage-independent candidate
+passes constrained discovery **and** a provider-free live-route gate. Settle the reasoning-effort
+question first and record the answer.
+
+Until an admissible candidate exists, no smoke, no campaign, and no movement on
+`completed_real_audits`, which remains `0`.
+
 ## 2026-08-28T12:56Z — **REVOCATION RECONCILED AND WORKING; replacement candidates still unusable — plan succession needed**
 
 `V3-REVOKERECON-001` works. Two viable replacement candidates were found. **They still cannot be

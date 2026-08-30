@@ -1442,13 +1442,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   transport boundaries. The revoked DeepSeek/Parasail exact and canonical identities still fail
   closed with role, model, endpoint, and
   `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`; plan/constraint hash changes, mutable role shadows,
-  and transport-registry mutation cannot resurrect or rescope the tombstone.
+  constructor-time constraint mutation, and coherent replacement or deletion of every mutable
+  transport-registry index cannot resurrect or rescope the tombstone. A separately retained weak
+  construction record preserves exact authority without retaining the client credential graph.
 - **Remaining limitation:** The unchanged pinned plan still selects the revoked candidate and is not
   runnable. This ticket selected no replacement, performed no provider call, and granted no
-  qualification, campaign, runtime, audit, or release authority. The operator-reported pre-fix
-  whole-plan deadlock remains historical evidence rather than a post-fix provider result.
-- **Next action:** Stop after closure. No successor ticket is selected. Candidate replacement,
-  empirical validation, and any later paid run require separate work and fresh authorization.
+  qualification, campaign, runtime, audit, or release authority. Current operator evidence reports
+  that unrevoked discovery now succeeds, but the replacement live-route gate lacks constrained
+  discovery evidence under the unchanged plan.
+- **Next action:** Stop after closure. `V3-PLANSUCCESSOR-001` is queued but unselected. Candidate
+  choice, successor-plan work, empirical validation, and any later paid run remain separate and
+  require a new work-unit selection and fresh authorization.
 
 ### V3-PLANSUCCESSOR-001 — Emit a successor selection plan naming a live candidate route
 
@@ -1489,10 +1493,50 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `route_predicate_profile`/`exact_route_constraint`/`normalized_route_facts`/`route_predicate_report`
   while the plan-pinned deepseek artifact contains all four. Plan
   `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`.
-- **Status:** `QUEUED`
-- **Next action:** Implement only successor emission and its negatives. Do not choose the replacement
+- **Status:** `IN_PROGRESS`
+- **Next action:** Implement and validate only successor emission and its negatives. Do not choose the replacement
   candidate, launch a campaign, emit an operator command, or grant any qualification, calibration, or
   release authority. Candidate choice remains an operator decision informed by a provider-free sweep.
+
+### V3-CANDROUTE-001 — Restore an admissible candidate route
+
+- **Objective:** There is currently **no admissible candidate route at all**. `V3-PLANSUCCESSOR-001`
+  works and successor plans emit correctly, but every plan-allowed candidate fails constrained
+  discovery, so no campaign can run and `completed_real_audits` cannot move off `0`. Restore at least
+  one admissible, lineage-independent candidate.
+- **Files/modules:** Role scoping in the route-predicate purpose matrix
+  (`src/mmaudit/models/route_constraints.py`), selection-plan endpoint inventory refresh, and focused
+  regressions.
+- **Acceptance criteria:**
+  - **Primary acceptance test:** at least one candidate route, lineage-independent of the `z-ai`
+    primary judge and `moonshotai` replay judge, passes constrained discovery **and** a provider-free
+    `--live-route-preflight-only` gate.
+  - **Question to settle first, with the answer recorded:** is `REASONING_EFFORT_SUPPORT` genuinely
+    required for the **candidate** role, or is it a judge-role requirement currently applied to all
+    four `RouteConstraintPurpose` values? It is presently required for every purpose and is not
+    role-scoped. Two otherwise-clean, lineage-distinct routes —
+    `google/gemma-4-26b-a4b-it=deepinfra/fp8` and `minimax/minimax-m3=coreweave/fp4` — fail solely on
+    `REASONING_EFFORT_INVENTORY_UNAVAILABLE`. If reasoning effort is not semantically required of a
+    candidate, role-scoping this predicate unlocks both immediately. If it **is** required, record why
+    and leave it; do not relax a real integrity constraint for convenience.
+  - Selection-plan `allowed_provider_endpoints` are refreshed against live catalogue metadata, or a
+    supported path refreshes them. Several entries name endpoint slugs that no longer exist
+    (`together`, `deepinfra`, `novita`, `google-vertex` for `gemini-3.7-flash`, `grok-4.6`,
+    `muse-spark-1.2`), so those models cannot be evaluated on their merits at all.
+  - Any relaxation is explicit, recorded with rationale, and role-scoped — never a blanket weakening.
+    ZDR, operational status, native structured-output mode, display-name injectivity, and lineage
+    independence remain fully enforced for the candidate role.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions for role-scoped predicate requirements across all four
+  purposes, endpoint-inventory refresh, admission of the restored candidate, continued rejection of
+  the revoked route and of genuinely non-conforming routes, schema drift, Ruff, strict mypy.
+- **Dependencies:** Operator sweep of `2026-08-30`, provider-free at `$0`, covering every
+  plan-allowed candidate route. Results recorded in the operator record.
+- **Status:** `QUEUED`
+- **Next action:** Settle the reasoning-effort question first and record the answer, then implement
+  whichever of role-scoping or endpoint refresh the answer justifies. Do not select the replacement
+  candidate, launch a campaign, emit an operator command, or grant any authority.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
