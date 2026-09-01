@@ -3,6 +3,59 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-01T04:49Z — **OPERATOR DECISION: pursue lossless price-lexeme custody. The V3-PRICEFORM-001 refusal is upheld, and answered.**
+
+Both outstanding questions were answered by Codex, both correctly. This entry records the operator
+decision on what follows, and supplies the technical fact that resolves the remaining one. No spend;
+ledger unchanged at 57 entries / `0.68118684` USD.
+
+### 1. Both refusals are accepted
+
+`REASONING_EFFORT_SUPPORT` is genuinely required of the candidate role — the candidate is sealed to
+the `model_benchmark` reasoning policy that emits `effort=high` and reserves reasoning tokens, so a
+route without published support would silently ignore an emitted control and break request/budget
+parity. Accepted; `gemma-4-26b-a4b-it` and `minimax-m3` are genuinely out, not out on a technicality.
+
+`V3-PRICEFORM-001` rejection also stands **under the custody model as it exists today**, and its
+reasoning is exactly right: after ordinary JSON parsing the original decimal lexeme is gone, and
+`Decimal(str(value))` proves only the chosen reserialization, not identity to the provider's decimal.
+The earlier operator proposal to admit "numerics that convert without loss" was unsound and is
+withdrawn.
+
+### 2. The operator decision
+
+**Pursue lossless price-lexeme custody. Do not relax the exactness requirement, and do not revisit the
+frozen objective's constraint set to unblock a campaign.**
+
+Of the three available paths — weaken a constraint, wait for provider metadata to change, or make
+exactness provable — only the third is compatible with the product's core claim. A constraint relaxed
+to admit a candidate is precisely the failure this system exists to prevent.
+
+### 3. The technical fact that resolves it
+
+The lexeme is only destroyed because the pricing path uses ordinary JSON number parsing. It need not.
+Verified operator-side `2026-09-01`:
+
+```
+json.loads('{"prompt": 0.0000012}')                      -> float, exact value
+  0.00000119999999999999994569773419106351042273672646842896938323974609375
+json.loads('{"prompt": 0.0000012}', parse_float=Decimal) -> Decimal('0.0000012')
+```
+
+With `parse_float=Decimal` the number never transits a binary float, and the provider's original
+decimal is preserved exactly — the same guarantee a string price already carries, obtained by not
+discarding the evidence rather than by reconstructing it.
+
+Queued as **`V3-PRICELEXEME-001`**. It honours the `V3-PRICEFORM-001` decision rather than overturning
+it: the *requirement* is unchanged and still fails closed; only the *custody model* changes, so that
+exactness becomes demonstrable for numeric-valued prices. Existing sealed evidence must remain
+byte-identical and continue to replay.
+
+If implemented, `x-ai/grok-4.6=amazon-bedrock/us-west-2` — the sole route satisfying every substantive
+candidate constraint — becomes admissible, and the campaign path reopens. If it cannot be implemented
+soundly, then the recorded conclusion stands unchanged: under the current constraint set no admissible
+candidate route exists, and that is a finding about the objective rather than a defect.
+
 ## 2026-08-30T19:00Z — **`list-endpoints` WORKS. Live survey of 112 endpoints across 12 models: still NO admissible candidate**
 
 `V3-ENDPOINTLIST-001` works and was exercised live — the enumeration Codex could not run. The result

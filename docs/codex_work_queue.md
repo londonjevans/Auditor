@@ -1671,6 +1671,115 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   emit a successor plan, launch a campaign, or grant any authority. Candidate selection remains an
   operator decision.
 
+### V3-ACTORMODEL-001 — Actor and incentive model as a required audit input
+
+- **Objective:** Add a typed, versioned, explicitly operator-authored actor model so severity and
+  likelihood account for privileged-role occupancy, concentration, capital seniority, revenue
+  exposure, incentives, and legitimate behavior instead of inferring actors from source code.
+- **Files/modules:** Actor-model schema/loader, consensus severity calibration, context and prompts,
+  report provenance, generated schema, safe synthetic fixtures, and regressions.
+- **Acceptance criteria:** Currently held and admitted-but-unfilled roles are distinct; loss-waterfall
+  priority is explicit; action against a stated interest is justified or rated down; legitimate
+  conduct is not mislabeled as misconduct and increases rather than decreases likelihood; absent or
+  stale input is disclosed on every severity; code/model occupancy disagreement becomes a typed
+  governance finding; the three queued economic-judgment corrections are reproduced safely.
+- **Tests:** Provider-free unit, context/prompt, consensus, report/schema, CLI, and synthetic
+  regression coverage; canonical schema generation, Ruff, strict mypy, and affected suites.
+- **Dependencies:** None for schema/input; completed `V3-CONSENSUS-001` for severity consumption.
+- **Status:** `COMPLETE`
+- **Result:** Added a typed, versioned, self-hashed operator actor input with bounded identity-safe
+  loading; current/stale/missing/future/invalid states; held versus admitted-unfilled roles; capital,
+  waterfall, exposure, constraint, ordinary-behavior, and governance-conflict evidence; actor-blind
+  specialist/verifier passes; typed judge context; and deterministic post-consensus calibration that
+  cannot let judge status or confidence reclassify a CURRENT-actor finding. Baseline, evaluation,
+  judge decisions, reports, SARIF, manifests, scheduler replay, and generated schemas retain exact
+  custody. Three synthetic correction scenarios and current/missing seven-pass controls pass.
+- **Validation:** Canonical generation and verification passed; Ruff formatting/checks and strict
+  mypy over `221` source files passed. The broad affected matrix passed `674` tests with `1`
+  capability skip and `2` explicitly deselected pre-existing truncation-parser regressions. Both
+  deselected tests were separately reproduced and fail on paths introduced before this ticket.
+- **Remaining limitation:** Actor facts remain operator-authored rather than independently proven.
+  Retained scheduler-v1 compatibility is established compositionally rather than by one complete
+  recovered-v1 journal fixture. The two unrelated truncation-parser hygiene regressions remain open
+  outside this work unit.
+- **Next action:** Select `V3-TAXONOMY-001` as the next dependency-ready local work unit at a new
+  ticket boundary; do not infer actor facts, select a candidate, or issue a provider/operator command.
+
+### V3-TAXONOMY-001 — Known-issue taxonomy with mandatory disposition
+
+- **Objective:** Bind a versioned defensive vulnerability taxonomy to deterministic protocol
+  profiles and require every applicable class to be explicitly `REVIEWED`, `NOT_APPLICABLE`, or a
+  cited `GAP`; an omission must never become an implicit pass.
+- **Files/modules:** Taxonomy corpus/schema and custody, deterministic Solidity profile matching,
+  model-coverage/report projections, maximum-assurance gates, generated artifacts, and regressions.
+- **Acceptance criteria:** The hash-pinned corpus and schema are canonical; applicability is
+  deterministic and evidence-backed; every applicable item and disposition is reported with a
+  denominator; critical gaps block `COMPLETE`; taxonomy entries cannot create findings.
+- **Tests:** Provider-free unit and safe local integration regressions, canonical schema/inventory
+  generation, Ruff, strict mypy, affected matrices, and the complete sequential suite.
+- **Dependencies:** `V3-COVERAGE-001` (`COMPLETE`).
+- **Status:** `IN_PROGRESS`
+- **Current result:** The core taxonomy and reporting capability is implemented. Closure-private
+  ordinary/recovery authority, durable promotion lineage, exact capability identity, promoted-leaf
+  consumers, ordinary-root system-prompt inheritance, lexically captured authority classes, and
+  exact recovery snapshot adoption are repaired. Direct/recursive promotion, consumer lifecycle,
+  alias-replacement, published-hard-link, and opening-final-fence regressions pass. Frozen
+  scheduler-v1 bytes replace the drifting legacy helper, and consumer validation now replays every
+  retained reference before applying the terminal live-authority gate. Focused consumer and exact
+  scheduler-pipeline regressions pass; the complete assurance/report/learning matrix passes `291`
+  tests; the complete model-coverage/review/manifest matrix passes `233` tests; and the complete
+  release/replay matrix passes `314` tests. Canonical generation and verification pass for the
+  final `3892`-source autonomy inventory, and the changed scheduler matrix passes `350` tests.
+  Remaining affected/full sequential gates are active.
+  Release collection
+  remains intentionally `BLOCKED_TECHNICAL` before all side effects. No provider or operator action
+  is authorized.
+- **Next action:** Finish the affected/full sequential matrices and reconcile final disposition.
+
+### V3-PRICELEXEME-001 — Preserve provider price lexemes so exactness is provable
+
+- **Objective:** Make exact billable-price custody **provable** rather than relaxing it. The
+  `V3-PRICEFORM-001` decision is correct as far as it goes: once a JSON number has been parsed by
+  ordinary means the original decimal lexeme is destroyed, and `Decimal(str(value))` then proves only
+  the chosen reserialization. The remedy is to never destroy the lexeme. Capture provider prices as
+  exact decimals **at parse time**, so a numeric-valued price can be admitted with the same exactness
+  guarantee a string price already carries. This unblocks the sole otherwise-viable candidate route,
+  `x-ai/grok-4.6=amazon-bedrock/us-west-2`, **without weakening any constraint**.
+- **Files/modules:** Provider metadata JSON decoding on the endpoint/pricing path,
+  `_validate_endpoint_pricing` and `_canonical_price` in
+  `src/mmaudit/models/endpoint_snapshots.py`, snapshot custody and digests, and focused regressions.
+- **Acceptance criteria:**
+  - Provider metadata carrying prices is decoded with a decimal-preserving hook — Python's
+    `json.loads(..., parse_float=Decimal)` — so a JSON number never transits a binary float on the
+    pricing path. Verified operator-side `2026-09-01`: ordinary parsing turns `0.0000012` into a float
+    whose exact value is
+    `0.00000119999999999999994569773419106351042273672646842896938323974609375`, while
+    `parse_float=Decimal` yields exactly `Decimal('0.0000012')`.
+  - A numeric price is admitted **only** through that lossless path. Any price reaching validation as
+    a binary float, or whose captured lexeme is absent, still fails closed with the existing named
+    reason. String prices behave exactly as today.
+  - The captured lexeme is the canonical stored form and is covered by existing snapshot digests, so
+    the provider's original decimal is auditable and replayable rather than reconstructed.
+  - Cost reserve/spend/reconcile arithmetic, ledger closure, per-attempt tripwires, and every existing
+    price-derived digest are unchanged for all currently-admissible routes; existing sealed evidence
+    remains byte-identical and continues to replay.
+  - Non-representable, malformed, negative, out-of-range, or ambiguous prices continue to fail closed.
+    Nothing here admits a price that cannot be represented exactly.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions with recorded fixtures covering numeric and string prices,
+  lexeme identity through decode → validate → snapshot → digest, byte-identity of existing sealed
+  evidence, rejection of float-transited and malformed prices, ledger arithmetic parity, schema drift,
+  Ruff, strict mypy.
+- **Dependencies:** `V3-PRICEFORM-001` decision of `2026-08-30` (rejection stands under the *current*
+  custody model). This ticket changes that custody model rather than the requirement, so the prior
+  decision is honoured, not overturned. Operator survey of `2026-08-30`: exactly one route satisfies
+  every substantive candidate constraint and is blocked solely by price representation.
+- **Status:** `QUEUED`
+- **Next action:** Implement lossless price capture and its negatives. Do not select a candidate,
+  emit a successor plan, launch a campaign, or grant any authority. Candidate selection remains an
+  operator decision informed by a provider-free sweep.
+
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
 - **Objective:** Define one typed, self-hashed route-predicate profile and make plan construction,
@@ -2544,15 +2653,15 @@ and report serialization.
 
 ## Current next action
 
-`V3-SCHEMARETRY-001`, `V3-REVOKERECON-001`, `V3-PLANSUCCESSOR-001`, and corrected schema-v1.1
-`V3-ENDPOINTLIST-001` are `COMPLETE` provider-free at their local implementation boundaries and
-nonauthorizing. The operator-reported v1.0 live survey exposed the endpoint-list model-fallback gap;
-the v1.1 correction is locally regressed but has not been exercised live. `V3-CANDROUTE-001` remains
-`PARTIAL`: the current operator record reports zero admissible real candidates, the active plan is
-unchanged, and no replacement is selected. Select `V3-ACTORMODEL-001` as the next dependency-ready
-local work unit. `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind
-their prerequisites. No provider action, campaign, operator command, run index, qualification,
-runtime authority, audit, or release action is current.
+`V3-TAXONOMY-001` is the sole logical ticket `IN_PROGRESS`. Its provider-free core is implemented,
+but adversarial review reopened ordinary/recovery authority and downstream recovery-credit paths.
+Release collection is explicitly `BLOCKED_TECHNICAL` before side effects. `V3-ACTORMODEL-001` is
+`COMPLETE`. `V3-CANDROUTE-001` remains `PARTIAL`: the current operator record reports zero
+admissible real candidates, the active plan is unchanged, and no replacement is selected.
+`V3-RETRIEVAL-001` remains the next dependency-ready ticket after taxonomy disposition.
+`V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No
+provider action, campaign, operator command, run index, qualification, runtime authority, audit,
+or release action is current.
 
 ## Historical next action — c627 replay boundary (superseded)
 
