@@ -6,12 +6,8 @@ import hashlib
 import importlib.metadata
 import os
 import re
-import signal
 import stat
-import subprocess
 import sys
-import tempfile
-import time
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,11 +21,14 @@ import mmaudit
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release import ReleaseGateId, ReleaseGateStatus
+from mmaudit.release_candidate import ReleaseCandidateObservation
 from mmaudit.release_gates import (
     ReleaseGateEvidenceBundle,
     ReleaseGateFixedPlan,
     ReleaseGatePlanExecutor,
+    ReleaseGatePrerequisiteBlocker,
     ReleaseGateReceipt,
+    ReleaseGateResultKind,
     build_release_gate_receipt,
     get_release_gate_child_environment_contract,
     get_release_gate_fixed_plan,
@@ -37,9 +36,7 @@ from mmaudit.release_gates import (
 )
 from mmaudit.release_io import (
     create_evidence_file_binding,
-    read_json_evidence,
     revalidate_evidence_file_binding,
-    write_json_evidence,
 )
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -50,6 +47,7 @@ _MAX_DISTRIBUTION_TOTAL_BYTES = 1024 * 1024 * 1024
 _MAX_DISTRIBUTION_FILES = 10_000
 _MAX_JUNIT_BYTES = 32 * 1024 * 1024
 _MAX_JUNIT_TESTS = 10_000_000
+_StatIdentity = tuple[int, int, int, int, int, int, int]
 _LOCAL_GATE_IDS = frozenset(
     {
         ReleaseGateId.RUFF_FORMAT,
@@ -58,6 +56,16 @@ _LOCAL_GATE_IDS = frozenset(
         ReleaseGateId.PYTEST,
     }
 )
+_LOCAL_GATE_BLOCKER_CODE = "secure_local_gate_runner_unavailable"
+_LOCAL_GATE_BLOCKER_SUMMARY = (
+    "No local runner currently proves pre-startup import isolation, subprocess network denial, "
+    "and descriptor-rooted evidence writes."
+)
+_LOCAL_GATE_RESULT_SUMMARY = (
+    "local execution is blocked until the runner provides OS network confinement and "
+    "descriptor-rooted candidate and evidence I/O"
+)
+_EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 class JUnitValidationStatus(StrEnum):
@@ -97,7 +105,7 @@ class LocalReleaseGateResultPayload(StrictModel):
     status: ReleaseGateStatus
     started_at: datetime
     ended_at: datetime
-    argv: tuple[str, ...] = Field(min_length=3, max_length=16)
+    argv: tuple[str, ...] = Field(min_length=3, max_length=32)
     argv_sha256: str = Field(pattern=_SHA256_PATTERN)
     tool_name: str = Field(min_length=1, max_length=100)
     tool_version: str = Field(min_length=1, max_length=200)
@@ -133,7 +141,7 @@ class LocalReleaseGateResultPayload(StrictModel):
     def string_tuples_are_literal(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(
             not item
-            or len(item) > 4_096
+            or len(item.encode("utf-8")) > 16_384
             or any(ord(character) < 32 or ord(character) == 127 for character in item)
             for item in value
         ):
@@ -257,19 +265,19 @@ def execute_local_release_gate(
     gate_id: ReleaseGateId,
     repository_root: Path,
     evidence_root: Path,
-    candidate_observation_sha256: str,
+    candidate: ReleaseCandidateObservation,
     run_binding_sha256: str,
 ) -> ReleaseGateReceipt:
-    """Execute one of four closed local plans and return its evidence-bound receipt."""
+    """Fail closed until an OS-confined, descriptor-rooted local runner is available."""
 
-    if not isinstance(gate_id, ReleaseGateId) or gate_id not in _LOCAL_GATE_IDS:
+    if type(gate_id) is not ReleaseGateId or gate_id not in _LOCAL_GATE_IDS:
         raise ValueError("only fixed local release gates may execute")
-    if os.name == "nt":
-        raise ValueError("fixed local release gates require POSIX process-group containment")
+    if type(candidate) is not ReleaseCandidateObservation:
+        raise TypeError("local release candidate must be an exact observation value")
+    candidate_observation_sha256 = candidate.observation_sha256
     _require_sha256(candidate_observation_sha256, label="candidate observation")
     _require_sha256(run_binding_sha256, label="run binding")
-    root, repository_identity = _require_executing_repository_root(repository_root)
-    evidence = _require_unlinked_directory(evidence_root, label="release evidence root")
+    del repository_root, evidence_root
     plan = get_release_gate_fixed_plan(gate_id)
     if (
         plan.executor is not ReleaseGatePlanExecutor.FIXED_LOCAL_PYTHON_MODULE
@@ -277,141 +285,31 @@ def execute_local_release_gate(
         or plan.timeout_seconds is None
     ):
         raise ValueError("release gate has no fixed local execution plan")
-    _require_fresh_destination(evidence / plan.result_artifact_path)
-    if plan.supplemental_artifact_path is not None:
-        _require_fresh_destination(evidence / plan.supplemental_artifact_path)
-
-    executable_before = _observe_executing_python()
-    tool_before = _observe_tool_distribution(plan.module)
-    argv = _materialize_argv(plan, evidence_root=evidence)
-    started_at = _utc_now()
-    junit_descriptor: int | None = None
-    junit_identity: tuple[int, int] | None = None
-    try:
-        if plan.supplemental_artifact_path is not None:
-            junit_descriptor, junit_identity = _create_fresh_private_file(
-                evidence / plan.supplemental_artifact_path
-            )
-        with tempfile.TemporaryDirectory(
-            prefix=".mmaudit-release-runtime-",
-            dir=evidence,
-        ) as runtime_name:
-            runtime_root = Path(runtime_name)
-            network_guard_root = _install_network_guard(runtime_root, gate_id=gate_id)
-            environment = _fixed_child_environment(
-                runtime_root,
-                network_guard_root=network_guard_root,
-                gate_id=gate_id,
-            )
-            environment_contract = get_release_gate_child_environment_contract(gate_id)
-            outcome = _execute_fixed_process(
-                argv=argv,
-                repository_root=root,
-                runtime_root=runtime_root,
-                environment=environment,
-                timeout_seconds=plan.timeout_seconds,
-            )
-        ended_at = _utc_now()
-
-        executable_after = _observe_executing_python()
-        tool_after = _observe_tool_distribution(plan.module)
-        final_root, final_repository_identity = _require_executing_repository_root(repository_root)
-        if (
-            final_root != root
-            or final_repository_identity != repository_identity
-            or executable_after != executable_before
-            or tool_after != tool_before
-        ):
-            raise ValueError("local release toolchain or repository changed during execution")
-
-        junit_status, junit_counts, junit_binding = _observe_junit(
-            gate_id=gate_id,
-            evidence_root=evidence,
-            relative_path=plan.supplemental_artifact_path,
-            descriptor=junit_descriptor,
-            created_identity=junit_identity,
-        )
-        status = (
-            ReleaseGateStatus.FAILED
-            if outcome.timed_out or outcome.returncode != 0
-            else ReleaseGateStatus.PASSED
-        )
-        if (
-            gate_id is ReleaseGateId.PYTEST
-            and status is ReleaseGateStatus.PASSED
-            and (
-                junit_status is not JUnitValidationStatus.VALID
-                or junit_counts is None
-                or junit_counts.failures
-                or junit_counts.errors
-            )
-        ):
-            raise ValueError("successful pytest command lacks valid nonempty JUnit evidence")
-
-        result = _build_result(
-            gate_id=gate_id,
-            candidate_observation_sha256=candidate_observation_sha256,
-            run_binding_sha256=run_binding_sha256,
-            plan=plan,
-            status=status,
-            started_at=started_at,
-            ended_at=ended_at,
-            argv=argv,
-            tool_version=tool_before.version,
-            python_executable_sha256=executable_before.sha256,
-            tool_distribution_sha256=tool_before.inventory_sha256,
-            outcome=outcome,
-            environment=environment,
-            environment_contract=environment_contract,
-            junit_status=junit_status,
-            junit_counts=junit_counts,
-            junit_binding=junit_binding,
-        )
-        result_binding = write_json_evidence(
-            evidence_root=evidence,
-            relative_path=plan.result_artifact_path,
-            value=result,
-            max_bytes=_MAX_CAPTURE_BYTES,
-        )
-        artifact_bindings = sorted(
-            [
-                result_binding,
-                *([junit_binding] if junit_binding is not None else []),
-            ],
-            key=lambda binding: binding.path,
-        )
-        receipt = build_release_gate_receipt(
-            gate_id=gate_id,
-            candidate_observation_sha256=candidate_observation_sha256,
-            run_binding_sha256=run_binding_sha256,
-            fixed_plan_sha256=plan.fixed_plan_sha256,
-            started_at=started_at,
-            ended_at=ended_at,
-            argv=argv,
-            tool_name=plan.module,
-            tool_version=tool_before.version,
-            tool_executable_sha256=executable_before.sha256,
-            tool_distribution_sha256=tool_before.inventory_sha256,
-            execution_evidence=ExecutionEvidenceKind.REAL,
-            exit_code=None if outcome.timed_out else outcome.returncode,
-            timed_out=outcome.timed_out,
-            stdout=outcome.stdout,
-            stderr=outcome.stderr,
-            summary=_result_summary(gate_id, status, junit_counts),
-            prerequisite_blocker=None,
-            artifact_bindings=artifact_bindings,
-        )
-        validate_local_release_gate_result_artifact(
-            evidence_root=evidence,
-            binding=result_binding,
-            expected_candidate_observation_sha256=candidate_observation_sha256,
-            expected_run_binding_sha256=run_binding_sha256,
-            expected_receipt=receipt,
-        )
-        return receipt
-    finally:
-        if junit_descriptor is not None:
-            os.close(junit_descriptor)
+    timestamp = _utc_now()
+    return build_release_gate_receipt(
+        gate_id=gate_id,
+        candidate_observation_sha256=candidate_observation_sha256,
+        run_binding_sha256=run_binding_sha256,
+        fixed_plan_sha256=plan.fixed_plan_sha256,
+        started_at=timestamp,
+        ended_at=timestamp,
+        argv=("mmaudit-release", "blocked-local-gate", gate_id.value),
+        tool_name=plan.module,
+        tool_version=None,
+        tool_executable_sha256=None,
+        tool_distribution_sha256=None,
+        execution_evidence=ExecutionEvidenceKind.UNVERIFIED,
+        exit_code=None,
+        timed_out=False,
+        stdout=b"",
+        stderr=b"",
+        summary=_LOCAL_GATE_RESULT_SUMMARY,
+        prerequisite_blocker=ReleaseGatePrerequisiteBlocker(
+            code=_LOCAL_GATE_BLOCKER_CODE,
+            summary=_LOCAL_GATE_BLOCKER_SUMMARY,
+        ),
+        artifact_bindings=(),
+    )
 
 
 def validate_local_release_gate_result_artifact(
@@ -422,92 +320,15 @@ def validate_local_release_gate_result_artifact(
     expected_run_binding_sha256: str,
     expected_receipt: ReleaseGateReceipt,
 ) -> LocalReleaseGateResult:
-    """Validate one typed result artifact and reconcile every receipt projection."""
+    """Reject executed local artifacts under the current no-execution plan."""
 
-    expected_binding = revalidate_evidence_file_binding(
-        evidence_root=evidence_root,
-        binding=binding,
-        max_bytes=_MAX_CAPTURE_BYTES,
-    )
-    observation = read_json_evidence(
-        evidence_root=evidence_root,
-        relative_path=expected_binding.path,
-        max_bytes=_MAX_CAPTURE_BYTES,
-    )
-    if observation.binding != expected_binding:
-        raise ValueError("local release result differs from its declared artifact binding")
-    result = LocalReleaseGateResult.model_validate(observation.value)
+    del evidence_root, binding, expected_candidate_observation_sha256, expected_run_binding_sha256
+    if type(expected_receipt) is not ReleaseGateReceipt:
+        raise TypeError("local release receipt must be an exact typed value")
     receipt = ReleaseGateReceipt.model_validate(expected_receipt.model_dump(mode="json"))
-    plan = get_release_gate_fixed_plan(receipt.gate_id)
-    expected_result_path = plan.result_artifact_path
-    expected_argv = _materialize_argv(
-        plan,
-        evidence_root=_require_unlinked_directory(
-            evidence_root,
-            label="release evidence root",
-        ),
-    )
-    current_executable = _observe_executing_python()
-    current_tool = _observe_tool_distribution(plan.module or "")
-    receipt_bindings = {item.path: item for item in receipt.artifact_bindings}
-    if (
-        expected_binding.path != expected_result_path
-        or receipt_bindings.get(expected_result_path) != expected_binding
-        or result.candidate_observation_sha256 != expected_candidate_observation_sha256
-        or result.run_binding_sha256 != expected_run_binding_sha256
-        or receipt.candidate_observation_sha256 != expected_candidate_observation_sha256
-        or receipt.run_binding_sha256 != expected_run_binding_sha256
-        or result.gate_id is not receipt.gate_id
-        or result.plan.fixed_plan_sha256 != receipt.fixed_plan_sha256
-        or result.status is not receipt.status
-        or result.started_at != receipt.started_at
-        or result.ended_at != receipt.ended_at
-        or result.argv != receipt.argv
-        or result.argv != expected_argv
-        or result.argv_sha256 != receipt.argv_sha256
-        or result.tool_name != receipt.tool_name
-        or result.tool_name != plan.module
-        or result.tool_version != receipt.tool_version
-        or result.tool_version != current_tool.version
-        or result.python_executable_sha256 != receipt.tool_executable_sha256
-        or result.python_executable_sha256 != current_executable.sha256
-        or result.tool_distribution_sha256 != receipt.tool_distribution_sha256
-        or result.tool_distribution_sha256 != current_tool.inventory_sha256
-        or result.execution_evidence is not receipt.execution_evidence
-        or result.timed_out is not receipt.timed_out
-        or result.stdout_size != receipt.stdout_size
-        or result.stdout_sha256 != receipt.stdout_sha256
-        or result.stderr_size != receipt.stderr_size
-        or result.stderr_sha256 != receipt.stderr_sha256
-    ):
-        raise ValueError("local release result differs from its receipt projection")
-    expected_receipt_exit = None if result.timed_out else result.process_exit_code
-    if receipt.exit_code != expected_receipt_exit:
-        raise ValueError("local release result exit status differs from its receipt")
-    expected_passed_checks = 1 if result.status is ReleaseGateStatus.PASSED else 0
-    expected_failed_checks = 1 - expected_passed_checks
-    if (
-        receipt.result_summary.checks_total != 1
-        or receipt.result_summary.checks_passed != expected_passed_checks
-        or receipt.result_summary.checks_failed != expected_failed_checks
-    ):
-        raise ValueError("local release receipt check accounting is not semantically exact")
-
-    expected_paths = {expected_result_path}
-    if result.junit_binding is not None:
-        supplemental = plan.supplemental_artifact_path
-        if supplemental is None or result.junit_binding.path != supplemental:
-            raise ValueError("local release result has an unexpected supplemental artifact")
-        revalidate_evidence_file_binding(
-            evidence_root=evidence_root,
-            binding=result.junit_binding,
-            max_bytes=_MAX_JUNIT_BYTES,
-        )
-        expected_paths.add(supplemental)
-    if set(receipt_bindings) != expected_paths:
-        raise ValueError("local release receipt artifact set is not semantically exact")
-    _revalidate_junit_result(result, evidence_root=evidence_root)
-    return result
+    if receipt.gate_id not in _LOCAL_GATE_IDS:
+        raise ValueError("local result validation received a non-local release gate")
+    raise ValueError("current local release plan rejects executed result artifacts")
 
 
 def validate_local_release_gate_receipts(
@@ -515,36 +336,53 @@ def validate_local_release_gate_receipts(
     bundle: ReleaseGateEvidenceBundle,
     evidence_root: Path,
 ) -> tuple[LocalReleaseGateResult, ...]:
-    """Validate all four local result artifacts carried by one candidate/run bundle."""
+    """Require canonical no-execution blockers for all four current local gates."""
 
+    del evidence_root
     validated = ReleaseGateEvidenceBundle.model_validate(bundle.model_dump(mode="json"))
     by_gate = {receipt.gate_id: receipt for receipt in validated.receipts}
-    results = []
     for gate_id in sorted(_LOCAL_GATE_IDS, key=lambda item: item.value):
-        receipt = by_gate[gate_id]
-        result_path = get_release_gate_fixed_plan(gate_id).result_artifact_path
-        binding = next(
-            (item for item in receipt.artifact_bindings if item.path == result_path),
-            None,
+        _require_canonical_local_gate_blocker(by_gate[gate_id], gate_id=gate_id)
+    return ()
+
+
+def _require_canonical_local_gate_blocker(
+    receipt: ReleaseGateReceipt,
+    *,
+    gate_id: ReleaseGateId,
+) -> None:
+    plan = get_release_gate_fixed_plan(gate_id)
+    blocker = receipt.prerequisite_blocker
+    summary = receipt.result_summary
+    if (
+        receipt.gate_id is not gate_id
+        or receipt.status is not ReleaseGateStatus.BLOCKED_TECHNICAL
+        or receipt.started_at != receipt.ended_at
+        or receipt.argv != ("mmaudit-release", "blocked-local-gate", gate_id.value)
+        or receipt.tool_name != plan.module
+        or receipt.tool_version is not None
+        or receipt.tool_executable_sha256 is not None
+        or receipt.tool_distribution_sha256 is not None
+        or receipt.execution_evidence is not ExecutionEvidenceKind.UNVERIFIED
+        or receipt.exit_code is not None
+        or receipt.timed_out
+        or receipt.stdout_size != 0
+        or receipt.stdout_sha256 != _EMPTY_SHA256
+        or receipt.stderr_size != 0
+        or receipt.stderr_sha256 != _EMPTY_SHA256
+        or summary.kind is not ReleaseGateResultKind.BLOCKED_TECHNICAL
+        or summary.summary != _LOCAL_GATE_RESULT_SUMMARY
+        or summary.checks_total != 0
+        or summary.checks_passed != 0
+        or summary.checks_failed != 0
+        or blocker is None
+        or blocker.code != _LOCAL_GATE_BLOCKER_CODE
+        or blocker.summary != _LOCAL_GATE_BLOCKER_SUMMARY
+        or receipt.artifact_bindings
+    ):
+        raise ValueError(
+            f"local release receipt is not the canonical current-plan blocker: {gate_id}"
         )
-        if receipt.status is ReleaseGateStatus.BLOCKED_TECHNICAL:
-            if binding is not None:
-                raise ValueError(
-                    f"blocked local release receipt claims an executed result: {gate_id}"
-                )
-            continue
-        if binding is None:
-            raise ValueError(f"local release receipt lacks its typed result artifact: {gate_id}")
-        results.append(
-            validate_local_release_gate_result_artifact(
-                evidence_root=evidence_root,
-                binding=binding,
-                expected_candidate_observation_sha256=validated.candidate_observation_sha256,
-                expected_run_binding_sha256=validated.run_binding_sha256,
-                expected_receipt=receipt,
-            )
-        )
-    return tuple(results)
 
 
 def _build_result(
@@ -612,72 +450,17 @@ def _build_result(
     )
 
 
-def _execute_fixed_process(
-    *,
-    argv: tuple[str, ...],
-    repository_root: Path,
-    runtime_root: Path,
-    environment: dict[str, str],
-    timeout_seconds: int,
-) -> _ProcessOutcome:
-    with (
-        tempfile.TemporaryFile(mode="w+b", dir=runtime_root) as stdout_file,
-        tempfile.TemporaryFile(mode="w+b", dir=runtime_root) as stderr_file,
-    ):
-        try:
-            process = subprocess.Popen(
-                list(argv),
-                cwd=repository_root,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                shell=False,
-                close_fds=True,
-                start_new_session=os.name != "nt",
-                preexec_fn=_limit_release_child if os.name != "nt" else None,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise ValueError("fixed local release command could not start") from exc
-        timed_out = False
-        try:
-            try:
-                returncode = process.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _stop_process(process)
-                returncode = process.wait(timeout=5)
-        finally:
-            _terminate_release_process_group(process.pid)
-        stdout = _read_capture(stdout_file)
-        stderr = _read_capture(stderr_file)
-    if not -255 <= returncode <= 255:
-        raise ValueError("fixed local release command returned an invalid exit status")
-    return _ProcessOutcome(
-        returncode=returncode,
-        timed_out=timed_out,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
 def _fixed_child_environment(
-    runtime_root: Path,
     *,
-    network_guard_root: Path,
+    evidence_root: Path,
+    candidate_root: Path,
     gate_id: ReleaseGateId,
 ) -> dict[str, str]:
-    home = runtime_root / "home"
-    cache = runtime_root / "cache"
-    temporary = runtime_root / "tmp"
-    for path in (home, cache, temporary):
-        path.mkdir(mode=0o700)
-        path.chmod(0o700)
     substitutions = {
         "{devnull}": os.devnull,
         "{python_bin}": str(Path(sys.executable).parent),
-        "{runtime_root}": str(runtime_root),
-        "{network_guard_root}": str(network_guard_root),
+        "{evidence_root}": str(evidence_root),
+        "{candidate_root}": str(candidate_root),
     }
     environment = get_release_gate_child_environment_contract(gate_id)
     for key, template in tuple(environment.items()):
@@ -690,56 +473,6 @@ def _fixed_child_environment(
     return environment
 
 
-def _install_network_guard(
-    runtime_root: Path,
-    *,
-    gate_id: ReleaseGateId,
-) -> Path:
-    """Install the exact private sitecustomize source bound by the fixed gate plan."""
-
-    guard_root = runtime_root / "network-guard"
-    try:
-        guard_root.mkdir(mode=0o700)
-        guard_root.chmod(0o700)
-        guard_metadata = guard_root.lstat()
-    except OSError as exc:
-        raise ValueError("local release network guard root could not be created") from exc
-    if (
-        not stat.S_ISDIR(guard_metadata.st_mode)
-        or stat.S_ISLNK(guard_metadata.st_mode)
-        or guard_root.is_junction()
-        or stat.S_IMODE(guard_metadata.st_mode) != 0o700
-    ):
-        raise ValueError("local release network guard root is not a private directory")
-
-    source = get_release_gate_network_guard_source(gate_id)
-    expected_sha256 = get_release_gate_fixed_plan(gate_id).network_guard_sha256
-    if expected_sha256 is None or hashlib.sha256(source).hexdigest() != expected_sha256:
-        raise ValueError("local release network guard source differs from its fixed plan")
-    destination = guard_root / "sitecustomize.py"
-    descriptor, created_identity = _create_fresh_private_file(destination)
-    try:
-        remaining = memoryview(source)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise ValueError("local release network guard could not be written")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-        observed = _read_descriptor(descriptor, max_bytes=_MAX_CAPTURE_BYTES)
-        metadata = os.fstat(descriptor)
-        if (
-            (metadata.st_dev, metadata.st_ino) != created_identity
-            or metadata.st_size != len(source)
-            or observed != source
-            or hashlib.sha256(observed).hexdigest() != expected_sha256
-        ):
-            raise ValueError("local release network guard changed during installation")
-    finally:
-        os.close(descriptor)
-    return guard_root
-
-
 def _materialize_argv(
     plan: ReleaseGateFixedPlan,
     *,
@@ -747,45 +480,119 @@ def _materialize_argv(
 ) -> tuple[str, ...]:
     if plan.module is None:
         raise ValueError("local release plan has no Python module")
-    arguments = tuple(
-        (
-            item.replace(
-                "{evidence_root}",
-                str(evidence_root),
-            )
-            if "{evidence_root}" in item
-            else item
-        )
-        for item in plan.arguments
+    bootstrap_source = get_release_gate_network_guard_source(plan.gate_id)
+    expected_bootstrap_sha256 = plan.network_guard_sha256
+    if (
+        expected_bootstrap_sha256 is None
+        or hashlib.sha256(bootstrap_source).hexdigest() != expected_bootstrap_sha256
+    ):
+        raise ValueError("local release trusted bootstrap differs from its fixed plan")
+    launcher = (
+        'exec(compile(bytes.fromhex("'
+        + bootstrap_source.hex()
+        + '").decode("utf-8"),"<mmaudit-release-bootstrap>","exec"))'
     )
-    argv = (sys.executable, "-P", "-m", plan.module, *arguments)
+    if len(launcher.encode("utf-8")) > 16_384 or any(
+        ord(character) < 32 or ord(character) == 127 for character in launcher
+    ):
+        raise ValueError("local release trusted bootstrap launcher is not a bounded literal")
+    substitutions = {
+        "{devnull}": os.devnull,
+        "{evidence_root}": str(evidence_root),
+    }
+    materialized_arguments: list[str] = []
+    for item in plan.arguments:
+        value = item
+        for marker, replacement in substitutions.items():
+            value = value.replace(marker, replacement)
+        if "{" in value or "}" in value:
+            raise ValueError("local release argv has an unresolved placeholder")
+        materialized_arguments.append(value)
+    arguments = tuple(materialized_arguments)
+    argv = (sys.executable, "-P", "-S", "-c", launcher, plan.module, *arguments)
     expected = {
         ReleaseGateId.RUFF_FORMAT: (
             sys.executable,
             "-P",
-            "-m",
+            "-S",
+            "-c",
+            launcher,
             "ruff",
             "format",
             "--check",
+            "--no-cache",
+            "--isolated",
+            "--target-version",
+            "py312",
+            "--line-length",
+            "100",
+            "--extend-exclude",
+            "config/public_model_lineage/sources/**",
+            "--extend-exclude",
+            "docs/remediation/v3/operator_captures/**",
             ".",
         ),
         ReleaseGateId.RUFF_CHECK: (
             sys.executable,
             "-P",
-            "-m",
+            "-S",
+            "-c",
+            launcher,
             "ruff",
             "check",
+            "--no-cache",
+            "--isolated",
+            "--target-version",
+            "py312",
+            "--line-length",
+            "100",
+            "--select",
+            "E,F,I,UP,B,SIM,RUF",
+            "--ignore",
+            "E501",
+            "--extend-exclude",
+            "config/public_model_lineage/sources/**",
+            "--extend-exclude",
+            "docs/remediation/v3/operator_captures/**",
             ".",
         ),
-        ReleaseGateId.MYPY: (sys.executable, "-P", "-m", "mypy"),
+        ReleaseGateId.MYPY: (
+            sys.executable,
+            "-P",
+            "-S",
+            "-c",
+            launcher,
+            "mypy",
+            "--no-incremental",
+            "--config-file",
+            os.devnull,
+            "--strict",
+            "--python-version",
+            "3.12",
+            "--disable-error-code",
+            "import-untyped",
+            "src/mmaudit",
+        ),
         ReleaseGateId.PYTEST: (
             sys.executable,
             "-P",
-            "-m",
+            "-S",
+            "-c",
+            launcher,
             "pytest",
             "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "pytest_asyncio.plugin",
+            "-c",
+            os.devnull,
+            "--rootdir=.",
+            "--confcutdir=.",
+            "--import-mode=importlib",
             "--junitxml",
             str(evidence_root / "release-gate-pytest-junit.xml"),
+            "tests",
         ),
     }[plan.gate_id]
     if argv != expected:
@@ -1249,64 +1056,6 @@ def _result_summary(
             f"and {junit_counts.skipped} skipped"
         )
     return f"fixed local {gate_id.value} gate passed"
-
-
-def _limit_release_child() -> None:
-    os.umask(0o077)
-    try:
-        import resource
-    except ImportError as exc:
-        raise RuntimeError("fixed local release resource limits are unavailable") from exc
-    resource.setrlimit(resource.RLIMIT_CPU, (1_800, 1_800))
-    resource.setrlimit(
-        resource.RLIMIT_FSIZE,
-        (_MAX_CAPTURE_BYTES + 1, _MAX_CAPTURE_BYTES + 1),
-    )
-    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    if sys.platform != "darwin" and hasattr(resource, "RLIMIT_NPROC"):
-        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
-    if sys.platform != "darwin" and hasattr(resource, "RLIMIT_AS"):
-        resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
-
-
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    try:
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        process.kill()
-
-
-def _terminate_release_process_group(process_group_id: int) -> None:
-    """Kill and confirm removal of descendants left in the isolated process group."""
-
-    if os.name == "nt" or process_group_id <= 1:
-        raise ValueError("fixed local release process group cannot be safely terminated")
-    try:
-        os.killpg(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    except OSError as exc:
-        raise ValueError("fixed local release process group cleanup failed") from exc
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process_group_id, 0)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            time.sleep(0.01)
-            continue
-        except OSError as exc:
-            raise ValueError(
-                "fixed local release process group cleanup could not be confirmed"
-            ) from exc
-        time.sleep(0.01)
-    raise ValueError("fixed local release process group survived cleanup")
 
 
 def _required_flag(name: str) -> int:

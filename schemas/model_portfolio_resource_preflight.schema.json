@@ -4,6 +4,7 @@
       "description": "Closed task classes covered by the pre-orientation spend reservation.",
       "enum": [
         "orientation",
+        "retrieval_planning",
         "compact_coverage",
         "source_audit",
         "whole_protocol",

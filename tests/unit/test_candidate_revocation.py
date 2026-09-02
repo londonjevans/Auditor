@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 import mmaudit.models.candidate_revocation as candidate_revocation_module
 from mmaudit.models.candidate_revocation import (
+    CANDIDATE_SELECTION_REVOCATION_PROJECTION,
     CANDIDATE_SELECTION_REVOCATION_RESOURCE,
     CANDIDATE_SELECTION_REVOCATION_RESOURCE_SHA256,
     OPERATOR_RESULTS_REVOCATION_EVIDENCE_SHA256,
@@ -87,6 +88,7 @@ def test_pinned_resource_is_exact_canonical_negative_only_evidence() -> None:
     assert entry.reason is (
         CandidateSelectionRevocationReason.EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE
     )
+    assert CANDIDATE_SELECTION_REVOCATION_PROJECTION[0][-1] == entry.reason.value
     assert entry.disposition == "REVOKED"
     for field_name in (
         "operator_evidence_authority",
@@ -212,11 +214,17 @@ def test_assignment_gate_rejects_requested_and_canonical_alias_case_insensitivel
     model_id: str,
     endpoint: str,
 ) -> None:
-    with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked"):
+    with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked") as raised:
         require_candidate_assignment_eligible(
+            role=ExactRouteRole.CANDIDATE,
             exact_model_id=model_id,
             provider_endpoint=endpoint,
         )
+    message = str(raised.value)
+    assert "role=candidate" in message
+    assert f"model={model_id}" in message
+    assert "endpoint=parasail/fp8" in message
+    assert "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in message
 
 
 @pytest.mark.parametrize("model_id", (REQUESTED_MODEL, CANONICAL_MODEL))
@@ -236,11 +244,26 @@ def test_new_plan_or_constraint_hash_cannot_resurrect_revoked_endpoint(
 ) -> None:
     with pytest.raises(CandidateSelectionRevocationError, match="assignment is revoked"):
         require_candidate_assignment_eligible(
+            role=ExactRouteRole.CANDIDATE,
             exact_model_id=model_id,
             provider_endpoint=ENDPOINT,
             selection_plan_sha256="a" * 64,
             exact_route_constraint_sha256="b" * 64,
         )
+
+
+@pytest.mark.parametrize(
+    "role",
+    (ExactRouteRole.PRIMARY_JUDGE, ExactRouteRole.REPLAY_JUDGE),
+)
+def test_assignment_gate_is_exact_to_revoked_role(role: ExactRouteRole) -> None:
+    require_candidate_assignment_eligible(
+        role=role,
+        exact_model_id=REQUESTED_MODEL,
+        provider_endpoint=ENDPOINT,
+        selection_plan_sha256="a" * 64,
+        exact_route_constraint_sha256="b" * 64,
+    )
 
 
 @pytest.mark.parametrize("model_id", (REQUESTED_MODEL, CANONICAL_MODEL))
@@ -256,6 +279,27 @@ def test_explicit_adjacent_endpoint_remains_discoverable_but_not_authorized(
     require_candidate_assignment_eligible(
         exact_model_id="adjacent/model-20260827",
         provider_endpoint=ENDPOINT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint"),
+    (
+        ("minimax/minimax-m3", "coreweave/fp4"),
+        ("google/gemma-4-26b-a4b-it", "deepinfra/fp8"),
+        ("tencent/hy3", "novita"),
+    ),
+)
+def test_observed_unrevoked_reselection_alternatives_remain_eligible(
+    model_id: str,
+    provider_endpoint: str,
+) -> None:
+    require_candidate_assignment_eligible(
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        selection_plan_sha256="a" * 64,
+        exact_route_constraint_sha256="b" * 64,
     )
 
 
@@ -337,7 +381,7 @@ def test_plan_route_gate_is_exact_to_role_model_and_endpoint() -> None:
 
 
 def test_single_route_helper_rejects_exact_tombstone() -> None:
-    with pytest.raises(CandidateSelectionRevocationError, match="route is revoked"):
+    with pytest.raises(CandidateSelectionRevocationError, match="route is revoked") as raised:
         require_candidate_route_eligible(
             selection_plan_sha256=PLAN_SHA256,
             role=ExactRouteRole.CANDIDATE,
@@ -345,6 +389,11 @@ def test_single_route_helper_rejects_exact_tombstone() -> None:
             provider_endpoint=ENDPOINT,
             exact_route_constraint_sha256=CONSTRAINT_SHA256,
         )
+    assert str(raised.value) == (
+        "candidate selection route is revoked: role=candidate; "
+        "model=deepseek/deepseek-v4-pro-0813; endpoint=parasail/fp8; "
+        "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE"
+    )
 
 
 def test_plan_route_inventory_requires_canonical_nonempty_unique_tuples() -> None:
@@ -391,6 +440,40 @@ def test_callable_boundary_binds_resource_identity_constant(
         assert candidate_revocation_callables_are_pristine() is False
         with pytest.raises(CandidateSelectionRevocationError, match="not pristine"):
             load_candidate_selection_revocation_registry()
+    assert candidate_revocation_callables_are_pristine()
+
+
+def test_assignment_gate_rechecks_pinned_resource_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as mutation:
+        mutation.setattr(Path, "read_bytes", lambda _path: b"{}")
+        with pytest.raises(CandidateSelectionRevocationError, match="resource identity changed"):
+            require_candidate_assignment_eligible(
+                role=ExactRouteRole.CANDIDATE,
+                exact_model_id=REQUESTED_MODEL,
+                provider_endpoint=ENDPOINT,
+            )
+    assert candidate_revocation_callables_are_pristine()
+
+
+def test_callable_boundary_rejects_exact_route_role_member_rebinding() -> None:
+    original_candidate = ExactRouteRole.CANDIDATE
+    type.__setattr__(
+        ExactRouteRole,
+        "CANDIDATE",
+        ExactRouteRole.PRIMARY_JUDGE,
+    )
+    try:
+        assert candidate_revocation_callables_are_pristine() is False
+        with pytest.raises(CandidateSelectionRevocationError, match="not pristine"):
+            require_candidate_assignment_eligible(
+                role=ExactRouteRole.CANDIDATE,
+                exact_model_id=REQUESTED_MODEL,
+                provider_endpoint=ENDPOINT,
+            )
+    finally:
+        type.__setattr__(ExactRouteRole, "CANDIDATE", original_candidate)
     assert candidate_revocation_callables_are_pristine()
 
 

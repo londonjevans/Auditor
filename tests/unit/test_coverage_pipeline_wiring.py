@@ -61,6 +61,10 @@ async def test_direct_pipeline_model_validation_rejects_revoked_route_before_pro
     tmp_path: Path,
     config_factory: Any,
 ) -> None:
+    class _WeakReferenceableClientStub:
+        def __init__(self, provider_policy: OpenRouterProviderPolicy) -> None:
+            self.provider_policy = provider_policy
+
     base = config_factory()
     config = config_factory(
         models={
@@ -76,8 +80,8 @@ async def test_direct_pipeline_model_validation_rejects_revoked_route_before_pro
             },
         }
     )
-    client = SimpleNamespace(
-        provider_policy=OpenRouterProviderPolicy(
+    client = _WeakReferenceableClientStub(
+        OpenRouterProviderPolicy(
             only=("parasail/fp8",),
             allow_fallbacks=False,
         )

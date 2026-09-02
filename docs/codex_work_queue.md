@@ -1718,23 +1718,32 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Tests:** Provider-free unit and safe local integration regressions, canonical schema/inventory
   generation, Ruff, strict mypy, affected matrices, and the complete sequential suite.
 - **Dependencies:** `V3-COVERAGE-001` (`COMPLETE`).
-- **Status:** `IN_PROGRESS`
-- **Current result:** The core taxonomy and reporting capability is implemented. Closure-private
-  ordinary/recovery authority, durable promotion lineage, exact capability identity, promoted-leaf
-  consumers, ordinary-root system-prompt inheritance, lexically captured authority classes, and
-  exact recovery snapshot adoption are repaired. Direct/recursive promotion, consumer lifecycle,
-  alias-replacement, published-hard-link, and opening-final-fence regressions pass. Frozen
-  scheduler-v1 bytes replace the drifting legacy helper, and consumer validation now replays every
-  retained reference before applying the terminal live-authority gate. Focused consumer and exact
-  scheduler-pipeline regressions pass; the complete assurance/report/learning matrix passes `291`
-  tests; the complete model-coverage/review/manifest matrix passes `233` tests; and the complete
-  release/replay matrix passes `314` tests. Canonical generation and verification pass for the
-  final `3892`-source autonomy inventory, and the changed scheduler matrix passes `350` tests.
-  Remaining affected/full sequential gates are active.
-  Release collection
-  remains intentionally `BLOCKED_TECHNICAL` before all side effects. No provider or operator action
-  is authorized.
-- **Next action:** Finish the affected/full sequential matrices and reconcile final disposition.
+- **Status:** `COMPLETE`
+- **Result:** The provider-free, hash-pinned defensive taxonomy is bound to deterministic protocol
+  profiles, and every applicable class now requires an evidence-cited `REVIEWED`,
+  `NOT_APPLICABLE`, or `GAP` disposition with an explicit denominator. Critical gaps block
+  maximum-assurance `COMPLETE`, while taxonomy entries remain classification-only and cannot create
+  findings. Closure-private ordinary/recovery authority, durable promotion lineage, exact
+  capability identity, promoted-leaf consumers, ordinary-root system-prompt inheritance, lexically
+  captured authority classes, and exact recovery snapshot adoption are repaired. Frozen
+  scheduler-v1 bytes replace the drifting legacy helper, and consumer validation replays every
+  retained reference before applying the terminal live-authority gate.
+- **Validation:** Canonical generation and verification pass for the final `3892`-source autonomy
+  inventory. The assurance/report/learning matrix passed `291` tests; model-coverage/review/manifest
+  passed `233`; release/replay passed `314`; the changed scheduler matrix passed `350`; affected
+  units passed `457`; affected safe local integrations passed `40` with `8` explicit skips; and the
+  cumulative coverage and truncation integration matrices passed `11` and `9` respectively. The
+  current governance matrix passed `103` tests. Ruff check, Ruff format verification over `597`
+  files, strict mypy over `226` source files, strict JSON parsing, and diff integrity pass. The
+  terminal complete sequential suite exited `0` with `8073 passed, 22 skipped, 12 warnings in
+  9810.83s (2:43:30)`.
+- **Remaining limitation:** This provider-free capability does not prove a provider-backed audit,
+  candidate selection, qualification, runtime authority, or release. Release collection remains
+  intentionally `BLOCKED_TECHNICAL` before all side effects; no provider or operator action is
+  authorized.
+- **Next action:** `STOP` at this ticket boundary. `V3-RETRIEVAL-001` is the next dependency-ready
+  ticket, but it remains `QUEUED` and unselected. `V3-CANDROUTE-001` remains `PARTIAL`, and
+  `V3-PRICELEXEME-001` remains `QUEUED`, unselected, and unimplemented. Grant no external authority.
 
 ### V3-PRICELEXEME-001 — Preserve provider price lexemes so exactness is provable
 
@@ -1775,10 +1784,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   custody model). This ticket changes that custody model rather than the requirement, so the prior
   decision is honoured, not overturned. Operator survey of `2026-08-30`: exactly one route satisfies
   every substantive candidate constraint and is blocked solely by price representation.
-- **Status:** `QUEUED`
-- **Next action:** Implement lossless price capture and its negatives. Do not select a candidate,
-  emit a successor plan, launch a campaign, or grant any authority. Candidate selection remains an
-  operator decision informed by a provider-free sweep.
+- **Status:** `IN_PROGRESS`
+- **Selection boundary:** Selected as the sole current successor after `V3-RETRIEVAL-001` closure;
+  `implementation_started=false`. This is a queue-state change only: no code, configuration,
+  schema, test fixture, provider command, candidate plan, ledger, or authority changed.
+- **Next action:** `STOP` at this selection-only boundary. A later work slice may implement lossless
+  price capture and its negatives. Keep `V3-PRICEFORM-001` `QUEUED` and `V3-CANDROUTE-001`
+  `PARTIAL` and downstream; do not select a candidate, launch a campaign, or grant authority.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2653,15 +2665,14 @@ and report serialization.
 
 ## Current next action
 
-`V3-TAXONOMY-001` is the sole logical ticket `IN_PROGRESS`. Its provider-free core is implemented,
-but adversarial review reopened ordinary/recovery authority and downstream recovery-credit paths.
-Release collection is explicitly `BLOCKED_TECHNICAL` before side effects. `V3-ACTORMODEL-001` is
-`COMPLETE`. `V3-CANDROUTE-001` remains `PARTIAL`: the current operator record reports zero
-admissible real candidates, the active plan is unchanged, and no replacement is selected.
-`V3-RETRIEVAL-001` remains the next dependency-ready ticket after taxonomy disposition.
-`V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind their prerequisites. No
-provider action, campaign, operator command, run index, qualification, runtime authority, audit,
-or release action is current.
+`CURRENT_TICKET` is `V3-PRICELEXEME-001`; `V3-RETRIEVAL-001` is the last completed ticket.
+`V3-PRICELEXEME-001` is the sole `IN_PROGRESS` ticket at a selection-only boundary with
+`implementation_started=false`. The combined queues contain `40` unfinished tickets.
+`V3-PRICEFORM-001` remains `QUEUED`. `V3-CANDROUTE-001` remains `PARTIAL` and downstream: the
+current operator record reports zero admissible real candidates, the active plan is unchanged,
+and no replacement is selected. `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind
+their prerequisites. No provider action, campaign, operator command, run index, qualification,
+runtime authority, audit, or release action is current.
 
 ## Historical next action — c627 replay boundary (superseded)
 

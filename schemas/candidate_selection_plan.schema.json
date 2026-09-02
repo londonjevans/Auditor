@@ -83,6 +83,86 @@
       "title": "AuthenticatedRunnerSelection",
       "type": "object"
     },
+    "CandidateSelectionEndpointInventoryRefresh": {
+      "additionalProperties": false,
+      "description": "One explicit, nonauthorizing endpoint inventory transition.",
+      "properties": {
+        "constrained_discovery_required": {
+          "const": true,
+          "title": "Constrained Discovery Required",
+          "type": "boolean"
+        },
+        "discovery_evidence_embedded": {
+          "const": false,
+          "title": "Discovery Evidence Embedded",
+          "type": "boolean"
+        },
+        "disposition": {
+          "const": "OPERATOR_STAGED_UNVERIFIED",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "endpoint_authority": {
+          "const": false,
+          "title": "Endpoint Authority",
+          "type": "boolean"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "predecessor_allowed_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Predecessor Allowed Provider Endpoints",
+          "type": "array"
+        },
+        "predecessor_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Entry Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_metadata_embedded": {
+          "const": false,
+          "title": "Provider Metadata Embedded",
+          "type": "boolean"
+        },
+        "refresh_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "predecessor_entry_sha256",
+        "predecessor_allowed_provider_endpoints",
+        "provider_endpoint",
+        "disposition",
+        "constrained_discovery_required",
+        "provider_metadata_embedded",
+        "discovery_evidence_embedded",
+        "endpoint_authority",
+        "refresh_sha256"
+      ],
+      "title": "CandidateSelectionEndpointInventoryRefresh",
+      "type": "object"
+    },
     "CandidateSelectionEntry": {
       "additionalProperties": false,
       "description": "One exact candidate proposal with no discovery or lineage authority.",
@@ -525,6 +605,69 @@
   "$id": "https://mmaudit.local/schemas/candidate_selection_plan.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "predecessor_plan_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "predecessor_plan_sha256"
+        ]
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.4"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "predecessor_plan_sha256"
+          ]
+        }
+      }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "endpoint_inventory_refresh"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.6"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "endpoint_inventory_refresh": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "endpoint_inventory_refresh"
+        ]
+      }
+    }
+  ],
   "description": "Self-hashed operator-staged seed with only literal-false authority flags.",
   "properties": {
     "artifact_kind": {
@@ -563,6 +706,17 @@
       "title": "Documentary Lineage Identity Authorized",
       "type": "boolean"
     },
+    "endpoint_inventory_refresh": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionEndpointInventoryRefresh"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "entries": {
       "items": {
         "$ref": "#/$defs/CandidateSelectionEntry"
@@ -581,6 +735,19 @@
       "pattern": "^[0-9a-f]{64}$",
       "title": "Plan Sha256",
       "type": "string"
+    },
+    "predecessor_plan_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predecessor Plan Sha256"
     },
     "production_selection_authorized": {
       "const": false,
@@ -618,7 +785,11 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.4",
+      "enum": [
+        "1.4",
+        "1.5",
+        "1.6"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

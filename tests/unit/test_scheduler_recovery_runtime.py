@@ -96,6 +96,7 @@ class _ReadyValues(TypedDict):
 
 def _runtime_fixture(path: Path) -> _RuntimeFixture:
     requests = _requests()
+    surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
     base_parent_context = _context(requests)
     provisional_parent_context = base_parent_context.model_copy(update={"role": "source_audit"})
     parent_context = provisional_parent_context.model_copy(
@@ -162,6 +163,9 @@ def _runtime_fixture(path: Path) -> _RuntimeFixture:
         system_prompt_sha256=base_task.system_prompt_sha256,
         normalizer_sha256=scheduler_response_normalizer_sha256(wire_schema_sha256),
         response_schema_sha256=wire_schema_sha256,
+        model_surface_review_request_manifest_sha256=(
+            surface_manifest.requested_surface_manifest_sha256
+        ),
     )
     plan = journal.seal_pass_plan(
         SchedulerPassPlan.build(
@@ -220,7 +224,6 @@ def _runtime_fixture(path: Path) -> _RuntimeFixture:
             terminal_evidence_sha256=projection.evidence_sha256,
         )
     )
-    surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
     recovery_plan = _root_plan(
         journal,
         projection=projection,

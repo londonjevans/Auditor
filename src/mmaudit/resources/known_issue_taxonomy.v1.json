@@ -1,0 +1,218 @@
+{
+  "schema_version": "1.0",
+  "taxonomy_version": "1.0",
+  "purpose": "defensive_failure_mode_coverage",
+  "finding_authority": false,
+  "items": [
+    {
+      "item_id": "KI-AMM-RESERVE-ACCOUNTING",
+      "title": "AMM reserve-dependent accounting",
+      "category": "economic_accounting",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["amm", "oracle_consumer"],
+      "defensive_question": "Review whether reserve-dependent security decisions remain correct across bounded reserve and liquidity changes.",
+      "economic_template": "amm_reserve_manipulation",
+      "item_sha256": "161a4c1ecf3dfd6fed1d9ab70f06e2dedfa514c5ff46e016845fd535fb6a644f",
+      "review_surface_subject_id": "known-issue:KI-AMM-RESERVE-ACCOUNTING:161a4c1ecf3dfd6fed1d9ab70f06e2dedfa514c5ff46e016845fd535fb6a644f"
+    },
+    {
+      "item_id": "KI-AUTHORIZATION-BOUNDARIES",
+      "title": "Authorization and privilege boundaries",
+      "category": "authorization",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["solidity_general"],
+      "defensive_question": "Review whether every state-changing privileged operation has an explicit, source-supported authorization boundary and safe authority transition.",
+      "economic_template": null,
+      "item_sha256": "c517ab0602aa2c1824bf86f46b03b3e3c3def0c866bcd13764e430b5d426797f",
+      "review_surface_subject_id": "known-issue:KI-AUTHORIZATION-BOUNDARIES:c517ab0602aa2c1824bf86f46b03b3e3c3def0c866bcd13764e430b5d426797f"
+    },
+    {
+      "item_id": "KI-BOUNDED-STATE-GROWTH",
+      "title": "Bounded persistent state growth",
+      "category": "availability",
+      "criticality": "non_critical",
+      "applicable_protocol_profiles": ["erc20_token", "governance", "staking", "token_distribution"],
+      "defensive_question": "Review whether externally reachable collection growth and iteration remain bounded under declared operational limits.",
+      "economic_template": "bounded_state_growth",
+      "item_sha256": "861a2503f18fa524fe95c1133e2cea504638a148167f3bea1b5df57183716afc",
+      "review_surface_subject_id": "known-issue:KI-BOUNDED-STATE-GROWTH:861a2503f18fa524fe95c1133e2cea504638a148167f3bea1b5df57183716afc"
+    },
+    {
+      "item_id": "KI-CALLBACK-STATE-CONSISTENCY",
+      "title": "Callback and receiver state consistency",
+      "category": "state_integrity",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["erc20_token", "erc4626_vault", "lending", "staking"],
+      "defensive_question": "Review whether reachable callbacks observe and leave accounting, authorization, and settlement state in a consistent order.",
+      "economic_template": "callback_receiver_reentrancy",
+      "item_sha256": "8eef23cef811bf9bfc390dea00dd735e59ea42bfff4c3f0e0591f360bcbc9cf2",
+      "review_surface_subject_id": "known-issue:KI-CALLBACK-STATE-CONSISTENCY:8eef23cef811bf9bfc390dea00dd735e59ea42bfff4c3f0e0591f360bcbc9cf2"
+    },
+    {
+      "item_id": "KI-CROSS-CHAIN-MESSAGE-CONSUMPTION",
+      "title": "Cross-chain message consumption",
+      "category": "cross_chain",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["bridge"],
+      "defensive_question": "Review whether inbound messages are domain-bound, ordered as intended, and consumed no more than once.",
+      "economic_template": "cross_chain_duplicate_ordering",
+      "item_sha256": "a6a4294d2face33e8e2eeb2da625e304731f787b27704148e7d810806f19c963",
+      "review_surface_subject_id": "known-issue:KI-CROSS-CHAIN-MESSAGE-CONSUMPTION:a6a4294d2face33e8e2eeb2da625e304731f787b27704148e7d810806f19c963"
+    },
+    {
+      "item_id": "KI-ERC4626-SHARE-INFLATION",
+      "title": "ERC4626 share inflation and donation accounting",
+      "category": "vault_accounting",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["erc4626_vault"],
+      "defensive_question": "Review whether share issuance and redemption remain fair when total assets change independently of share supply.",
+      "economic_template": "erc4626_donation_inflation",
+      "item_sha256": "141c6028f341b63cfea9cfba8e0c926ae15e83d5a9ef7237334bf638cfd88e82",
+      "review_surface_subject_id": "known-issue:KI-ERC4626-SHARE-INFLATION:141c6028f341b63cfea9cfba8e0c926ae15e83d5a9ef7237334bf638cfd88e82"
+    },
+    {
+      "item_id": "KI-EXTERNAL-CALL-STATE-CONSISTENCY",
+      "title": "External-call state consistency",
+      "category": "state_integrity",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["solidity_general"],
+      "defensive_question": "Review whether state and asset accounting remain consistent across every externally controlled call boundary and failure outcome.",
+      "economic_template": null,
+      "item_sha256": "748452b0f67bda5f4ffd6832713b34e8a0fb5236ac6cfb292f8eb613d987bcbb",
+      "review_surface_subject_id": "known-issue:KI-EXTERNAL-CALL-STATE-CONSISTENCY:748452b0f67bda5f4ffd6832713b34e8a0fb5236ac6cfb292f8eb613d987bcbb"
+    },
+    {
+      "item_id": "KI-GOVERNANCE-LIFECYCLE",
+      "title": "Governance and timelock lifecycle",
+      "category": "governance",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["governance"],
+      "defensive_question": "Review whether proposal, voting, queueing, delay, cancellation, and execution transitions preserve the intended authority lifecycle.",
+      "economic_template": "governance_timelock_race",
+      "item_sha256": "fbb7dad30fa42c1d80676d6f9fc4f5ca9257743cd365b3ad5f3f49116f2e7edd",
+      "review_surface_subject_id": "known-issue:KI-GOVERNANCE-LIFECYCLE:fbb7dad30fa42c1d80676d6f9fc4f5ca9257743cd365b3ad5f3f49116f2e7edd"
+    },
+    {
+      "item_id": "KI-LENDING-SOLVENCY-BOUNDARY",
+      "title": "Lending solvency and liquidation boundary",
+      "category": "lending",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["lending"],
+      "defensive_question": "Review whether debt, collateral, health, and liquidation transitions preserve solvency at boundary values.",
+      "economic_template": "liquidation_edge_cases",
+      "item_sha256": "56be3af4b0b176c482b3e29a3c4d0ec405db2937e6b498eb452a776e1e7b8023",
+      "review_surface_subject_id": "known-issue:KI-LENDING-SOLVENCY-BOUNDARY:56be3af4b0b176c482b3e29a3c4d0ec405db2937e6b498eb452a776e1e7b8023"
+    },
+    {
+      "item_id": "KI-NONSTANDARD-TOKEN-ACCOUNTING",
+      "title": "Non-standard token transfer accounting",
+      "category": "token_accounting",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["amm", "erc20_token", "erc4626_vault", "lending", "staking"],
+      "defensive_question": "Review whether token call outcomes and observed balance changes, rather than nominal amounts alone, govern internal credits and debits.",
+      "economic_template": "fee_on_transfer_rebasing_accounting",
+      "item_sha256": "5e9c022e2d2cfb5ccd85f404e68529f5cc5a3d2aa8eb5acfee43cb0250a3661d",
+      "review_surface_subject_id": "known-issue:KI-NONSTANDARD-TOKEN-ACCOUNTING:5e9c022e2d2cfb5ccd85f404e68529f5cc5a3d2aa8eb5acfee43cb0250a3661d"
+    },
+    {
+      "item_id": "KI-ORACLE-INTEGRITY-GUARDS",
+      "title": "Oracle integrity guards",
+      "category": "oracle",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["lending", "oracle_consumer"],
+      "defensive_question": "Review whether price-sensitive transitions validate source availability, freshness, scale, and configured sequencer conditions.",
+      "economic_template": "oracle_freshness_scale_availability",
+      "item_sha256": "4a015f1de91720600268a619da9a5f0f1d809691ddbc9b3e60658ee6a5bbf813",
+      "review_surface_subject_id": "known-issue:KI-ORACLE-INTEGRITY-GUARDS:4a015f1de91720600268a619da9a5f0f1d809691ddbc9b3e60658ee6a5bbf813"
+    },
+    {
+      "item_id": "KI-ORACLE-TEMPORARY-LIQUIDITY",
+      "title": "Temporary-liquidity oracle dependence",
+      "category": "oracle",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["amm", "lending", "oracle_consumer"],
+      "defensive_question": "Review whether temporary price or liquidity movement can influence a value-sensitive transition beyond documented bounds.",
+      "economic_template": "flash_loan_oracle_manipulation",
+      "item_sha256": "1466f19692db52c4a0aedc7936677607e5f5f93d17d83a08f8d4d429f65e077e",
+      "review_surface_subject_id": "known-issue:KI-ORACLE-TEMPORARY-LIQUIDITY:1466f19692db52c4a0aedc7936677607e5f5f93d17d83a08f8d4d429f65e077e"
+    },
+    {
+      "item_id": "KI-ORDERING-VALUE-BOUND",
+      "title": "Ordering-sensitive value bounds",
+      "category": "transaction_ordering",
+      "criticality": "non_critical",
+      "applicable_protocol_profiles": ["amm", "erc4626_vault", "lending"],
+      "defensive_question": "Review whether transaction ordering can settle a staged operation outside its explicit minimum or maximum value bounds.",
+      "economic_template": "sandwich_sensitive_flow",
+      "item_sha256": "b285b9670fd2ffaa9a24ad52759089f93a296d1b3fed248e775b6e8eb2782aff",
+      "review_surface_subject_id": "known-issue:KI-ORDERING-VALUE-BOUND:b285b9670fd2ffaa9a24ad52759089f93a296d1b3fed248e775b6e8eb2782aff"
+    },
+    {
+      "item_id": "KI-REWARD-INDEX-CONSISTENCY",
+      "title": "Reward index and claim consistency",
+      "category": "reward_accounting",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["staking", "token_distribution"],
+      "defensive_question": "Review whether reward indices, checkpoints, and consumed entitlements prevent duplicated or divergent claims.",
+      "economic_template": "reward_index_manipulation",
+      "item_sha256": "345d286c9f31480e5dc2421d080d632be74250771871cff90ee687e6e813c98d",
+      "review_surface_subject_id": "known-issue:KI-REWARD-INDEX-CONSISTENCY:345d286c9f31480e5dc2421d080d632be74250771871cff90ee687e6e813c98d"
+    },
+    {
+      "item_id": "KI-ROUNDING-ACCUMULATION",
+      "title": "Rounding accumulation",
+      "category": "numeric_accounting",
+      "criticality": "non_critical",
+      "applicable_protocol_profiles": ["amm", "erc4626_vault", "lending", "staking"],
+      "defensive_question": "Review whether repeated integer conversions keep cumulative rounding error within a documented, directionally fair bound.",
+      "economic_template": "rounding_exploitation",
+      "item_sha256": "1fc4f42809cfdc0a02f5ba98cc11690fa79ac156bdf6e944aa1e2693514d557d",
+      "review_surface_subject_id": "known-issue:KI-ROUNDING-ACCUMULATION:1fc4f42809cfdc0a02f5ba98cc11690fa79ac156bdf6e944aa1e2693514d557d"
+    },
+    {
+      "item_id": "KI-SHARE-PRICE-BOUNDARY",
+      "title": "Share-price and exchange-rate boundary",
+      "category": "share_accounting",
+      "criticality": "non_critical",
+      "applicable_protocol_profiles": ["amm", "erc4626_vault"],
+      "defensive_question": "Review whether share or exchange-rate changes correspond only to legitimate asset changes and preserve bounded redemption value.",
+      "economic_template": "share_price_exchange_rate",
+      "item_sha256": "cbb75ceffded5a826f8c9832d78847478d8eed4fdcd46fbf53a67e52395ec8e7",
+      "review_surface_subject_id": "known-issue:KI-SHARE-PRICE-BOUNDARY:cbb75ceffded5a826f8c9832d78847478d8eed4fdcd46fbf53a67e52395ec8e7"
+    },
+    {
+      "item_id": "KI-SIGNATURE-DOMAIN-REPLAY",
+      "title": "Signature domain and replay protection",
+      "category": "signature_authorization",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["bridge", "erc20_token", "governance", "token_distribution"],
+      "defensive_question": "Review whether signed authorizations bind signer, action, nonce, contract, chain, and validity window and are consumed once.",
+      "economic_template": "signature_nonce_domain_replay",
+      "item_sha256": "9785ad5255006ed0b2a675cf3a9845ea13658773a568ca1e6a8f20846483d862",
+      "review_surface_subject_id": "known-issue:KI-SIGNATURE-DOMAIN-REPLAY:9785ad5255006ed0b2a675cf3a9845ea13658773a568ca1e6a8f20846483d862"
+    },
+    {
+      "item_id": "KI-STATE-TRANSITION-ORDERING",
+      "title": "Multi-step state transition ordering",
+      "category": "state_machine",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["state_machine"],
+      "defensive_question": "Review whether every multi-step lifecycle consumes prepared state and excludes mutually inconsistent terminal states.",
+      "economic_template": "multi_transaction_state_ordering",
+      "item_sha256": "76fbd57be3530338a18c15f6a0b99edbee422f1b10f4465ca6bad00e53f56217",
+      "review_surface_subject_id": "known-issue:KI-STATE-TRANSITION-ORDERING:76fbd57be3530338a18c15f6a0b99edbee422f1b10f4465ca6bad00e53f56217"
+    },
+    {
+      "item_id": "KI-UPGRADE-INITIALIZATION-AUTHORITY",
+      "title": "Upgrade and initialization authority",
+      "category": "upgradeability",
+      "criticality": "critical",
+      "applicable_protocol_profiles": ["upgradeable_system"],
+      "defensive_question": "Review whether initialization versions, proxy administration, implementation changes, and delegated state preserve intended authority.",
+      "economic_template": "upgrade_initializer_misuse",
+      "item_sha256": "9be3957b71d32214394af4e40ef1b5d50d9389d0229ceeaf554e132dabd7581c",
+      "review_surface_subject_id": "known-issue:KI-UPGRADE-INITIALIZATION-AUTHORITY:9be3957b71d32214394af4e40ef1b5d50d9389d0229ceeaf554e132dabd7581c"
+    }
+  ],
+  "corpus_sha256": "3899b1934399f999717b452dc953af99ab0e4441099063e11f004e8135626f33"
+}

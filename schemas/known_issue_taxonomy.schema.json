@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "EconomicSimulationKind": {
+      "enum": [
+        "erc4626_donation_inflation",
+        "reward_index_manipulation",
+        "flash_loan_oracle_manipulation",
+        "oracle_freshness_scale_availability",
+        "amm_reserve_manipulation",
+        "liquidation_edge_cases",
+        "share_price_exchange_rate",
+        "fee_on_transfer_rebasing_accounting",
+        "rounding_exploitation",
+        "governance_timelock_race",
+        "upgrade_initializer_misuse",
+        "cross_chain_duplicate_ordering",
+        "callback_receiver_reentrancy",
+        "bounded_state_growth",
+        "multi_transaction_state_ordering",
+        "sandwich_sensitive_flow",
+        "signature_nonce_domain_replay"
+      ],
+      "title": "EconomicSimulationKind",
+      "type": "string"
+    },
+    "KnownIssueCriticality": {
+      "description": "Taxonomy priority used only for coverage gating, never finding creation.",
+      "enum": [
+        "critical",
+        "non_critical"
+      ],
+      "title": "KnownIssueCriticality",
+      "type": "string"
+    },
+    "KnownIssueTaxonomyItem": {
+      "additionalProperties": false,
+      "description": "One defensive failure-mode classification with no operational procedure.",
+      "properties": {
+        "applicable_protocol_profiles": {
+          "items": {
+            "$ref": "#/$defs/ProtocolProfileKind"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Applicable Protocol Profiles",
+          "type": "array"
+        },
+        "category": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "criticality": {
+          "$ref": "#/$defs/KnownIssueCriticality"
+        },
+        "defensive_question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Defensive Question",
+          "type": "string"
+        },
+        "economic_template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EconomicSimulationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "item_id": {
+          "pattern": "^KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "item_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Item Sha256",
+          "type": "string"
+        },
+        "review_surface_subject_id": {
+          "pattern": "^known-issue:KI-[A-Z0-9]+(?:-[A-Z0-9]+)*:[0-9a-f]{64}$",
+          "title": "Review Surface Subject Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "title",
+        "category",
+        "criticality",
+        "applicable_protocol_profiles",
+        "defensive_question",
+        "item_sha256",
+        "review_surface_subject_id"
+      ],
+      "title": "KnownIssueTaxonomyItem",
+      "type": "object"
+    },
+    "ProtocolProfileKind": {
+      "description": "Closed protocol profiles derived only from retained deterministic source facts.",
+      "enum": [
+        "solidity_general",
+        "erc20_token",
+        "erc721",
+        "erc1155",
+        "erc4626_vault",
+        "staking",
+        "lending",
+        "amm",
+        "governance",
+        "bridge",
+        "oracle_consumer",
+        "upgradeable_system",
+        "token_distribution",
+        "state_machine"
+      ],
+      "title": "ProtocolProfileKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/known_issue_taxonomy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned, semantic-self-hashed defensive known-issue corpus.",
+  "properties": {
+    "corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Corpus Sha256",
+      "type": "string"
+    },
+    "finding_authority": {
+      "const": false,
+      "default": false,
+      "title": "Finding Authority",
+      "type": "boolean"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/KnownIssueTaxonomyItem"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Items",
+      "type": "array"
+    },
+    "purpose": {
+      "const": "defensive_failure_mode_coverage",
+      "default": "defensive_failure_mode_coverage",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "taxonomy_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Taxonomy Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "items",
+    "corpus_sha256"
+  ],
+  "title": "KnownIssueTaxonomy",
+  "type": "object"
+}

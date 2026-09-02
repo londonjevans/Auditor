@@ -156,6 +156,7 @@ class PrepurchaseQuoteTaskClass(StrEnum):
     """Closed paid-work classes that a whole-run quote must bound explicitly."""
 
     ORIENTATION = "orientation"
+    RETRIEVAL_PLANNING = "retrieval_planning"
     COMPACT_COVERAGE = "compact_coverage"
     SOURCE_AUDIT = "source_audit"
     WHOLE_PROTOCOL = "whole_protocol"
@@ -900,6 +901,7 @@ class PrepurchaseQuoteReconciliation(_FrozenNonAuthorizingArtifact):
 
 _PORTFOLIO_TASK_CLASS = {
     ModelPortfolioTaskKind.ORIENTATION: PrepurchaseQuoteTaskClass.ORIENTATION,
+    ModelPortfolioTaskKind.RETRIEVAL_PLANNING: PrepurchaseQuoteTaskClass.RETRIEVAL_PLANNING,
     ModelPortfolioTaskKind.COMPACT_COVERAGE: PrepurchaseQuoteTaskClass.COMPACT_COVERAGE,
     ModelPortfolioTaskKind.SOURCE_AUDIT: PrepurchaseQuoteTaskClass.SOURCE_AUDIT,
     ModelPortfolioTaskKind.WHOLE_PROTOCOL: PrepurchaseQuoteTaskClass.WHOLE_PROTOCOL,

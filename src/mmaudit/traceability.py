@@ -16,6 +16,14 @@ from pydantic import Field, model_validator
 
 from mmaudit.models.schemas import StrictModel
 
+_KNOWN_ISSUE_TAXONOMY_RUNTIME_ARTIFACTS = frozenset(
+    {
+        "known-issue-taxonomy.json",
+        "known-issue-taxonomy-coverage.json",
+    }
+)
+_TRACEABILITY_RUNTIME_SCHEMA_VERSIONS = frozenset({"1.0", "1.1", "1.2", "1.3", "1.4"})
+
 
 class ImplementationStatus(StrEnum):
     IMPLEMENTED = "implemented"
@@ -440,6 +448,33 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             ],
         ),
         _row(
+            "MA-KNOWN-ISSUE-TAXONOMY",
+            "Every closed defensive known-issue class receives an evidence-backed disposition, "
+            "and an applicable critical GAP blocks maximum-assurance completion.",
+            ImplementationStatus.IMPLEMENTED,
+            verified,
+            implementation_paths=[
+                "schemas/known_issue_taxonomy.schema.json",
+                "schemas/known_issue_taxonomy_coverage.schema.json",
+                "src/mmaudit/models/schemas.py",
+                "src/mmaudit/orchestration/assurance.py",
+                "src/mmaudit/orchestration/model_coverage.py",
+                "src/mmaudit/orchestration/pipeline.py",
+                "src/mmaudit/resources/known_issue_taxonomy.v1.json",
+                "src/mmaudit/solidity/invariants.py",
+                "src/mmaudit/solidity/taxonomy.py",
+            ],
+            unit_tests=[
+                "tests/unit/test_known_issue_taxonomy.py",
+                "tests/unit/test_taxonomy_reporting.py",
+            ],
+            real_integration_tests=["tests/integration/test_pipeline.py"],
+            runtime_artifacts=[
+                "known-issue-taxonomy.json",
+                "known-issue-taxonomy-coverage.json",
+            ],
+        ),
+        _row(
             "MA-REPORT-BUNDLE",
             "Every audit emits a concise branded client report and a separately hash-bound "
             "complete forensic evidence bundle.",
@@ -478,6 +513,8 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
                 "audit-results.sarif",
                 "coverage.json",
                 "model-execution.json",
+                "known-issue-taxonomy.json",
+                "known-issue-taxonomy-coverage.json",
                 "run-evidence-manifest.json",
             ],
         ),
@@ -553,9 +590,14 @@ def validate_traceability_evidence(
     *,
     repository_root: Path | None,
     runtime_artifacts: set[str],
+    runtime_schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"],
 ) -> None:
-    """Fail when an implemented row cannot prove code, tests, and artifacts."""
+    """Fail when an implemented row cannot prove version-applicable evidence."""
 
+    if runtime_schema_version not in _TRACEABILITY_RUNTIME_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"unsupported traceability runtime schema version: {runtime_schema_version}"
+        )
     root = repository_root.resolve(strict=True) if repository_root is not None else None
     for requirement in matrix.requirements:
         if requirement.implementation_status is not ImplementationStatus.IMPLEMENTED:
@@ -600,7 +642,10 @@ def validate_traceability_evidence(
                     relative,
                     requirement_id=requirement.requirement_id,
                 )
-        missing_artifacts = set(requirement.runtime_artifacts) - runtime_artifacts
+        required_runtime_artifacts = set(requirement.runtime_artifacts)
+        if runtime_schema_version != "1.4":
+            required_runtime_artifacts.difference_update(_KNOWN_ISSUE_TAXONOMY_RUNTIME_ARTIFACTS)
+        missing_artifacts = required_runtime_artifacts - runtime_artifacts
         if missing_artifacts:
             raise ValueError(
                 f"{requirement.requirement_id} lacks runtime artifacts: "

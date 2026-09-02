@@ -30,6 +30,7 @@ from mmaudit.models.reasoning import (
     REASONING_EFFORT_ORDER,
     ReasoningControlMode,
     ReasoningEffort,
+    resolve_effective_reasoning_effort_inventory,
 )
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -1744,24 +1745,26 @@ def _reasoning_effort_result(
     profile: RoutePredicateProfile,
     facts: NormalizedRouteFacts,
 ) -> RoutePredicateResult:
-    endpoint = facts.endpoint_supported_reasoning_efforts
-    model = facts.model_supported_reasoning_efforts
-    effective = endpoint if endpoint is not None else model
-    if effective is None:
+    _, state, effective, _ = resolve_effective_reasoning_effort_inventory(
+        endpoint_efforts=facts.endpoint_supported_reasoning_efforts,
+        model_efforts=facts.model_supported_reasoning_efforts,
+    )
+    if state == "UNAVAILABLE":
         return _unavailable_result(
             RoutePredicateId.REASONING_EFFORT_SUPPORT,
             RoutePredicateReason.REASONING_EFFORT_INVENTORY_UNAVAILABLE,
         )
-    if not effective:
+    if state == "EMPTY":
         return _rejected_result(
             RoutePredicateId.REASONING_EFFORT_SUPPORT,
             RoutePredicateReason.REASONING_EFFORT_INVENTORY_EMPTY,
         )
-    if endpoint is not None and model is not None and not set(endpoint).issubset(model):
+    if state == "CONTRADICTORY":
         return _rejected_result(
             RoutePredicateId.REASONING_EFFORT_SUPPORT,
             RoutePredicateReason.REASONING_EFFORT_INVENTORY_CONTRADICTORY,
         )
+    assert effective is not None
     if profile.reasoning_effort not in effective:
         return _rejected_result(
             RoutePredicateId.REASONING_EFFORT_SUPPORT,

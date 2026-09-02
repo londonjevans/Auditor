@@ -30,6 +30,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     SolidityCompilationResult,
     SolidityCoverage,
+    SolidityEntityKind,
     SolidityGraphKind,
     SolidityGraphNodeKind,
     SolidityGraphSet,
@@ -694,6 +695,40 @@ def test_fallback_index_records_supported_function_abi_signatures(
     assert action.signature == "act(uint256,address,bytes32)"
     assert action.visibility == "external"
     assert action.payable
+
+
+def test_fallback_index_records_multiline_contract_state_without_function_locals(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "State.sol").write_text(
+        "pragma solidity ^0.8.20;\n"
+        "contract State\n"
+        "{\n"
+        "\n"
+        "bytes32 internal constant IMPLEMENTATION_SLOT =\n"
+        "    bytes32(uint256(7));\n"
+        "function update() external {\n"
+        "    bytes32 slot = IMPLEMENTATION_SLOT;\n"
+        "}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    config = config_factory()
+    discovery = discover_repository(tmp_path, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+
+    build = build_solidity_index(discovery, projects, [])
+    state_entities = [
+        entity
+        for entity in build.index.entities
+        if entity.kind is SolidityEntityKind.STATE_VARIABLE
+    ]
+
+    assert [(entity.name, entity.start_line, entity.end_line) for entity in state_entities] == [
+        ("IMPLEMENTATION_SLOT", 5, 6)
+    ]
 
 
 def test_compiler_ast_records_canonical_signature_and_selector(

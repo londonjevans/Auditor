@@ -18,6 +18,11 @@ from pydantic import Field, field_validator, model_validator
 import mmaudit
 from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    observe_unlinked_directory,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 
@@ -28,6 +33,8 @@ _MAX_TRACKED_BYTES = 4 * 1024**3
 _MAX_GIT_OUTPUT_BYTES = 512 * 1024**2
 _READ_CHUNK_BYTES = 1024 * 1024
 _EMPTY_STATUS_SHA256 = canonical_sha256([])
+_StatIdentity = tuple[int, int, int, int, int, int, int]
+_CandidateSemanticIdentity = tuple[str, str, str, str, int, int, str]
 
 
 class ReleaseCandidateObservation(StrictModel):
@@ -79,7 +86,19 @@ class _TrackedEntry:
 @dataclass(frozen=True, slots=True)
 class _TrackedFileObservation:
     record: dict[str, str | int]
-    identity: tuple[int, int, int, int, int, int, int]
+    identity: _StatIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseCandidateCustodyObservation:
+    """Exact tracked-file and directory custody for one local gate execution."""
+
+    root: Path
+    root_custody: DirectoryCustodyObservation
+    candidate_observation_sha256: str
+    candidate_identity: _CandidateSemanticIdentity
+    tracked_file_identities: tuple[tuple[str, _StatIdentity], ...]
+    tracked_directory_identities: tuple[tuple[str, _StatIdentity], ...]
 
 
 def observe_release_candidate(root: Path) -> ReleaseCandidateObservation:
@@ -199,6 +218,178 @@ def observe_release_candidate(root: Path) -> ReleaseCandidateObservation:
             "observation_sha256": canonical_sha256(payload),
         }
     )
+
+
+def observe_release_candidate_custody(
+    root: Path,
+    *,
+    expected_candidate: ReleaseCandidateObservation,
+) -> ReleaseCandidateCustodyObservation:
+    """Retain exact candidate identities before a fixed local release gate."""
+
+    repository_root = _require_executing_repository_root(root)
+    root_custody = observe_unlinked_directory(
+        repository_root,
+        label="release candidate custody",
+    )
+    try:
+        initial_root_identity = _stat_identity(repository_root.lstat())
+    except OSError as exc:
+        raise ValueError("release candidate custody root is unavailable") from exc
+    current = observe_release_candidate(repository_root)
+    expected_identity = _candidate_semantic_identity(expected_candidate)
+    if _candidate_semantic_identity(current) != expected_identity:
+        raise ValueError("local release gate candidate differs from its retained observation")
+    entries = _candidate_entries(repository_root, expected_candidate)
+    file_paths = tuple(entry.path for entry in entries)
+    directory_paths = _tracked_directory_paths(file_paths)
+    first_files, first_directories = _snapshot_candidate_paths(
+        repository_root,
+        file_paths=file_paths,
+        directory_paths=directory_paths,
+    )
+    second_files, second_directories = _snapshot_candidate_paths(
+        repository_root,
+        file_paths=file_paths,
+        directory_paths=directory_paths,
+    )
+    if (
+        first_files != second_files
+        or first_directories != second_directories
+        or not first_directories
+        or first_directories[0] != (".", initial_root_identity)
+    ):
+        raise ValueError("release candidate changed while gate custody was established")
+    current_after = observe_release_candidate(repository_root)
+    final_files, final_directories = _snapshot_candidate_paths(
+        repository_root,
+        file_paths=file_paths,
+        directory_paths=directory_paths,
+    )
+    if (
+        _candidate_semantic_identity(current_after) != expected_identity
+        or final_files != first_files
+        or final_directories != first_directories
+    ):
+        raise ValueError("release candidate changed while gate custody was established")
+    require_unchanged_unlinked_directory(
+        root_custody,
+        label="release candidate custody",
+    )
+    return ReleaseCandidateCustodyObservation(
+        root=repository_root,
+        root_custody=root_custody,
+        candidate_observation_sha256=expected_candidate.observation_sha256,
+        candidate_identity=expected_identity,
+        tracked_file_identities=final_files,
+        tracked_directory_identities=final_directories,
+    )
+
+
+def require_unchanged_release_candidate_custody(
+    initial: ReleaseCandidateCustodyObservation,
+) -> None:
+    """Fail if tracked bytes, identities, directories, or Git semantics changed."""
+
+    require_unchanged_unlinked_directory(
+        initial.root_custody,
+        label="release candidate custody",
+    )
+    file_paths = tuple(path for path, _identity in initial.tracked_file_identities)
+    directory_paths = tuple(path for path, _identity in initial.tracked_directory_identities)
+    before_files, before_directories = _snapshot_candidate_paths(
+        initial.root,
+        file_paths=file_paths,
+        directory_paths=directory_paths,
+    )
+    if (
+        before_files != initial.tracked_file_identities
+        or before_directories != initial.tracked_directory_identities
+    ):
+        raise ValueError("release candidate changed during local gate execution")
+    current = observe_release_candidate(initial.root)
+    after_files, after_directories = _snapshot_candidate_paths(
+        initial.root,
+        file_paths=file_paths,
+        directory_paths=directory_paths,
+    )
+    if (
+        _candidate_semantic_identity(current) != initial.candidate_identity
+        or after_files != initial.tracked_file_identities
+        or after_directories != initial.tracked_directory_identities
+    ):
+        raise ValueError("release candidate changed during local gate execution")
+    require_unchanged_unlinked_directory(
+        initial.root_custody,
+        label="release candidate custody",
+    )
+
+
+def _candidate_semantic_identity(
+    candidate: ReleaseCandidateObservation,
+) -> _CandidateSemanticIdentity:
+    return (
+        candidate.candidate_commit,
+        candidate.git_object_format,
+        candidate.candidate_tree_object,
+        candidate.tracked_source_inventory_sha256,
+        candidate.tracked_file_count,
+        candidate.tracked_file_bytes,
+        candidate.worktree_status_sha256,
+    )
+
+
+def _candidate_entries(
+    root: Path,
+    candidate: ReleaseCandidateObservation,
+) -> tuple[_TrackedEntry, ...]:
+    output = _run_git(
+        _trusted_git_executable(),
+        root,
+        ("ls-tree", "-r", "-z", "--full-tree", candidate.candidate_commit),
+    )
+    entries = _parse_tracked_entries(output, git_object_format=candidate.git_object_format)
+    if len(entries) != candidate.tracked_file_count:
+        raise ValueError("release candidate custody inventory differs from its observation")
+    return entries
+
+
+def _tracked_directory_paths(file_paths: tuple[str, ...]) -> tuple[str, ...]:
+    directories = {"."}
+    for relative in file_paths:
+        parts = relative.split("/")[:-1]
+        directories.update("/".join(parts[:index]) for index in range(1, len(parts) + 1))
+    return tuple(sorted(directories, key=lambda path: (path != ".", path)))
+
+
+def _snapshot_candidate_paths(
+    root: Path,
+    *,
+    file_paths: tuple[str, ...],
+    directory_paths: tuple[str, ...],
+) -> tuple[
+    tuple[tuple[str, _StatIdentity], ...],
+    tuple[tuple[str, _StatIdentity], ...],
+]:
+    files = tuple(
+        (relative, _stat_identity(_require_unshared_tracked_file(root, relative)[1]))
+        for relative in file_paths
+    )
+    directories: list[tuple[str, _StatIdentity]] = []
+    try:
+        for relative in directory_paths:
+            path = root if relative == "." else root.joinpath(*relative.split("/"))
+            metadata = path.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or path.is_junction()
+                or not stat.S_ISDIR(metadata.st_mode)
+            ):
+                raise ValueError("release candidate tracked parent is not an unlinked directory")
+            directories.append((relative, _stat_identity(metadata)))
+    except OSError as exc:
+        raise ValueError("release candidate tracked parent is unavailable") from exc
+    return files, tuple(directories)
 
 
 def _require_executing_repository_root(root: Path) -> Path:
@@ -502,13 +693,13 @@ def _hash_tracked_file(
 def _snapshot_tracked_identities(
     root: Path,
     entries: tuple[_TrackedEntry, ...],
-) -> tuple[tuple[int, int, int, int, int, int, int], ...]:
+) -> tuple[_StatIdentity, ...]:
     return tuple(
         _stat_identity(_require_unshared_tracked_file(root, entry.path)[1]) for entry in entries
     )
 
 
-def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+def _stat_identity(metadata: os.stat_result) -> _StatIdentity:
     return (
         metadata.st_dev,
         metadata.st_ino,

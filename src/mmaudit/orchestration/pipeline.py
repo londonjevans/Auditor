@@ -30,6 +30,8 @@ from typing import Any, Literal, cast
 from mmaudit.agents.base import (
     AgentRequestProtocol,
     FindingReviewResult,
+    RetrievalPlanningAgent,
+    RetrievalPlanningResult,
     WholeProtocolReviewAgent,
 )
 from mmaudit.agents.business_logic import BusinessLogicAgent
@@ -95,6 +97,12 @@ from mmaudit.language_plugins import (
 )
 from mmaudit.logging import JsonLineHandler, RedactingFilter
 from mmaudit.models import openrouter as openrouter_models
+from mmaudit.models.actor_model import (
+    ActorGovernanceFinding,
+    ActorModelEvaluation,
+    ActorModelInputEvidence,
+    ActorModelInputState,
+)
 from mmaudit.models.coverage_planning import (
     ModelPortfolioResourcePreflight,
     ModelPortfolioTaskKind,
@@ -156,6 +164,11 @@ from mmaudit.models.registry import (
     ProductionQualificationValidation,
     extract_zdr_model_ids,
 )
+from mmaudit.models.retrieval import (
+    SolidityRetrievalRequestBatch,
+    SolidityRetrievalRolePolicy,
+    SolidityRetrievalTranscript,
+)
 from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
     production_model_qualification_required,
@@ -174,6 +187,7 @@ from mmaudit.models.scheduler import (
     SchedulerPrivacyEvidenceCustody,
     SchedulerProviderAttemptEvidence,
     SchedulerRetainedJournalReference,
+    SchedulerRetrievalBinding,
     SchedulerScope,
     SchedulerShardDescriptor,
     SchedulerShardInventory,
@@ -181,14 +195,17 @@ from mmaudit.models.scheduler import (
     SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskPlan,
+    SchedulerTaskPurpose,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryModelRequestEvidence,
     SchedulerTruncationRecoveryPromotionDisposition,
     scheduler_canonical_sha256,
     scheduler_response_schema_sha256,
     scheduler_role_requires_specialist_accepted_outcome,
 )
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AnalysisState,
     AuditProfile,
     AuditQualityStatus,
@@ -225,6 +242,7 @@ from mmaudit.models.schemas import (
     InvariantSuite,
     JudgeDecision,
     JudgeDecisionBatch,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityAssessment,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
@@ -318,6 +336,17 @@ from mmaudit.models.usage import (
     recovery_request_token_plan_from_usage,
     request_token_plan_from_usage,
 )
+from mmaudit.orchestration.actor_model import (
+    ActorCalibrationResult,
+    actor_model_assessment_quality_gate,
+    actor_model_quality_gate,
+    bind_judged_actor_context,
+    build_actor_model_evaluation,
+    calibrate_finding,
+    load_actor_model,
+    reconcile_actor_model_with_graphs,
+    withhold_actor_model_from_discovery,
+)
 from mmaudit.orchestration.assurance import (
     CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES,
     AssuranceRuntime,
@@ -382,6 +411,7 @@ from mmaudit.orchestration.context import (
     context_json_escape_overhead_tokens,
     render_context,
     revalidate_context_package,
+    solidity_retrieval_context_reserve_bytes,
 )
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
@@ -411,6 +441,7 @@ from mmaudit.orchestration.learning import (
 from mmaudit.orchestration.manifest import (
     SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME,
     ManifestFileBinding,
+    build_model_review_artifact_inventory,
     build_run_evidence_manifest,
     canonical_sha256,
     open_manifest_bound_json_artifacts,
@@ -420,6 +451,7 @@ from mmaudit.orchestration.manifest import (
 )
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
+    build_model_review_pre_dispatch_authorizations,
     build_model_surface_requests,
     build_semantic_shard_source_review_request,
     model_review_critical_surface_gate,
@@ -428,7 +460,10 @@ from mmaudit.orchestration.model_coverage import (
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
-from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
+from mmaudit.orchestration.model_review_evidence import (
+    build_source_file_review_request,
+    model_surface_context_source_custody,
+)
 from mmaudit.orchestration.prepurchase_quote import (
     validate_accepted_prepurchase_quote_for_run,
 )
@@ -449,6 +484,8 @@ from mmaudit.orchestration.run_status import (
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
     open_scheduler_privacy_evidence_custody,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    require_verified_promoted_truncation_recovery_surface_coverage,
 )
 from mmaudit.orchestration.scheduler_runtime import (
     PipelineScheduler,
@@ -466,10 +503,10 @@ from mmaudit.orchestration.scope import (
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
     build_truncation_recovery_child_context,
-    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
-    require_verified_promoted_truncation_recovery_surface_coverage,
     verify_recursive_truncation_recovery_tree,
     verify_truncation_recovery_closure,
 )
@@ -555,7 +592,10 @@ from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
 from mmaudit.solidity.invariant_review import validate_invariant_review
 from mmaudit.solidity.invariant_templates import generate_invariant_harnesses
-from mmaudit.solidity.invariants import discover_invariants
+from mmaudit.solidity.invariants import (
+    discover_invariants,
+    validate_protocol_profile_replay,
+)
 from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.reproduction import (
@@ -563,10 +603,22 @@ from mmaudit.solidity.reproduction import (
     translate_foundry_test,
 )
 from mmaudit.solidity.reproduction_integrity import verify_reproduction_integrity
+from mmaudit.solidity.retrieval import (
+    SolidityRetrievalCorpus,
+    execute_solidity_retrieval_batch,
+    start_solidity_retrieval_transcript,
+)
 from mmaudit.solidity.sharding import (
     build_solidity_shard_inventory,
     solidity_graph_edge_id,
     verify_solidity_shard_inventory,
+)
+from mmaudit.solidity.taxonomy import (
+    LoadedKnownIssueTaxonomy,
+    build_known_issue_taxonomy_coverage,
+    known_issue_taxonomy_quality_gate,
+    load_known_issue_taxonomy,
+    write_pinned_known_issue_taxonomy,
 )
 from mmaudit.traceability import (
     build_traceability_matrix,
@@ -575,8 +627,238 @@ from mmaudit.traceability import (
 )
 
 _TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT = 700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS + 1
+_SCHEDULER_RECOVERY_REQUEST_ID_PREFIX = "scheduler-recovery-request-"
 _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = trusted_preview_candidate_review_task_resources
 _TRUSTED_PREVIEW_MODEL_PORTFOLIO_TASK_RESOURCES = trusted_preview_model_portfolio_task_resources
+
+
+@dataclass(frozen=True, slots=True)
+class _PromotedRecoveryLeafAuthority:
+    """One exact recovery leaf exposed by a successfully required private capability."""
+
+    request_id: str
+    usage_record_sha256: str
+    promotion_entry_sha256: str
+    role: str
+    requested_model: str
+    promotion_disposition: SchedulerTruncationRecoveryPromotionDisposition | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceRetrievalContextPlan:
+    """Private deterministic inputs for one source-review retrieval child."""
+
+    planning_task: SchedulerTaskPlan
+    corpus: SolidityRetrievalCorpus
+    policy: SolidityRetrievalRolePolicy
+    planning_context: ContextPackage
+    fallback_context: ContextPackage
+    final_context_budget: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RetrievedSourceReviewResult:
+    """One source-review outcome plus its selected context and retrieval custody."""
+
+    value: FindingReviewResult | SchedulerTaskResult
+    context: ContextPackage
+    retrieval_binding: SchedulerRetrievalBinding | None
+
+
+def _promoted_recovery_leaf_authorities(
+    *,
+    direct_projections: tuple[VerifiedPromotedTruncationRecoverySurfaceCoverageProjection, ...],
+    recursive_projections: tuple[
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection, ...
+    ],
+) -> tuple[_PromotedRecoveryLeafAuthority, ...]:
+    """Derive the bounded leaf inventory from already-required promotion capabilities."""
+
+    if type(direct_projections) is not tuple or type(recursive_projections) is not tuple:
+        raise TypeError("promoted recovery projection inventories must be immutable tuples")
+    if any(
+        type(projection) is not VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+        for projection in direct_projections
+    ) or any(
+        type(projection) is not VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection
+        for projection in recursive_projections
+    ):
+        raise TypeError("promoted recovery projection inventory contains an invalid authority")
+
+    promotion_ids = tuple(
+        projection.promotion_entry_sha256 for projection in direct_projections
+    ) + tuple(projection.promotion_entry_sha256 for projection in recursive_projections)
+    if len(promotion_ids) != len(set(promotion_ids)):
+        raise ValueError("promoted recovery capabilities repeat a promotion identity")
+
+    leaf_rows: list[
+        tuple[
+            UsageRecord,
+            str,
+            SchedulerTruncationRecoveryPromotionDisposition | None,
+        ]
+    ] = []
+    excluded_request_ids: set[str] = set()
+    for direct_projection in direct_projections:
+        if (
+            type(direct_projection.child_usage_records) is not tuple
+            or len(direct_projection.child_usage_records) != 2
+        ):
+            raise ValueError("direct promoted recovery must expose exactly two child leaves")
+        excluded_request_ids.add(direct_projection.parent_usage_record.request_id)
+        leaf_rows.extend(
+            (usage, direct_projection.promotion_entry_sha256, None)
+            for usage in direct_projection.child_usage_records
+        )
+    for recursive_projection in recursive_projections:
+        if (
+            type(recursive_projection.leaf_usage_records) is not tuple
+            or len(recursive_projection.leaf_usage_records) != 3
+        ):
+            raise ValueError("recursive promoted recovery must expose exactly three leaves")
+        excluded_request_ids.update(
+            (
+                recursive_projection.parent_usage_record.request_id,
+                recursive_projection.bridge_usage_record.request_id,
+            )
+        )
+        leaf_rows.extend(
+            (
+                usage,
+                recursive_projection.promotion_entry_sha256,
+                SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF,
+            )
+            for usage in recursive_projection.leaf_usage_records
+        )
+
+    if len(leaf_rows) > TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS:
+        raise ValueError("promoted recovery leaf inventory exceeds the scheduler bound")
+    if any(type(usage) is not UsageRecord for usage, _promotion, _disposition in leaf_rows):
+        raise TypeError("promoted recovery leaf inventory contains an invalid usage record")
+    request_ids = tuple(usage.request_id for usage, _promotion, _disposition in leaf_rows)
+    if len(request_ids) != len(set(request_ids)) or set(request_ids) & excluded_request_ids:
+        raise ValueError("promoted recovery leaf identities overlap or include a parent or bridge")
+
+    return tuple(
+        sorted(
+            (
+                _PromotedRecoveryLeafAuthority(
+                    request_id=usage.request_id,
+                    usage_record_sha256=scheduler_canonical_sha256(usage.model_dump(mode="json")),
+                    promotion_entry_sha256=promotion_entry_sha256,
+                    role=usage.role,
+                    requested_model=usage.requested_model,
+                    promotion_disposition=promotion_disposition,
+                )
+                for usage, promotion_entry_sha256, promotion_disposition in leaf_rows
+            ),
+            key=lambda authority: authority.request_id,
+        )
+    )
+
+
+def _require_current_promoted_recovery_leaf_authorities(
+    *,
+    direct_capabilities: Sequence[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    recursive_capabilities: Sequence[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+) -> tuple[_PromotedRecoveryLeafAuthority, ...]:
+    """Require every opaque capability again at the point that consumes its leaves."""
+
+    return _promoted_recovery_leaf_authorities(
+        direct_projections=tuple(
+            require_verified_promoted_truncation_recovery_surface_coverage(capability)
+            for capability in direct_capabilities
+        ),
+        recursive_projections=tuple(
+            require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)
+            for capability in recursive_capabilities
+        ),
+    )
+
+
+def _require_promoted_recovery_leaf_requests(
+    *,
+    authorities: tuple[_PromotedRecoveryLeafAuthority, ...],
+    recovery_requests: Iterable[SchedulerTruncationRecoveryModelRequestEvidence],
+) -> tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]:
+    """Join each private leaf authority to its exact public comparison evidence."""
+
+    requests = tuple(recovery_requests)
+    if len(requests) > TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS or any(
+        type(request) is not SchedulerTruncationRecoveryModelRequestEvidence for request in requests
+    ):
+        raise ValueError("scheduler recovery request inventory is invalid")
+    requests_by_id = {request.logical_request_id: request for request in requests}
+    if len(requests_by_id) != len(requests):
+        raise ValueError("scheduler recovery request inventory repeats an identity")
+
+    selected: list[SchedulerTruncationRecoveryModelRequestEvidence] = []
+    for authority in authorities:
+        request = requests_by_id.get(authority.request_id)
+        if (
+            request is None
+            or request.usage_record_sha256 != authority.usage_record_sha256
+            or request.promotion_entry_sha256 != authority.promotion_entry_sha256
+            or request.promotion_disposition is not authority.promotion_disposition
+            or request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            or request.role != authority.role
+            or request.requested_model != authority.requested_model
+        ):
+            raise ValueError(
+                "required promoted recovery leaf differs from scheduler comparison evidence"
+            )
+        selected.append(request)
+    return tuple(sorted(selected, key=lambda request: request.logical_request_id))
+
+
+def _minimum_floor_creditable_usage_records(
+    *,
+    usage_records: Iterable[UsageRecord],
+    successful_request_ids: set[str],
+    all_recovery_requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...],
+    promoted_recovery_leaf_requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...],
+) -> list[UsageRecord]:
+    """Credit ordinary usage plus recovery leaves backed by private promotion authority."""
+
+    all_recovery_by_id = {request.logical_request_id: request for request in all_recovery_requests}
+    promoted_recovery_by_id = {
+        request.logical_request_id: request for request in promoted_recovery_leaf_requests
+    }
+    if len(all_recovery_by_id) != len(all_recovery_requests) or not set(
+        promoted_recovery_by_id
+    ) <= set(all_recovery_by_id):
+        raise ValueError("minimum-floor recovery request inventories are inconsistent")
+
+    creditable: list[UsageRecord] = []
+    for record in usage_records:
+        if record.request_id not in successful_request_ids:
+            continue
+        recovery_namespaced = record.request_id.startswith(_SCHEDULER_RECOVERY_REQUEST_ID_PREFIX)
+        if record.request_id not in all_recovery_by_id and not recovery_namespaced:
+            if is_creditable_usage_record(record, require_real=True):
+                creditable.append(record)
+            continue
+        promoted_request = promoted_recovery_by_id.get(record.request_id)
+        if promoted_request is not None:
+            if (
+                scheduler_canonical_sha256(record.model_dump(mode="json"))
+                != promoted_request.usage_record_sha256
+                or record.role != promoted_request.role
+                or record.requested_model != promoted_request.requested_model
+            ):
+                raise ValueError(
+                    "promoted recovery usage differs from exact scheduler comparison evidence"
+                )
+            if is_recovery_creditable_usage_record(
+                record,
+                request_limit_scope=promoted_request.request_limit_scope,
+                request_limit_count_before=promoted_request.request_limit_count_before,
+                require_real=True,
+            ):
+                creditable.append(record)
+    return creditable
+
+
 _LATEST_ARTIFACT_FILENAMES = (
     "metadata.json",
     "prepurchase-quote-acceptance.json",
@@ -617,11 +899,15 @@ _LATEST_ARTIFACT_FILENAMES = (
     "formal-results.json",
     "solidity-coverage.json",
     "model-review-coverage.json",
+    "known-issue-taxonomy.json",
+    "known-issue-taxonomy-coverage.json",
     "context-manifest.json",
     "model-qualification-runtime.json",
     "scheduler-state.json",
     "scope-assessment.json",
     "prior-audit-comparison.json",
+    "actor-model-baseline.json",
+    "actor-model-evaluation.json",
     "reproduction-results.json",
     CI_STATE_FILENAME,
     "maximum_assurance_traceability.json",
@@ -695,19 +981,31 @@ def _bound_context_request_evidence(
         raise OpenRouterSchemaError(
             "validated agent request/context evidence failed validation"
         ) from exc
-    rendered_sha256 = hashlib.sha256(render_context(sealed_context).encode("utf-8")).hexdigest()
-    source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed_context.excerpts)
+    rendered = render_context(sealed_context).encode("utf-8")
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(sealed_context)
+    )
+    expected_evidence = ContextRequestEvidence.build(
+        request_id=usage_record.request_id,
+        request_role=usage_record.role,
+        context_role=sealed_context.role,
+        byte_budget=sealed_context.byte_budget,
+        declared_bytes_used=sealed_context.bytes_used,
+        rendered_bytes=len(rendered),
+        source_bytes=sealed_context.delivered_source_bytes(),
+        configured_maximum_source_tokens_per_request=(
+            sealed_context.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=sealed_context.effective_source_byte_ceiling,
+        rendered_sha256=hashlib.sha256(rendered).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
+        retrieval_policy=sealed_context.solidity_retrieval_policy,
+        retrieval_corpus_sha256=sealed_context.solidity_retrieval_corpus_sha256,
+        retrieval_transcript=sealed_context.solidity_retrieval_transcript,
+    )
     if (
-        evidence.request_id != usage_record.request_id
-        or evidence.request_role != usage_record.role
-        or evidence.context_role != sealed_context.role
-        or evidence.declared_bytes_used != sealed_context.bytes_used
-        or evidence.byte_budget != sealed_context.byte_budget
-        or evidence.rendered_sha256 != rendered_sha256
-        or evidence.source_bytes != source_bytes
-        or evidence.configured_maximum_source_tokens_per_request
-        != sealed_context.configured_maximum_source_tokens_per_request
-        or evidence.effective_source_byte_ceiling != sealed_context.effective_source_byte_ceiling
+        evidence.model_dump(mode="json") != expected_evidence.model_dump(mode="json")
         or usage_record.routing.get("context_request_evidence_sha256") != evidence.evidence_sha256
     ):
         raise OpenRouterSchemaError(
@@ -1703,6 +2001,8 @@ def _build_model_portfolio_scheduler_tasks(
     client: OpenRouterClient,
     scheduler: PipelineScheduler,
     coverage_plan: ModelSurfaceCoveragePlan,
+    model_surface_request_manifests_by_task_key: dict[str, str],
+    whole_protocol_surface_manifest_sha256: str,
     selected_model_ids: frozenset[str] | None,
     production_qualification: VerifiedProductionQualification | None,
 ) -> tuple[SchedulerTaskPlan, ...]:
@@ -1720,6 +2020,9 @@ def _build_model_portfolio_scheduler_tasks(
         configured_role: str | None = None,
         model_id: str | None = None,
         root_lineage: str | None = None,
+        purpose: SchedulerTaskPurpose = SchedulerTaskPurpose.PRIMARY,
+        parent_task_id: str | None = None,
+        model_surface_review_request_manifest_sha256: str | None = None,
     ) -> SchedulerTaskPlan:
         selected_model = model_id
         if selected_model is None:
@@ -1742,6 +2045,22 @@ def _build_model_portfolio_scheduler_tasks(
         response_schema_sha256 = _scheduler_response_schema_sha256(request_protocol.response_model)
         if request_hashes.schema_sha256 != response_schema_sha256:
             raise ValueError("portfolio request protocol schema hash is inconsistent")
+        surface_manifest_sha256 = model_surface_request_manifests_by_task_key.get(task_key)
+        if task_key.startswith("whole-protocol-review-"):
+            surface_manifest_sha256 = whole_protocol_surface_manifest_sha256
+        if model_surface_review_request_manifest_sha256 is not None:
+            if (
+                surface_manifest_sha256 is not None
+                and surface_manifest_sha256 != model_surface_review_request_manifest_sha256
+            ):
+                raise ValueError("portfolio task has conflicting surface authority")
+            surface_manifest_sha256 = model_surface_review_request_manifest_sha256
+        if (
+            purpose is SchedulerTaskPurpose.PRIMARY
+            and pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            and surface_manifest_sha256 is None
+        ):
+            raise ValueError("portfolio blind-review task lacks pre-dispatch surface authority")
         return scheduler.model_task(
             pass_kind=pass_kind,
             scope=scope,
@@ -1752,6 +2071,9 @@ def _build_model_portfolio_scheduler_tasks(
             system_prompt_sha256=request_hashes.system_prompt_sha256,
             response_schema_sha256=response_schema_sha256,
             candidate_ids=(),
+            model_surface_review_request_manifest_sha256=surface_manifest_sha256,
+            purpose=purpose,
+            parent_task_id=parent_task_id,
         )
 
     threat_agent = ThreatModelAgent(agent_config, client)
@@ -1767,14 +2089,35 @@ def _build_model_portfolio_scheduler_tasks(
     ]
     shards_by_id = {shard.shard_id: shard for shard in scheduler.manifest.shard_inventory.shards}
     for shard in scheduler.manifest.shard_inventory.shards:
+        scope = SchedulerScope.single_shard(shard.shard_id)
+        source_model = config.models.role("source_audit").primary
+        primary = model_task(
+            pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+            scope=scope,
+            task_key=f"source_audit-{shard.shard_id}",
+            request_role="source_audit",
+            configured_role="source_audit",
+            request_protocol=SourceAuditAgent(agent_config, client).request_protocol,
+        )
+        tasks.append(primary)
         tasks.append(
             model_task(
                 pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
-                scope=SchedulerScope.single_shard(shard.shard_id),
-                task_key=f"source_audit-{shard.shard_id}",
+                scope=scope,
+                task_key=f"retrieval-source_audit-{shard.shard_id}",
                 request_role="source_audit",
-                configured_role="source_audit",
-                request_protocol=SourceAuditAgent(agent_config, client).request_protocol,
+                request_protocol=RetrievalPlanningAgent(
+                    agent_config,
+                    client,
+                    role="source_audit",
+                    exact_model_id=source_model,
+                ).request_protocol,
+                model_id=source_model,
+                purpose=SchedulerTaskPurpose.RETRIEVAL_PLANNING,
+                parent_task_id=primary.task_id,
+                model_surface_review_request_manifest_sha256=(
+                    primary.model_surface_review_request_manifest_sha256
+                ),
             )
         )
     specialist_roles = {
@@ -2133,6 +2476,109 @@ def _whole_protocol_surface_requests(
         )
         selected[request.surface_id] = request
     return sorted(selected.values(), key=lambda request: request.surface_id)
+
+
+def _planned_blind_review_surface_manifests(
+    *,
+    config: AuditConfig,
+    discovery: DiscoveryResult,
+    scheduler_inventory: SchedulerShardInventory,
+    semantic_inventory: SolidityShardInventory | None,
+    solidity_index: SoliditySymbolIndex | None,
+    requests: list[ModelSurfaceReviewRequest],
+    assignments: dict[str, list[ModelSurfaceReviewRequest]],
+    coverage_plan: ModelSurfaceCoveragePlan | None,
+) -> tuple[dict[str, str], str]:
+    """Commit every blind review's exact surface request set before pass sealing."""
+
+    requests_by_id = {request.surface_id: request for request in requests}
+    if len(requests_by_id) != len(requests):
+        raise ValueError("authoritative model-surface inventory repeats an identity")
+    manifests: dict[str, str] = {}
+
+    def retain(task_key: str, selected: Iterable[ModelSurfaceReviewRequest]) -> None:
+        exact = tuple(sorted(selected, key=lambda request: request.surface_id))
+        if not exact:
+            raise ValueError(f"blind-review task {task_key} lacks an exact surface request")
+        manifest_sha256 = ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+            exact
+        )
+        prior = manifests.setdefault(task_key, manifest_sha256)
+        if prior != manifest_sha256:
+            raise ValueError("blind-review task key maps to multiple surface manifests")
+
+    specialist_roles = (
+        tuple(role for role in SPECIALIST_INVESTIGATOR_ROLES if role in config.models.specialists)
+        if config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
+        else ()
+    )
+    for shard in scheduler_inventory.shards:
+        scoped_paths = {source.path for source in shard.sources}
+        source_assigned = [
+            request
+            for request in assignments.get("source_audit", [])
+            if not request.allowed_locations
+            or {location.path for location in request.allowed_locations} <= scoped_paths
+        ]
+        retain(
+            f"source_audit-{shard.shard_id}",
+            _source_audit_shard_surface_requests(
+                shard=shard,
+                discovery=discovery,
+                solidity_index=solidity_index,
+                assigned=source_assigned,
+                solidity_requests=requests,
+            ),
+        )
+        if coverage_plan is not None:
+            continue
+        allowed_paths = _semantic_shard_context_paths(
+            semantic_inventory,
+            shard_id=shard.shard_id,
+            primary_paths=scoped_paths,
+        )
+        for review_role, task_key in (
+            ("business_logic", f"business_logic-{shard.shard_id}"),
+            ("configuration", f"configuration-{shard.shard_id}"),
+            *(
+                (f"specialist:{role}", f"specialist-{role}-{shard.shard_id}")
+                for role in specialist_roles
+            ),
+        ):
+            assigned = [
+                request
+                for request in assignments.get(review_role, [])
+                if not request.allowed_locations
+                or {location.path for location in request.allowed_locations} <= allowed_paths
+            ]
+            retain(
+                task_key,
+                _blind_shard_surface_requests(
+                    shard=shard,
+                    discovery=discovery,
+                    assigned=assigned,
+                ),
+            )
+
+    if coverage_plan is not None:
+        for task in coverage_plan.tasks:
+            try:
+                selected = tuple(requests_by_id[surface_id] for surface_id in task.surface_ids)
+            except KeyError as exc:
+                raise ValueError(
+                    "coverage task surface differs from the authoritative inventory"
+                ) from exc
+            retain(task.task_id, selected)
+            if manifests[task.task_id] != task.requested_surface_manifest_sha256:
+                raise ValueError("coverage task pre-dispatch surface manifest is inconsistent")
+
+    whole_requests = _whole_protocol_surface_requests(discovery=discovery)
+    if not whole_requests:
+        raise ValueError("whole-protocol review lacks an exact source-file surface")
+    whole_manifest_sha256 = ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+        whole_requests
+    )
+    return manifests, whole_manifest_sha256
 
 
 def _cross_shard_boundary_surface_requests(
@@ -3652,6 +4098,39 @@ class AuditPipeline:
         self.logger.addHandler(log_handler)
         incomplete: list[str] = []
         terminal_code = ExitCode.SUCCESS
+        actor_model_input: ActorModelInputEvidence = load_actor_model(
+            self.repo_input,
+            self.config.actor_model,
+            evaluated_at=run_started_at,
+        )
+        write_json_bounded(
+            run_dir / "private" / "actor-model-evidence.json",
+            actor_model_input,
+            max_bytes=MAX_JSON_ARTIFACT_BYTES,
+        )
+        if (
+            self.config.actor_model.required
+            and actor_model_input.state is not ActorModelInputState.CURRENT
+        ):
+            incomplete.extend(actor_model_input.limitations)
+            terminal_code = ExitCode.INCOMPLETE
+        actor_governance_findings: list[ActorGovernanceFinding] = []
+        actor_baseline_findings: dict[str, Finding] = {}
+        actor_model_evaluation: ActorModelEvaluation | None = None
+        judge_decisions: dict[str, JudgeDecision] = {}
+
+        def calibrate_retained_finding(finding: Finding) -> ActorCalibrationResult:
+            if finding.id in actor_baseline_findings:
+                raise ValueError("actor calibration received a duplicate finding ID")
+            actor_baseline_findings[finding.id] = Finding.model_validate(
+                finding.model_dump(mode="python")
+            )
+            return calibrate_finding(
+                finding,
+                actor_context=finding.actor_context,
+                actor_input=actor_model_input,
+            )
+
         budget_halted = False
         candidates: list[CandidateFinding] = []
         pass_four_candidates: list[CandidateFinding] = []
@@ -3684,6 +4163,7 @@ class AuditPipeline:
         scope_assessment: AuditScopeAssessment | None = None
         prior_audit_comparison: PriorAuditComparison | None = None
         prior_material_withheld_from_discovery = False
+        actor_material_withheld_from_discovery = False
         solidity_compilations: list[SolidityCompilationResult] = []
         dependency_preparation = DependencyPreparationRun(
             results=[],
@@ -3706,6 +4186,12 @@ class AuditPipeline:
         solidity_coverage: SolidityCoverage | None = None
         repository_suite_differential: RepositorySuiteDifferentialRun | None = None
         model_review_coverage: ModelReviewCoverage | None = None
+        taxonomy_resource: LoadedKnownIssueTaxonomy = load_known_issue_taxonomy()
+        write_pinned_known_issue_taxonomy(
+            run_dir / "known-issue-taxonomy.json",
+            taxonomy_resource,
+        )
+        taxonomy_coverage: KnownIssueTaxonomyCoverage | None = None
         model_surface_coverage_plan: ModelSurfaceCoveragePlan | None = None
         model_surface_resource_preflight: ModelSurfaceResourcePreflight | None = None
         model_portfolio_resource_preflight: ModelPortfolioResourcePreflight | None = None
@@ -3793,6 +4279,10 @@ class AuditPipeline:
             prior_audit_rule = "/" + normalize_relative_path(self.config.prior_audit.path)
             matcher.rules.append(prior_audit_rule)
             retained_ignore_rules.append(prior_audit_rule)
+        if self.config.actor_model.path is not None:
+            actor_model_rule = "/" + normalize_relative_path(self.config.actor_model.path)
+            matcher.rules.append(actor_model_rule)
+            retained_ignore_rules.append(actor_model_rule)
         if self.config.dependency_preparation.offline_snapshot_path is not None:
             snapshot_parent = PurePosixPath(
                 normalize_relative_path(self.config.dependency_preparation.offline_snapshot_path)
@@ -3853,6 +4343,13 @@ class AuditPipeline:
         ) = withhold_prior_audit_from_discovery(
             unfiltered_discovery,
             self.config.prior_audit.path,
+        )
+        (
+            unfiltered_discovery,
+            actor_material_withheld_from_discovery,
+        ) = withhold_actor_model_from_discovery(
+            unfiltered_discovery,
+            self.config.actor_model.path,
         )
         scope_projects = discover_solidity_projects(
             unfiltered_discovery,
@@ -4264,6 +4761,12 @@ class AuditPipeline:
                 for result in solidity_compilations
                 if result.status is not CompilationStatus.SUCCESS
             ]
+        actor_governance_findings.extend(
+            reconcile_actor_model_with_graphs(
+                actor_model_input,
+                solidity_graphs,
+            )
+        )
         scope_assessment = assess_audit_scope(
             discovery,
             solidity_projects,
@@ -4624,6 +5127,9 @@ class AuditPipeline:
                 all_scanner_findings,
             )
             for finding in scanner_report_findings:
+                actor_result = calibrate_retained_finding(finding)
+                finding = actor_result.finding
+                actor_governance_findings.extend(actor_result.governance_findings)
                 if finding.status is FindingStatus.REJECTED:
                     rejected_findings.append(finding)
                 elif (
@@ -4717,6 +5223,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
         )
@@ -4730,6 +5237,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             minimum_critical_root_lineages=minimum_critical_surface_lineages,
             source_contents_by_path=solidity_source_contents_by_path,
@@ -4740,6 +5248,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             requests=model_surface_requests,
             assignments=model_surface_review_assignments,
@@ -4753,6 +5262,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             requests=model_surface_requests,
             assignments=model_surface_review_assignments,
@@ -4911,6 +5421,7 @@ class AuditPipeline:
                     repository_config=self.config.repository,
                     privacy=self.config.privacy,
                     scanner_findings=scanner_findings,
+                    actor_model_evidence=actor_model_input,
                     scanner_secret_paths=_scanner_secret_paths(
                         all_scanner_findings,
                         allowed_scanner_paths,
@@ -4977,6 +5488,19 @@ class AuditPipeline:
                         run_dir / "private" / "model-surface-coverage-plan.json",
                         model_surface_coverage_plan,
                     )
+                (
+                    model_surface_request_manifests_by_task_key,
+                    whole_protocol_surface_manifest_sha256,
+                ) = _planned_blind_review_surface_manifests(
+                    config=self.config,
+                    discovery=discovery,
+                    scheduler_inventory=scheduler_inventory,
+                    semantic_inventory=solidity_shards,
+                    solidity_index=solidity_index,
+                    requests=model_surface_requests,
+                    assignments=model_surface_review_assignments,
+                    coverage_plan=model_surface_coverage_plan,
+                )
                 scheduler_analysis_input = build_scheduler_analysis_input_inventory(
                     run_options=run_options,
                     discovery=discovery,
@@ -5008,6 +5532,7 @@ class AuditPipeline:
                         if output_relative_to_repo is not None
                         else ()
                     ),
+                    actor_model_evidence=actor_model_input,
                 )
                 scheduler_analysis_input_sha256 = scheduler_analysis_input.analysis_input_sha256
                 atomic_ledger = self._effective_cost_ledger()
@@ -5110,6 +5635,12 @@ class AuditPipeline:
                         client=self.client,
                         scheduler=scheduler,
                         coverage_plan=model_surface_coverage_plan,
+                        model_surface_request_manifests_by_task_key=(
+                            model_surface_request_manifests_by_task_key
+                        ),
+                        whole_protocol_surface_manifest_sha256=(
+                            whole_protocol_surface_manifest_sha256
+                        ),
                         selected_model_ids=(
                             policy_selected_model_ids if paid_audit_policy_required else None
                         ),
@@ -5123,7 +5654,9 @@ class AuditPipeline:
                     task_envelopes = []
                     for scheduler_task in model_portfolio_scheduler_tasks:
                         coverage_task = coverage_tasks_by_id.get(scheduler_task.task_key)
-                        if scheduler_task.pass_kind is SchedulerPassKind.ORIENTATION:
+                        if scheduler_task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+                            task_kind = ModelPortfolioTaskKind.RETRIEVAL_PLANNING
+                        elif scheduler_task.pass_kind is SchedulerPassKind.ORIENTATION:
                             task_kind = ModelPortfolioTaskKind.ORIENTATION
                         elif coverage_task is not None:
                             task_kind = ModelPortfolioTaskKind.COMPACT_COVERAGE
@@ -5589,8 +6122,14 @@ class AuditPipeline:
                 **kwargs: Any,
             ) -> ContextPackage | None:
                 nonlocal terminal_code, budget_halted
+                fail_soft = bool(kwargs.pop("fail_soft", False))
                 try:
                     configured_budget = kwargs.pop("requested_budget", None)
+                    reserved_context_bytes = kwargs.pop("reserved_context_bytes", 0)
+                    if type(reserved_context_bytes) is not int or reserved_context_bytes < 0:
+                        raise ContextBudgetError(
+                            "reserved context bytes must be a nonnegative exact integer"
+                        )
                     workflow_byte_upper_bound_tokens = kwargs.pop(
                         "workflow_byte_upper_bound_tokens",
                         None,
@@ -5608,11 +6147,16 @@ class AuditPipeline:
                         )
 
                     initial_endpoint_budget = endpoint_budget()
-                    requested_budget = (
+                    full_requested_budget = (
                         initial_endpoint_budget
                         if configured_budget is None
                         else min(configured_budget, initial_endpoint_budget)
                     )
+                    requested_budget = full_requested_budget - reserved_context_bytes
+                    if requested_budget <= 0:
+                        raise ContextBudgetError(
+                            f"context preview for role {role} leaves no retrieval reserve"
+                        )
                     attempted_budgets: set[int] = set()
                     for _attempt in range(8):
                         if requested_budget in attempted_budgets:
@@ -5628,11 +6172,12 @@ class AuditPipeline:
                         escaped_endpoint_budget = endpoint_budget(
                             context_escape_overhead=(context_json_escape_overhead_tokens(package))
                         )
-                        validated_budget = (
+                        full_validated_budget = (
                             escaped_endpoint_budget
                             if configured_budget is None
                             else min(configured_budget, escaped_endpoint_budget)
                         )
+                        validated_budget = full_validated_budget - reserved_context_bytes
                         if requested_budget <= validated_budget:
                             return package
                         requested_budget = min(
@@ -5647,11 +6192,15 @@ class AuditPipeline:
                         f"context preview for role {role} did not converge within eight passes"
                     )
                 except ContextBudgetError as exc:
+                    if fail_soft:
+                        return None
                     incomplete.append(f"{role}: {exc}")
                     terminal_code = ExitCode.INCOMPLETE
                     budget_halted = True
                     return None
                 except OpenRouterError as exc:
+                    if fail_soft:
+                        return None
                     incomplete.append(f"{role}: {exc}")
                     terminal_code = ExitCode.MODEL_FAILURE
                     budget_halted = True
@@ -5678,6 +6227,48 @@ class AuditPipeline:
                     **kwargs,
                 )
 
+            def bind_retrieval_context_with_endpoint_budget(
+                *,
+                role: str,
+                package: ContextPackage,
+                policy: SolidityRetrievalRolePolicy,
+                corpus: SolidityRetrievalCorpus,
+                transcript: SolidityRetrievalTranscript | None,
+                maximum_budget: int,
+            ) -> ContextPackage:
+                """Converge a retrieval package against its exact escaped endpoint budget."""
+
+                models = context_models(role)
+                requested_budget = maximum_budget
+                attempted: set[int] = set()
+                for _attempt in range(8):
+                    if requested_budget in attempted or requested_budget <= 0:
+                        raise ContextBudgetError(
+                            f"retrieval context preview for role {role} did not converge"
+                        )
+                    attempted.add(requested_budget)
+                    bound = context_builder.bind_retrieval_context(
+                        package,
+                        policy=policy,
+                        corpus=corpus,
+                        transcript=transcript,
+                        byte_budget=requested_budget,
+                    )
+                    endpoint_budget = client.context_package_byte_budget(
+                        models,
+                        role=role,
+                        context_json_escape_overhead_tokens=(
+                            context_json_escape_overhead_tokens(bound)
+                        ),
+                    )
+                    validated_budget = min(maximum_budget, endpoint_budget)
+                    if requested_budget == validated_budget:
+                        return bound
+                    requested_budget = validated_budget
+                raise ContextBudgetError(
+                    f"retrieval context preview for role {role} did not converge within eight passes"
+                )
+
             def check_accounted_budget() -> None:
                 nonlocal terminal_code, budget_halted
                 if budget.spent_usd + 1e-12 < budget.total_usd:
@@ -5701,6 +6292,9 @@ class AuditPipeline:
                 model_id: str | None = None,
                 root_lineage: str | None = None,
                 candidate_ids: set[str] | None = None,
+                model_surface_review_request_manifest_sha256: str | None = None,
+                purpose: SchedulerTaskPurpose = SchedulerTaskPurpose.PRIMARY,
+                parent_task_id: str | None = None,
             ) -> SchedulerTaskPlan:
                 selected_model = model_id
                 if selected_model is None:
@@ -5731,6 +6325,26 @@ class AuditPipeline:
                 )
                 if request_hashes.schema_sha256 != response_schema_sha256:
                     raise ValueError("scheduled request protocol schema hash is inconsistent")
+                surface_manifest_sha256 = model_surface_request_manifests_by_task_key.get(task_key)
+                if task_key.startswith("whole-protocol-review-"):
+                    surface_manifest_sha256 = whole_protocol_surface_manifest_sha256
+                if model_surface_review_request_manifest_sha256 is not None:
+                    if (
+                        surface_manifest_sha256 is not None
+                        and surface_manifest_sha256 != model_surface_review_request_manifest_sha256
+                    ):
+                        raise ValueError(
+                            "scheduled task has conflicting pre-dispatch surface authority"
+                        )
+                    surface_manifest_sha256 = model_surface_review_request_manifest_sha256
+                if (
+                    purpose is SchedulerTaskPurpose.PRIMARY
+                    and pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+                    and surface_manifest_sha256 is None
+                ):
+                    raise ValueError(
+                        "scheduled blind-review task lacks pre-dispatch surface authority"
+                    )
                 planned_task = scheduler.model_task(
                     pass_kind=pass_kind,
                     scope=scope,
@@ -5741,6 +6355,9 @@ class AuditPipeline:
                     system_prompt_sha256=request_hashes.system_prompt_sha256,
                     response_schema_sha256=response_schema_sha256,
                     candidate_ids=tuple(sorted(candidate_ids or ())),
+                    model_surface_review_request_manifest_sha256=surface_manifest_sha256,
+                    purpose=purpose,
+                    parent_task_id=parent_task_id,
                 )
                 portfolio_matches = tuple(
                     task
@@ -5942,6 +6559,7 @@ class AuditPipeline:
                 *,
                 surface_requests: tuple[ModelSurfaceReviewRequest, ...] = (),
                 surface_artifact: ModelSurfaceReviewArtifact | None = None,
+                retrieval_binding: SchedulerRetrievalBinding | None = None,
             ) -> None:
                 outputs = tuple(
                     output for output in scheduler.journal.outputs if output.task_id == task.task_id
@@ -5951,6 +6569,7 @@ class AuditPipeline:
                     or outputs[0].specialist_accepted_outcome != expected
                     or outputs[0].model_surface_review_requests != surface_requests
                     or outputs[0].model_surface_review_artifact != surface_artifact
+                    or outputs[0].retrieval_binding != retrieval_binding
                 ):
                     raise OpenRouterSchemaError(
                         "resumed specialist outcome differs from its exact retained output"
@@ -6091,6 +6710,7 @@ class AuditPipeline:
                 ]
             ] = []
             coverage_task_by_scheduler_id: dict[str, ModelSurfaceGapTask] = {}
+            retrieval_task_by_primary_id: dict[str, SchedulerTaskPlan] = {}
             whole_protocol_specs: list[
                 tuple[
                     str,
@@ -6102,23 +6722,44 @@ class AuditPipeline:
             if not scheduler_halted:
                 for shard in scheduler.manifest.shard_inventory.shards:
                     scope = SchedulerScope.single_shard(shard.shard_id)
+                    source_primary_task = scheduled_model_task(
+                        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                        scope=scope,
+                        task_key=f"source_audit-{shard.shard_id}",
+                        request_role="source_audit",
+                        configured_role="source_audit",
+                        request_protocol=SourceAuditAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        ).request_protocol,
+                    )
+                    source_model = self.config.models.role("source_audit").primary
+                    retrieval_task = scheduled_model_task(
+                        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                        scope=scope,
+                        task_key=f"retrieval-source_audit-{shard.shard_id}",
+                        request_role="source_audit",
+                        request_protocol=RetrievalPlanningAgent(
+                            scheduler_agent_config,
+                            self.client,
+                            role="source_audit",
+                            exact_model_id=source_model,
+                        ).request_protocol,
+                        model_id=source_model,
+                        purpose=SchedulerTaskPurpose.RETRIEVAL_PLANNING,
+                        parent_task_id=source_primary_task.task_id,
+                        model_surface_review_request_manifest_sha256=(
+                            source_primary_task.model_surface_review_request_manifest_sha256
+                        ),
+                    )
+                    retrieval_task_by_primary_id[source_primary_task.task_id] = retrieval_task
                     blind_specs.append(
                         (
                             "source_audit",
                             "source_audit",
                             SourceAuditAgent,
                             shard,
-                            scheduled_model_task(
-                                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
-                                scope=scope,
-                                task_key=f"source_audit-{shard.shard_id}",
-                                request_role="source_audit",
-                                configured_role="source_audit",
-                                request_protocol=SourceAuditAgent(
-                                    scheduler_agent_config,
-                                    self.client,
-                                ).request_protocol,
-                            ),
+                            source_primary_task,
                         )
                     )
                     if model_surface_coverage_plan is None:
@@ -6260,6 +6901,11 @@ class AuditPipeline:
                     )
                 blind_plan_tasks = (
                     *(spec[4] for spec in blind_specs),
+                    *(
+                        retrieval_task_by_primary_id[spec[4].task_id]
+                        for spec in blind_specs
+                        if spec[4].task_id in retrieval_task_by_primary_id
+                    ),
                     *(spec[3] for spec in whole_protocol_specs),
                 )
                 completed_blind_review = scheduler.completed_pass_result(
@@ -6267,10 +6913,12 @@ class AuditPipeline:
                     blind_plan_tasks,
                 )
                 if completed_blind_review is None:
-                    scheduler.prepare_pass(
+                    blind_scheduler_plan = scheduler.prepare_pass(
                         SchedulerPassKind.BLIND_SHARD_REVIEW,
                         blind_plan_tasks,
                     )
+                else:
+                    blind_scheduler_plan = completed_blind_review.plan
 
                 blind_contexts: list[
                     tuple[
@@ -6289,6 +6937,10 @@ class AuditPipeline:
                         ContextPackage,
                     ]
                 ] = []
+                retrieval_context_plan_by_primary_id: dict[
+                    str,
+                    _SourceRetrievalContextPlan,
+                ] = {}
                 model_surface_requests_by_id = {
                     surface.surface_id: surface for surface in model_surface_requests
                 }
@@ -6378,6 +7030,15 @@ class AuditPipeline:
                             terminal_code = ExitCode.INCOMPLETE
                             budget_halted = True
                             break
+                    if (
+                        scheduler_task.model_surface_review_request_manifest_sha256
+                        != ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                            assigned_surfaces
+                        )
+                    ):
+                        raise ValueError(
+                            "blind-review context differs from its pre-dispatch surface authority"
+                        )
                     if request_role.startswith("specialist:"):
                         package = build_specialist_context(
                             configured_role,
@@ -6394,6 +7055,83 @@ class AuditPipeline:
                         )
                     if package is None:
                         break
+                    planning_task = retrieval_task_by_primary_id.get(scheduler_task.task_id)
+                    if request_role == "source_audit" and planning_task is not None:
+                        try:
+                            corpus = context_builder.build_retrieval_corpus(
+                                allowed_source_paths=allowed_paths,
+                            )
+                            if corpus is not None:
+                                role_allocation = (
+                                    blind_scheduler_plan.retrieval_role_budget_allocation_for_task(
+                                        scheduler_task.task_id
+                                    )
+                                )
+                                policy = role_allocation.policy
+                                reserve_bytes = solidity_retrieval_context_reserve_bytes(policy)
+                                planning_base = build_context(
+                                    request_role,
+                                    threat_model=threat_model,
+                                    requested_model_surfaces=assigned_surfaces,
+                                    allowed_source_paths=allowed_paths,
+                                    reserved_source_bytes=(policy.maximum_total_result_utf8_bytes),
+                                    reserved_context_bytes=reserve_bytes,
+                                    fail_soft=True,
+                                )
+                                if planning_base is not None:
+                                    final_context_budget = min(
+                                        self.config.repository.max_total_context_bytes,
+                                        planning_base.byte_budget + reserve_bytes,
+                                    )
+                                    planning_context = bind_retrieval_context_with_endpoint_budget(
+                                        role=request_role,
+                                        package=planning_base,
+                                        policy=policy,
+                                        corpus=corpus,
+                                        transcript=None,
+                                        maximum_budget=final_context_budget,
+                                    )
+                                    final_context_budget = planning_context.byte_budget
+                                    retrieval_context_plan_by_primary_id[scheduler_task.task_id] = (
+                                        _SourceRetrievalContextPlan(
+                                            planning_task=planning_task,
+                                            corpus=corpus,
+                                            policy=policy,
+                                            planning_context=planning_context,
+                                            fallback_context=package,
+                                            final_context_budget=final_context_budget,
+                                        )
+                                    )
+                        except (ContextBoundaryError, ContextBudgetError, ValueError):
+                            # The linked planner remains in the sealed pass and is
+                            # terminally recorded below; the primary retains the
+                            # existing single-shot context without provider spend.
+                            pass
+                        if scheduler_task.task_id not in retrieval_context_plan_by_primary_id:
+                            retained_planner_result = (
+                                scheduler.completed_result_for_task(
+                                    completed_blind_review,
+                                    planning_task,
+                                )
+                                if completed_blind_review is not None
+                                else scheduler.result_for_task(planning_task)
+                            )
+                            if (
+                                retained_planner_result is not None
+                                and retained_planner_result.terminal_status
+                                is SchedulerTerminalStatus.SUCCEEDED
+                            ):
+                                raise ContextBoundaryError(
+                                    "successful retrieval planner context cannot be rebuilt"
+                                )
+                            if retained_planner_result is None and completed_blind_review is None:
+                                scheduler.record_failure(
+                                    planning_task,
+                                    ContextBudgetError(
+                                        "safe retrieval context unavailable; retained "
+                                        "single-shot fallback"
+                                    ),
+                                )
                     blind_contexts.append(
                         (
                             request_role,
@@ -6419,6 +7157,16 @@ class AuditPipeline:
                         whole_protocol_agent,
                         scheduler_task,
                     ) in whole_protocol_specs:
+                        if (
+                            scheduler_task.model_surface_review_request_manifest_sha256
+                            != ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                                whole_protocol_surfaces
+                            )
+                        ):
+                            raise ValueError(
+                                "whole-protocol context differs from its pre-dispatch "
+                                "surface authority"
+                            )
                         package = build_context(
                             request_role,
                             preview_models=(model_id,),
@@ -6741,17 +7489,23 @@ class AuditPipeline:
                     blind_failure = ContextBudgetError(
                         "blind shard contexts were not frozen as one complete plan"
                     )
-                    for (
-                        _request_role,
-                        _configured_role,
-                        _agent_type,
-                        _shard,
-                        task_plan,
-                    ) in blind_specs:
-                        scheduler.record_failure(task_plan, blind_failure)
-                    for _request_role, _model_id, _agent, task_plan in whole_protocol_specs:
-                        scheduler.record_failure(task_plan, blind_failure)
+                    if completed_blind_review is None:
+                        for task_plan in blind_plan_tasks:
+                            if scheduler.result_for_task(task_plan) is None:
+                                scheduler.record_failure(task_plan, blind_failure)
                     await release_model_portfolio_if_terminal()
+                    if completed_blind_review is None:
+                        conclude_scheduler_pass()
+                    else:
+                        conclude_scheduler_result(completed_blind_review)
+                        if not scheduler_halted:
+                            incomplete.append(
+                                "completed blind-review evidence could not rebuild its exact "
+                                "context inventory"
+                            )
+                            scheduler_halted = True
+                            budget_halted = True
+                            terminal_code = ExitCode.INCOMPLETE
                 else:
                     if coverage_resource_failure is not None:
                         resource_failure_exception = BudgetExhaustedError(coverage_resource_failure)
@@ -6849,6 +7603,201 @@ class AuditPipeline:
                         ):
                             return await bounded_call(dispatch())
 
+                    def retained_retrieval_batch(
+                        planning_task: SchedulerTaskPlan,
+                    ) -> SolidityRetrievalRequestBatch | SchedulerTaskResult | None:
+                        retained = (
+                            scheduler.completed_result_for_task(
+                                completed_blind_review,
+                                planning_task,
+                            )
+                            if completed_blind_review is not None
+                            else scheduler.result_for_task(planning_task)
+                        )
+                        if retained is None:
+                            return None
+                        if retained.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                            return retained
+                        return (
+                            scheduler.completed_output_for_task(
+                                completed_blind_review,
+                                planning_task,
+                                SolidityRetrievalRequestBatch,
+                            )
+                            if completed_blind_review is not None
+                            else scheduler.output_for_task(
+                                planning_task,
+                                SolidityRetrievalRequestBatch,
+                            )
+                        )
+
+                    async def run_source_review_with_retrieval(
+                        *,
+                        agent: Any,
+                        primary_task: SchedulerTaskPlan,
+                        retrieval_plan: _SourceRetrievalContextPlan,
+                    ) -> _RetrievedSourceReviewResult:
+                        planning_task = retrieval_plan.planning_task
+                        packages.append(retrieval_plan.planning_context)
+                        transcript: SolidityRetrievalTranscript | None = None
+                        selected_context = retrieval_plan.fallback_context
+                        planned = retained_retrieval_batch(planning_task)
+                        if primary_task.requested_model is None:
+                            raise OpenRouterSchemaError(
+                                "retrieval primary lacks an exact model identity"
+                            )
+                        planner_agent = RetrievalPlanningAgent(
+                            scheduler_agent_config,
+                            client,
+                            role=primary_task.role,
+                            exact_model_id=primary_task.requested_model,
+                        )
+                        if planned is None and retrieval_plan.policy.maximum_requests == 0:
+                            planned = scheduler.record_failure(
+                                planning_task,
+                                ContextBudgetError(
+                                    "retrieval role allocation exhausted; retained single-shot "
+                                    "fallback"
+                                ),
+                            )
+                        if planned is None:
+                            try:
+                                planning_result = cast(
+                                    RetrievalPlanningResult,
+                                    await run_blind_agent(
+                                        agent=planner_agent,
+                                        scheduler_task=planning_task,
+                                        package=retrieval_plan.planning_context,
+                                    ),
+                                )
+                                candidate_transcript = execute_solidity_retrieval_batch(
+                                    corpus=retrieval_plan.corpus,
+                                    policy=retrieval_plan.policy,
+                                    transcript=start_solidity_retrieval_transcript(
+                                        corpus=retrieval_plan.corpus,
+                                        policy=retrieval_plan.policy,
+                                    ),
+                                    batch=planning_result.request_batch,
+                                )
+                                candidate_context = retrieval_plan.fallback_context
+                                if not candidate_transcript.single_shot_fallback_required:
+                                    candidate_context = bind_retrieval_context_with_endpoint_budget(
+                                        role=primary_task.role,
+                                        package=retrieval_plan.planning_context,
+                                        policy=retrieval_plan.policy,
+                                        corpus=retrieval_plan.corpus,
+                                        transcript=candidate_transcript,
+                                        maximum_budget=(retrieval_plan.final_context_budget),
+                                    )
+                                planner_terminal = scheduler.record_model_success(
+                                    planning_task,
+                                    output_value=planning_result.request_batch,
+                                    usage_records=usage.records,
+                                )
+                                planned = (
+                                    planning_result.request_batch
+                                    if planner_terminal.terminal_status
+                                    is SchedulerTerminalStatus.SUCCEEDED
+                                    else planner_terminal
+                                )
+                                if isinstance(planned, SolidityRetrievalRequestBatch):
+                                    transcript = candidate_transcript
+                                    selected_context = candidate_context
+                            except (
+                                BudgetExhaustedError,
+                                BudgetReservationStateError,
+                                ContextBoundaryError,
+                                ContextBudgetError,
+                                OpenRouterError,
+                                ValueError,
+                            ) as exc:
+                                retained_terminal = scheduler.result_for_task(planning_task)
+                                if retained_terminal is None:
+                                    retained_terminal = scheduler.record_failure(
+                                        planning_task,
+                                        exc,
+                                        usage_records=usage.records,
+                                        atomic_ledger=atomic_ledger,
+                                    )
+                                planned = retained_terminal
+
+                        if isinstance(planned, SolidityRetrievalRequestBatch):
+                            rebound = planner_agent.bind_completed_plan(
+                                retrieval_plan.planning_context,
+                                raw_response=planned,
+                                completion_usage=completed_usage_for_task(planning_task),
+                                logical_request_id=planning_task.logical_request_id,
+                            )
+                            planned = rebound.request_batch
+                        if (
+                            isinstance(planned, SolidityRetrievalRequestBatch)
+                            and transcript is None
+                        ):
+                            transcript = execute_solidity_retrieval_batch(
+                                corpus=retrieval_plan.corpus,
+                                policy=retrieval_plan.policy,
+                                transcript=start_solidity_retrieval_transcript(
+                                    corpus=retrieval_plan.corpus,
+                                    policy=retrieval_plan.policy,
+                                ),
+                                batch=planned,
+                            )
+                            if not transcript.single_shot_fallback_required:
+                                selected_context = bind_retrieval_context_with_endpoint_budget(
+                                    role=primary_task.role,
+                                    package=retrieval_plan.planning_context,
+                                    policy=retrieval_plan.policy,
+                                    corpus=retrieval_plan.corpus,
+                                    transcript=transcript,
+                                    maximum_budget=retrieval_plan.final_context_budget,
+                                )
+                        retrieval_binding: SchedulerRetrievalBinding | None = None
+                        if transcript is not None:
+                            retrieval_binding = (
+                                scheduler.completed_retrieval_binding_for_task(
+                                    completed_blind_review,
+                                    primary_task,
+                                )
+                                if completed_blind_review is not None
+                                else scheduler.build_retrieval_binding(
+                                    primary_task=primary_task,
+                                    planner_task=planning_task,
+                                    transcript=transcript,
+                                )
+                            )
+                            if retrieval_binding.transcript != transcript:
+                                raise OpenRouterSchemaError(
+                                    "replayed retrieval transcript differs from retained "
+                                    "primary custody"
+                                )
+                        packages.append(selected_context)
+                        recovered = completed_finding_review_or_terminal(
+                            completed_blind_review,
+                            primary_task,
+                            agent,
+                            selected_context,
+                        )
+                        if recovered is not None:
+                            return _RetrievedSourceReviewResult(
+                                value=recovered,
+                                context=selected_context,
+                                retrieval_binding=retrieval_binding,
+                            )
+
+                        review = cast(
+                            FindingReviewResult,
+                            await run_blind_agent(
+                                agent=agent,
+                                scheduler_task=primary_task,
+                                package=selected_context,
+                            ),
+                        )
+                        return _RetrievedSourceReviewResult(
+                            value=review,
+                            context=selected_context,
+                            retrieval_binding=retrieval_binding,
+                        )
+
                     def queue_exact_recovery_root(
                         *,
                         request_role: str,
@@ -6896,7 +7845,6 @@ class AuditPipeline:
                         scheduler_task,
                         blind_package,
                     ) in blind_contexts:
-                        packages.append(blind_package)
                         blind_agent = (
                             SpecialistFindingAgent(
                                 scheduler_agent_config,
@@ -6906,12 +7854,19 @@ class AuditPipeline:
                             if blind_agent_type is None
                             else blind_agent_type(scheduler_agent_config, self.client)
                         )
-                        recovered_review = completed_finding_review_or_terminal(
-                            completed_blind_review,
-                            scheduler_task,
-                            blind_agent,
-                            blind_package,
+                        retrieval_plan = retrieval_context_plan_by_primary_id.get(
+                            scheduler_task.task_id
                         )
+                        if retrieval_plan is None:
+                            packages.append(blind_package)
+                            recovered_review: Any = completed_finding_review_or_terminal(
+                                completed_blind_review,
+                                scheduler_task,
+                                blind_agent,
+                                blind_package,
+                            )
+                        else:
+                            recovered_review = retrieval_plan
                         if scheduler_task.task_id not in coverage_preview_by_scheduler_id:
                             supplemental_blind_work.append(
                                 (
@@ -6985,6 +7940,23 @@ class AuditPipeline:
                         blind_agent,
                         recovered_review,
                     ) in supplemental_blind_work:
+                        pending_review = (
+                            run_source_review_with_retrieval(
+                                agent=blind_agent,
+                                primary_task=scheduler_task,
+                                retrieval_plan=recovered_review,
+                            )
+                            if isinstance(recovered_review, _SourceRetrievalContextPlan)
+                            else (
+                                completed_value(recovered_review)
+                                if recovered_review is not None
+                                else run_blind_agent(
+                                    agent=blind_agent,
+                                    scheduler_task=scheduler_task,
+                                    package=package,
+                                )
+                            )
+                        )
                         blind_tasks.append(
                             (
                                 request_role,
@@ -6993,15 +7965,7 @@ class AuditPipeline:
                                 package,
                                 blind_agent,
                                 asyncio.create_task(
-                                    (
-                                        completed_value(recovered_review)
-                                        if recovered_review is not None
-                                        else run_blind_agent(
-                                            agent=blind_agent,
-                                            scheduler_task=scheduler_task,
-                                            package=package,
-                                        )
-                                    ),
+                                    pending_review,
                                     name=f"model:{request_role}:{scheduler_task.task_key}",
                                 ),
                             )
@@ -7016,6 +7980,11 @@ class AuditPipeline:
                     ) in blind_tasks:
                         try:
                             batch = await task
+                            retrieval_binding: SchedulerRetrievalBinding | None = None
+                            if isinstance(batch, _RetrievedSourceReviewResult):
+                                retrieval_binding = batch.retrieval_binding
+                                package = batch.context
+                                batch = batch.value
                             if isinstance(batch, SchedulerTaskResult):
                                 if queue_exact_recovery_root(
                                     request_role=request_role,
@@ -7079,6 +8048,7 @@ class AuditPipeline:
                                     ),
                                     model_surface_review_artifact=(batch.surface_review_artifact),
                                     normalization_evidence=batch.normalization_evidence,
+                                    retrieval_binding=retrieval_binding,
                                 )
                             else:
                                 require_completed_specialist_outcome(
@@ -7086,6 +8056,7 @@ class AuditPipeline:
                                     specialist_accepted_outcome,
                                     surface_requests=tuple(sealed_context.requested_model_surfaces),
                                     surface_artifact=batch.surface_review_artifact,
+                                    retrieval_binding=retrieval_binding,
                                 )
                             if batch.findings and time_to_first_candidate_seconds is None:
                                 time_to_first_candidate_seconds = (
@@ -8504,6 +9475,11 @@ class AuditPipeline:
                                 self.client,
                             ).request_protocol,
                             candidate_ids={request.surface_id},
+                            model_surface_review_request_manifest_sha256=(
+                                ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                                    (request,)
+                                )
+                            ),
                         )
                     integration_tasks.extend(boundary_review_tasks.values())
                     for overlap in solidity_shards.overlaps:
@@ -8523,6 +9499,11 @@ class AuditPipeline:
                                 self.client,
                             ).request_protocol,
                             candidate_ids={request.surface_id},
+                            model_surface_review_request_manifest_sha256=(
+                                ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                                    (request,)
+                                )
+                            ),
                         )
                     integration_tasks.extend(overlap_review_tasks.values())
                 if (
@@ -8615,6 +9596,16 @@ class AuditPipeline:
                                 "resumed cross-shard boundary context was not reproduced"
                             )
                     else:
+                        if (
+                            relationship_scheduler_task.model_surface_review_request_manifest_sha256
+                            != ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                                relationship_context.requested_model_surfaces
+                            )
+                        ):
+                            raise ValueError(
+                                "cross-shard review context differs from its pre-dispatch "
+                                "surface authority"
+                            )
                         packages.append(relationship_context)
                         contexts[relationship_id] = relationship_context
                 for relationship_id, relationship_context in sorted(contexts.items()):
@@ -10620,6 +11611,7 @@ class AuditPipeline:
             prepared_judgment_input = judge_agent.prepare_input(
                 groups=group_payloads,
                 threat_model=threat_model,
+                actor_model_evidence=actor_model_input,
             )
             if groups and not budget_halted and not scheduler_halted:
                 judge_context = build_context(
@@ -10633,7 +11625,7 @@ class AuditPipeline:
                 )
                 if judge_context is not None:
                     packages.append(judge_context)
-            judge_decisions: dict[str, JudgeDecision] = {}
+            judge_decisions = {}
             if groups and judge_context is not None:
                 assert judge_scheduler_task is not None
                 try:
@@ -10747,6 +11739,9 @@ class AuditPipeline:
                     deterministically_rejected_candidate_ids=(
                         deterministically_rejected_candidate_ids
                     ),
+                    apply_judge_classification=(
+                        actor_model_input.state is not ActorModelInputState.CURRENT
+                    ),
                 )
                 finding = enforce_critical_evidence_cap(
                     finding,
@@ -10775,6 +11770,14 @@ class AuditPipeline:
                     )
                     if terminal_code is ExitCode.SUCCESS:
                         terminal_code = ExitCode.INCOMPLETE
+                finding = bind_judged_actor_context(
+                    finding,
+                    judgment=judge_decisions.get(group.group_id),
+                    actor_input=actor_model_input,
+                )
+                actor_result = calibrate_retained_finding(finding)
+                finding = actor_result.finding
+                actor_governance_findings.extend(actor_result.governance_findings)
                 judge_vote = _judge_vote(
                     judge_decisions.get(group.group_id),
                     self.client,
@@ -11100,6 +12103,9 @@ class AuditPipeline:
                         self.config.maximum_assurance.require_formal_or_reproduction_for_confirmed_critical
                     ),
                 )
+                actor_result = calibrate_retained_finding(finding)
+                finding = actor_result.finding
+                actor_governance_findings.extend(actor_result.governance_findings)
                 if finding.status is FindingStatus.REJECTED:
                     rejected_findings.append(finding)
                 else:
@@ -11154,18 +12160,13 @@ class AuditPipeline:
                 reproductions,
             )
         private_model_review_path = run_dir / "private" / "model-review-artifacts.json"
+        private_model_review_inventory = build_model_review_artifact_inventory(
+            artifacts=model_surface_review_artifacts,
+            review_contexts_by_request=model_surface_review_contexts,
+        )
         write_json(
             private_model_review_path,
-            {
-                "schema_version": REPORT_SCHEMA_VERSION,
-                "artifacts": [
-                    artifact.model_dump(mode="json")
-                    for artifact in sorted(
-                        model_surface_review_artifacts,
-                        key=lambda item: item.request_id,
-                    )
-                ],
-            },
+            private_model_review_inventory.model_dump(mode="json"),
         )
         private_model_review_path.chmod(0o600)
         promoted_surface_projections = tuple(
@@ -11176,41 +12177,42 @@ class AuditPipeline:
             require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)
             for capability in promoted_recursive_truncation_surface_coverages
         )
+        promoted_recovery_leaf_authorities = _promoted_recovery_leaf_authorities(
+            direct_projections=promoted_surface_projections,
+            recursive_projections=promoted_recursive_surface_projections,
+        )
         if promoted_surface_projections or promoted_recursive_surface_projections:
             private_promoted_surface_path = (
                 run_dir / "private" / "truncation-recovered-surface-artifacts.json"
             )
+            promoted_surface_payloads = [
+                {
+                    "promotion_entry_sha256": projection.promotion_entry_sha256,
+                    "recovered_output_artifact_sha256": (
+                        projection.recovered_output_artifact_sha256
+                    ),
+                    "artifact": projection.artifact.model_dump(mode="json"),
+                }
+                for projection in promoted_surface_projections
+            ] + [
+                {
+                    "promotion_entry_sha256": projection.promotion_entry_sha256,
+                    "recovered_output_artifact_sha256": (
+                        projection.recovered_output_artifact_sha256
+                    ),
+                    "recursive_tree": True,
+                    "artifact": projection.artifact.model_dump(mode="json"),
+                }
+                for projection in promoted_recursive_surface_projections
+            ]
             write_json(
                 private_promoted_surface_path,
                 {
                     "schema_version": ("1.1" if promoted_recursive_surface_projections else "1.0"),
-                    "promotions": [
-                        {
-                            "promotion_entry_sha256": projection.promotion_entry_sha256,
-                            "recovered_output_artifact_sha256": (
-                                projection.recovered_output_artifact_sha256
-                            ),
-                            "artifact": projection.artifact.model_dump(mode="json"),
-                        }
-                        for projection in sorted(
-                            promoted_surface_projections,
-                            key=lambda item: item.promotion_entry_sha256,
-                        )
-                    ]
-                    + [
-                        {
-                            "promotion_entry_sha256": projection.promotion_entry_sha256,
-                            "recovered_output_artifact_sha256": (
-                                projection.recovered_output_artifact_sha256
-                            ),
-                            "recursive_tree": True,
-                            "artifact": projection.artifact.model_dump(mode="json"),
-                        }
-                        for projection in sorted(
-                            promoted_recursive_surface_projections,
-                            key=lambda item: item.promotion_entry_sha256,
-                        )
-                    ],
+                    "promotions": sorted(
+                        promoted_surface_payloads,
+                        key=lambda item: str(item["promotion_entry_sha256"]),
+                    ),
                 },
             )
             private_promoted_surface_path.chmod(0o600)
@@ -11224,14 +12226,16 @@ class AuditPipeline:
             if provider_session is None or provider_session.usage_evidence_consistent
             else []
         )
-        promoted_recovery_requests_for_coverage = (
-            tuple(
-                request
-                for request in self._active_scheduler.journal.recovery_model_requests
-                if request.promotion_entry_sha256 is not None
-                and request.promotion_disposition
-                is not (SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE)
-            )
+        promoted_recovery_requests_for_coverage = _require_promoted_recovery_leaf_requests(
+            authorities=promoted_recovery_leaf_authorities,
+            recovery_requests=(
+                self._active_scheduler.journal.recovery_model_requests
+                if self._active_scheduler is not None
+                else ()
+            ),
+        )
+        model_review_pre_dispatch_authorizations = (
+            build_model_review_pre_dispatch_authorizations(self._active_scheduler.journal)
             if self._active_scheduler is not None
             else ()
         )
@@ -11244,6 +12248,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
             recovery_usage_coordinates=tuple(
@@ -11258,6 +12263,25 @@ class AuditPipeline:
             promoted_recursive_recovery_surface_coverages=tuple(
                 promoted_recursive_truncation_surface_coverages
             ),
+            ordinary_review_authorizations=model_review_pre_dispatch_authorizations,
+        )
+        validate_protocol_profile_replay(
+            solidity_analysis_discovery,
+            solidity_index,
+            solidity_graphs,
+            solidity_invariants,
+        )
+        taxonomy_coverage = build_known_issue_taxonomy_coverage(
+            taxonomy_resource,
+            invariants=(
+                solidity_invariants if language_capability.evm_portfolio_applicable else None
+            ),
+            model_review_coverage=model_review_coverage,
+        )
+        write_json_bounded(
+            run_dir / "known-issue-taxonomy-coverage.json",
+            taxonomy_coverage,
+            max_bytes=MAX_JSON_ARTIFACT_BYTES,
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -11268,11 +12292,13 @@ class AuditPipeline:
             )
         quality_gates = _evaluate_quality_gates(
             config=self.config,
+            actor_model_input=actor_model_input,
             solidity_projects=solidity_projects,
             compilations=solidity_compilations,
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            taxonomy_coverage=taxonomy_coverage,
             model_surface_coverage_plan=model_surface_coverage_plan,
             authoritative_model_surface_requests=model_surface_requests,
             language_capability=language_capability,
@@ -11558,35 +12584,32 @@ class AuditPipeline:
             pipeline_owned=self._owns_client,
             usage_records=usage.records,
         )
-        promoted_recovery_requests = (
-            tuple(
-                request
-                for request in scheduler_artifact.recovery_model_requests
-                if request.promotion_entry_sha256 is not None
-            )
-            if scheduler_artifact is not None
-            else ()
+        all_recovery_requests = (
+            scheduler_artifact.recovery_model_requests if scheduler_artifact is not None else ()
         )
+        current_promoted_recovery_leaf_authorities = (
+            _require_current_promoted_recovery_leaf_authorities(
+                direct_capabilities=promoted_truncation_surface_coverages,
+                recursive_capabilities=promoted_recursive_truncation_surface_coverages,
+            )
+        )
+        promoted_recovery_requests = _require_promoted_recovery_leaf_requests(
+            authorities=current_promoted_recovery_leaf_authorities,
+            recovery_requests=all_recovery_requests,
+        )
+        all_recovery_request_by_id = {
+            request.logical_request_id: request for request in all_recovery_requests
+        }
         promoted_recovery_request_by_id = {
             request.logical_request_id: request for request in promoted_recovery_requests
         }
         model_credit_usage = (
-            [
-                record
-                for record in usage.records
-                if record.request_id in successful_scheduler_review_ids
-                and (
-                    is_recovery_creditable_usage_record(
-                        record,
-                        request_limit_scope=recovery_request.request_limit_scope,
-                        request_limit_count_before=(recovery_request.request_limit_count_before),
-                        require_real=True,
-                    )
-                    if (recovery_request := promoted_recovery_request_by_id.get(record.request_id))
-                    is not None
-                    else is_creditable_usage_record(record, require_real=True)
-                )
-            ]
+            _minimum_floor_creditable_usage_records(
+                usage_records=usage.records,
+                successful_request_ids=successful_scheduler_review_ids,
+                all_recovery_requests=all_recovery_requests,
+                promoted_recovery_leaf_requests=promoted_recovery_requests,
+            )
             if (
                 scheduler_usage_accounting_consistent
                 and (provider_session is None or provider_session.usage_evidence_consistent)
@@ -11615,11 +12638,19 @@ class AuditPipeline:
                 projection.bridge_usage_record.request_id,
             )
         }
+        promoted_recovery_leaf_request_ids = set(promoted_recovery_request_by_id)
+        all_recovery_request_ids = set(all_recovery_request_by_id)
+        authorized_structurally_successful_scheduler_review_ids = {
+            request_id
+            for request_id in structurally_successful_scheduler_review_ids
+            if request_id not in all_recovery_request_ids
+            or request_id in promoted_recovery_leaf_request_ids
+        }
         model_review_accounting_usage = (
             [
                 record
                 for record in usage.records
-                if record.request_id in structurally_successful_scheduler_review_ids
+                if record.request_id in authorized_structurally_successful_scheduler_review_ids
                 or record.request_id in promoted_parent_usage_ids
                 or record.request_id in promoted_recursive_tree_usage_ids
             ]
@@ -11645,6 +12676,7 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=taxonomy_resource.corpus,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
             recovery_usage_coordinates=tuple(
@@ -11654,13 +12686,30 @@ class AuditPipeline:
                     request.request_limit_count_before,
                 )
                 for request in promoted_recovery_requests
-                if request.promotion_disposition
-                is not (SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE)
             ),
             promoted_recovery_surface_coverages=tuple(promoted_truncation_surface_coverages),
             promoted_recursive_recovery_surface_coverages=tuple(
                 promoted_recursive_truncation_surface_coverages
             ),
+            ordinary_review_authorizations=model_review_pre_dispatch_authorizations,
+        )
+        validate_protocol_profile_replay(
+            solidity_analysis_discovery,
+            solidity_index,
+            solidity_graphs,
+            solidity_invariants,
+        )
+        taxonomy_coverage = build_known_issue_taxonomy_coverage(
+            taxonomy_resource,
+            invariants=(
+                solidity_invariants if language_capability.evm_portfolio_applicable else None
+            ),
+            model_review_coverage=model_review_coverage,
+        )
+        write_json_bounded(
+            run_dir / "known-issue-taxonomy-coverage.json",
+            taxonomy_coverage,
+            max_bytes=MAX_JSON_ARTIFACT_BYTES,
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -11669,21 +12718,38 @@ class AuditPipeline:
                 model_review_coverage,
                 solidity_graphs,
             )
+        promoted_recursive_specialist_aggregate_usage_ids = {
+            usage_record.request_id
+            for projection in promoted_recursive_surface_projections
+            for usage_record in (
+                projection.parent_usage_record,
+                projection.bridge_usage_record,
+            )
+            if canonical_specialist_role(usage_record.role) is not None
+        }
         specialist_execution_records = build_specialist_execution_records(
             self.config,
-            usage_records=(list(usage.records) if scheduler_usage_accounting_consistent else []),
+            usage_records=(
+                [
+                    record
+                    for record in usage.records
+                    if record.request_id not in promoted_recursive_specialist_aggregate_usage_ids
+                ]
+                if scheduler_usage_accounting_consistent
+                else []
+            ),
             contexts=packages,
             accepted_outcomes=tuple(
                 outcome
                 for outcome in accepted_specialist_outcomes
                 if scheduler_usage_accounting_consistent
-                and outcome.request_id in structurally_successful_scheduler_review_ids
+                and outcome.request_id in authorized_structurally_successful_scheduler_review_ids
             ),
             structurally_successful_request_ids=(
                 {
                     record.request_id
                     for record in usage.records
-                    if record.request_id in structurally_successful_scheduler_review_ids
+                    if record.request_id in authorized_structurally_successful_scheduler_review_ids
                     and canonical_specialist_role(record.role) is not None
                 }
                 if scheduler_usage_accounting_consistent
@@ -11814,11 +12880,13 @@ class AuditPipeline:
         )
         quality_gates = _evaluate_quality_gates(
             config=self.config,
+            actor_model_input=actor_model_input,
             solidity_projects=solidity_projects,
             compilations=solidity_compilations,
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            taxonomy_coverage=taxonomy_coverage,
             model_surface_coverage_plan=model_surface_coverage_plan,
             authoritative_model_surface_requests=model_surface_requests,
             language_capability=language_capability,
@@ -11863,9 +12931,13 @@ class AuditPipeline:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
+            "known-issue-taxonomy.json",
+            "known-issue-taxonomy-coverage.json",
             "language-capability.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
+            "actor-model-baseline.json",
+            "actor-model-evaluation.json",
             "maximum_assurance_traceability.json",
             "run-evidence-manifest.json",
             *({"scheduler-state.json"} if scheduler_artifact is not None else set()),
@@ -11927,6 +12999,7 @@ class AuditPipeline:
                 judge_completed=("judge" in successful_usage_roles or candidate_groups_count == 0),
                 coverage=solidity_coverage,
                 model_review_coverage=model_review_coverage,
+                taxonomy_coverage=taxonomy_coverage,
                 model_surface_review_artifacts=model_surface_review_artifacts,
                 promoted_truncation_recovery_surface_coverages=(
                     promoted_truncation_surface_coverages
@@ -11993,6 +13066,17 @@ class AuditPipeline:
             if ci_execution_failures and terminal_code is ExitCode.SUCCESS:
                 terminal_code = ExitCode.INCOMPLETE
 
+        quality_gates = [
+            *quality_gates,
+            actor_model_assessment_quality_gate(
+                actor_model_input,
+                (*final_findings, *rejected_findings, *filtered_findings),
+                required=(
+                    self.config.actor_model.required
+                    or actor_model_input.state is ActorModelInputState.CURRENT
+                ),
+            ),
+        ]
         failed_required_pre_floor = [
             gate for gate in quality_gates if gate.required and not gate.passed
         ]
@@ -12031,6 +13115,16 @@ class AuditPipeline:
         )
         model_review_applicable = not scanner_only
         incomplete = canonicalize_runtime_messages(incomplete)
+        if promoted_recovery_requests:
+            final_promoted_recovery_requests = _require_promoted_recovery_leaf_requests(
+                authorities=_require_current_promoted_recovery_leaf_authorities(
+                    direct_capabilities=promoted_truncation_surface_coverages,
+                    recursive_capabilities=promoted_recursive_truncation_surface_coverages,
+                ),
+                recovery_requests=all_recovery_requests,
+            )
+            if final_promoted_recovery_requests != promoted_recovery_requests:
+                raise ValueError("minimum-floor recovery authority changed before final assessment")
         minimum_analysis_floor = assess_minimum_analysis_floor(
             repository=repository_map,
             compilations=solidity_compilations,
@@ -12182,6 +13276,24 @@ class AuditPipeline:
             exact_accounted_cost_text = exact_accounted_cost_text.rstrip("0").rstrip(".")
         exact_accounted_cost_text = exact_accounted_cost_text or "0"
         assert language_capability is not None
+        assert taxonomy_coverage is not None
+        actor_model_baseline = ActorModelBaselineArtifact.build(actor_baseline_findings.values())
+        write_json_bounded(
+            run_dir / "actor-model-baseline.json",
+            actor_model_baseline,
+            max_bytes=MAX_JSON_ARTIFACT_BYTES,
+        )
+        actor_model_evaluation = build_actor_model_evaluation(
+            actor_input=actor_model_input,
+            findings=(*final_findings, *rejected_findings, *filtered_findings),
+            baseline_artifact=actor_model_baseline,
+            governance_findings=actor_governance_findings,
+        )
+        write_json_bounded(
+            run_dir / "actor-model-evaluation.json",
+            actor_model_evaluation,
+            max_bytes=MAX_JSON_ARTIFACT_BYTES,
+        )
         report = self._build_report(
             run_id=run_id,
             generated_at=datetime.now(UTC),
@@ -12222,6 +13334,7 @@ class AuditPipeline:
             formal_runs=formal_runs,
             solidity_coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            taxonomy_coverage=taxonomy_coverage,
             language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -12229,6 +13342,7 @@ class AuditPipeline:
             reproductions=reproductions,
             verifications=verifications,
             consensus_review=consensus_review,
+            judge_decisions=sorted(judge_decisions.values(), key=lambda item: item.group_id),
             cross_examinations=cross_examinations,
             falsifications=falsifications,
             quality_gates=quality_gates,
@@ -12244,6 +13358,9 @@ class AuditPipeline:
             scanner_source_inventory_sha256=(
                 scanner_source_sha256 if scanner_source_text_records else None
             ),
+            actor_model_baseline=actor_model_baseline,
+            actor_model_evaluation=actor_model_evaluation,
+            actor_material_withheld_from_discovery=(actor_material_withheld_from_discovery),
         )
         report = bind_active_finding_source_locations(report, report_source_contents)
         ci_state: CIRunState | None = None
@@ -12328,6 +13445,7 @@ class AuditPipeline:
             threat_location_rejections=threat_location_rejections,
             solidity_index=solidity_index,
             solidity_graphs=solidity_graphs,
+            solidity_analysis_discovery=solidity_analysis_discovery,
             solidity_invariants=report.invariants,
             invariant_review=report.invariant_review,
             invariant_executions=report.invariant_executions,
@@ -12795,6 +13913,7 @@ class AuditPipeline:
         formal_runs: list[FormalToolRun],
         solidity_coverage: SolidityCoverage | None,
         model_review_coverage: ModelReviewCoverage,
+        taxonomy_coverage: KnownIssueTaxonomyCoverage,
         language_capability: LanguageCapabilityAssessment,
         scope_assessment: AuditScopeAssessment,
         prior_audit_comparison: PriorAuditComparison,
@@ -12802,6 +13921,7 @@ class AuditPipeline:
         reproductions: list[ReproductionResult],
         verifications: VerificationBatch,
         consensus_review: ConsensusReviewArtifact | None,
+        judge_decisions: list[JudgeDecision],
         cross_examinations: list[CandidateCrossExaminationDecision],
         falsifications: FalsificationBatch,
         quality_gates: list[QualityGateResult],
@@ -12815,6 +13935,9 @@ class AuditPipeline:
         scheduler_report_binding: dict[str, Any] | None,
         accounted_cost_usd_exact: str,
         scanner_source_inventory_sha256: str | None,
+        actor_model_baseline: ActorModelBaselineArtifact,
+        actor_model_evaluation: ActorModelEvaluation,
+        actor_material_withheld_from_discovery: bool,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -12877,6 +14000,9 @@ class AuditPipeline:
             audit_model_refresh_evidence=self.audit_model_refresh_evidence,
             maximum_assurance=maximum_assurance,
             consensus_review=consensus_review,
+            actor_model_baseline=actor_model_baseline,
+            actor_model_evaluation=actor_model_evaluation,
+            judge_decisions=judge_decisions,
             verification_decisions=verifications.decisions,
             cross_examination_decisions=cross_examinations,
             falsification_decisions=falsifications.decisions,
@@ -12893,6 +14019,7 @@ class AuditPipeline:
             formal_runs=formal_runs,
             solidity_coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            taxonomy_coverage=taxonomy_coverage,
             report_quality_review=report_quality_review,
             metadata={
                 "tool_version": "0.1.0",
@@ -12939,6 +14066,12 @@ class AuditPipeline:
                     ]
                 },
                 "threat_model_generated": threat_model is not None,
+                "actor_model": {
+                    "state": actor_model_evaluation.input_evidence.state.value,
+                    "evaluation_sha256": actor_model_evaluation.evaluation_sha256,
+                    "withheld_from_source_discovery": (actor_material_withheld_from_discovery),
+                    "governance_findings": len(actor_model_evaluation.governance_findings),
+                },
                 "threat_model_location_rejections": len(threat_location_rejections),
                 "context_files_withheld_by_secret_safeguards": context_withheld_files,
                 "context_manifest": context_manifest_report_binding(context_manifest).model_dump(
@@ -13183,6 +14316,7 @@ class AuditPipeline:
         threat_location_rejections: list[str],
         solidity_index: SoliditySymbolIndex | None,
         solidity_graphs: SolidityGraphSet | None,
+        solidity_analysis_discovery: DiscoveryResult,
         solidity_invariants: InvariantSuite | None,
         invariant_review: InvariantReviewResult | None,
         invariant_executions: list[InvariantExecutionResult],
@@ -13573,6 +14707,7 @@ class AuditPipeline:
             traceability,
             repository_root=None,
             runtime_artifacts=runtime_artifacts,
+            runtime_schema_version=report.schema_version,
         )
         write_traceability_artifact(
             run_dir / "maximum_assurance_traceability.json",
@@ -13590,6 +14725,7 @@ class AuditPipeline:
                 self.production_qualification if not run_options.scanner_only else None
             ),
             scheduler_runtime_journal=scheduler_runtime_journal,
+            protocol_profile_replay_discovery=solidity_analysis_discovery,
         )
         write_run_evidence_manifest(
             run_dir / "run-evidence-manifest.json",
@@ -14450,11 +15586,13 @@ def _record_reproduction_attempts(
 def _evaluate_quality_gates(
     *,
     config: AuditConfig,
+    actor_model_input: ActorModelInputEvidence,
     solidity_projects: list[SolidityProjectMetadata],
     compilations: list[SolidityCompilationResult],
     scanner_runs: list[ScannerRun],
     coverage: SolidityCoverage | None,
     model_review_coverage: ModelReviewCoverage | None,
+    taxonomy_coverage: KnownIssueTaxonomyCoverage | None,
     model_surface_coverage_plan: ModelSurfaceCoveragePlan | None,
     authoritative_model_surface_requests: Sequence[ModelSurfaceReviewRequest],
     language_capability: LanguageCapabilityAssessment | None,
@@ -14468,10 +15606,19 @@ def _evaluate_quality_gates(
     model_surface_assignment_gate: QualityGateResult,
     repository_execution_sha256: str | None,
 ) -> list[QualityGateResult]:
+    maximum = config.profile is AuditProfile.MAXIMUM_ASSURANCE
     base_gates = [
         language_capability_quality_gate(language_capability),
         scope_quality_gate(scope_assessment),
         model_surface_assignment_gate,
+        actor_model_quality_gate(
+            actor_model_input,
+            required=config.actor_model.required,
+        ),
+        known_issue_taxonomy_quality_gate(
+            taxonomy_coverage,
+            required=maximum,
+        ),
     ]
     if prior_audit_comparison is not None:
         base_gates.append(prior_audit_quality_gate(prior_audit_comparison, config.prior_audit))
@@ -14508,7 +15655,6 @@ def _evaluate_quality_gates(
         "verifier",
         "judge",
     }
-    maximum = config.profile is AuditProfile.MAXIMUM_ASSURANCE
     completed_invariants = [
         result
         for result in invariant_executions

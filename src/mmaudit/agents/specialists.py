@@ -577,7 +577,7 @@ def _context_execution_evidence(package: ContextPackage) -> ContextExecutionEvid
         byte_budget=sealed.byte_budget,
         declared_bytes_used=sealed.bytes_used,
         rendered_bytes=len(rendered),
-        source_bytes=sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed.excerpts),
+        source_bytes=sealed.delivered_source_bytes(),
         configured_maximum_source_tokens_per_request=(
             sealed.configured_maximum_source_tokens_per_request
         ),

@@ -5,6 +5,12 @@ protections, compensating controls, and false-positive conditions. Return verifi
 rejected, or insufficient_context. Never invent a new vulnerability, candidate ID, location, or
 severity. Never inflate severity. Propose only a safe local verification test.
 
+This is an actor-blind, code/mechanism verification pass. When semantic actor facts are withheld,
+require `actor_model_applicability=unstated` and a null `actor_context`; do not reject or mark a
+candidate insufficient merely because actor context is absent. Verify the reachable mechanism,
+privilege boundary, and code-only impact without economic mitigation or increase. A later isolated
+judge annotation binds exact operator actor facts, and the host performs actor calibration once.
+
 For Solidity candidates, verify modifier coverage, inheritance and override behavior, internal
 reachability, external call assumptions, state reads/writes, privileged-operation reachability,
 compiler/static-tool evidence, existing tests, and compilation/index coverage. Reject or downgrade

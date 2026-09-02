@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +18,8 @@ from mmaudit.config import (
     canonical_audit_config_json,
 )
 from mmaudit.orchestration.manifest import (
+    KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+    KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
     ManifestBindingSet,
     ManifestFileBinding,
     ManifestHashBinding,
@@ -43,6 +46,7 @@ from tests.language_capability_support import (
     write_language_capability_artifact,
 )
 from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.taxonomy_custody_support import write_exact_taxonomy_custody
 from tests.unit.test_release_run import _report as _release_report
 
 
@@ -228,6 +232,19 @@ def _workspace(
                 size=len(artifact_bytes),
             )
         )
+    taxonomy_bindings = write_exact_taxonomy_custody(run_dir)
+    for artifact_name in (
+        KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+    ):
+        artifact_bytes = (run_dir / artifact_name).read_bytes()
+        artifact_bindings.append(
+            ManifestFileBinding(
+                path=artifact_name,
+                sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+                size=len(artifact_bytes),
+            )
+        )
     language_artifact = empty_language_capability(config.effective().language_profile)
     write_language_capability_artifact(run_dir, language_artifact)
     language_bytes = (run_dir / "language-capability.json").read_bytes()
@@ -236,6 +253,20 @@ def _workspace(
             path="language-capability.json",
             sha256=hashlib.sha256(language_bytes).hexdigest(),
             size=len(language_bytes),
+        )
+    )
+    inventory_path = run_dir / "private" / "model-review-artifacts.json"
+    inventory_path.parent.mkdir(mode=0o700)
+    inventory_path.write_text(
+        stable_json({"schema_version": "1.0", "artifacts": []}),
+        encoding="utf-8",
+    )
+    inventory_bytes = inventory_path.read_bytes()
+    artifact_bindings.append(
+        ManifestFileBinding(
+            path="private/model-review-artifacts.json",
+            sha256=hashlib.sha256(inventory_bytes).hexdigest(),
+            size=len(inventory_bytes),
         )
     )
     authority_path = write_run_terminal_report_authority(
@@ -254,15 +285,26 @@ def _workspace(
             size=len(authority_bytes),
         )
     )
+    bindings = _bindings()
+    bindings = bindings.model_copy(
+        update={
+            "coverage": sorted(
+                [
+                    *bindings.coverage,
+                    *taxonomy_bindings,
+                ],
+                key=lambda binding: binding.identifier,
+            )
+        }
+    )
     manifest = seal_run_evidence_manifest(
         run_id="synthetic-run",
         repository_root_name="synthetic-target",
         git_commit="1" * 40,
         sources=[source_binding],
         run_configuration=_run_configuration(config),
-        bindings=_bindings(),
+        bindings=bindings,
         artifacts=artifact_bindings,
-        schema_version="1.2",
         tool_version="test",
     )
     manifest_path = run_dir / "run-evidence-manifest.json"
@@ -290,10 +332,12 @@ def _observe(
     artifact_evidence: Path,
     verification_path: Path,
     run_binding: ReleaseRunBinding,
+    configuration_root: Path | None = None,
 ) -> verification_module.ReleaseRunVerificationBinding:
     return observe_release_run_verification(
         run_dir=run_dir,
         target_repository_root=source,
+        configuration_root=configuration_root or source,
         release_repository_root=run_dir.parent / "release-product",
         artifact_evidence_path=artifact_evidence,
         verification_path=verification_path,
@@ -311,9 +355,10 @@ def test_observation_binds_exact_current_file_and_two_recomputations(
         artifact_evidence,
         verification_path,
         run_binding,
-        _manifest,
+        manifest,
         verification,
     ) = _workspace(tmp_path, config_factory())
+    assert manifest.schema_version == "1.4"
 
     with (
         patch.object(
@@ -349,6 +394,9 @@ def test_observation_binds_exact_current_file_and_two_recomputations(
     assert all(
         call.kwargs["repository_root"] == source.resolve() for call in recompute.call_args_list
     )
+    assert all(
+        call.kwargs["configuration_root"] == source.resolve() for call in recompute.call_args_list
+    )
     assert binding.run_id == run_binding.run_id
     assert binding.run_binding_sha256 == run_binding.binding_sha256
     assert binding.effective_config_sha256 == run_binding.effective_config_sha256
@@ -360,6 +408,177 @@ def test_observation_binds_exact_current_file_and_two_recomputations(
     assert binding.binding_sha256 == canonical_sha256(
         binding.model_dump(mode="json", exclude={"binding_sha256"})
     )
+
+
+def test_observation_rejects_configuration_root_replacement_between_passes(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    (
+        run_dir,
+        source,
+        artifact_evidence,
+        verification_path,
+        run_binding,
+        _manifest,
+        verification,
+    ) = _workspace(tmp_path, config_factory())
+    configuration_root = tmp_path / "configuration"
+    configuration_root.mkdir()
+    displaced_root = tmp_path / "displaced-configuration"
+
+    def replace_configuration_root(**_kwargs: object) -> RunVerification:
+        configuration_root.rename(displaced_root)
+        configuration_root.mkdir()
+        return verification
+
+    with (
+        patch.object(
+            verification_module,
+            "verify_run_evidence",
+            side_effect=replace_configuration_root,
+        ),
+        patch.object(
+            verification_module,
+            "observe_release_run_binding",
+            return_value=run_binding,
+        ),
+        pytest.raises(ValueError, match="configuration root changed"),
+    ):
+        _observe(
+            run_dir=run_dir,
+            source=source,
+            configuration_root=configuration_root,
+            artifact_evidence=artifact_evidence,
+            verification_path=verification_path,
+            run_binding=run_binding,
+        )
+
+
+def test_observation_rejects_in_place_ignore_edit_between_passes(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    (
+        run_dir,
+        source,
+        artifact_evidence,
+        verification_path,
+        run_binding,
+        _manifest,
+        verification,
+    ) = _workspace(tmp_path, config_factory())
+    configuration_root = tmp_path / "configuration"
+    configuration_root.mkdir()
+    ignore_path = configuration_root / ".mmauditignore"
+    ignore_path.write_text("/initial.sol\n", encoding="utf-8")
+
+    def edit_ignore_file(**_kwargs: object) -> RunVerification:
+        ignore_path.write_text("/changed.sol\n", encoding="utf-8")
+        return verification
+
+    with (
+        patch.object(
+            verification_module,
+            "verify_run_evidence",
+            side_effect=edit_ignore_file,
+        ),
+        patch.object(
+            verification_module,
+            "observe_release_run_binding",
+            return_value=run_binding,
+        ),
+        pytest.raises(ValueError, match="configuration ignore input changed"),
+    ):
+        _observe(
+            run_dir=run_dir,
+            source=source,
+            configuration_root=configuration_root,
+            artifact_evidence=artifact_evidence,
+            verification_path=verification_path,
+            run_binding=run_binding,
+        )
+
+
+def test_observation_rejects_nested_ignore_replacement_between_passes(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory(repository={"ignore_file": "policy/exclusions.txt"})
+    (
+        run_dir,
+        source,
+        artifact_evidence,
+        verification_path,
+        run_binding,
+        _manifest,
+        verification,
+    ) = _workspace(tmp_path, config)
+    configuration_root = tmp_path / "configuration"
+    policy_root = configuration_root / "policy"
+    policy_root.mkdir(parents=True)
+    ignore_path = policy_root / "exclusions.txt"
+    ignore_path.write_text("/excluded.sol\n", encoding="utf-8")
+    displaced = tmp_path / "displaced-exclusions.txt"
+
+    def replace_nested_ignore_file(**_kwargs: object) -> RunVerification:
+        ignore_path.rename(displaced)
+        ignore_path.write_text("/excluded.sol\n", encoding="utf-8")
+        return verification
+
+    with (
+        patch.object(
+            verification_module,
+            "verify_run_evidence",
+            side_effect=replace_nested_ignore_file,
+        ),
+        patch.object(
+            verification_module,
+            "observe_release_run_binding",
+            return_value=run_binding,
+        ),
+        pytest.raises(ValueError, match="configuration ignore input changed"),
+    ):
+        _observe(
+            run_dir=run_dir,
+            source=source,
+            configuration_root=configuration_root,
+            artifact_evidence=artifact_evidence,
+            verification_path=verification_path,
+            run_binding=run_binding,
+        )
+
+
+def test_observation_rejects_linked_configuration_root(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    (
+        run_dir,
+        source,
+        artifact_evidence,
+        verification_path,
+        run_binding,
+        _manifest,
+        _verification,
+    ) = _workspace(tmp_path, config_factory())
+    configuration_root = tmp_path / "configuration"
+    configuration_root.mkdir()
+    linked_root = tmp_path / "configuration-link"
+    try:
+        linked_root.symlink_to(configuration_root, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with pytest.raises(ValueError, match="may not traverse a link"):
+        _observe(
+            run_dir=run_dir,
+            source=source,
+            configuration_root=linked_root,
+            artifact_evidence=artifact_evidence,
+            verification_path=verification_path,
+            run_binding=run_binding,
+        )
 
 
 def test_observation_rejects_stale_supplied_or_different_recomputation(
@@ -667,6 +886,7 @@ def test_observation_rejects_wrong_target_root_and_linked_release_root(
         observe_release_run_verification(
             run_dir=run_dir,
             target_repository_root=source,
+            configuration_root=source,
             release_repository_root=release_alias,
             artifact_evidence_path=artifact_evidence,
             verification_path=verification_path,
@@ -782,6 +1002,51 @@ def test_observation_rejects_source_path_swap_before_descriptor_open(
         patch.object(verification_module.os, "open", side_effect=swap_then_open),
         pytest.raises(ValueError, match="changed before hashing"),
     ):
+        _observe(
+            run_dir=run_dir,
+            source=source,
+            artifact_evidence=artifact_evidence,
+            verification_path=verification_path,
+            run_binding=run_binding,
+        )
+
+
+def test_observation_rejects_target_root_swapped_after_initial_validation(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        run_dir,
+        source,
+        artifact_evidence,
+        verification_path,
+        run_binding,
+        _manifest,
+        _verification,
+    ) = _workspace(tmp_path, config_factory())
+    alternate = tmp_path / "alternate-source"
+    displaced = tmp_path / "displaced-source"
+    shutil.copytree(source, alternate)
+    original_require = verification_module._require_unlinked_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, *, label: str):
+        nonlocal swapped
+        observation = original_require(path, label=label)
+        if label == "release target repository" and not swapped:
+            swapped = True
+            source.rename(displaced)
+            alternate.rename(source)
+        return observation
+
+    monkeypatch.setattr(
+        verification_module,
+        "_require_unlinked_directory",
+        validate_then_swap,
+    )
+
+    with pytest.raises(ValueError, match="root changed during custody"):
         _observe(
             run_dir=run_dir,
             source=source,

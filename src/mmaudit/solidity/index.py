@@ -676,7 +676,8 @@ def _entity_from_node(
 def _fallback_entities(file: DiscoveredFile) -> list[SolidityEntity]:
     lines = file.content.splitlines()
     entities: list[SolidityEntity] = []
-    contract_stack: list[tuple[str, int]] = []
+    contract_stack: list[tuple[str, int, int]] = []
+    consumed_state_lines: set[int] = set()
     declaration = re.compile(r"\b(contract|interface|library)\s+([A-Za-z_][A-Za-z0-9_]*)")
     function_re = re.compile(
         r"\b(function|modifier|constructor)\s*([A-Za-z_][A-Za-z0-9_]*)?\s*"
@@ -692,10 +693,20 @@ def _fallback_entities(file: DiscoveredFile) -> list[SolidityEntity]:
         r"^\s*(?:[A-Za-z_][A-Za-z0-9_<>,\[\]. ]+\s+)+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;)"
     )
     for index, line in enumerate(lines, start=1):
+        while contract_stack and index > contract_stack[-1][2]:
+            contract_stack.pop()
         current_contract = contract_stack[-1][0] if contract_stack else None
         if match := declaration.search(line):
             name = match.group(2)
-            contract_stack.append((name, _brace_depth(lines[:index])))
+            contract_end_line = _fallback_block_end(lines, index)
+            if contract_end_line > index:
+                contract_stack.append(
+                    (
+                        name,
+                        _fallback_contract_body_depth(lines, index, contract_end_line),
+                        contract_end_line,
+                    )
+                )
             current_contract = name
             entities.append(
                 _fallback_entity(
@@ -704,7 +715,7 @@ def _fallback_entities(file: DiscoveredFile) -> list[SolidityEntity]:
                     name,
                     None,
                     index,
-                    _fallback_block_end(lines, index),
+                    contract_end_line,
                 )
             )
         else:
@@ -755,11 +766,21 @@ def _fallback_entities(file: DiscoveredFile) -> list[SolidityEntity]:
                     index,
                 )
             )
-        elif current_contract:
-            state_match = mapping_re.search(line)
-            if state_match is None and ";" in line and "(" not in line:
-                state_match = variable_re.search(line)
+        elif (
+            current_contract
+            and contract_stack
+            and index not in consumed_state_lines
+            and _brace_depth(lines[: index - 1]) == contract_stack[-1][1]
+        ):
+            state_statement, state_end_line = _fallback_state_statement(lines, index)
+            state_match = mapping_re.search(state_statement)
+            if state_match is None and not re.match(
+                r"^\s*(?:function|modifier|constructor|event|error|struct|enum|using|type)\b",
+                state_statement,
+            ):
+                state_match = variable_re.search(state_statement)
             if state_match is not None:
+                consumed_state_lines.update(range(index + 1, state_end_line + 1))
                 entities.append(
                     _fallback_entity(
                         file,
@@ -767,10 +788,42 @@ def _fallback_entities(file: DiscoveredFile) -> list[SolidityEntity]:
                         state_match.group("name"),
                         current_contract,
                         index,
-                        index,
+                        state_end_line,
                     )
                 )
     return entities
+
+
+def _fallback_state_statement(lines: list[str], start_line: int) -> tuple[str, int]:
+    """Join one bounded contract-level state declaration through its semicolon."""
+
+    if not lines[start_line - 1].strip():
+        return lines[start_line - 1], start_line
+    parts: list[str] = []
+    byte_count = 0
+    for line_number in range(start_line, min(len(lines), start_line + 31) + 1):
+        line = lines[line_number - 1]
+        stripped = line.strip()
+        parts.append(stripped)
+        byte_count += len(line.encode("utf-8"))
+        if byte_count > 8_192 or "{" in line or "}" in line:
+            break
+        if ";" in line:
+            return " ".join(parts), line_number
+    return lines[start_line - 1], start_line
+
+
+def _fallback_contract_body_depth(
+    lines: list[str],
+    start_line: int,
+    end_line: int,
+) -> int:
+    """Return the brace depth immediately inside one fallback-parsed contract body."""
+
+    for line_number in range(start_line, end_line + 1):
+        if "{" in lines[line_number - 1]:
+            return _brace_depth(lines[: line_number - 1]) + 1
+    return _brace_depth(lines[:start_line])
 
 
 def _fallback_entity(
@@ -1046,7 +1099,7 @@ def _fallback_block_end(lines: list[str], start_line: int) -> int:
             return index
         if not seen_open and line.rstrip().endswith(";"):
             return index
-    return start_line
+    return len(lines) if seen_open else start_line
 
 
 def _brace_depth(lines: list[str]) -> int:

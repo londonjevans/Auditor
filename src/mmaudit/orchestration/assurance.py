@@ -84,6 +84,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityAssessment,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
@@ -291,6 +292,7 @@ class AssuranceRuntime:
     judge_completed: bool = False
     coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
+    taxonomy_coverage: KnownIssueTaxonomyCoverage | None = None
     model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = field(default_factory=list)
     promoted_truncation_recovery_surface_coverages: list[
         VerifiedPromotedTruncationRecoverySurfaceCoverage
@@ -978,9 +980,11 @@ def _scheduler_assurance_errors(
             duplicate_surface_artifact = True
         surface_artifacts[sealed_artifact.request_id] = sealed_artifact
 
+    from mmaudit.orchestration.scheduler import (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    )
     from mmaudit.orchestration.truncation_recovery_evidence import (
         TruncationRecoveryEvidenceError,
-        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
     )
 
     recursive_bindings = tuple(
@@ -1811,6 +1815,7 @@ class MaximumAssuranceContract:
 
         if not self.requested and not self.required:
             return MaximumAssuranceAssessment(
+                contract_version="1.1",
                 requested=False,
                 required=False,
                 downgrade_allowed=self.allow_downgrade,
@@ -1838,6 +1843,7 @@ class MaximumAssuranceContract:
             status = MaximumAssuranceStatus.FAILED
             downgraded = False
         return MaximumAssuranceAssessment(
+            contract_version="1.1",
             requested=self.requested,
             required=self.required,
             downgrade_allowed=self.allow_downgrade,
@@ -2724,6 +2730,28 @@ class MaximumAssuranceContract:
                     else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "model-review-coverage.json"),
+            ),
+            _requirement(
+                "known_issue_taxonomy_critical_disposition",
+                runtime.taxonomy_coverage is not None
+                and runtime.taxonomy_coverage.critical_gate_passed,
+                (
+                    f"{runtime.taxonomy_coverage.critical.numerator}/"
+                    f"{runtime.taxonomy_coverage.critical.denominator} applicable critical "
+                    "known-issue classes received explicit credited review; critical gaps="
+                    f"{','.join(runtime.taxonomy_coverage.critical_gap_ids) or 'none'}"
+                    if runtime.taxonomy_coverage is not None
+                    else "known-issue taxonomy coverage was not produced"
+                ),
+                state=(
+                    AnalysisState.MODEL_ONLY
+                    if runtime.taxonomy_coverage is not None
+                    else AnalysisState.NOT_ANALYZED
+                ),
+                artifacts=(
+                    _present(runtime.artifacts, "known-issue-taxonomy-coverage.json")
+                    + _present(runtime.artifacts, "known-issue-taxonomy.json")
+                ),
             ),
             _requirement(
                 "certified_model_ensemble",
@@ -4091,12 +4119,18 @@ def _promoted_recovery_context_matches_request(
     """Bind one live capability context to its public request and usage routing."""
 
     from mmaudit.orchestration.context import render_context, revalidate_context_package
+    from mmaudit.orchestration.model_review_evidence import (
+        model_surface_context_source_custody,
+    )
 
     if type(context) is not ContextPackage:
         return False
     try:
         validated = revalidate_context_package(context)
         rendered = render_context(validated)
+        requested_surface_manifest_sha256, source_location_proof_sha256s = (
+            model_surface_context_source_custody(validated)
+        )
         expected = ContextRequestEvidence.build(
             request_id=request.logical_request_id,
             request_role=request.role,
@@ -4104,12 +4138,17 @@ def _promoted_recovery_context_matches_request(
             byte_budget=validated.byte_budget,
             declared_bytes_used=validated.bytes_used,
             rendered_bytes=len(rendered.encode()),
-            source_bytes=sum(len(item.content.encode()) for item in validated.excerpts),
+            source_bytes=validated.delivered_source_bytes(),
             configured_maximum_source_tokens_per_request=(
                 validated.configured_maximum_source_tokens_per_request
             ),
             effective_source_byte_ceiling=validated.effective_source_byte_ceiling,
             rendered_sha256=hashlib.sha256(rendered.encode()).hexdigest(),
+            requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+            source_location_proof_sha256s=source_location_proof_sha256s,
+            retrieval_policy=validated.solidity_retrieval_policy,
+            retrieval_corpus_sha256=validated.solidity_retrieval_corpus_sha256,
+            retrieval_transcript=validated.solidity_retrieval_transcript,
         )
         routed = ContextRequestEvidence.model_validate(
             usage.routing.get("context_request_evidence")
@@ -4349,10 +4388,12 @@ def _model_coverage_is_backed_by_real_usage(
     if coverage is None:
         return False
 
-    from mmaudit.orchestration.truncation_recovery_evidence import (
-        TruncationRecoveryEvidenceError,
+    from mmaudit.orchestration.scheduler import (
         require_verified_promoted_recursive_truncation_recovery_surface_coverage,
         require_verified_promoted_truncation_recovery_surface_coverage,
+    )
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        TruncationRecoveryEvidenceError,
     )
 
     usage_by_request: dict[str, list[UsageRecord]] = {}

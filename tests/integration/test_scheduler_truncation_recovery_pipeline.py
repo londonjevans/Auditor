@@ -11,6 +11,7 @@ import pytest
 
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.constants import ExitCode
+from mmaudit.models.actor_model import ActorModelInputEvidence
 from mmaudit.models.openrouter import OpenRouterPrivacyError
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
@@ -112,9 +113,31 @@ def _truncated_parent_attempt(run_dir: Path) -> dict[str, Any]:
 
 
 def _candidate_and_surface_inventory(run_dir: Path) -> tuple[bytes, bytes]:
+    model_review_payload = json.loads(
+        (run_dir / "private" / "model-review-artifacts.json").read_bytes()
+    )
+    for authority in model_review_payload["context_authorities"]:
+        context = authority["context"]
+        actor_payload = context["actor_model_evidence"]
+        if actor_payload is None:
+            continue
+        actor_evidence = ActorModelInputEvidence.model_validate_json(
+            json.dumps(actor_payload),
+            strict=True,
+        )
+        context["actor_model_evidence"] = actor_evidence.model_dump(
+            mode="json",
+            exclude={"evaluated_at", "evidence_sha256"},
+        )
     return (
         (run_dir / "candidate-findings.json").read_bytes(),
-        (run_dir / "private" / "model-review-artifacts.json").read_bytes(),
+        json.dumps(
+            model_review_payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8"),
     )
 
 

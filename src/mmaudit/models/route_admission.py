@@ -626,14 +626,15 @@ def _evaluate_authenticated_runner_route_admission(
             "authenticated runner route admission has the wrong exact input type"
         )
     try:
-        for model_id in {model.exact_model_id, model.canonical_model_slug}:
+        for model_id in sorted({model.exact_model_id, model.canonical_model_slug}):
             require_candidate_assignment_eligible(
+                role=expected_role,
                 exact_model_id=model_id,
                 provider_endpoint=model.approved_provider_endpoint,
             )
     except CandidateSelectionRevocationError as exc:
         raise AuthenticatedRunnerRouteAdmissionError(
-            "authenticated runner candidate assignment is revoked"
+            f"authenticated runner route assignment is revoked: {exc}"
         ) from exc
     if frozen_live_equivalent is not None and type(frozen_live_equivalent) is not bool:
         raise AuthenticatedRunnerRouteAdmissionError(

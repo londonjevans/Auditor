@@ -13,6 +13,7 @@ from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicatio
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
+from mmaudit.models.actor_model import ActorModel, ActorModelEvaluation
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
 from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
 from mmaudit.models.authenticated_runner_durable_bundle import (
@@ -38,6 +39,7 @@ from mmaudit.models.coverage_planning import (
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourcePreflight,
 )
+from mmaudit.models.endpoint_inventory import OpenRouterEndpointInventoryDiagnostic
 from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEvidence
 from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
 from mmaudit.models.ground_truth_authority import FrozenGroundTruthProvenance
@@ -91,12 +93,15 @@ from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
 from mmaudit.models.route_runtime_evidence import RouteRuntimeEvidenceArtifact
 from mmaudit.models.scheduler import SchedulerArtifact, SchedulerRetainedJournalReference
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AuditModelRefreshPricingAttemptEvidence,
     ConsensusReviewArtifact,
     HardhatInventoryPhaseRequest,
     HardhatReporterExecution,
     HardhatReporterInventory,
     HardhatTestPhaseRequest,
+    KnownIssueTaxonomy,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityArtifact,
     SolidityGraphFactKind,
     SolidityGraphKind,
@@ -119,13 +124,17 @@ from mmaudit.orchestration.managed_toolchain import (
     render_default_managed_toolchain_bundle,
 )
 from mmaudit.orchestration.manifest import (
+    _KNOWN_ISSUE_TAXONOMY_BINDING_IDS,
     AUDIT_MODEL_REFRESH_BINDING_IDS,
     AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
     AUDIT_MODEL_REFRESH_PRICING_BINDING_IDS,
     AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_PATH,
     AUDIT_MODEL_SELECTION_BINDING_IDS,
     AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
+    KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+    KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+    MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
 )
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -152,6 +161,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "actor_model.schema.json": ActorModel,
+    "actor_model_baseline.schema.json": ActorModelBaselineArtifact,
+    "actor_model_evaluation.schema.json": ActorModelEvaluation,
     "autonomy_gate_inventory.schema.json": AutonomyGateInventory,
     "authenticated_cross_lineage_runner_evidence.schema.json": (
         AuthenticatedCrossLineageRunnerEvidence
@@ -178,6 +190,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "context_manifest.schema.json": ContextManifest,
     "coverage_artifact.schema.json": CoverageArtifact,
     "cross_lineage_adjudication_report.schema.json": CrossLineageAdjudicationReport,
+    "openrouter_endpoint_inventory_diagnostic.schema.json": (OpenRouterEndpointInventoryDiagnostic),
     "findings_artifact.schema.json": FindingsArtifact,
     "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,
     "frozen_ground_truth_provenance.schema.json": FrozenGroundTruthProvenance,
@@ -187,6 +200,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "language_capability.schema.json": LanguageCapabilityArtifact,
+    "known_issue_taxonomy.schema.json": KnownIssueTaxonomy,
+    "known_issue_taxonomy_coverage.schema.json": KnownIssueTaxonomyCoverage,
     "managed_toolchain_bundle.schema.json": ManagedToolchainBundle,
     "evidence_sealed_authority.schema.json": EvidenceSealedAuthorityEvidence,
     "evidence_seal_verdict.schema.json": EvidenceSealVerdictProjection,
@@ -337,6 +352,9 @@ TITLE_OVERRIDES = {
     "openrouter_structured_request_cost_preview.schema.json": (
         "mmaudit non-authorizing OpenRouter structured request cost preview"
     ),
+    "openrouter_endpoint_inventory_diagnostic.schema.json": (
+        "mmaudit non-authorizing OpenRouter endpoint inventory diagnostic"
+    ),
     "model_refresh_attempt.schema.json": "mmaudit model refresh attempt",
     "model_refresh_diff.schema.json": "mmaudit model refresh diff",
     "model_refresh_freshness.schema.json": "mmaudit model refresh freshness",
@@ -376,12 +394,36 @@ TITLE_OVERRIDES = {
 }
 
 
+def run_evidence_manifest_run_configuration_rules() -> list[dict[str, Any]]:
+    """Return the exact version boundary for manifest run-configuration custody."""
+
+    return [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.0"}},
+                "required": ["schema_version"],
+            },
+            "then": {"properties": {"run_configuration": {"type": "null"}}},
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"enum": ["1.1", "1.2", "1.3", "1.4"]}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "required": ["run_configuration"],
+                "properties": {"run_configuration": {"$ref": "#/$defs/runConfiguration"}},
+            },
+        },
+    ]
+
+
 def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
     """Return the published schema-1.2+ contract for every manifest-bound report leaf."""
 
     return {
         "if": {
-            "properties": {"schema_version": {"enum": ["1.2", "1.3"]}},
+            "properties": {"schema_version": {"enum": ["1.2", "1.3", "1.4"]}},
             "required": ["schema_version"],
         },
         "then": {
@@ -408,6 +450,87 @@ def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
             }
         },
     }
+
+
+def run_evidence_manifest_taxonomy_custody_rules() -> list[dict[str, Any]]:
+    """Return the exact schema-1.4 taxonomy and raw-review custody boundary."""
+
+    taxonomy_artifact_paths = sorted(
+        {
+            KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+            KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+        }
+    )
+    current_artifact_paths = sorted(
+        {*taxonomy_artifact_paths, MODEL_REVIEW_ARTIFACT_INVENTORY_PATH}
+    )
+    coverage_binding_ids = sorted(_KNOWN_ISSUE_TAXONOMY_BINDING_IDS)
+    artifact_matches = [
+        {
+            "contains": {
+                "properties": {"path": {"const": path}},
+                "required": ["path"],
+            },
+            "maxContains": 1,
+            "minContains": 1,
+        }
+        for path in current_artifact_paths
+    ]
+    coverage_binding_matches = [
+        {
+            "contains": {
+                "properties": {"identifier": {"const": identifier}},
+                "required": ["identifier"],
+            },
+            "maxContains": 1,
+            "minContains": 1,
+        }
+        for identifier in coverage_binding_ids
+    ]
+    any_artifact_match = {
+        "properties": {"path": {"enum": current_artifact_paths}},
+        "required": ["path"],
+    }
+    any_coverage_binding_match = {
+        "properties": {"identifier": {"enum": coverage_binding_ids}},
+        "required": ["identifier"],
+    }
+    return [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.4"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {"allOf": artifact_matches},
+                    "bindings": {
+                        "properties": {
+                            "coverage": {"allOf": coverage_binding_matches},
+                        },
+                        "required": ["coverage"],
+                    },
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"enum": ["1.0", "1.1", "1.2", "1.3"]}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {"not": {"contains": any_artifact_match}},
+                    "bindings": {
+                        "properties": {
+                            "coverage": {"not": {"contains": any_coverage_binding_match}},
+                        },
+                        "required": ["coverage"],
+                    },
+                }
+            },
+        },
+    ]
 
 
 def run_evidence_manifest_audit_model_selection_rules() -> list[dict[str, Any]]:
@@ -630,7 +753,7 @@ def run_evidence_manifest_audit_model_refresh_pricing_rules() -> list[dict[str, 
 
 
 def _run_evidence_manifest_contract_is_current() -> bool:
-    """Verify the hand-authored manifest schema retains the generated report-leaf contract."""
+    """Verify every exact hand-authored manifest version and custody rule."""
 
     path = SCHEMA_ROOT / "run_evidence_manifest.schema.json"
     try:
@@ -638,12 +761,21 @@ def _run_evidence_manifest_contract_is_current() -> bool:
     except (OSError, ValueError):
         return False
     expected = [
+        *run_evidence_manifest_run_configuration_rules(),
         run_evidence_manifest_report_bundle_rule(),
+        *run_evidence_manifest_taxonomy_custody_rules(),
         *run_evidence_manifest_audit_model_selection_rules(),
         *run_evidence_manifest_audit_model_refresh_rules(),
         *run_evidence_manifest_audit_model_refresh_pricing_rules(),
     ]
-    return all(rule in schema.get("allOf", []) for rule in expected)
+    observed = schema.get("allOf")
+    return (
+        schema.get("properties", {}).get("schema_version")
+        == {"enum": ["1.0", "1.1", "1.2", "1.3", "1.4"]}
+        and isinstance(observed, list)
+        and len(observed) == len(expected)
+        and all(rule in observed for rule in expected)
+    )
 
 
 _SOLIDITY_COVERAGE_EDGE_DENSE_MAPS = (

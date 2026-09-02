@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import shutil
 import socket
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -13,7 +14,8 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from mmaudit.cli import app
+import mmaudit.orchestration.verification as verification_module
+from mmaudit.cli import _verification_configuration_root, app
 from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
@@ -24,7 +26,7 @@ from mmaudit.config import (
     SmartContractsConfig,
     audit_config_overrides,
 )
-from mmaudit.constants import ExitCode
+from mmaudit.constants import ANALYSIS_ROLES, ExitCode
 from mmaudit.models.schemas import (
     AnalysisState,
     AttackerCapabilityPolicy,
@@ -89,10 +91,15 @@ from mmaudit.models.schemas import (
     SolidityProvenance,
     StatefulActionSpec,
 )
+from mmaudit.models.sharding import SolidityShardReportBinding
+from mmaudit.orchestration import replay as replay_module
+from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
+from mmaudit.orchestration.execution_candidates import build_invariant_execution_candidates
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     build_run_evidence_manifest,
     canonical_sha256,
+    rebuild_run_evidence_manifest_for_verification,
     write_run_evidence_manifest,
 )
 from mmaudit.orchestration.replay import (
@@ -108,26 +115,80 @@ from mmaudit.orchestration.replay import (
     _repository_test_execution_projection,
     write_offline_replay,
 )
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
+from mmaudit.orchestration.run_status import (
+    assess_minimum_analysis_floor,
+    audit_quality_status_for_run_status,
+    minimum_analysis_floor_quality_gate,
+)
 from mmaudit.orchestration.verification import (
     RunVerification,
     RunVerificationStatus,
     verify_run_evidence,
 )
 from mmaudit.reporting.json_report import write_json
+from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.fork_matrix import (
     REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS,
     ForkMatrixDependencies,
     repository_fork_matrix_timeout_budget_seconds,
 )
+from mmaudit.solidity.coverage import build_solidity_coverage
+from mmaudit.solidity.graphs import build_solidity_graphs
+from mmaudit.solidity.index import build_solidity_index
+from mmaudit.solidity.invariants import detect_protocol_profiles
 from mmaudit.solidity.properties import build_property_corpus
+from mmaudit.solidity.sharding import build_solidity_shard_inventory
+from mmaudit.solidity.taxonomy import (
+    build_known_issue_taxonomy_coverage,
+    known_issue_taxonomy_quality_gate,
+    load_known_issue_taxonomy,
+)
 from tests.language_capability_support import language_capability_for_files
-from tests.unit.test_manifest import _write_required_artifacts
+from tests.unit.test_manifest import (
+    _report as _current_manifest_report,
+)
+from tests.unit.test_manifest import (
+    _with_current_findings,
+    _write_required_artifacts,
+)
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
 )
 
 runner = CliRunner()
+
+
+def test_verification_configuration_root_is_config_parent_and_rejects_conflict(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "external" / "mmaudit.toml"
+    explicit_root = tmp_path / "explicit"
+
+    assert (
+        _verification_configuration_root(
+            config_path=config_path,
+            configuration_root=None,
+        )
+        == config_path.resolve().parent
+    )
+    assert (
+        _verification_configuration_root(
+            config_path=None,
+            configuration_root=explicit_root,
+        )
+        == explicit_root
+    )
+    with pytest.raises(ValueError, match="must equal the parent"):
+        _verification_configuration_root(
+            config_path=config_path,
+            configuration_root=explicit_root,
+        )
+
+
 _NOW = datetime(2026, 7, 27, tzinfo=UTC)
 _REPLAY_SCANNER_STDOUT = b"{}"
 
@@ -1071,16 +1132,19 @@ def _write_replay_run(
     repository = root / "repository"
     source = repository / "src" / "Vault.sol"
     source.parent.mkdir(parents=True)
-    source_text = "contract Vault { uint256 public state; function touch() external {} }\n"
+    source_text = (
+        "contract Vault {\n    uint256 public state;\n    function touch() external {}\n}\n"
+    )
     source.write_text(source_text, encoding="utf-8")
     source_hash = hashlib.sha256(source_text.encode()).hexdigest()
+    source_lines = len(source_text.splitlines())
     language_capability = language_capability_for_files(
         config.language_profile,
         (
             LanguageCapabilityFileEvidence(
                 path="src/Vault.sol",
                 size=len(source_text.encode()),
-                lines=1,
+                lines=source_lines,
                 sha256=source_hash,
                 language="Solidity",
             ),
@@ -1095,6 +1159,32 @@ def _write_replay_run(
         build_command=["forge", "build"],
         test_command=["forge", "test"],
     )
+    discovery = DiscoveryResult(
+        root=repository,
+        files=(
+            DiscoveredFile(
+                absolute_path=source,
+                relative_path="src/Vault.sol",
+                content=source_text,
+                size=len(source_text.encode()),
+                lines=source_lines,
+                sha256=source_hash,
+                language="Solidity",
+                categories=("smart_contract",),
+            ),
+        ),
+        omitted=(),
+        changed_paths=frozenset(),
+        git_commit=None,
+    )
+    solidity_index_build = build_solidity_index(discovery, [project], [])
+    solidity_graphs = build_solidity_graphs(discovery, solidity_index_build)
+    solidity_shards = build_solidity_shard_inventory(
+        discovery,
+        solidity_index_build.index,
+        solidity_graphs,
+    )
+    solidity_shard_binding = SolidityShardReportBinding.from_inventory(solidity_shards)
     repository_sha256 = scanner_workspace_sha256(repository, repository / ".mmaudit")
     differential = (
         _differential_result(config, repository_sha256) if with_repository_differential else None
@@ -1104,13 +1194,48 @@ def _write_replay_run(
     invariant_result = _invariant_result()
     specification = _test_specification()
     reproduction = _reproduction_result()
-    reproduction_resolution = CandidateReproductionResolution(
-        candidate_id=candidate.candidate_id,
-        kind=ReproductionResolutionKind.INCONCLUSIVE,
-        detail="attempted reproduction did not produce a qualifying terminal outcome",
+    reproduction_resolutions = build_candidate_reproduction_resolutions(
+        candidates=[candidate],
+        results=[reproduction],
     )
-    invariant_suite = _invariant_suite(source_hash)
-    property_corpus = build_property_corpus(invariant_suite, None, [harness])
+    profile_assessment = detect_protocol_profiles(
+        solidity_index_build.index,
+        solidity_graphs,
+        {"src/Vault.sol": source_text},
+    )
+    invariant_suite = _invariant_suite(
+        hashlib.sha256(b"contract Vault {\n").hexdigest()
+    ).model_copy(
+        update={
+            "protocol_profiles": [
+                profile.value for profile in profile_assessment.detected_profiles
+            ],
+            "protocol_profile_assessment": profile_assessment,
+        }
+    )
+    property_corpus = build_property_corpus(
+        invariant_suite,
+        solidity_index_build.index,
+        [harness],
+    )
+    execution_candidate_build = build_invariant_execution_candidates(
+        repository_root=repository,
+        invariant_suite=invariant_suite,
+        harnesses=[harness],
+        property_corpus=property_corpus,
+        executions=[invariant_result],
+    )
+    solidity_coverage = build_solidity_coverage(
+        discovery=discovery,
+        projects=[project],
+        compilations=[],
+        index=solidity_index_build.index,
+        graphs=solidity_graphs,
+        scanner_runs=[scanner],
+        invariants=invariant_suite,
+        invariant_executions=[invariant_result],
+        expected_repository_sha256=repository_sha256,
+    )
     rejected_finding = Finding(
         id="finding-replay",
         group_id="group-replay",
@@ -1144,7 +1269,7 @@ def _write_replay_run(
         privacy["fork_rpc_egress"] = RepositoryForkRpcPrivacyEvidence.from_differential(
             differential
         ).model_dump(mode="json")
-    report = AuditReport(
+    legacy_report = AuditReport(
         schema_version="1.0",
         run_id="offline-replay-test",
         generated_at=_NOW,
@@ -1168,7 +1293,7 @@ def _write_replay_run(
                 RepositoryFile(
                     path="src/Vault.sol",
                     size=len(source_text.encode()),
-                    lines=1,
+                    lines=source_lines,
                     sha256=source_hash,
                     language="Solidity",
                 )
@@ -1191,9 +1316,18 @@ def _write_replay_run(
         metadata={
             "run_options": run_options.model_dump(mode="json"),
             "solidity": {
-                "index_summary": {"entities": 0, "ast_sources": 0, "fallback_sources": 0},
-                "graph_summary": {"edges": 0, "warnings": 0},
-                "shard_summary": None,
+                "projects": [project.model_dump(mode="json")],
+                "compilation": [],
+                "index_summary": {
+                    "entities": len(solidity_index_build.index.entities),
+                    "ast_sources": len(solidity_index_build.index.ast_sources),
+                    "fallback_sources": len(solidity_index_build.index.fallback_sources),
+                },
+                "graph_summary": {
+                    "edges": len(solidity_graphs.edges),
+                    "warnings": len(solidity_graphs.warnings),
+                },
+                "shard_summary": solidity_shard_binding.model_dump(mode="json"),
                 "property_corpus_summary": {
                     "properties": len(property_corpus.properties),
                     "limitations": len(property_corpus.limitations),
@@ -1208,6 +1342,103 @@ def _write_replay_run(
             },
         },
     )
+    current_base = _current_manifest_report(config)
+    execution_rejection_reasons = [
+        f"execution-origin evidence rejected: {item.rejection_detail}"
+        for item in execution_candidate_build.dispositions
+        if item.rejection_detail is not None
+    ]
+    minimum_floor = assess_minimum_analysis_floor(
+        repository=legacy_report.repository,
+        compilations=(),
+        scanner_runs=legacy_report.scanner_runs,
+        usage=(),
+        required_model_roles=ANALYSIS_ROLES,
+        coverage_metrics=solidity_coverage.quality_metrics,
+        solidity_applicable=True,
+        static_analysis_applicable=True,
+    )
+    report = current_base.model_copy(
+        update={
+            "run_id": legacy_report.run_id,
+            "generated_at": legacy_report.generated_at,
+            "audit_profile": config.profile,
+            "repository": legacy_report.repository,
+            "configuration_hash": legacy_report.configuration_hash,
+            "model_configuration_hash": legacy_report.model_configuration_hash,
+            "privacy": legacy_report.privacy,
+            "scanner_runs": legacy_report.scanner_runs,
+            "repository_suite_differential": legacy_report.repository_suite_differential,
+            "reproductions": [reproduction],
+            "incomplete_reasons": sorted(
+                {*minimum_floor.limitations, *execution_rejection_reasons}
+            ),
+            "completed": minimum_floor.minimum_floor_met,
+            "quality_status": audit_quality_status_for_run_status(minimum_floor.run_status),
+            "run_status": minimum_floor.run_status,
+            "minimum_analysis_floor": minimum_floor,
+            "quality_gates": [
+                (
+                    minimum_analysis_floor_quality_gate(minimum_floor)
+                    if gate.gate == "minimum_analysis_floor"
+                    else gate
+                )
+                for gate in current_base.quality_gates
+            ],
+            "invariants": legacy_report.invariants,
+            "invariant_executions": legacy_report.invariant_executions,
+            "solidity_coverage": solidity_coverage,
+            "execution_origin_dispositions": list(execution_candidate_build.dispositions),
+            "language_capability": legacy_report.language_capability,
+            "metadata": {
+                **current_base.metadata,
+                **legacy_report.metadata,
+            },
+        }
+    )
+    taxonomy_coverage = build_known_issue_taxonomy_coverage(
+        load_known_issue_taxonomy(),
+        invariants=invariant_suite,
+        model_review_coverage=None,
+    )
+    report = report.model_copy(
+        update={
+            "taxonomy_coverage": taxonomy_coverage,
+            "maximum_assurance": (
+                MaximumAssuranceContract(config).evaluate(
+                    AssuranceRuntime(
+                        taxonomy_coverage=taxonomy_coverage,
+                        artifacts={
+                            "known-issue-taxonomy-coverage.json",
+                            "known-issue-taxonomy.json",
+                        },
+                    )
+                )
+                if config.profile is AuditProfile.MAXIMUM_ASSURANCE
+                else None
+            ),
+            "quality_gates": [
+                (
+                    known_issue_taxonomy_quality_gate(
+                        taxonomy_coverage,
+                        required=config.profile is AuditProfile.MAXIMUM_ASSURANCE,
+                    )
+                    if gate.gate == "known_issue_taxonomy_critical_disposition"
+                    else gate
+                )
+                for gate in report.quality_gates
+            ],
+        }
+    )
+    calibrated = _with_current_findings(report, [rejected_finding])
+    report = AuditReport.model_validate(
+        calibrated.model_copy(
+            update={
+                "findings": [],
+                "rejected_findings": calibrated.findings,
+            }
+        ).model_dump(mode="python")
+    )
     run_dir = root / report.run_id
     run_dir.mkdir()
     assert scanner.raw_output_path is not None
@@ -1219,6 +1450,7 @@ def _write_replay_run(
         run_dir,
         report,
         candidates=(candidate,),
+        reproduction_resolutions=tuple(reproduction_resolutions),
     )
     artifacts = {
         "scanner-results.json": {
@@ -1230,9 +1462,18 @@ def _write_replay_run(
             "projects": [project.model_dump(mode="json")],
         },
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
-        "solidity-index.json": {"schema_version": "1.0", "index": None},
-        "solidity-graphs.json": {"schema_version": "1.0", "graphs": None},
-        "solidity-shards.json": {"schema_version": "1.0", "inventory": None},
+        "solidity-index.json": {
+            "schema_version": "1.0",
+            "index": solidity_index_build.index.model_dump(mode="json"),
+        },
+        "solidity-graphs.json": {
+            "schema_version": "1.0",
+            "graphs": solidity_graphs.model_dump(mode="json"),
+        },
+        "solidity-shards.json": {
+            "schema_version": "1.0",
+            "inventory": solidity_shards.model_dump(mode="json"),
+        },
         "solidity-invariants.json": {
             "schema_version": "1.0",
             "invariants": invariant_suite.model_dump(mode="json"),
@@ -1259,14 +1500,20 @@ def _write_replay_run(
             "schema_version": "1.0",
             "test_specifications": [specification.model_dump(mode="json")],
             "results": [reproduction.model_dump(mode="json")],
-            "candidate_resolutions": [reproduction_resolution.model_dump(mode="json")],
+            "candidate_resolutions": [
+                resolution.model_dump(mode="json") for resolution in reproduction_resolutions
+            ],
             "falsification_decisions": [],
         },
-        "formal-results.json": {"schema_version": "1.0", "runs": []},
+        "formal-results.json": {
+            "schema_version": "1.0",
+            "runs": [],
+            "dynamic_engine_comparisons": [],
+        },
         "solidity-coverage.json": {
             "schema_version": "1.0",
             "evidence_authority": "comparison_required",
-            "coverage": None,
+            "coverage": solidity_coverage.model_dump(mode="json"),
         },
         "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
         "scope-assessment.json": {"schema_version": "1.0", "assessment": None},
@@ -1288,6 +1535,7 @@ def _write_replay_run(
         environment_overrides=environment_overrides,
         cli_overrides=invocation_overrides,
         run_options=run_options,
+        protocol_profile_replay_discovery=discovery,
     )
     manifest_path = run_dir / "run-evidence-manifest.json"
     write_run_evidence_manifest(manifest_path, manifest)
@@ -1296,6 +1544,8 @@ def _write_replay_run(
 
 def _orchestrator(
     config: AuditConfig | None,
+    *,
+    configuration_root: Path | None = None,
 ) -> tuple[
     OfflineReplayOrchestrator,
     _LocalScannerRunner,
@@ -1308,6 +1558,7 @@ def _orchestrator(
     return (
         OfflineReplayOrchestrator(
             config,
+            configuration_root=configuration_root,
             scanner_runner=scanner,
             invariant_runner=invariant,
             reproduction_runner=reproduction,
@@ -1601,6 +1852,7 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
     )
     orchestrator = OfflineReplayOrchestrator(
         config,
+        configuration_root=repository,
         scanner_runner=scanner,
         invariant_runner=invariant,
         reproduction_runner=reproduction,
@@ -1700,7 +1952,7 @@ async def test_rootless_configured_replay_fails_closed_when_exact_backend_is_una
         ValueError,
         match="configured hardened isolation backend is unavailable",
     ):
-        await OfflineReplayOrchestrator(config).replay(
+        await OfflineReplayOrchestrator(config, configuration_root=repository).replay(
             manifest_path=manifest_path,
             run_dir=run_dir,
             repository_root=repository,
@@ -1778,7 +2030,7 @@ async def test_stale_manifest_refuses_backend_resolution_and_default_runner_cons
     )
 
     with pytest.raises(ValueError, match="refused stale"):
-        await OfflineReplayOrchestrator(config).replay(
+        await OfflineReplayOrchestrator(config, configuration_root=repository).replay(
             manifest_path=manifest_path,
             run_dir=run_dir,
             repository_root=repository,
@@ -1886,7 +2138,7 @@ async def test_rootless_configured_replay_shares_one_exact_backend_across_defaul
         lambda: clean_state_provider,
     )
 
-    orchestrator = OfflineReplayOrchestrator(config)
+    orchestrator = OfflineReplayOrchestrator(config, configuration_root=repository)
     replay = await orchestrator.replay(
         manifest_path=manifest_path,
         run_dir=run_dir,
@@ -1967,6 +2219,7 @@ async def test_profile_overridden_replay_builds_default_backend_bound_differenti
         lambda *_args, **_kwargs: backend,
     )
     orchestrator = OfflineReplayOrchestrator(
+        configuration_root=repository,
         scanner_runner=scanner,
         invariant_runner=_LocalInvariantRunner(_invariant_result()),
         reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
@@ -2062,6 +2315,7 @@ async def test_default_differential_replay_reserves_each_attempt_full_policy_tim
 
     replay = await OfflineReplayOrchestrator(
         config,
+        configuration_root=repository,
         scanner_runner=scanner,
         invariant_runner=_LocalInvariantRunner(_invariant_result()),
         reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
@@ -2117,6 +2371,7 @@ async def test_failed_repository_differential_replay_cannot_match(
     )
     replay = await OfflineReplayOrchestrator(
         config,
+        configuration_root=repository,
         scanner_runner=_ForkAwareScannerRunner([_differential_baseline(expected)]),
         invariant_runner=_LocalInvariantRunner(_invariant_result()),
         reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
@@ -2680,17 +2935,42 @@ def test_repository_differential_qualification_requires_copy_and_lifecycle_evide
     )
 
 
-def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:
+def _rewrite_manifest_as_legacy(manifest_path: Path, config: AuditConfig) -> None:
     manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
     payload = manifest.model_dump(mode="json")
     run_dir = manifest_path.parent
     report = AuditReport.model_validate_json(
         (run_dir / "final-findings.json").read_text(encoding="utf-8")
     )
+    legacy_report_payload = report.model_dump(mode="python")
+    legacy_report_payload["schema_version"] = "1.0"
+    for inventory_name in ("findings", "rejected_findings", "filtered_findings"):
+        legacy_report_payload[inventory_name] = [
+            item.model_copy(update={"actor_assessment": None}).model_dump(mode="python")
+            for item in getattr(report, inventory_name)
+        ]
+    for current_field in (
+        "accounted_cost_usd_exact",
+        "actor_model_baseline",
+        "actor_model_evaluation",
+        "execution_origin_dispositions",
+        "judge_decisions",
+        "maximum_assurance",
+        "minimum_analysis_floor",
+        "quality_gates",
+        "run_status",
+        "taxonomy_coverage",
+    ):
+        legacy_report_payload.pop(current_field, None)
+    legacy_report = AuditReport.model_validate(legacy_report_payload)
+    final_report_path = run_dir / "final-findings.json"
+    write_json(final_report_path, legacy_report)
+    _rebind_artifact(payload, final_report_path)
     metadata_path = run_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["completed"] = report.completed
-    metadata["incomplete_reasons"] = report.incomplete_reasons
+    metadata["schema_version"] = "1.0"
+    metadata["completed"] = legacy_report.completed
+    metadata["incomplete_reasons"] = legacy_report.incomplete_reasons
     for current_status_field in (
         "quality_status",
         "run_status",
@@ -2704,6 +2984,33 @@ def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:
         encoding="utf-8",
     )
     _rebind_artifact(payload, metadata_path)
+    current_only_paths = {
+        "actor-model-baseline.json",
+        "actor-model-evaluation.json",
+        "execution-origin-dispositions.json",
+        "known-issue-taxonomy-coverage.json",
+        "known-issue-taxonomy.json",
+        "private/model-review-artifacts.json",
+    }
+    payload["artifacts"] = [
+        binding
+        for binding in payload["artifacts"]
+        if isinstance(binding, dict) and binding.get("path") not in current_only_paths
+    ]
+    bindings = payload["bindings"]
+    assert isinstance(bindings, dict)
+    coverage_bindings = bindings["coverage"]
+    assert isinstance(coverage_bindings, list)
+    bindings["coverage"] = [
+        binding
+        for binding in coverage_bindings
+        if isinstance(binding, dict)
+        and not str(binding.get("identifier", "")).startswith("known-issue-taxonomy/")
+    ]
+    for relative_path in sorted(current_only_paths):
+        path = run_dir / relative_path
+        if path.exists():
+            path.unlink()
     payload["schema_version"] = "1.0"
     payload["run_configuration"] = None
     payload["manifest_sha256"] = canonical_sha256(
@@ -2713,10 +3020,24 @@ def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:
             if key not in {"manifest_sha256", "run_configuration"}
         }
     )
-    write_run_evidence_manifest(
-        manifest_path,
-        RunEvidenceManifest.model_validate(payload),
+    candidate = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(manifest_path, candidate)
+    observed = rebuild_run_evidence_manifest_for_verification(
+        run_dir=run_dir,
+        report=legacy_report,
+        config=config,
+        sealed_manifest=candidate,
     )
+    payload["bindings"] = observed.bindings.model_dump(mode="json")
+    payload["artifacts"] = [item.model_dump(mode="json") for item in observed.artifacts]
+    payload["manifest_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"manifest_sha256", "run_configuration"}
+        }
+    )
+    write_run_evidence_manifest(manifest_path, RunEvidenceManifest.model_validate(payload))
 
 
 def _reseal_manifest_payload(
@@ -2763,7 +3084,10 @@ def test_replay_loads_pipeline_candidate_resolution_as_typed_evidence(
         CandidateReproductionResolution(
             candidate_id="candidate-replay",
             kind=ReproductionResolutionKind.INCONCLUSIVE,
-            detail="attempted reproduction did not produce a qualifying terminal outcome",
+            detail=(
+                "attempted reproduction did not produce a qualifying terminal outcome: "
+                "not_reproduced"
+            ),
         )
     ]
 
@@ -2820,7 +3144,10 @@ def test_replay_accepts_inconclusive_high_candidate_without_generated_test(
         CandidateReproductionResolution(
             candidate_id="candidate-replay",
             kind=ReproductionResolutionKind.INCONCLUSIVE,
-            detail="attempted reproduction did not produce a qualifying terminal outcome",
+            detail=(
+                "attempted reproduction did not produce a qualifying terminal outcome: "
+                "not_reproduced"
+            ),
         )
     ]
 
@@ -2838,6 +3165,16 @@ def test_replay_rejects_resolution_for_non_obligated_model_candidate(
         end_line=1,
     ).model_copy(update={"severity": Severity.MEDIUM})
     _repository, run_dir, _manifest_path = _write_replay_run(tmp_path, config, candidate)
+    path = run_dir / "reproduction-results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["candidate_resolutions"] = [
+        CandidateReproductionResolution(
+            candidate_id="candidate-replay",
+            kind=ReproductionResolutionKind.INCONCLUSIVE,
+            detail="synthetic invalid non-obligated resolution",
+        ).model_dump(mode="json")
+    ]
+    write_json(path, payload)
 
     with pytest.raises(
         ValidationError,
@@ -2940,7 +3277,10 @@ async def test_local_fixture_replays_scanner_saved_test_and_counterexample_offli
         end_line=1,
     )
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
-    orchestrator, scanner, invariant, reproduction = _orchestrator(config)
+    orchestrator, scanner, invariant, reproduction = _orchestrator(
+        config,
+        configuration_root=repository,
+    )
 
     def deny_network(*_args, **_kwargs):
         raise AssertionError("offline replay attempted network access")
@@ -3000,7 +3340,10 @@ async def test_v11_replay_reconstructs_embedded_profile_override(
         file_config=base_config,
         cli_overrides=cli_overrides,
     )
-    orchestrator, scanner, invariant, reproduction = _orchestrator(None)
+    orchestrator, scanner, invariant, reproduction = _orchestrator(
+        None,
+        configuration_root=repository,
+    )
 
     replay = await orchestrator.replay(
         manifest_path=manifest_path,
@@ -3049,6 +3392,8 @@ def test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config(
             str(run_dir),
             "--repo",
             str(repository),
+            "--configuration-root",
+            str(repository),
             "--output",
             str(output),
             "--no-color",
@@ -3091,6 +3436,7 @@ async def test_v11_replay_reapplies_profile_override_to_explicit_base_config(
     invariant = _LocalInvariantRunner(_invariant_result())
     reproduction = _LocalReproductionRunner(_reproduction_result())
     orchestrator = OfflineReplayOrchestrator(
+        configuration_root=repository,
         file_config=base_config,
         scanner_runner=scanner,
         invariant_runner=invariant,
@@ -3137,6 +3483,7 @@ async def test_v11_replay_rejects_changed_base_masked_by_profile_override(
     invariant = _LocalInvariantRunner(_invariant_result())
     reproduction = _LocalReproductionRunner(_reproduction_result())
     orchestrator = OfflineReplayOrchestrator(
+        configuration_root=repository,
         file_config=changed_base,
         scanner_runner=scanner,
         invariant_runner=invariant,
@@ -3149,6 +3496,138 @@ async def test_v11_replay_rejects_changed_base_masked_by_profile_override(
             run_dir=run_dir,
             repository_root=repository,
             work_dir=tmp_path / "changed-base-work",
+        )
+
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_replay_rejects_configuration_root_with_linked_ancestor(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory(language_profile="solidity-evm")
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    real_parent = tmp_path / "trusted-configuration"
+    configuration_root = real_parent / "root"
+    configuration_root.mkdir(parents=True)
+    linked_parent = tmp_path / "linked-configuration"
+    try:
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    orchestrator, scanner, invariant, reproduction = _orchestrator(
+        config,
+        configuration_root=linked_parent / "root",
+    )
+
+    with pytest.raises(ValueError, match="configuration root may not traverse a link"):
+        await orchestrator.replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "linked-configuration-work",
+        )
+
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_replay_rejects_transient_ignore_edit_restored_during_verification(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(language_profile="solidity-evm")
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    ignore_path = repository / ".mmauditignore"
+    ignore_path.write_bytes(b"")
+    original_discover = verification_module.discover_repository
+
+    def discover_with_transient_ignore(*args, **kwargs):
+        ignore_path.write_text("/src/Vault.sol\n", encoding="utf-8")
+        try:
+            return original_discover(*args, **kwargs)
+        finally:
+            ignore_path.write_bytes(b"")
+
+    monkeypatch.setattr(
+        verification_module,
+        "discover_repository",
+        discover_with_transient_ignore,
+    )
+    orchestrator, scanner, invariant, reproduction = _orchestrator(
+        config,
+        configuration_root=repository,
+    )
+
+    with pytest.raises(ValueError, match="configuration ignore input changed"):
+        await orchestrator.replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "transient-configuration-work",
+        )
+
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_replay_rejects_repository_swapped_after_initial_validation(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(language_profile="solidity-evm")
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    alternate = tmp_path / "alternate-repository"
+    displaced = tmp_path / "displaced-repository"
+    shutil.copytree(repository, alternate)
+    original_safe_directory = replay_module._safe_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, label: str):
+        nonlocal swapped
+        observation = original_safe_directory(path, label)
+        if label == "repository" and not swapped:
+            swapped = True
+            repository.rename(displaced)
+            alternate.rename(repository)
+        return observation
+
+    monkeypatch.setattr(replay_module, "_safe_directory", validate_then_swap)
+    orchestrator, scanner, invariant, reproduction = _orchestrator(
+        config,
+        configuration_root=repository,
+    )
+
+    with pytest.raises(ValueError, match=r"offline replay .* root changed during custody"):
+        await orchestrator.replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "swapped-repository-work",
         )
 
     assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
@@ -3168,8 +3647,11 @@ async def test_v10_replay_requires_explicit_config(
         end_line=1,
     )
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
-    _rewrite_manifest_as_legacy(manifest_path)
-    without_config, scanner, invariant, reproduction = _orchestrator(None)
+    _rewrite_manifest_as_legacy(manifest_path, config)
+    without_config, scanner, invariant, reproduction = _orchestrator(
+        None,
+        configuration_root=repository,
+    )
 
     missing_config_verification = verify_run_evidence(
         manifest_path=manifest_path,
@@ -3181,6 +3663,7 @@ async def test_v10_replay_requires_explicit_config(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert explicit_config_verification.status is RunVerificationStatus.CURRENT
@@ -3194,7 +3677,7 @@ async def test_v10_replay_requires_explicit_config(
         )
 
     assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
-    with_config, _, _, _ = _orchestrator(config)
+    with_config, _, _, _ = _orchestrator(config, configuration_root=repository)
     replay = await with_config.replay(
         manifest_path=manifest_path,
         run_dir=run_dir,
@@ -3245,6 +3728,7 @@ def test_verify_run_rejects_self_consistent_run_options_manifest_tamper(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3317,6 +3801,7 @@ def test_verify_run_rejects_manifest_and_report_tamper_against_emitted_metadata(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3355,6 +3840,7 @@ def test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3391,6 +3877,7 @@ def test_verify_run_rejects_type_confused_metadata_boolean(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3431,6 +3918,7 @@ def test_verify_run_normalizes_nonfinite_metadata_to_stale(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3486,6 +3974,7 @@ def test_verify_run_rejects_override_layer_reclassification(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3513,6 +4002,7 @@ async def test_replay_detects_semantic_drift_and_verifies_before_execution(
     reproduction = _LocalReproductionRunner(_reproduction_result())
     orchestrator = OfflineReplayOrchestrator(
         config,
+        configuration_root=repository,
         scanner_runner=scanner,
         invariant_runner=invariant,
         reproduction_runner=reproduction,
@@ -3557,7 +4047,8 @@ def test_replay_cli_and_published_schema(
         end_line=1,
     )
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
-    orchestrator, _, _, _ = _orchestrator(None)
+    orchestrator, _, _, _ = _orchestrator(None, configuration_root=repository)
+    orchestrator.configuration_root = repository
     monkeypatch.setattr(
         "mmaudit.cli.OfflineReplayOrchestrator",
         lambda _config=None, **_kwargs: orchestrator,
@@ -3572,6 +4063,8 @@ def test_replay_cli_and_published_schema(
             "--run-dir",
             str(run_dir),
             "--repo",
+            str(repository),
+            "--configuration-root",
             str(repository),
             "--output",
             str(output),
@@ -3626,6 +4119,8 @@ def test_verify_run_cli_uses_embedded_v11_configuration(
             str(run_dir),
             "--repo",
             str(repository),
+            "--configuration-root",
+            str(repository),
             "--output",
             str(output),
             "--no-color",
@@ -3650,7 +4145,7 @@ def test_replay_writer_rejects_links(
         end_line=1,
     )
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
-    orchestrator, _, _, _ = _orchestrator(config)
+    orchestrator, _, _, _ = _orchestrator(config, configuration_root=repository)
     replay = asyncio.run(
         orchestrator.replay(
             manifest_path=manifest_path,

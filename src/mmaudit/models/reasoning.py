@@ -22,6 +22,13 @@ from mmaudit.constants import (
 
 ReasoningControlMode = Literal["disabled", "default", "effort", "max_tokens"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+EffectiveReasoningEffortInventorySource = Literal["ENDPOINT", "MODEL", "UNAVAILABLE"]
+EffectiveReasoningEffortInventoryState = Literal[
+    "UNAVAILABLE",
+    "EMPTY",
+    "PUBLISHED",
+    "CONTRADICTORY",
+]
 REASONING_EFFORT_ORDER: tuple[ReasoningEffort, ...] = (
     "none",
     "minimal",
@@ -89,6 +96,44 @@ _FALLBACK_BASE_EXPLOIT_TEST_ROLES = frozenset(
         "configuration",
     }
 )
+
+
+def resolve_effective_reasoning_effort_inventory(
+    *,
+    endpoint_efforts: tuple[ReasoningEffort, ...] | None,
+    model_efforts: tuple[ReasoningEffort, ...] | None,
+) -> tuple[
+    EffectiveReasoningEffortInventorySource,
+    EffectiveReasoningEffortInventoryState,
+    tuple[ReasoningEffort, ...] | None,
+    bool | None,
+]:
+    """Resolve the endpoint-first inventory used by route admission and diagnostics."""
+
+    source: EffectiveReasoningEffortInventorySource
+    state: EffectiveReasoningEffortInventoryState
+    if endpoint_efforts is not None:
+        source = "ENDPOINT"
+        effective = endpoint_efforts
+    elif model_efforts is not None:
+        source = "MODEL"
+        effective = model_efforts
+    else:
+        source = "UNAVAILABLE"
+        effective = None
+    if effective is None:
+        state = "UNAVAILABLE"
+    elif (
+        endpoint_efforts is not None
+        and model_efforts is not None
+        and not set(endpoint_efforts).issubset(model_efforts)
+    ):
+        state = "CONTRADICTORY"
+    elif not effective:
+        state = "EMPTY"
+    else:
+        state = "PUBLISHED"
+    return source, state, effective, None if effective is None else "high" in effective
 
 
 class ReasoningPolicyError(ValueError):

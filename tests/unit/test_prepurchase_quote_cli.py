@@ -142,7 +142,7 @@ def test_quote_create_applies_explicit_schema_retry_selection_exactly(
     monkeypatch.setattr(
         cli_module,
         "load_model_discovery_run",
-        lambda path: ((object(), (object(),)) if path == discovery_run else pytest.fail(path)),
+        lambda path: (object(), (object(),)) if path == discovery_run else pytest.fail(path),
     )
 
     def build_quote(observed_config: Any, **_kwargs: Any) -> PrepurchaseQuote:
@@ -202,9 +202,7 @@ def test_quote_create_rejects_implicit_or_conflicting_schema_retry_before_input_
     selection: int | None,
     message: str,
 ) -> None:
-    config = config_factory(
-        execution={"max_schema_validation_retries": configured_retries}
-    )
+    config = config_factory(execution={"max_schema_validation_retries": configured_retries})
     monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
     monkeypatch.setattr(
         cli_module,

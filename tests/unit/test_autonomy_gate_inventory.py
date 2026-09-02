@@ -43,36 +43,36 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3783
-    assert inventory.source_occurrence_count == 3786
-    assert inventory.audit_config_leaf_locator_count == 507
-    assert inventory.audit_config_leaf_occurrence_count == 510
+    assert inventory.source_count == 3895
+    assert inventory.source_occurrence_count == 3898
+    assert inventory.audit_config_leaf_locator_count == 513
+    assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
     assert inventory.audit_run_option_leaf_count == 16
-    assert inventory.audit_override_path_count == 46
+    assert inventory.audit_override_path_count == 51
     assert inventory.environment_override_count == 28
     assert inventory.cli_run_parameter_count == 53
     assert inventory.pipeline_init_parameter_count == 26
     assert inventory.pipeline_run_parameter_count == 16
-    assert inventory.completion_entrypoint_parameter_count == 323
+    assert inventory.completion_entrypoint_parameter_count == 336
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
-        "AUDIT_CONFIG_LEAF": 507,
+        "AUDIT_CONFIG_LEAF": 513,
         "AUDIT_RUN_OPTION_LEAF": 16,
-        "AUDIT_OVERRIDE_PATH": 46,
+        "AUDIT_OVERRIDE_PATH": 51,
         "ENVIRONMENT_OVERRIDE": 28,
         "CLI_RUN_PARAMETER": 53,
         "PIPELINE_INIT_PARAMETER": 26,
         "PIPELINE_RUN_PARAMETER": 16,
-        "COMPLETION_ENTRYPOINT_PARAMETER": 323,
-        "DIRECT_ENVIRONMENT_INPUT": 503,
+        "COMPLETION_ENTRYPOINT_PARAMETER": 336,
+        "DIRECT_ENVIRONMENT_INPUT": 499,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 241,
-        "EXPLICIT_NON_FIELD_GATE": 1991,
+        "AUDITED_MODULE_UNIVERSE": 253,
+        "EXPLICIT_NON_FIELD_GATE": 2071,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3737,
-        SourceCoverageClassification.NON_GATING_CONTROL: 46,
+        SourceCoverageClassification.GATE: 3846,
+        SourceCoverageClassification.NON_GATING_CONTROL: 49,
     }
     assert {item.value for item in SourceCoverageClassification} == {
         "GATE",
@@ -84,7 +84,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 111
     )
     assert (
-        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 86
+        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 88
     )
     assert (
         sum(
@@ -94,15 +94,15 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 19
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 276
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 292
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
-        == 80
+        == 81
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1620
+        == 1683
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -174,7 +174,7 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         for source in inventory.source_coverage
         if source.source_id.startswith("filesystem-input:orchestration.scheduler:")
     )
-    assert len(scheduler_filesystem_sources) == 51
+    assert len(scheduler_filesystem_sources) == 59
     assert all(
         source.logical_gate_id == "gate-managed-output-provisioning"
         for source in scheduler_filesystem_sources
@@ -184,6 +184,8 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         "filesystem-input:orchestration.scheduler:_cleanup_orphan_immutable_writes:1",
         "filesystem-input:orchestration.scheduler:_durable_directory_names:1",
         "filesystem-input:orchestration.scheduler:_inspect_orphan_immutable_writes:1",
+        "filesystem-input:orchestration.scheduler:"
+        "_build_scheduler_journal_custody_registry.record_validated_snapshot:2",
         "filesystem-input:orchestration.scheduler:_write_exclusive_private_file:1",
         "filesystem-input:orchestration.scheduler:_write_model:1",
     } <= set(sources)
@@ -199,6 +201,40 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
     assert runtime_evidence.source_kind is CompletionInputSourceKind.COMPLETION_ENTRYPOINT_PARAMETER
     assert runtime_evidence.classification is SourceCoverageClassification.GATE
     assert runtime_evidence.logical_gate_id == "gate-autonomous-model-authority"
+    for source_id in (
+        "completion-entrypoint:models_emit_selection_plan_successor:candidate",
+        "completion-entrypoint:models_emit_selection_plan_successor:predecessor_plan",
+        "completion-entrypoint:models_emit_selection_plan_successor:refresh_endpoint_inventory",
+        "completion-entrypoint:models_list_endpoints:model_id",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-autonomous-model-authority"
+    for source_id in (
+        "completion-entrypoint:certify_run_command:configuration_root",
+        "completion-entrypoint:replay_command:configuration_root",
+        "completion-entrypoint:verify_run_command:configuration_root",
+        "filesystem-input:cli:_verification_configuration_root:1",
+        "filesystem-input:repository.configuration_custody:observe_configuration_input:1",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-managed-profile"
+    scheduler_process_sources = tuple(
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("direct-env-ast:orchestration.scheduler:")
+        and ":process-identity" in source.source_id
+    )
+    assert len(scheduler_process_sources) == 12
+    assert all(
+        source.logical_gate_id == "gate-release-evidence-pipeline"
+        for source in scheduler_process_sources
+        if "privacy_evidence_custody" not in source.source_id
+    )
+    assert (
+        sources[
+            "direct-env-ast:orchestration.scheduler:open_scheduler_privacy_evidence_custody:"
+            "process-identity:1"
+        ].logical_gate_id
+        == "gate-client-privacy-consent"
+    )
     for source_id in (
         "cli-run:accepted_quote",
         "completion-entrypoint:_execute_audit:accepted_quote",

@@ -1,0 +1,34 @@
+{
+  "campaign_id": "scheduler-campaign-ed82daefb1c6eb53c2c9d7621a2aec71db6053de2168ee08c98927f6158c93da",
+  "child_result_sha256s": [
+    "00c9f1ba4a065ae9f96cedd1bab5cfc7cbec5c65df97b644c698f4a131478df7",
+    "c3bd011f71d74333046d849cdb6aef471300e429963d4aab8986c0e24acc3b1f"
+  ],
+  "closure_id": "scheduler-recovery-closure-dd45ad5c826c485471e748ba6c6f471ba7c567c40871f80cba9aa10a633ff70a",
+  "closure_status": "COVERAGE_CLOSED",
+  "completion_authorized": false,
+  "coverage_credit_authorized": false,
+  "covered_unfinished_surface_ids": [
+    "model-surface:4c285c0e2ac4f1d48a4b2abd1764bbf28ee1e97639f7757e1e991b6c417049d3",
+    "model-surface:6096a57075a61f7679c02671a4924a758cd786c7326807939bde245bceb9e3a0",
+    "model-surface:8e9e3499644dd4864eed327ee11d6922fed7daacdcaab8ecaeb7cb66b9c6bc9b",
+    "model-surface:f40a135e6b843c3110bd4a347ae5ac2193cf7481997b619e137f4295b0fb6b12"
+  ],
+  "entry_index": 1,
+  "entry_kind": "FAMILY_CLOSED",
+  "entry_sha256": "c29fac1f4750690778c70ba922ce1d480e80a11f957b4c489e60203e2844f2cd",
+  "evidence_authority": "comparison_required",
+  "family_id": "scheduler-recovery-family-8feb969c982c89fd8d9fbfc5d5386f3397980094a05c11240e0eccf251269229",
+  "family_index": 0,
+  "family_root_sha256": "c35e1ec5c2144827de46e7117ba8567b7655689762b3ca83e24e71fb3a80f31a",
+  "journal_version": "mmaudit.scheduler.truncation-recovery-journal.v1",
+  "nested_family_closure_sha256s": [],
+  "previous_entry_sha256": "c35e1ec5c2144827de46e7117ba8567b7655689762b3ca83e24e71fb3a80f31a",
+  "provider_dispatch_authorized": false,
+  "recovery_plan_sha256": "63924bc53cc7d7a2553125a87bc8cf03468cfeef744d4c48163228babab152fd",
+  "release_authorized": false,
+  "request_limit_binding_sha256": "dd09c29ce21b88969d93d48dfb12030ebecc2c442ebf9d40939daae6185fa608",
+  "request_limit_id": "scheduler-request-ba09c8de8b06f3ca6f5b04e47555945505e3c8df6c15a93c0e0edfffb59da474",
+  "review_credit_authorized": false,
+  "schema_version": "1.1"
+}

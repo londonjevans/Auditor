@@ -6,6 +6,7 @@ import json
 import re
 import stat
 import subprocess
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -92,10 +93,11 @@ CURRENT_COVERAGE_CHECKPOINT = "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
 CURRENT_COVERAGE_PARENT_CHECKPOINT = "d6c7c5b05d8466a3793b3174809e1cd48b6a02e8"
 CURRENT_RETRY_CHECKPOINT = "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
 CURRENT_RETRY_PARENT_CHECKPOINT = "9a902192cae14bb14144094b3a3b3bf6dafed9a9"
-CURRENT_OPERATOR_RESULTS_SHA256 = "d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089"
-CURRENT_OPERATOR_RESULTS_BYTES = 148_339
-CURRENT_OPERATOR_RESULTS_LINES = 2_648
-CURRENT_OPERATOR_RESULTS_LATEST_ENTRY = "2026-08-28T07:56Z"
+CURRENT_OPERATOR_RESULTS_SHA256 = "af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b"
+CURRENT_OPERATOR_RESULTS_BYTES = 162_656
+CURRENT_OPERATOR_RESULTS_LINES = 2_902
+CURRENT_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-01T04:49Z"
+CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT = "4c553590fedd4d297442f0a73da703d993f5eec9"
 HISTORICAL_50D_OPERATOR_RESULTS_CHECKPOINT = "e8610cd6325ae599f5a725a9bf6c64da12928564"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
@@ -187,19 +189,37 @@ CURRENT_RETRYCONT_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
     "f47561a1fb172db9a8739c5ee5a8492d95ffb06e0e0a5935be635d155d2891f1"
 )
 CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_RAW_SHA256 = (
-    "1a665257e440562070b2cd40850009dbf43a2a56d2146f0ed223c58270f52e19"
+    "6451a873fd2d52d5ee3a9bc6afaa875090f489982e94bca9e1122d9b63ed9bd0"
 )
 CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
-    "ad38cfc95945bd5bfbd105069a4c19a1d81f80a1b3cf30caadda4b2eede97992"
+    "78e9541c32de209c48632602f368113b0781dacba4104904c26a7817e4ff9b08"
 )
 CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SHA256 = (
-    "85ba15048e7c6e2ca738c8f9120ef2df5f62b234fcb3eac5407dd0d23b959d34"
+    "194b3d3423b992255bc932383b1988d36965040b2e767d9ea4665d43d20b8e23"
 )
 CURRENT_SCHEMARETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
-    "d00d39076f28d90853731c6b7ecbbec7d30a94cef5a27a8eeb9cd248b1d7754d"
+    "780cba1dc17a14f0bd749f5878eb0a311c84431fcc1ea39ffb89f89a12bb3cc0"
 )
 CURRENT_SCHEMARETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
-    "5dcd00d64f536200bc619ef455fbba2285c4715883c4ce752918148b6f072766"
+    "924720fbeda73c21f1311d086c4fcc0370d190dcdbe0a754f564dd99892a9f14"
+)
+CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "71bcd46da89cd7a1b31ec0ca35b5a7f4a4004ffbc871fd34ff0e520ab0894073"
+)
+CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "228db72a188433fa9727fc8f0185b69949c615c81f56abbad1565cc0492af4ab"
+)
+CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256 = (
+    "ebdcf5520ffe0f82d3a0bcc6fb5669ce2e2724730521ad71f55e54f29e2da830"
+)
+CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "63550cead89dcf5425fa06374df61e225a93342b7a55a3774532597b002b33ee"
+)
+CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "d0a1471e64dc50a32e23a3dab4c52a14d56acb22f8ab5f460a2494c7a0f3c6fa"
+)
+CURRENT_ENDPOINTLIST_DIAGNOSTIC_SCHEMA_RAW_SHA256 = (
+    "326cd2a83b5bc1b825018bfbfe2e7244c62587105d1bc188e4dbe3ff7b8a2b72"
 )
 ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256 = (
     "e3b1280836581456a43c73c0eaa9acc184dc05bb175c0dac4a83973bab79c921"
@@ -1663,10 +1683,49 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
     combined = codex | canonical
     unfinished = sum(status != "COMPLETE" for status in combined.values())
 
-    assert unfinished == 41
+    assert combined["V3-TAXONOMY-001"] == "COMPLETE"
+    assert combined["V3-RETRIEVAL-001"] == "COMPLETE"
+    assert combined["V3-PRICELEXEME-001"] == "IN_PROGRESS"
+    assert combined["V3-PRICEFORM-001"] == "QUEUED"
+    assert unfinished == 40
     assert (
         f"REMAINING_ACTIONABLE_TICKETS: The combined queues contain {unfinished} unfinished tickets"
     ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
+
+
+def test_current_worklog_headers_bind_pricelexeme_status_and_retrieval_inventory() -> None:
+    exact_status = (
+        "V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_"
+        "IMPLEMENTATION_NOT_STARTED_CODEX_ZERO_EXTERNAL_COMMANDS"
+    )
+    exact_counts = (
+        "3895 sources / 3898 occurrences / 3846 gate sources / 49 non-gating controls / "
+        "13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual"
+    )
+    inventory_components = (
+        f"Raw `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256}`",
+        f"self `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256}`",
+        f"discovery `{CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256}`",
+        f"universe `{CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256}`",
+        f"schema raw `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256}`",
+    )
+
+    for worklog_path in (CODEX_WORKLOG_PATH, ROOT / "docs/remediation/v3/worklog.md"):
+        current_header = worklog_path.read_text(encoding="utf-8").split("\n## ", maxsplit=1)[0]
+        assert f"AUTORUN_STATUS: {exact_status}" in current_header
+        assert f"CURRENT_LOCAL_SLICE_STATUS: {exact_status}" in current_header
+        assert "CURRENT_TICKET: V3-PRICELEXEME-001" in current_header
+        assert "CURRENT_TICKET_IMPLEMENTATION_STARTED: false" in current_header
+        assert (
+            "CURRENT_AUTONOMY_INVENTORY: "
+            "CURRENT_RECONCILED_V3_PRICELEXEME_001_SELECTION_AFTER_V3_RETRIEVAL_001_COMPLETE"
+            in current_header
+        )
+        for component in inventory_components:
+            assert component in current_header
+        assert exact_counts in current_header
+        assert "PRE_TRANSITION_GOVERNED_GENERATION_LAST_VERIFIED" not in current_header
+        assert "8156 passed, 22 skipped, 12 warnings in 9963.54s (2:46:03)" in current_header
 
 
 def test_retry_ticket_is_mirrored_complete_and_has_an_exact_source_manifest() -> None:
@@ -1881,7 +1940,7 @@ def test_retry_closure_preserves_the_exact_coverage_runtime_portfolio() -> None:
     )
 
 
-def test_schema_retry_closure_is_current_and_preserves_learning_history() -> None:
+def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> None:
     traceability_text = TRACEABILITY_PATH.read_text(encoding="utf-8")
     worklogs = (
         CODEX_WORKLOG_PATH.read_text(encoding="utf-8"),
@@ -1892,6 +1951,31 @@ def test_schema_retry_closure_is_current_and_preserves_learning_history() -> Non
         current_header = " ".join(raw_worklog.split("\n## ", maxsplit=1)[0].split())
         newest_entry = " ".join(
             raw_worklog.split("\n## ", maxsplit=1)[1].split("\n## ", maxsplit=1)[0].split()
+        )
+        pricelexeme_selection_entry = " ".join(
+            raw_worklog.split("## 2026-09-02T08:52:48Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        actor_model_completion_entry = " ".join(
+            raw_worklog.split("## 2026-08-31T00:16:29Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        operator_decision_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T19:47:22Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        endpoint_completion_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T19:29:47Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        plan_successor_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T15:31:29Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
         )
         modelrefresh_entry = " ".join(
             raw_worklog.split("## 2026-08-27T21:47:03Z", maxsplit=1)[1]
@@ -1908,33 +1992,60 @@ def test_schema_retry_closure_is_current_and_preserves_learning_history() -> Non
             .split("\n## ", maxsplit=1)[0]
             .split()
         )
-        assert "AUTORUN_STATUS: V3_SCHEMARETRY_001_COMPLETE_" in current_header
+        schema_retry_entry = " ".join(
+            raw_worklog.split("## 2026-08-28T08:10:11Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        candidate_route_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T17:49:22Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        reopened_endpoint_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T19:09:10Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        historical_endpoint_v1_0_entry = " ".join(
+            raw_worklog.split("## 2026-08-30T18:47:27Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
+        assert "AUTORUN_STATUS:" in current_header
         assert "PROVIDER_FREE" in current_header
         assert "NONAUTHORIZING" in current_header
-        assert "ZERO_CURRENT_EXTERNAL_COMMANDS" in current_header
-        assert (
-            "CURRENT_LOCAL_SLICE_STATUS: V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_"
-            "NONAUTHORIZING" in current_header
-        )
-        assert "CURRENT_TICKET: UNSELECTED" in current_header
-        assert "LAST_COMPLETED_TICKET: V3-SCHEMARETRY-001" in current_header
-        assert "41 unfinished tickets" in current_header
-        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_D06AE996" in (
+        assert "CODEX_ZERO_EXTERNAL_COMMANDS" in current_header
+        assert "CURRENT_LOCAL_SLICE_STATUS:" in current_header
+        assert "CURRENT_TICKET:" in current_header
+        assert "LAST_COMPLETED_TICKET:" in current_header
+        assert "LAST_PARTIAL_TICKET: V3-CANDROUTE-001" in current_header
+        assert "unfinished tickets" in current_header
+        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_AF7A24E" in (
             current_header
         )
         for status_component in (
-            "REVOCATION_DEADLOCK_ALL_CANDIDATE_DISCOVERY",
-            "PROVIDER_FREE",
+            "OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY",
+            "PRICEFORM_REFUSAL_UPHELD",
+            "REASONING_EFFORT_REQUIRED",
+            "PRICELEXEME_QUEUED",
+            "PRIOR_LIVE_V1_0_METADATA_SURVEY",
+            "12_MODELS",
+            "112_ENDPOINTS",
+            "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
+            "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
+            "ZERO_ADMISSIBLE_CANDIDATES",
+            "ACTIVE_PLAN_UNCHANGED",
             "LEDGER_UNCHANGED",
             "57_ENTRIES",
             "068118684_SPEND",
             "ZERO_COMPLETED_REAL_AUDITS",
-            "V3_REVOKERECON_REQUIRED",
             "NONAUTHORIZING",
+            "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
         ):
             assert status_component in current_header
         assert CURRENT_OPERATOR_RESULTS_SHA256 in current_header
-        assert "148339 bytes / 2648 lines" in current_header
+        assert "162656 bytes / 2902 lines" in current_header
         assert "V3-LEARNING-001" in learning_entry
         assert "Phase 1" in learning_entry and "complete" in learning_entry.lower()
         assert "PARTIAL" in learning_entry
@@ -1949,17 +2060,58 @@ def test_schema_retry_closure_is_current_and_preserves_learning_history() -> Non
         assert "authority" in learning_entry.lower()
         assert "private" in learning_entry.lower()
         assert "completed_real_audits" in worklog
-        assert "V3-MULTI-AUDIT-001" in current_header
-        assert "queued" in current_header.lower() and "unselected" in current_header.lower()
-        assert "V3-SCHEMARETRY-001" in newest_entry and "complete" in newest_entry.lower()
-        assert "explicit" in newest_entry.lower() and "provider-free" in newest_entry.lower()
+        assert "V3-ACTORMODEL-001" in worklog
+        assert "V3-TAXONOMY-001" in worklog
+        assert "REMAINING_ACTIONABLE_TICKETS:" in current_header
+        assert "V3-CANDROUTE-001" in current_header and "PARTIAL" in current_header
+        assert "V3-ACTORMODEL-001" in actor_model_completion_entry
+        assert "complete" in actor_model_completion_entry.lower()
+        assert "operator-authored" in actor_model_completion_entry.lower()
+        assert "actor-blind" in actor_model_completion_entry.lower()
+        assert (
+            "judge" in actor_model_completion_entry.lower()
+            and "context" in actor_model_completion_entry.lower()
+        )
+        assert (
+            "baseline" in actor_model_completion_entry.lower()
+            and "evaluation" in actor_model_completion_entry.lower()
+        )
+        assert "provider-free" in actor_model_completion_entry.lower()
+        assert "authority" in actor_model_completion_entry.lower()
+        assert "operator decision reconciliation" in operator_decision_entry.lower()
+        assert "V3-PRICEFORM-001 decision" in operator_decision_entry
+        assert "Rejection stands" in operator_decision_entry
+        assert "no admissible candidate route exists" in operator_decision_entry
+        assert "REASONING_EFFORT_SUPPORT" in operator_decision_entry
+        assert "genuinely required of the candidate" in operator_decision_entry
+        assert "not relaxed" in operator_decision_entry
+        assert "V3-ENDPOINTLIST-001" in endpoint_completion_entry
+        assert "schema-v1.1 corrective completion" in endpoint_completion_entry.lower()
+        assert "model" in endpoint_completion_entry.lower()
+        assert "effective" in endpoint_completion_entry.lower()
+        assert "v1.1 has not been exercised live" in endpoint_completion_entry.lower()
+        assert "codex did not issue" in endpoint_completion_entry.lower()
+        assert "reopened from live diagnostic evidence" in reopened_endpoint_entry.lower()
+        assert "`12` models" in reopened_endpoint_entry.lower()
+        assert "`112` endpoints" in reopened_endpoint_entry.lower()
+        assert "provider-free completion" in historical_endpoint_v1_0_entry.lower()
+        assert "list-endpoints" in historical_endpoint_v1_0_entry
+        assert "no provider/network enumeration" in historical_endpoint_v1_0_entry.lower()
+        assert "V3-CANDROUTE-001" in candidate_route_entry
+        assert "provider-free partial closure" in candidate_route_entry.lower()
+        assert "schema v1.6" in candidate_route_entry.lower()
+        assert "constrained discovery" in candidate_route_entry.lower()
+        assert "V3-PLANSUCCESSOR-001" in plan_successor_entry
+        assert "complete" in plan_successor_entry.lower()
+        assert "predecessor" in plan_successor_entry.lower()
+        assert "provider-free" in plan_successor_entry.lower()
         assert "External effects:" in learning_entry
-        assert "no provider or operator action is current" in newest_entry.lower()
+        assert "shares one pure resolver" in endpoint_completion_entry.lower()
         assert "package-pinned negative registry" in modelrefresh_entry.lower()
         assert "tombstone" in modelrefresh_entry.lower()
-        assert "max_model_retries" in newest_entry
-        assert "schema_validation_failed" in newest_entry.lower()
-        assert "no provider or operator action" in current_header.lower()
+        assert "max_model_retries" in schema_retry_entry
+        assert "schema_validation_failed" in schema_retry_entry.lower()
+        assert "no codex provider or operator action" in current_header.lower()
         assert "is current" in current_header
         assert "operator-reports" in worklog.lower()
         assert "index-21" in worklog.lower() or "index21" in worklog.lower()
@@ -1969,11 +2121,20 @@ def test_schema_retry_closure_is_current_and_preserves_learning_history() -> Non
         assert "RUNTIME_EVIDENCE_INVALID" in worklog
         assert "Codex" in worklog and "private" in worklog.lower()
         assert "full admission for one launch" in worklog.lower()
-        assert "no continuing admission" in worklog.lower()
-        assert CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_RAW_SHA256 in current_header
-        assert CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SHA256 in current_header
-        assert CURRENT_SCHEMARETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 in current_header
-        assert CURRENT_SCHEMARETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256 in current_header
+        normalized_newest_entry = newest_entry.lower()
+        normalized_selection_entry = pricelexeme_selection_entry.lower()
+        assert "selection does not admit or select a candidate route" in normalized_selection_entry
+        assert "grant provider or runner authority" in normalized_selection_entry
+        assert "or authority action occurred" in normalized_selection_entry
+        assert "terminal validation and inventory reconciled" in normalized_newest_entry
+        assert "8156 passed, 22 skipped, 12 warnings" in normalized_newest_entry
+        assert "sole `in_progress` ticket" in normalized_newest_entry
+        assert "implementation_started=false" in normalized_newest_entry
+        assert "changes no pricing decoder, retry behavior, runtime configuration" in (
+            normalized_newest_entry
+        )
+        assert "performs no provider" in normalized_newest_entry
+        assert "or authority action" in normalized_newest_entry
         assert "137,294 bytes / 2,462" in historical_retry_reconciliation
         assert (
             "latest entry" in historical_retry_reconciliation
@@ -2206,10 +2367,27 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     traceability = json.loads(traceability_text)
     requirements = traceability["requirements"]
     requirement_ids = [requirement["id"] for requirement in requirements]
+    requirements_by_id = {requirement["id"]: requirement for requirement in requirements}
 
     assert requirement_ids == list(EXPECTED_REQUIREMENT_IDS), (
         "review traceability must contain the canonical complete A-V requirement sequence"
     )
+    assert requirements_by_id["K"]["tickets"] == ["V3-COVERAGE-001", "V3-TAXONOMY-001"]
+    assert requirements_by_id["K"]["status"] == "COMPLETE"
+    assert "19-item defensive corpus" in requirements_by_id["K"]["evidence"][-1]
+    assert requirements_by_id["K"]["remaining_proof"] == (
+        "No local Requirement K proof remains. Its completed provider-free evidence supplies no "
+        "provider execution, qualification, campaign, audit, benchmark, AUTHSEAL, runtime, or "
+        "release authority."
+    )
+    assert requirements_by_id["U"]["status"] == "IN_PROGRESS"
+    assert "V3-RETRIEVAL-001 is COMPLETE" in requirements_by_id["U"]["evidence"][-1]
+    assert "V3-PRICELEXEME-001" in requirements_by_id["U"]["evidence"][-1]
+    assert "implementation_started=false" in requirements_by_id["U"]["evidence"][-1]
+    assert "V3-TAXONOMY-001" in requirements_by_id["U"]["remaining_proof"]
+    assert "V3-RETRIEVAL-001" in requirements_by_id["U"]["remaining_proof"]
+    assert "V3-PRICELEXEME-001" in requirements_by_id["U"]["remaining_proof"]
+    assert "Finish V3-TAXONOMY-001" not in requirements_by_id["U"]["remaining_proof"]
     assert "The current 29375-byte operator log" not in traceability_text
     assert "The current 35771-byte operator record" not in traceability_text
     assert "the current one-entry AUTHRUNNER campaign ledger" not in traceability_text
@@ -2218,14 +2396,282 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "then-current 35771-byte operator record" in traceability_text
     assert "global 25-entry ledger / 0.396223 USD" in traceability_text
     operator_reconciliation = traceability["operator_evidence_reconciliation"]
-    assert operator_reconciliation["critical_path_ticket"] == "UNSELECTED"
-    assert operator_reconciliation["critical_path_ticket_status"] == (
-        "NO_SUCCESSOR_SELECTED_AFTER_V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    assert operator_reconciliation["critical_path_ticket"] == "V3-PRICELEXEME-001"
+    critical_path_status = operator_reconciliation["critical_path_ticket_status"]
+    for status_component in (
+        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING",
+        "PRICEFORM_REFUSAL_UPHELD",
+        "EFFORT_HIGH_RETAINED",
+        "V3_RETRIEVAL_001_COMPLETE",
+        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
+    ):
+        assert status_component in critical_path_status
+    assert (
+        operator_reconciliation[
+            "critical_path_ticket_newly_selected_started_or_marked_in_progress_this_turn"
+        ]
+        is True
     )
-    assert operator_reconciliation["current_local_ticket"] == "UNSELECTED"
+    assert operator_reconciliation["current_preflight_status"].startswith(
+        "LOCAL_V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    assert (
+        "RETAINED_LOCAL_V3_ACTORMODEL_001_COMPLETE"
+        in (operator_reconciliation["current_preflight_status"])
+    )
+    assert (
+        "RETAINED_LOCAL_V3_ENDPOINTLIST_001_COMPLETE"
+        in (operator_reconciliation["current_preflight_status"])
+    )
+    assert "V3_RETRIEVAL_001_COMPLETE" in operator_reconciliation["current_preflight_status"]
+    assert "IMPLEMENTATION_STARTED_FALSE" in operator_reconciliation["current_preflight_status"]
+    assert operator_reconciliation["current_local_ticket"] == "V3-PRICELEXEME-001"
     assert operator_reconciliation["current_local_ticket_status"] == (
-        "NO_SUCCESSOR_SELECTED_AFTER_V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_"
-        "NONAUTHORIZING; V3_REVOKERECON_001_IS_NEXT_DEPENDENCY_READY_QUEUED_TICKET"
+        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    assert operator_reconciliation["current_taxonomy_ticket"] == "V3-TAXONOMY-001"
+    assert operator_reconciliation["current_taxonomy_status"] == (
+        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
+    )
+    assert operator_reconciliation["current_taxonomy_version"] == "1.0"
+    assert operator_reconciliation["current_taxonomy_item_count"] == 19
+    assert operator_reconciliation["current_taxonomy_critical_item_count"] == 15
+    assert operator_reconciliation["current_taxonomy_dispositions"] == [
+        "REVIEWED",
+        "NOT_APPLICABLE",
+        "GAP",
+    ]
+    for taxonomy_true_field in (
+        "current_taxonomy_deterministic_profile_applicability",
+        "current_taxonomy_applicability_evidence_backed",
+        "current_taxonomy_omission_becomes_gap",
+        "current_taxonomy_denominator_reported_with_surface_coverage",
+        "current_taxonomy_critical_gap_blocks_maximum_assurance_complete",
+        "current_taxonomy_canonical_generation_current",
+        "current_taxonomy_release_collection_blocked_technical_before_side_effects",
+        "current_taxonomy_affected_matrices_complete",
+        "current_taxonomy_complete_sequential_suite_passed",
+    ):
+        assert operator_reconciliation[taxonomy_true_field] is True
+    for taxonomy_false_field in (
+        "current_taxonomy_creates_findings",
+        "current_taxonomy_finding_authority",
+    ):
+        assert operator_reconciliation[taxonomy_false_field] is False
+    assert (
+        operator_reconciliation["current_taxonomy_assurance_report_learning_matrix_passed"] == 291
+    )
+    assert (
+        operator_reconciliation["current_taxonomy_model_coverage_review_manifest_matrix_passed"]
+        == 233
+    )
+    assert operator_reconciliation["current_taxonomy_release_replay_matrix_passed"] == 314
+    assert operator_reconciliation["current_taxonomy_scheduler_affected_matrix_passed"] == 350
+    assert operator_reconciliation["current_actor_model_ticket"] == "V3-ACTORMODEL-001"
+    assert operator_reconciliation["current_actor_model_status"] == (
+        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
+    )
+    assert operator_reconciliation["current_actor_model_schema_paths"] == [
+        "schemas/actor_model.schema.json",
+        "schemas/actor_model_baseline.schema.json",
+        "schemas/actor_model_evaluation.schema.json",
+    ]
+    assert operator_reconciliation["current_actor_model_fixture_paths"] == [
+        "tests/fixtures/actor_model/synthetic_orchard_actor_model.json",
+        "tests/fixtures/actor_model/synthetic_correction_scenarios.json",
+    ]
+    for actor_model_true_field in (
+        "current_actor_model_typed_versioned_self_hashed_operator_authored_input",
+        "current_actor_model_current_stale_missing_future_and_invalid_handling",
+        "current_actor_model_role_occupancy_distinguishes_currently_held_and_admitted_unfilled",
+        "current_actor_model_capital_and_loss_waterfall_priority_enforced",
+        "current_actor_model_action_against_interest_requires_plausibility_evidence_or_rates_down",
+        "current_actor_model_ordinary_legitimate_behavior_increases_likelihood",
+        "current_actor_model_ordinary_legitimate_behavior_changes_framing_and_remediation",
+        "current_actor_model_absent_or_stale_input_limits_every_finding_severity",
+        "current_actor_model_absent_or_stale_input_attaches_limitation_to_every_finding_severity",
+        "current_actor_model_typed_code_model_occupancy_governance_conflict",
+        "current_actor_model_specialists_actor_blind",
+        "current_actor_model_verifiers_actor_blind",
+        "current_actor_model_judge_receives_typed_context",
+        "current_actor_model_judge_context_only_post_consensus_severity_calibration_when_input_current",
+        "current_actor_model_baseline_custody",
+        "current_actor_model_evaluation_custody",
+        "current_actor_model_judge_decision_custody",
+    ):
+        assert operator_reconciliation[actor_model_true_field] is True
+    for actor_model_false_field in (
+        "current_actor_model_judge_classification_controls_consensus_or_confidence_when_input_current",
+        "current_actor_model_unknown_actor_facts_inferred",
+        "current_actor_model_provider_or_network_accessed_by_codex",
+        "current_actor_model_operator_command_emitted_by_codex",
+        "current_actor_model_grants_authority",
+    ):
+        assert operator_reconciliation[actor_model_false_field] is False
+    assert operator_reconciliation["current_actor_model_role_occupancy_states"] == [
+        "CURRENTLY_HELD",
+        "ADMITTED_UNFILLED",
+    ]
+    assert operator_reconciliation["current_actor_model_validated_correction_scenarios"] == [
+        "anchor-first-loss-scope",
+        "ordinary-servicer-forbearance",
+        "request-cooldown-severity",
+    ]
+    assert operator_reconciliation["current_candidate_reasoning_effort_requirement_settled"]
+    assert operator_reconciliation["current_candidate_reasoning_effort_requirement"] == (
+        "EFFORT_HIGH_REQUIRED_BY_SHARED_AUTHRUNNER_PROFILE_ALL_ROLES_ALL_PURPOSES"
+    )
+    assert operator_reconciliation["current_candidate_reasoning_effort_predicate_relaxed"] is False
+    assert operator_reconciliation[
+        "current_candidate_price_form_decision_settled_operator_reported"
+    ]
+    assert operator_reconciliation["current_candidate_price_form_decision"] == (
+        "CURRENT_BINARY_FLOAT_CUSTODY_REFUSAL_UPHELD"
+    )
+    assert operator_reconciliation["current_candidate_price_exactness_requirement_relaxed"] is False
+    assert (
+        operator_reconciliation[
+            "current_candidate_numeric_price_ordinary_json_path_remains_inadmissible"
+        ]
+        is True
+    )
+    assert operator_reconciliation["current_candidate_lossless_price_lexeme_custody_ticket"] == (
+        "V3-PRICELEXEME-001"
+    )
+    assert operator_reconciliation[
+        "current_candidate_lossless_price_lexeme_custody_ticket_status"
+    ] == ("IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING")
+    assert operator_reconciliation[
+        "current_candidate_lossless_price_lexeme_parse_float_decimal_fact_operator_reported"
+    ]
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_parse_float_decimal_fact_independently_verified_by_codex"
+        ]
+        is False
+    )
+    assert operator_reconciliation["current_candidate_conditional_future_route"] == (
+        "x-ai/grok-4.6=amazon-bedrock/us-west-2"
+    )
+    assert (
+        operator_reconciliation["current_candidate_conditional_future_route_currently_admissible"]
+        is False
+    )
+    assert operator_reconciliation["current_candidate_conditional_future_route_selected"] is False
+    assert (
+        operator_reconciliation["current_candidate_lossless_price_lexeme_decision_grants_authority"]
+        is False
+    )
+    assert operator_reconciliation["current_candidate_endpoint_inventory_refresh_supported"]
+    assert (
+        operator_reconciliation["current_candidate_endpoint_inventory_refresh_schema_version"]
+        == "1.6"
+    )
+    assert operator_reconciliation["current_candidate_endpoint_inventory_refresh_disposition"] == (
+        "OPERATOR_STAGED_UNVERIFIED"
+    )
+    assert operator_reconciliation[
+        "current_candidate_endpoint_inventory_refresh_requires_constrained_discovery"
+    ]
+    assert (
+        operator_reconciliation["current_candidate_endpoint_inventory_refresh_grants_authority"]
+        is False
+    )
+    assert operator_reconciliation[
+        "current_candidate_endpoint_inventory_refresh_live_route_preflight_proven_synthetic"
+    ]
+    assert operator_reconciliation["current_endpoint_inventory_diagnostic_ticket"] == (
+        "V3-ENDPOINTLIST-001"
+    )
+    assert operator_reconciliation["current_endpoint_inventory_diagnostic_status"] == (
+        "COMPLETE_PROVIDER_FREE_V1_1_MODEL_EFFECTIVE_REASONING_PARITY_NONAUTHORIZING_"
+        "OPERATOR_LIVE_V1_0_SURVEY_CODEX_NO_EXTERNAL_ACTION"
+    )
+    assert operator_reconciliation["current_endpoint_inventory_diagnostic_schema_version"] == "1.1"
+    assert (
+        operator_reconciliation["current_endpoint_inventory_diagnostic_schema_raw_sha256"]
+        == CURRENT_ENDPOINTLIST_DIAGNOSTIC_SCHEMA_RAW_SHA256
+    )
+    assert operator_reconciliation[
+        "current_endpoint_inventory_diagnostic_exact_model_metadata_only"
+    ]
+    assert operator_reconciliation[
+        "current_endpoint_inventory_diagnostic_reports_exact_route_arguments"
+    ]
+    for field in (
+        "current_endpoint_inventory_diagnostic_reports_endpoint_structured_output_inventory",
+        "current_endpoint_inventory_diagnostic_reports_model_structured_output_inventory",
+        "current_endpoint_inventory_diagnostic_reports_endpoint_reasoning_effort_inventory",
+        "current_endpoint_inventory_diagnostic_reports_model_reasoning_effort_inventory",
+        "current_endpoint_inventory_diagnostic_reports_effective_reasoning_effort_inventory",
+        "current_endpoint_inventory_diagnostic_reports_effective_reasoning_effort_inventory_source",
+        "current_endpoint_inventory_diagnostic_shared_reasoning_effort_resolver_with_route_admission",
+        "current_endpoint_inventory_diagnostic_exact_catalog_model_read_sealed",
+        "current_endpoint_inventory_diagnostic_full_metadata_credential_reflection_scan",
+    ):
+        assert operator_reconciliation[field]
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_v1_0_live_enumeration_performed"
+        ]
+        is True
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_corrected_v1_1_live_enumeration_performed"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_live_enumeration_performed_by_codex"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_live_enumeration_independently_authenticated_by_codex"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_model_count"
+        ]
+        == 12
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_endpoint_count"
+        ]
+        == 112
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_endpoint_reasoning_inventory_count"
+        ]
+        == 0
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_route_trial_count"
+        ]
+        == 4
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_operator_reported_admissible_candidate_count"
+        ]
+        == 0
+    )
+    assert (
+        operator_reconciliation[
+            "current_endpoint_inventory_diagnostic_completion_or_ledger_activity"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation["current_endpoint_inventory_diagnostic_grants_authority"] is False
     )
     assert operator_reconciliation["current_modelrefresh_ticket_status"].startswith(
         "PARTIAL_CANDIDATE_REVOCATION_SLICE_COMPLETE_PROVIDER_FREE"
@@ -2233,7 +2679,67 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert operator_reconciliation["current_learning_ticket_status"].startswith(
         "PARTIAL_PHASE_1_COMPLETE_PROVIDER_FREE"
     )
-    assert operator_reconciliation["last_completed_ticket"] == "V3-SCHEMARETRY-001"
+    assert operator_reconciliation["last_completed_ticket"] == "V3-RETRIEVAL-001"
+    assert operator_reconciliation["last_partial_ticket"] == "V3-CANDROUTE-001"
+    assert operator_reconciliation["next_safe_local_ticket"] == "V3-PRICELEXEME-001"
+    assert operator_reconciliation["completed_real_audits"] == 0
+    next_safe_action = operator_reconciliation["next_safe_action"]
+    for next_action_component in (
+        "BEGIN",
+        "PROVIDER_FREE",
+        "V3_PRICELEXEME_001",
+        "IMPLEMENTATION",
+        "NOT_STARTED",
+        "PRICEFORM_REFUSAL",
+        "EFFORT_HIGH",
+        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
+        "NO_PROVIDER_OR_OPERATOR_COMMAND_OR_AUTHORITY_IS_CURRENT",
+    ):
+        assert next_action_component in next_safe_action
+    assert operator_reconciliation["current_candidate_revocation_plan_reconciliation_complete"]
+    assert operator_reconciliation["current_candidate_revocation_local_evaluation_scope"] == (
+        "REQUESTED_ASSIGNED_ROUTE"
+    )
+    assert (
+        operator_reconciliation["current_candidate_unrevoked_alternative_discovery_succeeds"]
+        is False
+    )
+    assert operator_reconciliation["current_candidate_unrevoked_alternative_discovery_scope"] == (
+        "OPERATOR_REPORTED_PLAN_ALLOWED_REAL_ROUTE_SWEEP_NOT_INDEPENDENTLY_AUTHENTICATED"
+    )
+    assert operator_reconciliation["current_candidate_synthetic_refreshed_route_discovery_succeeds"]
+    assert operator_reconciliation["current_candidate_exact_role_isolation_proven_provider_free"]
+    assert operator_reconciliation[
+        "current_candidate_exact_transport_role_custody_proven_provider_free"
+    ]
+    assert operator_reconciliation[
+        "current_candidate_plan_or_constraint_hash_resurrection_rejected"
+    ]
+    assert operator_reconciliation["current_candidate_selection_plan_emitter_available"]
+    assert operator_reconciliation["current_candidate_plan_successor_ticket_selected"]
+    assert operator_reconciliation["current_candidate_plan_successor_ticket_complete"]
+    assert operator_reconciliation["current_candidate_plan_successor_schema_version"] == "1.5"
+    assert operator_reconciliation["current_candidate_plan_successor_artifact_emitted_or_selected"]
+    assert operator_reconciliation[
+        "current_candidate_plan_successor_artifact_emitted_operator_reported"
+    ]
+    assert (
+        operator_reconciliation["current_candidate_plan_successor_artifact_inspected_by_codex"]
+        is False
+    )
+    assert (
+        operator_reconciliation["current_candidate_plan_successor_selected_as_active_plan"] is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_complete_constrained_sweep_admissible_count_operator_reported"
+        ]
+        == 0
+    )
+    assert operator_reconciliation[
+        "current_candidate_plan_successor_provider_free_live_route_preflight_proven"
+    ]
+    assert operator_reconciliation["current_candidate_replacement_selected"] is False
     assert operator_reconciliation["current_schema_retry_ticket_status"].startswith(
         "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
     )
@@ -2252,18 +2758,24 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert operator_reconciliation["current_operator_results_sha256"] == (
         CURRENT_OPERATOR_RESULTS_SHA256
     )
+    assert operator_reconciliation["current_latest_entry_timestamp"] == (
+        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+    )
     assert (
         operator_reconciliation["current_operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
     )
     assert (
         operator_reconciliation["current_operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
     )
-    assert operator_reconciliation["current_operator_results_repository_commit"] is None
+    assert (
+        operator_reconciliation["current_operator_results_repository_commit"]
+        == CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT
+    )
     assert (
         operator_reconciliation[
             "current_operator_results_repository_commit_pushed_and_remote_resolved"
         ]
-        is False
+        is True
     )
     assert operator_reconciliation["runtime_admission_default_without_evidence_remains_unavailable"]
     assert operator_reconciliation["runtime_admission_current_private_evidence_replayed"] is True
@@ -2376,7 +2888,7 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     current_autonomy_evidence = next(
         evidence
         for evidence in reversed(requirements_by_id["U"]["evidence"])
-        if evidence.startswith("V3-SCHEMARETRY-001 is COMPLETE")
+        if evidence.startswith("V3-CANDROUTE-001 is PARTIAL locally")
     )
     assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in autonomy_evidence
     assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT in autonomy_evidence
@@ -2391,9 +2903,9 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SHA256 in current_autonomy_evidence
     assert CURRENT_SCHEMARETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 in current_autonomy_evidence
     assert CURRENT_SCHEMARETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256 in current_autonomy_evidence
-    assert "3783 sources / 3786 occurrences / 3737 gate sources" in current_autonomy_evidence
+    assert "3815 sources / 3818 occurrences / 3768 gate sources" in current_autonomy_evidence
     assert (
-        "46 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / "
+        "47 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / "
         "15 current-manual"
     ) in current_autonomy_evidence
     assert "3667 unique completion inputs / 3670 occurrences" in autonomy_evidence
@@ -2517,38 +3029,45 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         current_header = worklog.split("\n## ", maxsplit=1)[0]
-        assert "AUTORUN_STATUS: V3_SCHEMARETRY_001_COMPLETE_" in current_header
+        assert "AUTORUN_STATUS:" in current_header
         assert "PROVIDER_FREE" in current_header
         assert "NONAUTHORIZING" in current_header
-        assert "ZERO_CURRENT_EXTERNAL_COMMANDS" in current_header
-        assert "CURRENT_TICKET: UNSELECTED" in current_header
-        assert (
-            "CURRENT_LOCAL_SLICE_STATUS: V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_"
-            "NONAUTHORIZING" in current_header
-        )
-        assert "LAST_COMPLETED_TICKET: V3-SCHEMARETRY-001" in current_header
+        assert "CODEX_ZERO_EXTERNAL_COMMANDS" in current_header
+        assert "CURRENT_TICKET:" in current_header
+        assert "CURRENT_LOCAL_SLICE_STATUS:" in current_header
+        assert "LAST_COMPLETED_TICKET:" in current_header
+        assert "LAST_PARTIAL_TICKET: V3-CANDROUTE-001" in current_header
         assert CURRENT_COVERAGE_CHECKPOINT in worklog
-        assert "V3-SCHEMARETRY-001" in current_header
-        assert "41 unfinished tickets" in current_header
-        assert "V3-REVOKERECON-001" in current_header
-        assert "V3-MULTI-AUDIT-001" in current_header
-        assert "queued" in current_header.lower() and "unselected" in current_header.lower()
-        assert "V3-SINGLE-AUDIT-001" in current_header and "queued" in current_header.lower()
-        assert "FULL_ADMISSION_FOR_FAILED_LAUNCH" in current_header
-        assert "no continuing admission or authority" in current_header
-        assert "V3-CALIBRATE-001" in current_header and "BLOCKED_TECHNICAL" in current_header
-        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_D06AE996" in (
+        assert "V3-ACTORMODEL-001" in worklog
+        assert "unfinished tickets" in current_header
+        assert "V3-TAXONOMY-001" in worklog
+        assert "V3-ACTORMODEL-001" in worklog
+        assert "REMAINING_ACTIONABLE_TICKETS:" in current_header
+        assert "V3-CANDROUTE-001" in current_header and "PARTIAL" in current_header
+        assert "ZERO_ADMISSIBLE_CANDIDATES" in current_header
+        assert "no codex provider or operator action" in current_header.lower()
+        assert "V3-CALIBRATE-001" in worklog and "BLOCKED_TECHNICAL" in worklog
+        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_AF7A24E" in (
             current_header
         )
         for status_component in (
-            "REVOCATION_DEADLOCK_ALL_CANDIDATE_DISCOVERY",
-            "PROVIDER_FREE",
+            "OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY",
+            "PRICEFORM_REFUSAL_UPHELD",
+            "REASONING_EFFORT_REQUIRED",
+            "PRICELEXEME_QUEUED",
+            "PRIOR_LIVE_V1_0_METADATA_SURVEY",
+            "12_MODELS",
+            "112_ENDPOINTS",
+            "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
+            "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
+            "ZERO_ADMISSIBLE_CANDIDATES",
+            "ACTIVE_PLAN_UNCHANGED",
             "LEDGER_UNCHANGED",
             "57_ENTRIES",
             "068118684_SPEND",
             "ZERO_COMPLETED_REAL_AUDITS",
-            "V3_REVOKERECON_REQUIRED",
             "NONAUTHORIZING",
+            "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
         ):
             assert status_component in current_header
         assert (
@@ -2567,6 +3086,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-RETRYCONT-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-QUOTE-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-SCHEMARETRY-001"] == "COMPLETE"
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-ENDPOINTLIST-001"] == "COMPLETE"
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-ACTORMODEL-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-LEARNING-001"] == "PARTIAL"
         assert "V3-CALIBRATE-001" in normalized_queue
         assert "Stop after" in normalized_queue and "`COMPLETE`" in normalized_queue
@@ -2574,18 +3095,37 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert "no external action" in normalized_queue.lower()
     assert combined_queue_statuses["V3-SINGLE-AUDIT-001"] == "QUEUED"
     assert combined_queue_statuses["V3-MULTI-AUDIT-001"] == "QUEUED"
+    assert combined_queue_statuses["V3-REVOKERECON-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-PLANSUCCESSOR-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-ENDPOINTLIST-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-ACTORMODEL-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-CANDROUTE-001"] == "PARTIAL"
+    assert combined_queue_statuses["V3-PRICEFORM-001"] == "QUEUED"
+    assert combined_queue_statuses["V3-RETRIEVAL-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-PRICELEXEME-001"] == "IN_PROGRESS"
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     current_operator_status = runtime_status["operator_results_current_worktree_status"]
-    assert current_operator_status.startswith("RECONCILED_EXACT_D06AE996_REVOCATION_DEADLOCK")
+    assert current_operator_status.startswith(
+        "RECONCILED_EXACT_AF7A24E_OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY"
+    )
     for status_component in (
-        "ALL_CANDIDATE_DISCOVERY",
-        "PROVIDER_FREE",
+        "PRICEFORM_REFUSAL_UPHELD",
+        "REASONING_EFFORT_REQUIRED",
+        "PRICELEXEME_QUEUED",
+        "PRIOR_LIVE_V1_0_METADATA_SURVEY",
+        "V1_0_METADATA_SURVEY",
+        "12_MODELS",
+        "112_ENDPOINTS",
+        "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
+        "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
+        "ZERO_ADMISSIBLE_CANDIDATES",
+        "ACTIVE_PLAN_UNCHANGED",
         "LEDGER_UNCHANGED",
         "57_ENTRIES",
         "068118684_SPEND",
         "ZERO_COMPLETED_REAL_AUDITS",
-        "V3_REVOKERECON_REQUIRED",
         "NONAUTHORIZING",
+        "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
     ):
         assert status_component in current_operator_status
     assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
@@ -2598,13 +3138,38 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert (
         runtime_status["last_reconciled_operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
     )
+    assert runtime_status["last_reconciled_operator_entry_timestamp"] == (
+        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+    )
     assert (
         hashlib.sha256(current_operator_result_bytes).hexdigest() == CURRENT_OPERATOR_RESULTS_SHA256
     )
     assert len(current_operator_result_bytes) == CURRENT_OPERATOR_RESULTS_BYTES
     assert len(current_operator_results.splitlines()) == CURRENT_OPERATOR_RESULTS_LINES
     assert f"## {CURRENT_OPERATOR_RESULTS_LATEST_ENTRY}" in current_operator_results
-    latest_operator_entry = _isolated_level_two_section(
+    current_operator_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-01T04:49Z — **OPERATOR DECISION: pursue lossless price-lexeme custody. "
+        "The V3-PRICEFORM-001 refusal is upheld, and answered.**",
+    )
+    normalized_current_operator_entry = " ".join(current_operator_entry.split())
+    historical_endpoint_survey_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-08-30T19:00Z — **`list-endpoints` WORKS. Live survey of 112 endpoints "
+        "across 12 models: still NO admissible candidate**",
+    )
+    normalized_historical_endpoint_survey_entry = " ".join(historical_endpoint_survey_entry.split())
+    historical_plan_successor_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-08-30T15:18Z — **V3-PLANSUCCESSOR-001 WORKS. But NO candidate route "
+        "is admissible — complete sweep, $0**",
+    )
+    historical_plan_gap_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-08-28T12:56Z — **REVOCATION RECONCILED AND WORKING; replacement "
+        "candidates still unusable — plan succession needed**",
+    )
+    historical_revocation_deadlock_entry = _isolated_level_two_section(
         current_operator_results,
         "## 2026-08-28T07:56Z — **REGRESSION: candidate revocation deadlocks ALL candidate "
         "discovery; reselection sweep cannot run**",
@@ -2624,13 +3189,73 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "## 2026-08-27T06:37Z — **CAMPAIGN BLOCKER FULLY TRACED: two admission predicates "
         "have no satisfying code path**",
     )
-    assert "exactly **one** entry" in latest_operator_entry
-    assert "EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in latest_operator_entry
-    assert "every candidate is refused" in latest_operator_entry
-    assert "minimax/minimax-m3=coreweave/fp4" in latest_operator_entry
-    assert "candidate selection route is revoked" in latest_operator_entry
-    assert "ledger unchanged at 57 entries" in latest_operator_entry
-    assert "completed_real_audits` stays `0`" in latest_operator_entry
+    assert "Both refusals are accepted" in normalized_current_operator_entry
+    assert "`REASONING_EFFORT_SUPPORT` is genuinely required" in (normalized_current_operator_entry)
+    assert "`model_benchmark` reasoning policy" in normalized_current_operator_entry
+    assert "emits `effort=high` and reserves reasoning tokens" in normalized_current_operator_entry
+    assert "rejection also stands" in normalized_current_operator_entry
+    assert "ordinary JSON parsing" in normalized_current_operator_entry
+    assert "`Decimal(str(value))` proves only the chosen reserialization" in (
+        normalized_current_operator_entry
+    )
+    assert "unsound and is withdrawn" in normalized_current_operator_entry
+    assert "Pursue lossless price-lexeme custody" in normalized_current_operator_entry
+    assert "Do not relax the exactness requirement" in normalized_current_operator_entry
+    assert "parse_float=Decimal" in current_operator_entry
+    assert "V3-PRICELEXEME-001" in current_operator_entry
+    assert "the *requirement* is unchanged and still fails closed" in current_operator_entry
+    assert "only the *custody model* changes" in current_operator_entry
+    assert "Existing sealed evidence must remain byte-identical and continue to replay" in (
+        normalized_current_operator_entry
+    )
+    assert "x-ai/grok-4.6=amazon-bedrock/us-west-2" in current_operator_entry
+    assert "If implemented" in current_operator_entry
+    assert "If it cannot be implemented soundly" in normalized_current_operator_entry
+    assert "under the current constraint set no admissible candidate route exists" in (
+        normalized_current_operator_entry
+    )
+    assert "No spend" in current_operator_entry
+    assert "ledger unchanged at 57 entries" in normalized_current_operator_entry
+    assert "`V3-ENDPOINTLIST-001` works and was exercised live" in (
+        normalized_historical_endpoint_survey_entry
+    )
+    assert "all 112 endpoints of all 12 models" in normalized_historical_endpoint_survey_entry
+    assert "absent on all 112 endpoints" in normalized_historical_endpoint_survey_entry
+    assert "model-level" in normalized_historical_endpoint_survey_entry
+    assert "effective resolved value" in normalized_historical_endpoint_survey_entry
+    assert "No admissible candidate exists" in normalized_historical_endpoint_survey_entry
+    assert "ledger unchanged at 57" in normalized_historical_endpoint_survey_entry
+    assert "V3-CANDROUTE-001" in normalized_historical_endpoint_survey_entry
+    assert "completed_real_audits` remains `0`" in normalized_historical_endpoint_survey_entry
+    assert "Successor plans emit and bind correctly" in historical_plan_successor_entry
+    assert "00b6aa8fb1d23640a6b65dae7883d7265e416b9ba4383c3240329e62500f34b3" in (
+        historical_plan_successor_entry
+    )
+    assert "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f" in (
+        historical_plan_successor_entry
+    )
+    assert "zero admissible candidates" in historical_plan_successor_entry
+    assert "REASONING_EFFORT_INVENTORY_UNAVAILABLE" in historical_plan_successor_entry
+    assert "provider-free throughout" in historical_plan_successor_entry.lower()
+    assert "predecessor" in historical_plan_successor_entry
+    assert "unconstrained discovery passing is not evidence of admissibility" in (
+        historical_plan_successor_entry.lower()
+    )
+    assert "V3-REVOKERECON-001` works" in historical_plan_gap_entry
+    assert "EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in historical_plan_gap_entry
+    assert "google/gemma-4-26b-a4b-it=deepinfra/fp8" in historical_plan_gap_entry
+    assert "tencent/hy3=novita" in historical_plan_gap_entry
+    assert "ordinary drift, not revocation" in historical_plan_gap_entry
+    assert (
+        "authenticated runner route lacks constrained discovery evidence"
+        in historical_plan_gap_entry
+    )
+    assert "V3-PLANSUCCESSOR-001" in historical_plan_gap_entry
+    assert "ledger unchanged at 57 entries" in historical_plan_gap_entry
+    assert "exactly **one** entry" in historical_revocation_deadlock_entry
+    assert "every candidate is refused" in historical_revocation_deadlock_entry
+    assert "candidate selection route is revoked" in historical_revocation_deadlock_entry
+    assert "completed_real_audits` stays `0`" in historical_revocation_deadlock_entry
     assert "paid smoke index `22`" in campaign_operator_entry
     assert "`0.04395915` USD" in campaign_operator_entry
     assert "29702a02f52626deca38ff36401eb3cb7bb4602f07677881760ad26ba40df5d4" in (
@@ -2663,38 +3288,44 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "0.43458261" in current_operator_results
     current_guide_reconciliation = _isolated_level_three_section(
         model_selection,
-        "### Current operator-result reconciliation — 2026-08-28T07:56Z",
+        "### Current operator-result reconciliation — 2026-09-01T04:49Z",
     )
     normalized_current_guide_reconciliation = " ".join(current_guide_reconciliation.split())
     assert CURRENT_OPERATOR_RESULTS_SHA256 in current_guide_reconciliation
-    assert "148,339 bytes / 2,648 lines" in current_guide_reconciliation
+    assert "162,656 bytes / 2,902 lines" in current_guide_reconciliation
     assert "nonauthorizing" in normalized_current_guide_reconciliation
     assert "not independently authenticated by Codex" in normalized_current_guide_reconciliation
-    assert "V3-REVOKERECON-001" in current_guide_reconciliation
-    assert "every unrevoked alternative" in normalized_current_guide_reconciliation
-    assert "r23" in normalized_current_guide_reconciliation.lower()
-    assert "index 22" in current_guide_reconciliation
-    assert "FULL_CAMPAIGN_ADMISSION" in current_guide_reconciliation
-    assert "failed closed" in normalized_current_guide_reconciliation
-    assert "nine" in normalized_current_guide_reconciliation.lower()
-    assert "15" in current_guide_reconciliation
-    assert "57 entries" in current_guide_reconciliation
-    assert "0.68118684" in current_guide_reconciliation
-    assert "V3-RUNTIMEADMIT-001" in current_guide_reconciliation
-    assert "COMPLETE" in current_guide_reconciliation
-    assert "--runtime-evidence-smoke-bundle" in current_guide_reconciliation
-    assert "Codex" in current_guide_reconciliation and "private" in (
+    assert "credentialed metadata-only" in normalized_current_guide_reconciliation
+    assert "12 models and 112 endpoints" in normalized_current_guide_reconciliation
+    assert "both outstanding refusals" in normalized_current_guide_reconciliation
+    assert "reserve reasoning tokens" in normalized_current_guide_reconciliation
+    assert "all four route-constraint purposes" in normalized_current_guide_reconciliation
+    assert "binary float" in normalized_current_guide_reconciliation
+    assert "parse_float=Decimal" in current_guide_reconciliation
+    assert "V3-PRICELEXEME-001" in current_guide_reconciliation
+    assert "AF7 evidence boundary" in current_guide_reconciliation
+    assert "queued, unselected, and unimplemented" in normalized_current_guide_reconciliation
+    assert "sole `IN_PROGRESS` ticket" in current_guide_reconciliation
+    assert "V3-RETRIEVAL-001" in current_guide_reconciliation
+    assert "`COMPLETE`" in current_guide_reconciliation
+    assert "`implementation_started=false`" in current_guide_reconciliation
+    assert "no decoder, pricing, retry, or configuration change" in (
+        normalized_current_guide_reconciliation
+    )
+    assert "not currently admissible or selected" in normalized_current_guide_reconciliation
+    assert "existing sealed evidence must remain byte-identical" in (
         normalized_current_guide_reconciliation.lower()
     )
-    assert "reusable admission" in normalized_current_guide_reconciliation.lower()
+    assert "schema v1.1" in normalized_current_guide_reconciliation
+    assert "has not been exercised live" in normalized_current_guide_reconciliation
+    assert "effort=high" in normalized_current_guide_reconciliation
+    assert "predicate remains unchanged" in normalized_current_guide_reconciliation
+    assert "prior 15:18 entry remains historical" in normalized_current_guide_reconciliation
+    assert "zero admissible candidates" in current_guide_reconciliation
+    assert "V3-CANDROUTE-001" in current_guide_reconciliation
+    assert "57 entries" in current_guide_reconciliation
+    assert "0.68118684" in current_guide_reconciliation
     assert "non-runnable" in normalized_current_guide_reconciliation.lower()
-    assert "max_schema_validation_retries = 0" in current_guide_reconciliation
-    assert "max_model_retries = 1" in current_guide_reconciliation
-    assert "--retry-continuity-config" in current_guide_reconciliation
-    assert "exactly three schema retries" in current_guide_reconciliation
-    assert "five maximum attempts" in normalized_current_guide_reconciliation
-    assert "durable AUTHRUNNER v1.2" in current_guide_reconciliation
-    assert "historical v1.0/v1.1 bundles" in current_guide_reconciliation
     assert "cannot substitute" in current_guide_reconciliation
     assert "No operator command or run index is current or inferred" in (
         normalized_current_guide_reconciliation
@@ -2709,7 +3340,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "active schema-v1.4 selection plan remains byte-unchanged" in (
         normalized_model_selection
     )
-    assert "plan is now stale and non-runnable" in normalized_model_selection
+    assert "that assignment non-runnable" in normalized_model_selection
     assert "no replacement candidate is selected" in normalized_model_selection.lower()
     route_profile = selection_plan["authenticated_runner_selection"]["route_predicate_profile"]
     assert route_profile["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
@@ -2731,6 +3362,31 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     for operator_prerequisites in operator_prerequisite_guides:
         normalized_operator_prerequisites = " ".join(operator_prerequisites.split())
         assert CURRENT_OPERATOR_RESULTS_SHA256 in operator_prerequisites
+        assert "162,656 bytes / 2,902 lines" in operator_prerequisites
+        assert "credentialed metadata-only" in normalized_operator_prerequisites
+        assert "12 models" in normalized_operator_prerequisites
+        assert "112 endpoints" in normalized_operator_prerequisites
+        assert "accepts both refusals" in normalized_operator_prerequisites
+        assert "reserve reasoning tokens" in normalized_operator_prerequisites
+        assert "all four route purposes" in normalized_operator_prerequisites
+        assert "binary float" in normalized_operator_prerequisites
+        assert "parse_float=Decimal" in operator_prerequisites
+        assert "V3-PRICELEXEME-001" in operator_prerequisites
+        assert "AF7 evidence boundary" in operator_prerequisites
+        assert "queued, unselected, and unimplemented" in normalized_operator_prerequisites
+        assert "sole `IN_PROGRESS` ticket" in operator_prerequisites
+        assert "V3-RETRIEVAL-001" in operator_prerequisites
+        assert "`COMPLETE`" in operator_prerequisites
+        assert "`implementation_started=false`" in operator_prerequisites
+        assert "no decoder, pricing, retry, or configuration change" in (
+            normalized_operator_prerequisites
+        )
+        assert "not currently admissible or selected" in normalized_operator_prerequisites
+        assert "no admissible candidate route" in normalized_operator_prerequisites
+        assert "No constraint was relaxed" in operator_prerequisites
+        assert "schema v1.1" in normalized_operator_prerequisites
+        assert "has not been exercised live" in normalized_operator_prerequisites
+        assert "no repeat external command is required" in normalized_operator_prerequisites
         assert "--qualification-policy" in operator_prerequisites
         assert "V3-RUNTIMEADMIT-001" in operator_prerequisites
         assert "COMPLETE" in operator_prerequisites
@@ -2752,39 +3408,147 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert "manifest-v1.3" in operator_prerequisites
         assert "max_model_retries" in operator_prerequisites
         assert "transient-only" in operator_prerequisites
-    assert runtime_status["current_ticket"] == "UNSELECTED"
-    assert runtime_status["last_completed_ticket"] == "V3-SCHEMARETRY-001"
+    assert runtime_status["current_ticket"] == "V3-PRICELEXEME-001"
+    assert runtime_status["last_completed_ticket"] == "V3-RETRIEVAL-001"
+    assert runtime_status["last_partial_ticket"] == "V3-CANDROUTE-001"
+    assert runtime_status["next_safe_local_ticket"] == "V3-PRICELEXEME-001"
     assert runtime_status["completed_real_audits"] == 0
-    last_completed_work = runtime_status["last_completed_provider_free_work"]
-    assert last_completed_work["ticket"] == "V3-SCHEMARETRY-001"
-    assert last_completed_work["slice"] == (
-        "EXPLICIT_ORDINARY_AUDIT_AND_QUOTE_SCHEMA_RETRY_SELECTION_WITH_EXACT_SPLIT_POLICY_CUSTODY"
+    current_work = runtime_status["current_provider_free_work"]
+    assert current_work["ticket"] == "V3-PRICELEXEME-001"
+    assert current_work["slice"] == "LOSSLESS_PROVIDER_PRICE_LEXEME_CUSTODY_SELECTION"
+    assert current_work["status"] == (
+        "IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_IMPLEMENTATION_NOT_STARTED"
     )
-    assert "COMPLETE_PROVIDER_FREE_NONAUTHORIZING" in last_completed_work["status"]
-    assert "DEFAULT_OFF" in last_completed_work["status"]
-    assert "TRANSIENT_AND_SCHEMA_QUOTAS_INDEPENDENT" in last_completed_work["status"]
-    assert "EXACT_CLI_CONFIG_QUOTE_ACCEPTANCE_BUDGET_USAGE" in last_completed_work["status"]
+    assert current_work["implementation_started"] is False
     assert (
-        "V3_REVOKERECON_001_NEXT_DEPENDENCY_READY_QUEUED_NOT_SELECTED"
-        in (last_completed_work["next_slice"])
+        "BEGIN_PROVIDER_FREE_LOSSLESS_PRICE_LEXEME_IMPLEMENTATION" in (current_work["next_slice"])
     )
-    assert "V3_MULTI_AUDIT_001_REMAINS_QUEUED" in last_completed_work["next_slice"]
-    assert "V3_SINGLE_AUDIT_001" in last_completed_work["next_slice"]
-    assert last_completed_work["retry_behavior_changed"] is True
-    assert last_completed_work["retry_configuration_changed"] is True
-    assert last_completed_work["default_schema_retry_enabled"] is False
-    assert last_completed_work["transient_retry_semantics_changed"] is False
-    assert last_completed_work["historical_failed_campaign_retry_state_changed"] is False
-    for authority_field in (
-        "provider_access_authorized",
-        "secret_access_authorized",
-        "private_operator_artifact_access_authorized",
-        "runtime_authority_granted",
-        "operator_metadata_egress_command_emitted",
-        "operator_paid_smoke_command_emitted",
-        "operator_command_execution_authorized",
+    assert current_work["provider_or_network_accessed_by_codex"] is False
+    assert current_work["operator_command_emitted_by_codex"] is False
+    assert current_work["candidate_or_route_selected"] is False
+    assert current_work["grants_authority"] is False
+    retrieval_work = runtime_status["last_completed_provider_free_work"]
+    assert retrieval_work["ticket"] == "V3-RETRIEVAL-001"
+    assert retrieval_work["slice"] == "BOUNDED_READ_ONLY_INDEXED_RETRIEVAL_LOOP"
+    assert retrieval_work["status"] == (
+        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
+    )
+    for retrieval_true_field in (
+        "fixed_typed_read_only_indexed_lookup_allowlist",
+        "secret_taint_and_scope_refusal",
+        "static_role_wide_request_byte_token_budgets",
+        "private_transcript_and_hash_only_public_custody",
+        "failed_primary_transcript_retained",
+        "exact_replay_and_resume",
+        "single_shot_fallback",
+        "canonical_generation_current",
+        "active_selection_plan_unchanged",
+        "affected_matrices_complete",
     ):
-        assert last_completed_work[authority_field] is False
+        assert retrieval_work[retrieval_true_field] is True
+    for retrieval_false_field in (
+        "retry_behavior_changed",
+        "retry_configuration_changed",
+        "model_completion_issued",
+        "cost_ledger_opened_or_mutated",
+        "usage_recorded",
+        "credential_or_secret_disclosed",
+        "candidate_replacement_selected",
+        "candidate_or_route_selected",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "grants_authority",
+    ):
+        assert retrieval_work[retrieval_false_field] is False
+    assert retrieval_work["completed_real_audits"] == 0
+    assert "V3_PRICELEXEME_001_SELECTED_IN_PROGRESS" in retrieval_work["next_slice"]
+    assert "IMPLEMENTATION_STARTED_FALSE" in retrieval_work["next_slice"]
+    assert "KEEP_V3_CANDROUTE_001_PARTIAL_DOWNSTREAM" in retrieval_work["next_slice"]
+    terminal_validation = runtime_status["last_validation"]
+    complete_sequential_suite_passed = retrieval_work["complete_sequential_suite_passed"]
+    assert type(complete_sequential_suite_passed) is bool
+    if complete_sequential_suite_passed:
+        assert (
+            retrieval_work[
+                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
+            ]
+            is False
+        )
+        assert type(retrieval_work["terminal_full_suite_passed"]) is int
+        assert retrieval_work["terminal_full_suite_passed"] > 0
+        assert type(retrieval_work["terminal_full_suite_skipped"]) is int
+        assert retrieval_work["terminal_full_suite_skipped"] >= 0
+        assert type(retrieval_work["terminal_full_suite_warnings"]) is int
+        assert retrieval_work["terminal_full_suite_warnings"] >= 0
+        assert type(retrieval_work["terminal_full_suite_elapsed_seconds"]) in (int, float)
+        assert retrieval_work["terminal_full_suite_elapsed_seconds"] > 0
+        assert terminal_validation["status"].startswith("V3_RETRIEVAL_001_COMPLETE_PROVIDER_FREE")
+        assert "NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS" in terminal_validation["status"]
+        assert terminal_validation["terminal_full_suite_run"] is True
+        assert terminal_validation["terminal_full_suite_attempt_started"] is True
+        terminal_suite = terminal_validation["v3_retrieval_001_terminal_full_suite"]
+        assert terminal_suite["exit_code"] == 0
+        assert terminal_suite["tests_passed"] == retrieval_work["terminal_full_suite_passed"]
+        assert terminal_suite["tests_skipped"] == retrieval_work["terminal_full_suite_skipped"]
+        assert terminal_suite["warnings"] == retrieval_work["terminal_full_suite_warnings"]
+        assert (
+            terminal_suite["elapsed_seconds"]
+            == retrieval_work["terminal_full_suite_elapsed_seconds"]
+        )
+        assert terminal_suite["terminal_result_available"] is True
+        assert terminal_suite["pass_credit"] is True
+        assert terminal_suite["required_local_loopback_permission"] is True
+    else:
+        assert retrieval_work["terminal_full_suite_passed"] == 0
+        assert retrieval_work["terminal_full_suite_skipped"] == 0
+        assert retrieval_work["terminal_full_suite_warnings"] == 0
+        assert retrieval_work["terminal_full_suite_elapsed_seconds"] == 0.0
+        assert (
+            retrieval_work[
+                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
+            ]
+            is True
+        )
+        assert "v3_retrieval_001_terminal_full_suite" not in terminal_validation
+
+    successor_status = runtime_status["candidate_selection_plan_successor"]
+    assert successor_status["ticket"] == "V3-PLANSUCCESSOR-001"
+    assert successor_status["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    assert successor_status["active_plan_schema_version"] == "1.4"
+    assert successor_status["active_plan_sha256"] == CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
+    assert successor_status["active_plan_unchanged"] is True
+    assert successor_status["successor_plan_schema_version"] == "1.5"
+    assert successor_status["candidate_selection_plan_schema_raw_sha256"] == (
+        "ea3a9218f1595d3de521b8020e7929235e5940105c5f5d43cfbc45a21a2c3feb"
+    )
+    assert successor_status["emitter_command"] == "models emit-selection-plan-successor"
+    assert successor_status["emitter_available"] is True
+    assert successor_status["predecessor_digest_recorded"] is True
+    assert successor_status["entry_constraint_profile_role_and_plan_hashes_derived"] is True
+    assert successor_status["caller_supplied_hashes_accepted"] is False
+    assert successor_status["judge_constraints_carried_forward"] is True
+    assert successor_status["current_revocation_enforced_before_publication"] is True
+    assert successor_status["historical_structural_validation_independent_of_later_revocation"]
+    assert successor_status["predecessor_discovery_evidence_reinterpreted_under_successor"] is False
+    assert successor_status["callable_replacement_and_code_mutation_rejected_before_publication"]
+    assert successor_status["fresh_private_mode_0600_publication"] is True
+    assert successor_status["successor_bound_constrained_discovery_proven_provider_free"] is True
+    assert successor_status["successor_bound_live_route_preflight_only_proven_provider_free"]
+    assert successor_status["successor_bound_completion_transport_occurred"] is False
+    assert successor_status["successor_artifact_checked_in"] is False
+    assert successor_status["candidate_replacement_selected"] is False
+    assert successor_status["completed_real_audits"] == 0
+    for authority_field in (
+        "provider_or_network_accessed",
+        "secret_material_read",
+        "operator_private_artifact_or_ledger_accessed",
+        "operator_command_emitted",
+        "campaign_or_run_index_selected",
+        "qualification_authority",
+        "runtime_authority",
+        "release_authority",
+    ):
+        assert successor_status[authority_field] is False
 
     consensus = runtime_status["consensus_provider_free_adjudication"]
     assert consensus["ticket"] == "V3-CONSENSUS-001"
@@ -2957,21 +3721,114 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     ):
         assert schema_retry[authority_key] is False
     operator_reconciliation = runtime_status["current_operator_result_reconciliation"]
-    assert operator_reconciliation["operator_results_repository_commit"] is None
+    assert operator_reconciliation["latest_entry_timestamp"] == (
+        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+    )
+    assert operator_reconciliation["operator_results_sha256"] == CURRENT_OPERATOR_RESULTS_SHA256
+    assert operator_reconciliation["operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
+    assert operator_reconciliation["operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
+    assert operator_reconciliation["operator_results_repository_commit"] == (
+        CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT
+    )
     assert (
         operator_reconciliation["operator_results_repository_commit_pushed_and_remote_resolved"]
+        is True
+    )
+    assert operator_reconciliation["critical_path_ticket"] == "V3-PRICELEXEME-001"
+    assert operator_reconciliation[
+        "candidate_reasoning_effort_requirement_for_candidate_role_settled"
+    ]
+    assert operator_reconciliation["candidate_reasoning_effort_requirement"] == (
+        "EFFORT_HIGH_REQUIRED_BY_SHARED_AUTHRUNNER_PROFILE_ALL_ROLES_ALL_PURPOSES"
+    )
+    assert operator_reconciliation["candidate_reasoning_effort_predicate_relaxed"] is False
+    assert operator_reconciliation["candidate_price_form_decision_settled_operator_reported"]
+    assert operator_reconciliation["candidate_price_form_decision"] == (
+        "CURRENT_BINARY_FLOAT_CUSTODY_REFUSAL_UPHELD"
+    )
+    assert operator_reconciliation["candidate_price_exactness_requirement_relaxed"] is False
+    assert operator_reconciliation[
+        "candidate_numeric_price_ordinary_json_path_remains_inadmissible"
+    ]
+    assert operator_reconciliation["candidate_lossless_price_lexeme_custody_ticket"] == (
+        "V3-PRICELEXEME-001"
+    )
+    assert operator_reconciliation["candidate_lossless_price_lexeme_custody_ticket_status"] == (
+        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    assert operator_reconciliation[
+        "candidate_lossless_price_lexeme_parse_float_decimal_fact_operator_reported"
+    ]
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_parse_float_decimal_fact_independently_verified_by_codex"
+        ]
         is False
     )
-    assert operator_reconciliation["critical_path_ticket"] == "UNSELECTED"
+    assert operator_reconciliation["candidate_conditional_future_route"] == (
+        "x-ai/grok-4.6=amazon-bedrock/us-west-2"
+    )
+    assert (
+        operator_reconciliation["candidate_conditional_future_route_currently_admissible"] is False
+    )
+    assert operator_reconciliation["candidate_conditional_future_route_selected"] is False
+    assert (
+        operator_reconciliation["candidate_lossless_price_lexeme_decision_grants_authority"]
+        is False
+    )
     assert (
         operator_reconciliation[
             "critical_path_ticket_newly_selected_started_or_marked_in_progress_this_turn"
         ]
+        is True
+    )
+    assert (
+        operator_reconciliation["candidate_route_restoration_ticket_selected_during_this_work_unit"]
         is False
     )
-    assert operator_reconciliation["critical_path_ticket_status"] == (
-        "NO_SUCCESSOR_SELECTED_AFTER_V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    assert operator_reconciliation["endpoint_inventory_diagnostic_ticket"] == (
+        "V3-ENDPOINTLIST-001"
     )
+    assert (
+        operator_reconciliation[
+            "endpoint_inventory_diagnostic_operator_reported_v1_0_live_enumeration_performed"
+        ]
+        is True
+    )
+    assert (
+        operator_reconciliation[
+            "endpoint_inventory_diagnostic_corrected_v1_1_live_enumeration_performed"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation["endpoint_inventory_diagnostic_live_enumeration_performed_by_codex"]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "endpoint_inventory_diagnostic_live_enumeration_independently_authenticated_by_codex"
+        ]
+        is False
+    )
+    assert operator_reconciliation["endpoint_inventory_diagnostic_schema_version"] == "1.1"
+    assert operator_reconciliation["endpoint_inventory_diagnostic_schema_raw_sha256"] == (
+        CURRENT_ENDPOINTLIST_DIAGNOSTIC_SCHEMA_RAW_SHA256
+    )
+    assert operator_reconciliation["endpoint_inventory_diagnostic_model_completion_issued"] is False
+    assert (
+        operator_reconciliation["endpoint_inventory_diagnostic_cost_ledger_opened_or_mutated"]
+        is False
+    )
+    critical_path_status = operator_reconciliation["critical_path_ticket_status"]
+    for status_component in (
+        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING",
+        "PRICEFORM_REFUSAL_UPHELD",
+        "EFFORT_HIGH_RETAINED",
+        "V3_RETRIEVAL_001_COMPLETE",
+        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
+    ):
+        assert status_component in critical_path_status
     runtime_mechanism_status = operator_reconciliation[
         "runtime_admission_local_promotion_mechanism_status"
     ]
@@ -3091,10 +3948,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     managed_toolchain_schema = json.loads(managed_toolchain_schema_bytes)
     current_phase_zero = runtime_status["autonomy_phase_zero_inventory"]
     assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == (
-        CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_RAW_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256
     )
     assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == (
-        CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
     )
     assert hashlib.sha256(route_runtime_schema_bytes).hexdigest() == (
         ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
@@ -3103,39 +3960,39 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "https://mmaudit.local/schemas/route_runtime_evidence_artifact.schema.json"
     )
     assert route_runtime_schema["title"] == "mmaudit nonauthorizing exact route runtime evidence"
-    assert autonomy_inventory["inventory_sha256"] == (CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SHA256)
+    assert autonomy_inventory["inventory_sha256"] == (CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256)
     assert autonomy_inventory["source_discovery_semantics_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
     )
     assert autonomy_inventory["source_universe_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256
     )
     assert current_phase_zero["artifact_raw_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_RAW_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256
     )
     assert current_phase_zero["schema_raw_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
     )
-    assert current_phase_zero["inventory_sha256"] == (CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SHA256)
+    assert current_phase_zero["inventory_sha256"] == (CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256)
     assert current_phase_zero["source_discovery_semantics_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
     )
     assert current_phase_zero["source_universe_sha256"] == (
-        CURRENT_SCHEMARETRY_AUTONOMY_SOURCE_UNIVERSE_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256
     )
-    assert current_phase_zero["source_count"] == 3_783
-    assert current_phase_zero["source_occurrence_count"] == 3_786
-    assert current_phase_zero["gate_source_count"] == 3_737
-    assert current_phase_zero["non_gating_source_count"] == 46
+    assert current_phase_zero["source_count"] == 3_895
+    assert current_phase_zero["source_occurrence_count"] == 3_898
+    assert current_phase_zero["gate_source_count"] == 3_846
+    assert current_phase_zero["non_gating_source_count"] == 49
     assert current_phase_zero["source_kind_count"] == 13
     assert current_phase_zero["logical_gate_count"] == 35
     assert current_phase_zero["unsatisfied_gate_count"] == 29
     assert current_phase_zero["current_manual_gate_count"] == 15
-    assert current_phase_zero["audit_config_leaf_locator_count"] == 507
-    assert current_phase_zero["audit_config_leaf_occurrence_count"] == 510
+    assert current_phase_zero["audit_config_leaf_locator_count"] == 513
+    assert current_phase_zero["audit_config_leaf_occurrence_count"] == 516
     assert current_phase_zero["audit_config_shared_locator_count"] == 3
-    assert current_phase_zero["explicit_non_field_gate_occurrence_count"] == 1_991
-    assert current_phase_zero["completion_entrypoint_parameter_count"] == 323
+    assert current_phase_zero["explicit_non_field_gate_occurrence_count"] == 2_071
+    assert current_phase_zero["completion_entrypoint_parameter_count"] == 336
     assert current_phase_zero["cli_run_parameter_count"] == 53
     assert runtime_status["real_model_calls"] == {
         "attempted": None,
@@ -3538,7 +4395,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 0
     assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert model_selection.count("--live-route-preflight-only") == 0
+    assert model_selection.count("--live-route-preflight-only") == 2
     assert model_selection.count("--allow-metadata-egress") == 0
     assert model_selection.count("--allow-code-egress") == 0
     assert " --preflight-only " not in model_selection
@@ -4036,7 +4893,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         == historical_autonomy_inventory_raw_sha256
     )
     assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == (
-        CURRENT_SCHEMARETRY_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
     )
     assert hashlib.sha256(managed_toolchain_bytes).hexdigest() == MANAGED_TOOLCHAIN_RAW_SHA256
     assert (
@@ -4130,26 +4987,109 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "keep the ticket PARTIAL" in historical_resume
     assert "positive nonempty full-pipeline REAL promotion evidence" in historical_resume
     assert "No operator/provider authority exists" in historical_resume
-    current_action = pause_state["next_action_after_v3_schemaretry_completion"]
-    current_resume = pause_state["resume_action_after_v3_schemaretry_completion"]
-    assert "STOP after V3-SCHEMARETRY-001 provider-free closure" in current_action
-    assert "V3-REVOKERECON-001" in current_action
-    assert "not selected" in current_action
-    assert "default-off schema retry" in current_action
-    assert "do not treat its local regressions as provider evidence" in current_resume
+    historical_taxonomy_action = pause_state["next_action_during_v3_taxonomy_implementation"]
+    historical_taxonomy_resume = pause_state["resume_action_during_v3_taxonomy_implementation"]
+    assert "remaining taxonomy, governance, local-integration" in historical_taxonomy_action
+    assert "complete sequential matrices" in historical_taxonomy_action
+    assert "dispose V3-TAXONOMY-001" in historical_taxonomy_action
+    assert "BLOCKED_TECHNICAL" in historical_taxonomy_action
+    assert "Resume only the active provider-free V3-TAXONOMY-001" in (historical_taxonomy_resume)
+    assert "nonfinding taxonomy behavior" in historical_taxonomy_resume
+    assert "omission-to-GAP" in historical_taxonomy_resume
+    assert "V3-RETRIEVAL-001 only after exact taxonomy disposition" in (historical_taxonomy_resume)
+    historical_taxonomy_completion_action = pause_state["next_action_after_v3_taxonomy_completion"]
+    historical_taxonomy_completion_resume = pause_state[
+        "resume_action_after_v3_taxonomy_completion"
+    ]
+    assert "STOP after V3-TAXONOMY-001 provider-free closure" in (
+        historical_taxonomy_completion_action
+    )
+    assert "V3-RETRIEVAL-001 is next dependency-ready but remains queued and unselected" in (
+        historical_taxonomy_completion_action
+    )
+    assert "PARTIAL V3-CANDROUTE-001" in historical_taxonomy_completion_action
+    assert "queued unimplemented V3-PRICELEXEME-001" in historical_taxonomy_completion_action
+    assert "Do not emit or execute a provider/operator command" in (
+        historical_taxonomy_completion_action
+    )
+    assert "At a new work-unit boundary" in historical_taxonomy_completion_resume
+    assert "before selecting V3-RETRIEVAL-001 or another bounded ticket" in (
+        historical_taxonomy_completion_resume
+    )
+    assert "Do not infer or select a route from fixtures" in historical_taxonomy_completion_resume
+    historical_retrieval_action = pause_state["next_action_during_v3_retrieval_final_validation"]
+    historical_retrieval_resume = pause_state["resume_action_during_v3_retrieval_final_validation"]
+    assert "Finish only the active provider-free V3-RETRIEVAL-001 validation loop" in (
+        historical_retrieval_action
+    )
+    assert "complete sequential suite" in historical_retrieval_action
+    assert "Preserve the unchanged retry code and configuration" in (historical_retrieval_action)
+    assert "Do not emit or execute a provider/operator command" in (historical_retrieval_action)
+    assert "Resume only V3-RETRIEVAL-001 terminal provider-free validation" in (
+        historical_retrieval_resume
+    )
+    assert "Do not select a successor, route, provider action" in historical_retrieval_resume
+    current_action = pause_state["next_action_during_v3_pricelexeme_selection"]
+    current_resume = pause_state["resume_action_during_v3_pricelexeme_selection"]
+    normalized_current_action = " ".join(current_action.lower().split())
+    normalized_current_resume = " ".join(current_resume.lower().split())
+    for current_text in (normalized_current_action, normalized_current_resume):
+        assert "v3-pricelexeme-001" in current_text
+        assert "implementation_started=false" in current_text
+        assert "provider-free" in current_text
+        assert "price" in current_text and "lexeme" in current_text
+        assert "route" in current_text
+        assert "authority" in current_text
+    assert "begin" in normalized_current_action
+    assert "priceform" in normalized_current_action
+    assert "reasoning" in normalized_current_action or "effort-high" in normalized_current_action
+    assert "partial v3-candroute-001" in normalized_current_action
+    assert "provider" in normalized_current_resume
     assert pause_state["non_allowlisted_pause_journal_fields_are_historical"] is True
     assert pause_state["non_allowlisted_pause_journal_fields_are_current_actions"] is False
     assert pause_state["current_semantic_field_allowlist"] == [
-        "next_action_after_v3_schemaretry_completion",
-        "resume_action_after_v3_schemaretry_completion",
+        "next_action_during_v3_pricelexeme_selection",
+        "resume_action_during_v3_pricelexeme_selection",
     ]
     assert "Every field in this object" in pause_state["historical_pause_journal_scope"]
     assert "validation*" in pause_state["historical_pause_journal_scope"]
     assert "checkpoint*" in pause_state["historical_pause_journal_scope"]
     assert "timestamped_pause_journal_scope" not in pause_state
     assert "timestamped_pause_journal_entries_are_current_actions" not in pause_state
-    assert pause_state["current_action_field"] == "next_action_after_v3_schemaretry_completion"
-    assert pause_state["current_resume_field"] == ("resume_action_after_v3_schemaretry_completion")
+    assert pause_state["current_action_field"] == "next_action_during_v3_pricelexeme_selection"
+    assert pause_state["current_resume_field"] == ("resume_action_during_v3_pricelexeme_selection")
+    assert (
+        "next_action_during_v3_retrieval_final_validation"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_during_v3_retrieval_final_validation"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_during_v3_taxonomy_implementation"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_during_v3_taxonomy_implementation"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_after_v3_endpointlist_v1_1_complete"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_after_v3_taxonomy_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_taxonomy_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_endpointlist_v1_1_complete"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
     assert "result_v3_authrunner_current_r2_r5_r2_preflight" not in pause_state
     assert "result_v3_authrunner_historical_r2_r5_r2_preflight" in pause_state
     assert (
@@ -6124,3 +7064,45 @@ def test_readme_context_and_token_limits_match_configuration_defaults() -> None:
         assert documented == expected, (
             f"README documents {field}={documented}, but AuditConfig defines {expected}"
         )
+
+
+def test_actor_model_operator_guidance_is_pinned_fresh_and_provider_free() -> None:
+    readme = README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+    operator_guides = (
+        OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
+        V3_OPERATOR_PREREQUISITES_PATH.read_text(encoding="utf-8"),
+    )
+    templates = (
+        ROOT / "mmaudit.example.toml",
+        ROOT / "src" / "mmaudit" / "templates" / "mmaudit.example.toml",
+    )
+
+    for expected in (
+        "schemas/actor_model.schema.json",
+        "tests/fixtures/actor_model/synthetic_orchard_actor_model.json",
+        "expected_subject_id",
+        "expected_model_sha256",
+        "expected_source_sha256",
+        "valid_from <= run_started_at < valid_until",
+    ):
+        assert expected in readme
+        assert all(expected in guide for guide in operator_guides)
+    assert "do not use model output to invent actors or incentives" in normalized_readme
+    assert all("requires no provider access" in guide for guide in operator_guides)
+
+    for path in templates:
+        text = path.read_text(encoding="utf-8")
+        payload = tomllib.loads(text)
+        assert payload["actor_model"] == {"required": False, "max_bytes": 1_000_000}
+        _, separator, remainder = text.partition("[actor_model]\n")
+        assert separator, f"{path} has no actor-model example"
+        section, separator, _ = remainder.partition("\n[repository]")
+        assert separator, f"{path} actor-model example has no repository boundary"
+        assert "required = false" in section
+        assert "max_bytes = 1000000" in section
+        assert '# path = "audit/actor-model.json"' in section
+        assert "# expected_subject_id =" in section
+        assert "# expected_model_sha256 =" in section
+        assert "# expected_source_sha256 =" in section
+        assert "optional pin" in section

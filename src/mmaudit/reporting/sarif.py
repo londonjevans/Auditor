@@ -8,12 +8,15 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
+from mmaudit.models.actor_model import ActorRemediationFocus, actor_remediation_guidance
 from mmaudit.models.schemas import (
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
     Finding,
     FindingStatus,
+    KnownIssueDisposition,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityAssessment,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
@@ -38,6 +41,94 @@ _LEVEL = {
     Severity.LOW: "note",
     Severity.INFORMATIONAL: "note",
 }
+
+
+def _taxonomy_run_properties(
+    coverage: KnownIssueTaxonomyCoverage,
+) -> dict[str, Any]:
+    """Project bounded taxonomy coverage metadata without creating SARIF findings."""
+
+    reviewed_count = sum(
+        item.disposition is KnownIssueDisposition.REVIEWED for item in coverage.dispositions
+    )
+    not_applicable_count = sum(
+        item.disposition is KnownIssueDisposition.NOT_APPLICABLE for item in coverage.dispositions
+    )
+    gap_count = sum(item.disposition is KnownIssueDisposition.GAP for item in coverage.dispositions)
+    return {
+        "schemaVersion": coverage.schema_version,
+        "taxonomyVersion": coverage.corpus.taxonomy_version,
+        "corpusSha256": coverage.corpus.corpus_sha256,
+        "corpusRawSha256": coverage.corpus_raw_sha256,
+        "coverageSha256": coverage.coverage_sha256,
+        "findingAuthority": False,
+        "profileClassificationComplete": bool(
+            coverage.profile_assessment is not None
+            and coverage.profile_assessment.classification_complete
+        ),
+        "overall": {
+            "numerator": coverage.overall.numerator,
+            "denominator": coverage.overall.denominator,
+            "population": coverage.overall.population,
+            "percentage": coverage.overall.percentage,
+        },
+        "critical": {
+            "numerator": coverage.critical.numerator,
+            "denominator": coverage.critical.denominator,
+            "population": coverage.critical.population,
+            "percentage": coverage.critical.percentage,
+        },
+        "dispositions": {
+            "reviewed": reviewed_count,
+            "notApplicable": not_applicable_count,
+            "gap": gap_count,
+        },
+        "criticalGapIds": list(coverage.critical_gap_ids),
+        "criticalGatePassed": coverage.critical_gate_passed,
+        "limitationCount": len(coverage.limitations),
+    }
+
+
+def _taxonomy_notification(
+    coverage: KnownIssueTaxonomyCoverage,
+) -> dict[str, Any] | None:
+    gap_count = sum(item.disposition is KnownIssueDisposition.GAP for item in coverage.dispositions)
+    if not gap_count and coverage.critical_gate_passed:
+        return None
+    critical_ids = coverage.critical_gap_ids[:20]
+    critical_detail = (
+        " Critical GAPs: "
+        + ", ".join(critical_ids)
+        + (
+            f", +{len(coverage.critical_gap_ids) - len(critical_ids)} retained."
+            if len(coverage.critical_gap_ids) > len(critical_ids)
+            else "."
+        )
+        if critical_ids
+        else (
+            " The critical taxonomy gate is not passed."
+            if not coverage.critical_gate_passed
+            else ""
+        )
+    )
+    message_text = (
+        f"Known-issue taxonomy coverage retains {gap_count} GAP disposition(s)."
+        f"{critical_detail} GAPs are absent review evidence, not findings."
+        if gap_count
+        else (
+            "Known-issue taxonomy critical coverage gate is not passed. This is incomplete "
+            "review coverage, not a finding."
+        )
+    )
+    return {
+        "level": "warning" if not coverage.critical_gate_passed else "note",
+        "message": {"text": message_text},
+        "properties": {
+            "findingAuthority": False,
+            "gapCount": gap_count,
+            "criticalGapCount": len(coverage.critical_gap_ids),
+        },
+    }
 
 
 def _validated_artifact_for_findings(
@@ -94,6 +185,44 @@ def _origin_properties(finding: Finding) -> dict[str, Any]:
     }
     if finding.group_id is not None:
         properties["groupId"] = finding.group_id
+    if finding.actor_assessment is not None:
+        actor = finding.actor_assessment
+        properties["actorModel"] = {
+            "inputState": actor.input_state.value,
+            "disposition": actor.disposition.value,
+            "roleId": actor.role_id,
+            "severityBasis": actor.severity_basis,
+            "harmedPartyDisposition": (
+                actor.harmed_party_disposition.value
+                if actor.harmed_party_disposition is not None
+                else None
+            ),
+            "harmedPartyId": actor.harmed_party_id,
+            "baselineFindingSha256": actor.baseline_finding_sha256,
+            "originalSeverity": actor.original_severity.value,
+            "calibratedSeverity": actor.calibrated_severity.value,
+            "likelihoodAdjustment": actor.likelihood_adjustment.value,
+            "remediationFocus": actor.remediation_focus.value,
+            "remediationGuidance": actor_remediation_guidance(actor.remediation_focus),
+            "holderFeeRevenueExposure": (
+                actor.holder_fee_revenue_exposure.value
+                if actor.holder_fee_revenue_exposure is not None
+                else None
+            ),
+            "holderProtocolFailureLoss": (
+                actor.holder_protocol_failure_loss.value
+                if actor.holder_protocol_failure_loss is not None
+                else None
+            ),
+            "concentratedWithRoleIds": list(actor.concentrated_with_role_ids),
+            "requiredConcentratedRoleIds": list(actor.required_concentrated_role_ids),
+            "relevantEconomicExposures": [
+                value.value for value in actor.relevant_economic_exposures
+            ],
+            "plausibilityEvidenceReferenceIds": list(actor.plausibility_evidence_reference_ids),
+            "assessmentSha256": actor.assessment_sha256,
+            "limitation": actor.limitation,
+        }
     return properties
 
 
@@ -113,6 +242,39 @@ def _origin_fingerprint(finding: Finding) -> str:
             allow_nan=False,
         ).encode()
     ).hexdigest()
+
+
+def _ordinary_legitimate_behavior(finding: Finding) -> bool:
+    assessment = finding.actor_assessment
+    return bool(
+        assessment is not None
+        and assessment.remediation_focus is ActorRemediationFocus.LEGITIMATE_STATE_TRANSITION
+    )
+
+
+def _sarif_title(finding: Finding) -> str:
+    return (
+        "Ordinary legitimate behavior finding"
+        if _ordinary_legitimate_behavior(finding)
+        else finding.title
+    )
+
+
+def _sarif_remediation(finding: Finding) -> str:
+    assessment = finding.actor_assessment
+    if assessment is None or not _ordinary_legitimate_behavior(finding):
+        return finding.recommendation
+    return actor_remediation_guidance(assessment.remediation_focus)
+
+
+def _sarif_summary(finding: Finding) -> str:
+    if not _ordinary_legitimate_behavior(finding):
+        return finding.summary
+    return (
+        "The calibrated actor context, citing operator evidence, classifies this as an ordinary "
+        "authorized state transition whose safety properties and affected-party protections "
+        "require defensive validation."
+    )
 
 
 def _scanner_execution_record(run: ScannerRun) -> dict[str, Any]:
@@ -191,6 +353,7 @@ def generate_sarif(
     scanner_runs: Sequence[ScannerRun] = (),
     maximum_assurance: MaximumAssuranceAssessment | None = None,
     language_capability: LanguageCapabilityAssessment | None = None,
+    taxonomy_coverage: KnownIssueTaxonomyCoverage | None = None,
     run_status: AuditRunStatus | None = None,
     quality_status: AuditQualityStatus | None = None,
     completed: bool | None = None,
@@ -198,6 +361,10 @@ def generate_sarif(
     quality_gates: Sequence[QualityGateResult] = (),
 ) -> dict[str, Any]:
     findings_artifact = _validated_artifact_for_findings(findings, findings_artifact)
+    if taxonomy_coverage is not None:
+        taxonomy_coverage = KnownIssueTaxonomyCoverage.model_validate(
+            taxonomy_coverage.model_dump(mode="python")
+        )
     artifact_records = _record_map(findings_artifact)
     if findings_artifact is not None:
         if run_status is not None and run_status is not findings_artifact.run_status:
@@ -292,6 +459,8 @@ def generate_sarif(
                 )
             )
         origin_properties = _origin_properties(finding)
+        ordinary_behavior = _ordinary_legitimate_behavior(finding)
+        effective_remediation = _sarif_remediation(finding)
         disposition_properties: dict[str, Any] = (
             {
                 "effectiveDisposition": record.disposition.value,
@@ -304,10 +473,10 @@ def generate_sarif(
             {
                 "id": finding.id,
                 "name": finding.id.replace("-", "_"),
-                "shortDescription": {"text": finding.title},
-                "fullDescription": {"text": finding.summary},
+                "shortDescription": {"text": _sarif_title(finding)},
+                "fullDescription": {"text": _sarif_summary(finding)},
                 "help": {
-                    "text": finding.recommendation,
+                    "text": effective_remediation,
                 },
                 "properties": {
                     "tags": tags,
@@ -346,6 +515,18 @@ def generate_sarif(
             "owasp": finding.owasp,
             **disposition_properties,
             **origin_properties,
+            **(
+                {
+                    "submittedModelTitle": finding.title,
+                    "submittedModelSummary": finding.summary,
+                    "submittedModelImpact": finding.impact,
+                    "submittedModelPath": list(finding.attack_path),
+                    "submittedModelRecommendation": finding.recommendation,
+                    "submittedModelFramingSuperseded": True,
+                }
+                if ordinary_behavior
+                else {}
+            ),
         }
         results.append(
             {
@@ -355,8 +536,8 @@ def generate_sarif(
                     "text": (
                         f"[{record.disposition.value if record is not None else finding.status.value}] "
                         f"[{finding.origin_kind.value}] "
-                        f"{finding.summary} "
-                        f"Remediation: {finding.recommendation}"
+                        f"{_sarif_summary(finding)} "
+                        f"Remediation: {effective_remediation}"
                     )
                 },
                 "locations": locations,
@@ -402,6 +583,8 @@ def generate_sarif(
                 "reducedCapability": language_capability.reduced_capability,
             }
         )
+    if taxonomy_coverage is not None:
+        run_properties["knownIssueTaxonomyCoverage"] = _taxonomy_run_properties(taxonomy_coverage)
     if run_status is not None:
         run_properties["runStatus"] = run_status.value
     if quality_status is not None:
@@ -423,6 +606,7 @@ def generate_sarif(
             bool(quality_gates),
             bool(scanner_runs),
             language_capability is not None,
+            taxonomy_coverage is not None,
         )
     )
     if run_evidence_supplied:
@@ -446,6 +630,16 @@ def generate_sarif(
                     "reducedCapability": language_capability.reduced_capability,
                 }
             )
+        if taxonomy_coverage is not None:
+            invocation_properties["knownIssueTaxonomyCoverage"] = {
+                "overallNumerator": taxonomy_coverage.overall.numerator,
+                "overallDenominator": taxonomy_coverage.overall.denominator,
+                "criticalNumerator": taxonomy_coverage.critical.numerator,
+                "criticalDenominator": taxonomy_coverage.critical.denominator,
+                "criticalGapCount": len(taxonomy_coverage.critical_gap_ids),
+                "criticalGatePassed": taxonomy_coverage.critical_gate_passed,
+                "findingAuthority": False,
+            }
         invocation = {
             "executionSuccessful": (
                 run_status is AuditRunStatus.COMPLETE
@@ -481,6 +675,10 @@ def generate_sarif(
             for run in sorted(scanner_runs, key=lambda item: item.scanner)
             if (notification := _scanner_execution_notification(run)) is not None
         )
+        if taxonomy_coverage is not None:
+            taxonomy_notification = _taxonomy_notification(taxonomy_coverage)
+            if taxonomy_notification is not None:
+                invocation["toolExecutionNotifications"].append(taxonomy_notification)
         if language_capability is not None and language_capability.status in {
             LanguageCapabilityStatus.MISMATCH,
             LanguageCapabilityStatus.INCONCLUSIVE,
@@ -591,12 +789,76 @@ def generate_report_sarif(
         scanner_runs=report.scanner_runs,
         maximum_assurance=report.maximum_assurance,
         language_capability=report.language_capability,
+        taxonomy_coverage=report.taxonomy_coverage,
         run_status=projection.run_status,
         quality_status=projection.quality_status,
         completed=projection.completed,
         incomplete_reasons=projection.limitations,
         quality_gates=projection.quality_gates,
     )
+    if report.actor_model_evaluation is not None:
+        run = sarif["runs"][0]
+        evaluation = report.actor_model_evaluation
+        run["properties"]["actorModel"] = {
+            "inputState": evaluation.input_evidence.state.value,
+            "evaluationSha256": evaluation.evaluation_sha256,
+            "governanceFindingCount": len(evaluation.governance_findings),
+            "limitations": list(evaluation.input_evidence.limitations),
+        }
+        if evaluation.governance_findings:
+            run["tool"]["driver"]["rules"].append(
+                {
+                    "id": "MMAUDIT-ACTOR-GOVERNANCE",
+                    "name": "mmaudit_actor_governance",
+                    "shortDescription": {
+                        "text": "Actor-model and retained code-role governance observation"
+                    },
+                    "fullDescription": {
+                        "text": (
+                            "A typed actor-model assumption disagrees with, or is unresolved "
+                            "against, retained local role evidence."
+                        )
+                    },
+                    "properties": {"tags": ["governance", "actor-model"]},
+                }
+            )
+        for governance in evaluation.governance_findings:
+            locations = [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": quote(item.path, safe="/-._~"),
+                            "uriBaseId": "%SRCROOT%",
+                        },
+                        "region": {
+                            "startLine": item.start_line,
+                            "endLine": item.end_line,
+                        },
+                    }
+                }
+                for item in governance.code_evidence
+            ]
+            run["results"].append(
+                {
+                    "ruleId": "MMAUDIT-ACTOR-GOVERNANCE",
+                    "level": "warning",
+                    "message": {
+                        "text": (
+                            f"{governance.kind.value} for role {governance.role_id}: "
+                            f"{governance.detail}"
+                        )
+                    },
+                    "locations": locations,
+                    "partialFingerprints": {"actorGovernanceConflictId": governance.conflict_id},
+                    "properties": {
+                        "conflictId": governance.conflict_id,
+                        "kind": governance.kind.value,
+                        "roleId": governance.role_id,
+                        "actorModelSha256": governance.actor_model_sha256,
+                        "findingSha256": governance.finding_sha256,
+                    },
+                }
+            )
     if report.language_capability is None:
         run = sarif["runs"][0]
         run["properties"]["capabilityStatus"] = "NOT_RECORDED"

@@ -205,20 +205,117 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "COMPLETE" in requirements["U"]["remaining_proof"]
     assert "V3-CONSENSUS-001" in requirements["N"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
+    assert requirements["K"]["tickets"] == ["V3-COVERAGE-001", "V3-TAXONOMY-001"]
+    assert requirements["K"]["status"] == "COMPLETE"
+    assert "19-item defensive corpus" in requirements["K"]["evidence"][-1]
+    assert "V3-RETRIEVAL-001 is COMPLETE" in requirements["U"]["evidence"][-1]
+    assert "V3-PRICELEXEME-001" in requirements["U"]["evidence"][-1]
+    assert "implementation_started=false" in requirements["U"]["evidence"][-1]
+    assert requirements["U"]["status"] == "IN_PROGRESS"
     assert runtime_status["candidate_commit"] == "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
     assert runtime_status["candidate_commit_parent"] == ("9a902192cae14bb14144094b3a3b3bf6dafed9a9")
-    assert runtime_status["current_ticket"] == "UNSELECTED"
-    assert runtime_status["last_completed_ticket"] == "V3-SCHEMARETRY-001"
+    assert runtime_status["current_ticket"] == "V3-PRICELEXEME-001"
+    assert runtime_status["last_completed_ticket"] == "V3-RETRIEVAL-001"
+    assert runtime_status["last_partial_ticket"] == "V3-CANDROUTE-001"
+    assert runtime_status["next_safe_local_ticket"] == "V3-PRICELEXEME-001"
     assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
-    last_completed_work = runtime_status["last_completed_provider_free_work"]
-    assert last_completed_work["ticket"] == "V3-SCHEMARETRY-001"
-    assert "COMPLETE_PROVIDER_FREE_NONAUTHORIZING" in last_completed_work["status"]
-    assert (
-        "V3_REVOKERECON_001_NEXT_DEPENDENCY_READY_QUEUED_NOT_SELECTED"
-        in (last_completed_work["next_slice"])
+    current_work = runtime_status["current_provider_free_work"]
+    assert current_work["ticket"] == "V3-PRICELEXEME-001"
+    assert current_work["slice"] == "LOSSLESS_PROVIDER_PRICE_LEXEME_CUSTODY_SELECTION"
+    assert current_work["status"] == (
+        "IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_IMPLEMENTATION_NOT_STARTED"
     )
-    assert "V3_MULTI_AUDIT_001_REMAINS_QUEUED" in last_completed_work["next_slice"]
-    assert "V3_SINGLE_AUDIT_001" in last_completed_work["next_slice"]
+    assert current_work["implementation_started"] is False
+    assert (
+        "BEGIN_PROVIDER_FREE_LOSSLESS_PRICE_LEXEME_IMPLEMENTATION" in (current_work["next_slice"])
+    )
+    assert current_work["provider_or_network_accessed_by_codex"] is False
+    assert current_work["operator_command_emitted_by_codex"] is False
+    assert current_work["candidate_or_route_selected"] is False
+    assert current_work["grants_authority"] is False
+    retrieval_work = runtime_status["last_completed_provider_free_work"]
+    assert retrieval_work["ticket"] == "V3-RETRIEVAL-001"
+    assert retrieval_work["slice"] == "BOUNDED_READ_ONLY_INDEXED_RETRIEVAL_LOOP"
+    assert retrieval_work["status"] == (
+        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
+    )
+    for retrieval_true_field in (
+        "fixed_typed_read_only_indexed_lookup_allowlist",
+        "secret_taint_and_scope_refusal",
+        "static_role_wide_request_byte_token_budgets",
+        "private_transcript_and_hash_only_public_custody",
+        "failed_primary_transcript_retained",
+        "exact_replay_and_resume",
+        "single_shot_fallback",
+        "canonical_generation_current",
+        "active_selection_plan_unchanged",
+        "affected_matrices_complete",
+    ):
+        assert retrieval_work[retrieval_true_field] is True
+    for retrieval_false_field in (
+        "retry_behavior_changed",
+        "retry_configuration_changed",
+        "model_completion_issued",
+        "cost_ledger_opened_or_mutated",
+        "usage_recorded",
+        "credential_or_secret_disclosed",
+        "candidate_replacement_selected",
+        "candidate_or_route_selected",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "grants_authority",
+    ):
+        assert retrieval_work[retrieval_false_field] is False
+    assert retrieval_work["completed_real_audits"] == 0
+    assert "V3_PRICELEXEME_001_SELECTED_IN_PROGRESS" in retrieval_work["next_slice"]
+    assert "IMPLEMENTATION_STARTED_FALSE" in retrieval_work["next_slice"]
+    assert "KEEP_V3_CANDROUTE_001_PARTIAL_DOWNSTREAM" in retrieval_work["next_slice"]
+    terminal_validation = runtime_status["last_validation"]
+    complete_sequential_suite_passed = retrieval_work["complete_sequential_suite_passed"]
+    assert type(complete_sequential_suite_passed) is bool
+    if complete_sequential_suite_passed:
+        assert (
+            retrieval_work[
+                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
+            ]
+            is False
+        )
+        assert type(retrieval_work["terminal_full_suite_passed"]) is int
+        assert retrieval_work["terminal_full_suite_passed"] > 0
+        assert type(retrieval_work["terminal_full_suite_skipped"]) is int
+        assert retrieval_work["terminal_full_suite_skipped"] >= 0
+        assert type(retrieval_work["terminal_full_suite_warnings"]) is int
+        assert retrieval_work["terminal_full_suite_warnings"] >= 0
+        assert type(retrieval_work["terminal_full_suite_elapsed_seconds"]) in (int, float)
+        assert retrieval_work["terminal_full_suite_elapsed_seconds"] > 0
+        assert terminal_validation["status"].startswith("V3_RETRIEVAL_001_COMPLETE_PROVIDER_FREE")
+        assert "NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS" in terminal_validation["status"]
+        assert terminal_validation["terminal_full_suite_run"] is True
+        assert terminal_validation["terminal_full_suite_attempt_started"] is True
+        terminal_suite = terminal_validation["v3_retrieval_001_terminal_full_suite"]
+        assert terminal_suite["exit_code"] == 0
+        assert terminal_suite["tests_passed"] == retrieval_work["terminal_full_suite_passed"]
+        assert terminal_suite["tests_skipped"] == retrieval_work["terminal_full_suite_skipped"]
+        assert terminal_suite["warnings"] == retrieval_work["terminal_full_suite_warnings"]
+        assert (
+            terminal_suite["elapsed_seconds"]
+            == retrieval_work["terminal_full_suite_elapsed_seconds"]
+        )
+        assert terminal_suite["terminal_result_available"] is True
+        assert terminal_suite["pass_credit"] is True
+        assert terminal_suite["required_local_loopback_permission"] is True
+    else:
+        assert retrieval_work["terminal_full_suite_passed"] == 0
+        assert retrieval_work["terminal_full_suite_skipped"] == 0
+        assert retrieval_work["terminal_full_suite_warnings"] == 0
+        assert retrieval_work["terminal_full_suite_elapsed_seconds"] == 0.0
+        assert (
+            retrieval_work[
+                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
+            ]
+            is True
+        )
+        assert "v3_retrieval_001_terminal_full_suite" not in terminal_validation
     consensus = runtime_status["consensus_provider_free_adjudication"]
     assert consensus["ticket"] == "V3-CONSENSUS-001"
     assert consensus["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
@@ -238,18 +335,17 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert consensus["retry_configuration_changed"] is False
     assert consensus["successor_ticket_selected"] is False
     current_inventory = runtime_status["autonomy_phase_zero_inventory"]
-    assert current_inventory["current_reconciliation_commit"] == (
-        "f8960d92569cb9d8865ada9284981458699e4dab"
-    )
-    assert current_inventory["current_reconciliation_commit_pushed"] is True
-    assert current_inventory["current_reconciliation_commit_remote_resolved"] is True
-    assert current_inventory["current_reconciliation_uncommitted_worktree"] is False
+    assert current_inventory["current_reconciliation_commit"] is None
+    assert current_inventory["current_reconciliation_commit_pushed"] is False
+    assert current_inventory["current_reconciliation_commit_remote_resolved"] is False
+    assert current_inventory["current_reconciliation_uncommitted_worktree"] is True
     assert runtime_status["candidate_commit_pushed"] is True
     assert runtime_status["candidate_commit_remote_resolved"] is True
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
     assert "V3-AUTHLINEAGE-RECEIPT-001" not in requirements["L"]["tickets"]
     assert "V3-PLANCONSTRAINTS-001" in requirements["L"]["tickets"]
     assert "V3-RUNTIMEADMIT-001" in requirements["L"]["tickets"]
+    assert "V3-ENDPOINTLIST-001" in requirements["L"]["tickets"]
     assert "V3-HUMANCMP-001" not in requirements["R"]["tickets"]
     assert (
         "The optional human-comparison tier is not required"
@@ -259,8 +355,8 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     calibration_block = runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
     assert "V3-CALIBRATE-001 remains BLOCKED_TECHNICAL" in calibration_block
     assert "calibrated P2 plus successor C2" in calibration_block
-    assert "FULL admission for one launch" in calibration_block
-    assert "DeepSeek candidate is non-runnable" in calibration_block
+    assert "FULL admission for one historical failed launch" in calibration_block
+    assert "active plan is unchanged and non-runnable" in calibration_block
     assert "57 entries / 0.68118684 USD" in calibration_block
     assert "completed real audits remain zero" in calibration_block
     assert "No current command or run index is authorized or inferred" in calibration_block
@@ -304,7 +400,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 73
+    assert len(ticket_id_list) == len(ticket_ids) == 75
     assert len(historical_id_list) == len(historical_ids) == 46
     assert ticket_ids - historical_ids == {
         "V3-AUTHLINEAGE-001",
@@ -315,6 +411,8 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-AUTHVERDICT-001",
         "V3-BASELINE-001",
         "V3-BENCHSCORE-001",
+        "V3-CANDROUTE-001",
+        "V3-ENDPOINTLIST-001",
         "V3-EFFORT-001",
         "V3-EXECORIGIN-001",
         "V3-FLOOR-001",

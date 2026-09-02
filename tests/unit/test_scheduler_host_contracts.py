@@ -78,6 +78,10 @@ def _task(
             "system_prompt_sha256": _sha256(f"{seed}:system:{role}"),
             "normalizer_sha256": _sha256(f"{seed}:normalizer:{role}"),
         }
+        if pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW or (
+            pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic"
+        ):
+            model_fields["model_surface_review_request_manifest_sha256"] = "f" * 64
     return SchedulerTaskPlan.build(
         manifest=manifest,
         pass_kind=pass_kind,
@@ -795,7 +799,12 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
     )
     absent_host_journal = cast(
         Any,
-        SimpleNamespace(outputs=(), pass_results=(absence_pass,)),
+        SimpleNamespace(
+            outputs=(),
+            pass_results=(absence_pass,),
+            plans=(absence_pass.plan,),
+            activations=(),
+        ),
     )
     absent_host_snapshot = _scheduler_report_authority_snapshot(absent_host_journal)
 
@@ -911,7 +920,10 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         reproduction_artifact=exact_artifact,
         snapshot=absent_host_snapshot,
     )
-    no_pass_journal = cast(Any, SimpleNamespace(outputs=(), pass_results=()))
+    no_pass_journal = cast(
+        Any,
+        SimpleNamespace(outputs=(), pass_results=(), plans=(), activations=()),
+    )
     no_pass_snapshot = _scheduler_report_authority_snapshot(no_pass_journal)
     _validate_scheduler_prejudgment_evidence_authority(
         authority=exact_authority,

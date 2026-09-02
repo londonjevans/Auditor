@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +33,10 @@ from mmaudit.models.openrouter import (
     StructuredCompletion,
     trusted_complete_candidate_review_with_evidence,
 )
+from mmaudit.models.retrieval import (
+    SolidityRetrievalRequestBatch,
+    SolidityRetrievalRolePolicy,
+)
 from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReviewBatch,
@@ -43,14 +49,26 @@ from mmaudit.models.truncation import (
     CandidateReviewFramedDocument,
     CandidateReviewNormalizationEvidence,
 )
-from mmaudit.models.usage import _validated_usage_copy_preserving_owned_attestation
-from mmaudit.orchestration.context import render_context
+from mmaudit.models.usage import (
+    _validated_usage_copy_preserving_owned_attestation,
+    has_exact_nonfallback_model_identity,
+)
+from mmaudit.orchestration.context import (
+    ContextBoundaryError,
+    render_context,
+    revalidate_context_package,
+)
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
     seal_model_surface_review_artifact,
 )
 
 _RECOVERY_ROOT_REQUEST_ID = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
+_RETRIEVAL_PLANNING_REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_EXACT_MODEL_ID = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z"
+)
+_WHOLE_PROTOCOL_REVIEW_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _MAX_RECOVERY_REQUEST_COUNT = 1_000_000
 _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH = trusted_complete_candidate_review_with_evidence
 
@@ -173,12 +191,264 @@ class FindingReviewResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrievalPlanningResult:
+    """Non-crediting retrieval intents plus their exact request custody."""
+
+    request_batch: SolidityRetrievalRequestBatch
+    planning_context: ContextPackage
+    completion_usage: UsageRecord
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.request_batch) is not SolidityRetrievalRequestBatch
+            or type(self.planning_context) is not ContextPackage
+            or type(self.completion_usage) is not UsageRecord
+        ):
+            raise TypeError("retrieval planning result has an invalid exact custody type")
+        try:
+            request_batch = SolidityRetrievalRequestBatch.model_validate_json(
+                self.request_batch.model_dump_json(),
+                strict=True,
+            )
+            planning_context = revalidate_context_package(self.planning_context)
+            completion_usage = _validated_usage_copy_preserving_owned_attestation(
+                self.completion_usage
+            )
+        except (AttributeError, ContextBoundaryError, TypeError, ValueError) as exc:
+            raise ValueError("retrieval planning result failed detached validation") from exc
+        if (
+            request_batch != self.request_batch
+            or planning_context != self.planning_context
+            or completion_usage != self.completion_usage
+        ):
+            raise ValueError("retrieval planning result changed after detached validation")
+        object.__setattr__(self, "request_batch", request_batch)
+        object.__setattr__(self, "planning_context", planning_context)
+        object.__setattr__(self, "completion_usage", completion_usage)
+
+
+@dataclass(frozen=True, slots=True)
 class ValidatedAgentResult[ValueT]:
     """Host-validated role result paired with its exact provider completion."""
 
     value: ValueT
     completion_usage: UsageRecord
     raw_response: Any | None = None
+
+
+def _retrieval_context_role_matches(*, request_role: str, context_role: str) -> bool:
+    return request_role == context_role or (
+        context_role == "whole_protocol_review"
+        and _WHOLE_PROTOCOL_REVIEW_ROLE.fullmatch(request_role) is not None
+    )
+
+
+class RetrievalPlanningAgent(AgentBase):
+    """Request one bounded, non-crediting retrieval-intent batch for an exact reviewer."""
+
+    prompt_file = "retrieval_planning.md"
+
+    def __init__(
+        self,
+        config: AuditConfig,
+        client: OpenRouterClient,
+        *,
+        role: str,
+        exact_model_id: str,
+    ) -> None:
+        super().__init__(config, client)
+        if type(role) is not str:
+            raise TypeError("retrieval planning role must be an exact string")
+        try:
+            SolidityRetrievalRolePolicy.build(role=role)
+        except ValueError as exc:
+            raise ValueError("retrieval planning role is not supported") from exc
+        if type(exact_model_id) is not str or _EXACT_MODEL_ID.fullmatch(exact_model_id) is None:
+            raise ValueError("retrieval planning requires an exact provider/model ID")
+
+        if _WHOLE_PROTOCOL_REVIEW_ROLE.fullmatch(role) is None:
+            configured_role = (
+                role.removeprefix("specialist:").split(":", 1)[0]
+                if role.startswith("specialist:")
+                else role
+            )
+            try:
+                configured = config.models.role(configured_role)
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    "retrieval planning role has no configured model identity"
+                ) from exc
+            if exact_model_id not in (configured.primary, *configured.fallbacks):
+                raise ValueError(
+                    "retrieval planning model differs from the configured reviewer identity"
+                )
+
+        self.role = role
+        self.exact_model_id = exact_model_id
+
+    @property
+    def configured_models(self) -> list[str]:
+        """Expose the one exact review route shared by planning and final review."""
+
+        return [self.exact_model_id]
+
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file=self.prompt_file,
+            schema_name="mmaudit_solidity_retrieval_request_batch",
+            response_model=SolidityRetrievalRequestBatch,
+        )
+
+    async def run(
+        self,
+        context: ContextPackage,
+        *,
+        logical_request_id: str,
+    ) -> RetrievalPlanningResult:
+        if (
+            type(logical_request_id) is not str
+            or _RETRIEVAL_PLANNING_REQUEST_ID.fullmatch(logical_request_id) is None
+        ):
+            raise OpenRouterSchemaError(
+                "retrieval planning requires a separate bounded logical request ID"
+            )
+        request_context = self._detached_context(context)
+        protocol = self.request_protocol
+        completion = await self.client.complete_with_evidence(
+            role=self.role,
+            models=self.configured_models,
+            system_prompt=protocol.system_prompt,
+            user_prompt=render_context(request_context),
+            context_package=request_context,
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
+        )
+        return self.bind_completed_plan(
+            request_context,
+            raw_response=completion.value,
+            completion_usage=completion.usage_record,
+            logical_request_id=logical_request_id,
+        )
+
+    def bind_completed_plan(
+        self,
+        context: ContextPackage,
+        *,
+        raw_response: SolidityRetrievalRequestBatch,
+        completion_usage: UsageRecord,
+        logical_request_id: str,
+    ) -> RetrievalPlanningResult:
+        """Detach and bind one retained planning completion to its exact review identity."""
+
+        if (
+            type(logical_request_id) is not str
+            or _RETRIEVAL_PLANNING_REQUEST_ID.fullmatch(logical_request_id) is None
+        ):
+            raise OpenRouterSchemaError("retrieval planning logical request ID is invalid")
+        request_context = self._detached_context(context)
+        if type(raw_response) is not SolidityRetrievalRequestBatch:
+            raise OpenRouterSchemaError("retrieval planning batch has an invalid exact type")
+        try:
+            request_batch = SolidityRetrievalRequestBatch.model_validate_json(
+                raw_response.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise OpenRouterSchemaError(
+                "retrieval planning batch failed detached validation"
+            ) from exc
+        if request_batch != raw_response:
+            raise OpenRouterSchemaError("retrieval planning batch changed after validation")
+        policy = request_context.solidity_retrieval_policy
+        if policy is None:  # Defensive: _detached_context requires this exact binding.
+            raise OpenRouterSchemaError("retrieval planning context lacks its exact role policy")
+        if len(request_batch.requests) > policy.maximum_requests:
+            raise OpenRouterSchemaError(
+                "retrieval planning batch exceeds its exact role request limit"
+            )
+
+        if type(completion_usage) is not UsageRecord:
+            raise OpenRouterSchemaError("retrieval planning usage has an invalid exact type")
+        try:
+            usage = _validated_usage_copy_preserving_owned_attestation(completion_usage)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise OpenRouterSchemaError("retrieval planning usage failed exact validation") from exc
+        if usage != completion_usage:
+            raise OpenRouterSchemaError("retrieval planning usage changed after validation")
+        if (
+            usage.request_id != logical_request_id
+            or usage.role != self.role
+            or usage.requested_model != self.exact_model_id
+            or not has_exact_nonfallback_model_identity(usage)
+        ):
+            raise OpenRouterSchemaError(
+                "retrieval planning usage differs from its exact request identity"
+            )
+        protocol = self.request_protocol
+        request_hashes = self.client.preview_structured_request_hashes(
+            role=self.role,
+            model=self.exact_model_id,
+            system_prompt=protocol.system_prompt,
+            user_prompt=render_context(request_context),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+        )
+        validated_response_sha256 = hashlib.sha256(
+            json.dumps(
+                request_batch.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            usage.prompt_sha256 != request_hashes.prompt_sha256
+            or usage.user_prompt_sha256 != request_hashes.user_prompt_sha256
+            or usage.schema_sha256 != request_hashes.schema_sha256
+            or usage.validated_response_sha256 != validated_response_sha256
+        ):
+            raise OpenRouterSchemaError(
+                "retrieval planning usage differs from its exact prompt or response custody"
+            )
+        return RetrievalPlanningResult(
+            request_batch=request_batch,
+            planning_context=request_context,
+            completion_usage=usage,
+        )
+
+    def _detached_context(self, context: ContextPackage) -> ContextPackage:
+        if type(context) is not ContextPackage:
+            raise OpenRouterSchemaError("retrieval planning context has an invalid exact type")
+        try:
+            request_context = revalidate_context_package(context)
+        except ContextBoundaryError as exc:
+            raise OpenRouterSchemaError(
+                "retrieval planning context failed detached validation"
+            ) from exc
+        if not _retrieval_context_role_matches(
+            request_role=self.role,
+            context_role=request_context.role,
+        ):
+            raise OpenRouterSchemaError(
+                "retrieval planning context differs from its configured review role"
+            )
+        policy = request_context.solidity_retrieval_policy
+        if policy is None or request_context.solidity_retrieval_corpus_sha256 is None:
+            raise OpenRouterSchemaError(
+                "retrieval planning requires a retrieval-bound planning context"
+            )
+        if policy.role != self.role:
+            raise OpenRouterSchemaError(
+                "retrieval planning policy differs from its configured review role"
+            )
+        if request_context.solidity_retrieval_transcript is not None:
+            raise OpenRouterSchemaError(
+                "retrieval planning requires a transcript-free planning context"
+            )
+        return request_context
 
 
 class ThreatModelAgent(AgentBase):

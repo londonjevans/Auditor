@@ -9,6 +9,8 @@ RELEASE_REPORT_PATH ?=
 RELEASE_EVIDENCE_ROOT ?=
 RELEASE_REPOSITORY_ROOT ?=
 RELEASE_TARGET_REPOSITORY_ROOT ?=
+RELEASE_CONFIGURATION_ROOT ?=
+RELEASE_PUBLICATION_ROOT ?=
 RELEASE_ARTIFACT_EVIDENCE_PATH ?=
 RELEASE_RUN_VERIFICATION_PATH ?=
 RELEASE_REQUIRE_COMPLETE ?=
@@ -48,6 +50,7 @@ release-evidence:
 	@test -n "$(RELEASE_REPOSITORY_ROOT)" || { echo "RELEASE_REPOSITORY_ROOT is required" >&2; exit 2; }
 	@test -n "$(RELEASE_RUN_DIR)" || { echo "RELEASE_RUN_DIR is required" >&2; exit 2; }
 	@test -n "$(RELEASE_TARGET_REPOSITORY_ROOT)" || { echo "RELEASE_TARGET_REPOSITORY_ROOT is required" >&2; exit 2; }
+	@test -n "$(RELEASE_CONFIGURATION_ROOT)" || { echo "RELEASE_CONFIGURATION_ROOT is required" >&2; exit 2; }
 	@test -n "$(RELEASE_ARTIFACT_EVIDENCE_PATH)" || { echo "RELEASE_ARTIFACT_EVIDENCE_PATH is required" >&2; exit 2; }
 	@test -n "$(RELEASE_RUN_VERIFICATION_PATH)" || { echo "RELEASE_RUN_VERIFICATION_PATH is required" >&2; exit 2; }
 	$(PYTHON) scripts/validate_release_evidence.py \
@@ -58,26 +61,27 @@ release-evidence:
 		--release-repository "$(RELEASE_REPOSITORY_ROOT)" \
 		--run-dir "$(RELEASE_RUN_DIR)" \
 		--target-repository "$(RELEASE_TARGET_REPOSITORY_ROOT)" \
+		--configuration-root "$(RELEASE_CONFIGURATION_ROOT)" \
 		--artifact-evidence-file "$(RELEASE_ARTIFACT_EVIDENCE_PATH)" \
 		--run-verification-file "$(RELEASE_RUN_VERIFICATION_PATH)"
 
 release-generate:
 	@test -n "$(RELEASE_ID)" || { echo "RELEASE_ID is required" >&2; exit 2; }
-	@test -n "$(RELEASE_REPORT_ROOT)" || { echo "RELEASE_REPORT_ROOT is required" >&2; exit 2; }
-	@test -n "$(RELEASE_EVIDENCE_ROOT)" || { echo "RELEASE_EVIDENCE_ROOT is required" >&2; exit 2; }
 	@test -n "$(RELEASE_REPOSITORY_ROOT)" || { echo "RELEASE_REPOSITORY_ROOT is required" >&2; exit 2; }
 	@test -n "$(RELEASE_RUN_DIR)" || { echo "RELEASE_RUN_DIR is required" >&2; exit 2; }
 	@test -n "$(RELEASE_TARGET_REPOSITORY_ROOT)" || { echo "RELEASE_TARGET_REPOSITORY_ROOT is required" >&2; exit 2; }
+	@test -n "$(RELEASE_CONFIGURATION_ROOT)" || { echo "RELEASE_CONFIGURATION_ROOT is required" >&2; exit 2; }
+	@test -n "$(RELEASE_PUBLICATION_ROOT)" || { echo "RELEASE_PUBLICATION_ROOT is required" >&2; exit 2; }
 	@test -n "$(RELEASE_ARTIFACT_EVIDENCE_PATH)" || { echo "RELEASE_ARTIFACT_EVIDENCE_PATH is required" >&2; exit 2; }
 	@test -n "$(RELEASE_RUN_VERIFICATION_PATH)" || { echo "RELEASE_RUN_VERIFICATION_PATH is required" >&2; exit 2; }
 	$(PYTHON) scripts/generate_release_report.py \
 		--release-id "$(RELEASE_ID)" \
-		--report-root "$(RELEASE_REPORT_ROOT)" \
-		--evidence-root "$(RELEASE_EVIDENCE_ROOT)" \
 		--release-repository "$(RELEASE_REPOSITORY_ROOT)" \
 		--run-dir "$(RELEASE_RUN_DIR)" \
 		--target-repository "$(RELEASE_TARGET_REPOSITORY_ROOT)" \
+		--configuration-root "$(RELEASE_CONFIGURATION_ROOT)" \
 		--artifact-evidence-file "$(RELEASE_ARTIFACT_EVIDENCE_PATH)" \
-		--run-verification-file "$(RELEASE_RUN_VERIFICATION_PATH)"
+		--run-verification-file "$(RELEASE_RUN_VERIFICATION_PATH)" \
+		--publication-root "$(RELEASE_PUBLICATION_ROOT)"
 
 release-local: check release-evidence

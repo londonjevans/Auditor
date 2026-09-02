@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
+from bisect import bisect_right
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -15,6 +17,12 @@ from typing import Any
 from pydantic_core import PydanticSerializationError
 
 from mmaudit.config import PrivacyConfig, RepositoryConfig
+from mmaudit.models.actor_model import ActorModelInputEvidence, ActorModelInputState
+from mmaudit.models.retrieval import (
+    SolidityRetrievalOperation,
+    SolidityRetrievalRolePolicy,
+    SolidityRetrievalTranscript,
+)
 from mmaudit.models.schemas import (
     ContextExcerpt,
     ContextPackage,
@@ -54,11 +62,15 @@ from mmaudit.orchestration.model_coverage import (
 from mmaudit.repository.chunking import chunk_text, excerpt_proves_location, line_range_hash
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.redaction import SecretSafetyError, detect_secrets, redact_text
+from mmaudit.repository.redaction import SecretMatch, SecretSafetyError, detect_secrets, redact_text
 from mmaudit.solidity.retrieval import (
+    SolidityRetrievalCorpus,
+    SolidityRetrievalSecretInterval,
+    build_solidity_retrieval_corpus,
     compact_solidity_graphs,
     compact_solidity_index,
     solidity_preferred_paths,
+    validate_solidity_retrieval_replay,
 )
 
 
@@ -68,6 +80,57 @@ class ContextBudgetError(RuntimeError):
 
 class ContextBoundaryError(ContextBudgetError, ValueError):
     """Raised when a supplied context package fails detached boundary validation."""
+
+
+_RETRIEVAL_WITHHELD_SCANNER_SECRET = "scanner_secret_path"
+_RETRIEVAL_WITHHELD_PATH_SECRET = "path_secret_match"
+_SOLIDITY_RETRIEVAL_CONTEXT_OVERHEAD_RESERVE_BYTES = 16_384
+
+
+def solidity_retrieval_context_reserve_bytes(
+    policy: SolidityRetrievalRolePolicy,
+) -> int:
+    """Reserve a conservative rendered transcript envelope before provider planning."""
+
+    validated = SolidityRetrievalRolePolicy.model_validate(policy.model_dump(mode="python"))
+    return (
+        validated.maximum_transcript_utf8_bytes + _SOLIDITY_RETRIEVAL_CONTEXT_OVERHEAD_RESERVE_BYTES
+    )
+
+
+def _canonical_line_intervals(
+    intervals: Iterable[tuple[int, int]],
+) -> tuple[tuple[int, int], ...]:
+    """Return sorted, merged 1-based inclusive line intervals."""
+
+    merged: list[tuple[int, int]] = []
+    for start_line, end_line in sorted(intervals):
+        if start_line < 1 or end_line < start_line:
+            raise ValueError("taint line intervals must be 1-based and inclusive")
+        if merged and start_line <= merged[-1][1] + 1:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end_line))
+        else:
+            merged.append((start_line, end_line))
+    return tuple(merged)
+
+
+def _secret_taint_line_intervals(
+    content: str,
+    matches: Iterable[SecretMatch],
+) -> tuple[tuple[int, int], ...]:
+    """Project secret matches into non-secret line-only taint intervals."""
+
+    line_break_ends = tuple(match.end() for match in re.finditer(r"\r\n|\r|\n", content))
+    intervals = (
+        (
+            bisect_right(line_break_ends, match.start) + 1,
+            bisect_right(line_break_ends, match.end - 1) + 1,
+        )
+        for match in matches
+        if match.end > match.start
+    )
+    return _canonical_line_intervals(intervals)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1226,6 +1289,7 @@ class ContextBuilder:
         repository_config: RepositoryConfig,
         privacy: PrivacyConfig,
         scanner_findings: list[ScannerFinding],
+        actor_model_evidence: ActorModelInputEvidence | None = None,
         scanner_secret_paths: set[str] | None = None,
         solidity_projects: list[SolidityProjectMetadata] | None = None,
         solidity_compilations: list[SolidityCompilationResult] | None = None,
@@ -1251,6 +1315,8 @@ class ContextBuilder:
                 for location in finding.locations
             ),
         }
+        self._retrieval_taint_line_intervals: dict[str, tuple[tuple[int, int], ...]] = {}
+        self._retrieval_withheld_path_reasons: dict[str, frozenset[str]] = {}
         if self._scanner_secret_paths and privacy.fail_on_detected_secret:
             raise SecretSafetyError(
                 "deterministic scanner detected a potential secret in model-eligible source; "
@@ -1269,14 +1335,45 @@ class ContextBuilder:
                 safe_paths,
             )
         ]
+        self._actor_model_evidence = (
+            actor_model_evidence.model_copy(deep=True) if actor_model_evidence else None
+        )
         self._solidity_projects = [
             project.model_copy(deep=True) for project in (solidity_projects or ())
         ]
         self._solidity_compilations = [
             compilation.model_copy(deep=True) for compilation in (solidity_compilations or ())
         ]
-        self._solidity_index = solidity_index.model_copy(deep=True) if solidity_index else None
-        self._solidity_graphs = solidity_graphs.model_copy(deep=True) if solidity_graphs else None
+        self._retrieval_solidity_index = (
+            solidity_index.model_copy(deep=True) if solidity_index else None
+        )
+        self._retrieval_solidity_graphs = (
+            solidity_graphs.model_copy(deep=True) if solidity_graphs else None
+        )
+        privacy_tainted_solidity_metadata = bool(
+            self._retrieval_taint_line_intervals or self._retrieval_withheld_path_reasons
+        )
+        self._solidity_index = (
+            self._provider_safe_solidity_index(self._retrieval_solidity_index)
+            if privacy_tainted_solidity_metadata
+            else (
+                self._retrieval_solidity_index.model_copy(deep=True)
+                if self._retrieval_solidity_index
+                else None
+            )
+        )
+        self._solidity_graphs = (
+            None
+            if privacy_tainted_solidity_metadata
+            else (
+                self._retrieval_solidity_graphs.model_copy(deep=True)
+                if self._retrieval_solidity_graphs
+                else None
+            )
+        )
+        if privacy_tainted_solidity_metadata:
+            self._solidity_projects = []
+            self._solidity_compilations = []
         self._solidity_invariants = (
             solidity_invariants.model_copy(deep=True) if solidity_invariants else None
         )
@@ -1290,6 +1387,16 @@ class ContextBuilder:
         self._solidity_coverage = (
             solidity_coverage.model_copy(deep=True) if solidity_coverage else None
         )
+        if privacy_tainted_solidity_metadata:
+            # Source-derived auxiliary records may carry free-form compiler, graph,
+            # invariant, or formal-tool text.  Keep the raw index/graphs only in the
+            # private retrieval corpus path and exclude every unproved projection
+            # from ordinary provider context.
+            self._solidity_invariants = None
+            self._invariant_executions = []
+            self._economic_simulations = []
+            self._formal_runs = []
+            self._solidity_coverage = None
         self._inventory_snapshot = _ContextInventorySnapshot.capture(
             repository_map=self._repository_map,
             scanner_findings=self._scanner_findings,
@@ -1320,6 +1427,341 @@ class ContextBuilder:
     @property
     def scanner_findings(self) -> list[ScannerFinding]:
         return [finding.model_copy(deep=True) for finding in self._scanner_findings]
+
+    @property
+    def retrieval_taint_line_intervals(
+        self,
+    ) -> Mapping[str, tuple[tuple[int, int], ...]]:
+        """Return a detached immutable line-only taint projection for retrieval."""
+
+        return MappingProxyType(dict(sorted(self._retrieval_taint_line_intervals.items())))
+
+    @property
+    def retrieval_withheld_path_reasons(self) -> Mapping[str, frozenset[str]]:
+        """Return detached immutable reasons for files withheld from retrieval."""
+
+        return MappingProxyType(dict(sorted(self._retrieval_withheld_path_reasons.items())))
+
+    def build_retrieval_corpus(
+        self,
+        *,
+        allowed_source_paths: set[str] | None = None,
+    ) -> SolidityRetrievalCorpus | None:
+        """Build one shard-scoped, already-redacted Solidity lookup corpus."""
+
+        if self._retrieval_solidity_index is None:
+            return None
+        safe_solidity_files = tuple(
+            item for item in self._safe_files if item.relative_path.lower().endswith(".sol")
+        )
+        if not safe_solidity_files:
+            return None
+        redacted_sources = {item.relative_path: item.content for item in safe_solidity_files}
+        if len(redacted_sources) != len(safe_solidity_files):
+            raise ContextBudgetError("safe Solidity retrieval source inventory repeats a path")
+        safe_paths = set(redacted_sources)
+        original_sources: dict[str, str] = {}
+        for item in self.discovery.files:
+            try:
+                path = normalize_relative_path(item.relative_path)
+            except ValueError as exc:
+                raise ContextBudgetError(
+                    "original Solidity retrieval source inventory contains an unsafe path"
+                ) from exc
+            if path not in safe_paths:
+                continue
+            if path in original_sources:
+                raise ContextBudgetError(
+                    "original Solidity retrieval source inventory repeats a path"
+                )
+            original_sources[path] = item.content
+        if set(original_sources) != safe_paths:
+            raise ContextBudgetError(
+                "safe Solidity retrieval sources lack exact original-source custody"
+            )
+        normalized_allowed: set[str] | None = None
+        if allowed_source_paths is not None:
+            try:
+                requested_allowed = {normalize_relative_path(path) for path in allowed_source_paths}
+            except ValueError as exc:
+                raise ContextBudgetError(
+                    "Solidity retrieval source allowlist contains an unsafe path"
+                ) from exc
+            if requested_allowed != allowed_source_paths:
+                raise ContextBudgetError(
+                    "Solidity retrieval source allowlist paths must be normalized"
+                )
+            normalized_allowed = {path for path in requested_allowed if path in safe_paths}
+        secret_intervals = tuple(
+            SolidityRetrievalSecretInterval(
+                path=path,
+                start_line=start_line,
+                end_line=end_line,
+            )
+            for path, intervals in sorted(self._retrieval_taint_line_intervals.items())
+            if path in safe_paths
+            for start_line, end_line in intervals
+        )
+        withheld_paths = {
+            path for path in self._retrieval_withheld_path_reasons if path.lower().endswith(".sol")
+        }
+        try:
+            return build_solidity_retrieval_corpus(
+                original_sources=original_sources,
+                redacted_sources=redacted_sources,
+                secret_tainted_intervals=secret_intervals,
+                index=self._retrieval_solidity_index,
+                graphs=self._retrieval_solidity_graphs,
+                allowed_paths=normalized_allowed,
+                withheld_paths=withheld_paths,
+            )
+        except ValueError as exc:
+            raise ContextBudgetError(
+                "Solidity retrieval corpus failed its deterministic safety boundary"
+            ) from exc
+
+    def _provider_safe_solidity_index(
+        self,
+        index: SoliditySymbolIndex | None,
+    ) -> SoliditySymbolIndex | None:
+        """Remove privacy-tainted deterministic metadata before ordinary model egress."""
+
+        if index is None:
+            return None
+        safe_source_by_path = {
+            item.relative_path: item.content
+            for item in self._safe_files
+            if item.relative_path.lower().endswith(".sol")
+        }
+        entities: list[SolidityEntity] = []
+        for entity in index.entities:
+            content = safe_source_by_path.get(entity.path)
+            if content is None:
+                continue
+            if any(
+                start_line <= entity.end_line and entity.start_line <= end_line
+                for start_line, end_line in self._retrieval_taint_line_intervals.get(
+                    entity.path,
+                    (),
+                )
+            ):
+                continue
+            try:
+                observed_hash = line_range_hash(
+                    content,
+                    entity.start_line,
+                    entity.end_line,
+                )
+            except (IndexError, TypeError, ValueError):
+                continue
+            if observed_hash != entity.source_hash:
+                continue
+            entities.append(
+                entity.model_copy(
+                    update={
+                        "contract_name": None,
+                        "documentation": None,
+                    }
+                )
+            )
+        retained_paths = {entity.path for entity in entities}
+        return index.model_copy(
+            update={
+                "projects": [],
+                "entities": entities,
+                "ast_sources": [path for path in index.ast_sources if path in retained_paths],
+                "fallback_sources": [
+                    path for path in index.fallback_sources if path in retained_paths
+                ],
+                "warnings": [],
+            }
+        )
+
+    def bind_retrieval_context(
+        self,
+        package: ContextPackage,
+        *,
+        policy: SolidityRetrievalRolePolicy,
+        corpus: SolidityRetrievalCorpus,
+        transcript: SolidityRetrievalTranscript | None = None,
+        byte_budget: int | None = None,
+    ) -> ContextPackage:
+        """Attach exact retrieval custody and remeasure the provider-visible package."""
+
+        sealed_package = revalidate_context_package(package)
+        sealed_policy = SolidityRetrievalRolePolicy.model_validate(policy.model_dump(mode="python"))
+        sealed_corpus = SolidityRetrievalCorpus.model_validate(corpus.model_dump(mode="python"))
+        sealed_transcript = (
+            None
+            if transcript is None
+            else SolidityRetrievalTranscript.model_validate(transcript.model_dump(mode="python"))
+        )
+        if sealed_transcript is not None:
+            try:
+                sealed_transcript = validate_solidity_retrieval_replay(
+                    corpus=sealed_corpus,
+                    policy=sealed_policy,
+                    transcript=sealed_transcript,
+                )
+            except ValueError as exc:
+                raise ContextBoundaryError(
+                    "context retrieval transcript failed exact local replay"
+                ) from exc
+        existing_policy = sealed_package.solidity_retrieval_policy
+        existing_corpus_sha256 = sealed_package.solidity_retrieval_corpus_sha256
+        if (existing_policy is not None and existing_policy != sealed_policy) or (
+            existing_corpus_sha256 is not None
+            and existing_corpus_sha256 != sealed_corpus.corpus_sha256
+        ):
+            raise ContextBoundaryError(
+                "context package is already bound to different retrieval custody"
+            )
+        governing_budget = sealed_package.byte_budget if byte_budget is None else byte_budget
+        if (
+            isinstance(governing_budget, bool)
+            or governing_budget <= 0
+            or governing_budget > self.repository_config.max_total_context_bytes
+        ):
+            raise ContextBudgetError("retrieval context budget exceeds its repository limit")
+        if governing_budget < sealed_package.bytes_used:
+            raise ContextBudgetError("retrieval context budget is smaller than its base package")
+        if any(
+            request.kind is ModelReviewSurfaceKind.CALL
+            for request in sealed_package.requested_model_surfaces
+        ):
+            raise ContextBoundaryError(
+                "retrieval context cannot replace exact provider-visible call-graph custody"
+            )
+
+        package_index = sealed_package.solidity_index
+        package_entities_by_id = (
+            {entity.id: entity for entity in package_index.entities}
+            if package_index is not None
+            else {}
+        )
+        safe_entities = tuple(
+            entity
+            for entity in sealed_corpus.entities
+            if entity.subject_id in package_entities_by_id
+        )
+        safe_entity_ids = {entity.subject_id for entity in safe_entities}
+        required_entity_ids = {
+            request.subject_id
+            for request in sealed_package.requested_model_surfaces
+            if request.kind in _ENTITY_BACKED_MODEL_SURFACE_KINDS
+        }
+        if not required_entity_ids <= safe_entity_ids:
+            raise ContextBoundaryError(
+                "retrieval context lacks a safe required model-surface entity"
+            )
+        sanitized_entities = [
+            SolidityEntity(
+                id=entity.subject_id,
+                kind=SolidityEntityKind(entity.kind.value),
+                name=entity.name,
+                contract_name=None,
+                path=entity.path,
+                start_line=entity.start_line,
+                end_line=entity.end_line,
+                byte_start=package_entities_by_id[entity.subject_id].byte_start,
+                byte_end=package_entities_by_id[entity.subject_id].byte_end,
+                source_hash=entity.source_hash,
+                provenance=package_entities_by_id[entity.subject_id].provenance,
+                confidence=package_entities_by_id[entity.subject_id].confidence,
+                transformation="provider_safe_retrieval_projection",
+                visibility=entity.visibility,
+                mutability=entity.mutability,
+                payable=entity.payable,
+                signature=None,
+                selector=None,
+                return_types=[],
+                documentation=None,
+            )
+            for entity in safe_entities
+        ]
+        sanitized_index = (
+            None
+            if package_index is None
+            else SoliditySymbolIndex(
+                projects=[],
+                entities=sanitized_entities,
+                ast_sources=[],
+                fallback_sources=[],
+                warnings=[],
+            )
+        )
+        configured_source_bytes = min(
+            2**31 - 1,
+            sealed_package.configured_maximum_source_tokens_per_request
+            * UTF8_BYTES_PER_ESTIMATED_TOKEN,
+        )
+        effective_source_ceiling = sealed_package.effective_source_byte_ceiling
+        if sealed_package.solidity_retrieval_policy is None:
+            effective_source_ceiling += sealed_policy.maximum_total_result_utf8_bytes
+        effective_source_ceiling = min(
+            effective_source_ceiling,
+            configured_source_bytes,
+            governing_budget,
+        )
+        bound = sealed_package.model_copy(
+            update={
+                "byte_budget": governing_budget,
+                "bytes_used": 0,
+                "effective_source_byte_ceiling": effective_source_ceiling,
+                "solidity_projects": (),
+                "solidity_compilations": (),
+                "solidity_index": sanitized_index,
+                "solidity_graphs": None,
+                "solidity_invariants": None,
+                "invariant_executions": (),
+                "economic_simulations": (),
+                "formal_runs": (),
+                "solidity_coverage": None,
+                "solidity_retrieval_policy": sealed_policy,
+                "solidity_retrieval_corpus_sha256": sealed_corpus.corpus_sha256,
+                "solidity_retrieval_entities": safe_entities,
+                "solidity_retrieval_transcript": sealed_transcript,
+            }
+        )
+        rendered_bytes = len(render_context(bound).encode("utf-8"))
+        if rendered_bytes > governing_budget:
+            raise ContextBudgetError(
+                "validated Solidity retrieval transcript exceeds its reserved context budget"
+            )
+        return bound.model_copy(update={"bytes_used": rendered_bytes})
+
+    def retrieval_single_shot_fallback_context(
+        self,
+        package: ContextPackage,
+        *,
+        byte_budget: int | None = None,
+    ) -> ContextPackage:
+        """Close retrieval while retaining its provider-safe deterministic projection."""
+
+        sealed = revalidate_context_package(package)
+        if sealed.solidity_retrieval_policy is None:
+            raise ContextBoundaryError("single-shot retrieval fallback lacks a safe bound context")
+        governing_budget = sealed.byte_budget if byte_budget is None else byte_budget
+        if (
+            isinstance(governing_budget, bool)
+            or governing_budget <= 0
+            or governing_budget > self.repository_config.max_total_context_bytes
+        ):
+            raise ContextBudgetError("single-shot retrieval fallback budget is invalid")
+        fallback = sealed.model_copy(
+            update={
+                "byte_budget": governing_budget,
+                "bytes_used": 0,
+                "solidity_retrieval_policy": None,
+                "solidity_retrieval_corpus_sha256": None,
+                "solidity_retrieval_entities": (),
+                "solidity_retrieval_transcript": None,
+            }
+        )
+        rendered_bytes = len(render_context(fallback).encode("utf-8"))
+        if rendered_bytes > governing_budget:
+            raise ContextBudgetError("single-shot retrieval fallback exceeds its context budget")
+        return fallback.model_copy(update={"bytes_used": rendered_bytes})
 
     @property
     def solidity_projects(self) -> list[SolidityProjectMetadata]:
@@ -1362,7 +1804,12 @@ class ContextBuilder:
     def _redact_every_file(self, files: Iterable[DiscoveredFile]) -> tuple[DiscoveredFile, ...]:
         safe: list[DiscoveredFile] = []
         for item in files:
+            normalized_path = normalize_relative_path(item.relative_path)
             if item.relative_path in self._scanner_secret_paths:
+                self._record_retrieval_withheld_path(
+                    normalized_path,
+                    _RETRIEVAL_WITHHELD_SCANNER_SECRET,
+                )
                 continue
             path_matches = detect_secrets(item.relative_path)
             if any(match.confidence == "high" for match in path_matches):
@@ -1372,14 +1819,28 @@ class ContextBuilder:
                     redact=False,
                 )
             if path_matches:
+                self._record_retrieval_withheld_path(
+                    normalized_path,
+                    _RETRIEVAL_WITHHELD_PATH_SECRET,
+                )
                 continue
-            redacted, _matches = redact_text(
+            redacted, matches = redact_text(
                 item.content,
                 fail_on_detected_secret=self.privacy.fail_on_detected_secret,
                 redact=self.privacy.redact_secrets,
             )
+            intervals = _secret_taint_line_intervals(item.content, matches)
+            if intervals:
+                existing = self._retrieval_taint_line_intervals.get(normalized_path, ())
+                self._retrieval_taint_line_intervals[normalized_path] = _canonical_line_intervals(
+                    (*existing, *intervals)
+                )
             safe.append(replace(item, content=redacted, size=len(redacted.encode())))
         return tuple(safe)
+
+    def _record_retrieval_withheld_path(self, path: str, reason: str) -> None:
+        reasons = self._retrieval_withheld_path_reasons.get(path, frozenset())
+        self._retrieval_withheld_path_reasons[path] = reasons | {reason}
 
     def _safe_repository_map(
         self,
@@ -1531,11 +1992,14 @@ class ContextBuilder:
         allowed_source_paths: set[str] | None = None,
         requested_model_surfaces: list[ModelSurfaceReviewRequest] | None = None,
         request_model_surface_reviews: bool = False,
+        reserved_source_bytes: int = 0,
     ) -> ContextPackage:
         """Allocate one independently bounded package."""
 
         if request_model_surface_reviews and requested_model_surfaces is not None:
             raise ContextBudgetError("model surface requests cannot be both derived and supplied")
+        if isinstance(reserved_source_bytes, bool) or reserved_source_bytes < 0:
+            raise ContextBudgetError("reserved source byte budget must be nonnegative")
         scoped_safe_files = self._safe_files
         scope_excluded_files: list[DiscoveredFile] = []
         if allowed_source_paths is not None:
@@ -1568,10 +2032,13 @@ class ContextBuilder:
         # planner independently reserves the full UTF-8 byte upper bound before
         # transport, so allowing the deterministic byte/3 estimate here cannot
         # overrun an endpoint.
-        source_byte_ceiling = min(
+        configured_source_byte_ceiling = min(
             2**31 - 1,
             self.maximum_source_tokens_per_request * UTF8_BYTES_PER_ESTIMATED_TOKEN,
         )
+        if reserved_source_bytes > configured_source_byte_ceiling:
+            raise ContextBudgetError("reserved source bytes exceed the configured source ceiling")
+        source_byte_ceiling = configured_source_byte_ceiling - reserved_source_bytes
         default_share = self.repository_config.max_total_context_bytes
         budget = min(
             default_share if requested_budget is None else requested_budget,
@@ -1869,6 +2336,7 @@ class ContextBuilder:
                 scanner_findings=selected_scanners,
                 excerpts=[],
                 requested_model_surfaces=selected_model_surfaces,
+                actor_model_evidence=self._actor_model_evidence,
                 threat_model=included_threat_model,
                 solidity_projects=included_solidity_projects,
                 solidity_compilations=included_solidity_compilations,
@@ -2293,6 +2761,7 @@ class ContextBuilder:
             scanner_findings=selected_scanners,
             excerpts=excerpts,
             requested_model_surfaces=selected_model_surfaces,
+            actor_model_evidence=self._actor_model_evidence,
             threat_model=included_threat_model,
             solidity_projects=included_solidity_projects,
             solidity_compilations=included_solidity_compilations,
@@ -2377,6 +2846,17 @@ def context_hash_index(packages: Iterable[ContextPackage]) -> dict[tuple[str, in
             result[(file.path, 0, 0)] = file.sha256
         for excerpt in sealed.excerpts:
             result[(excerpt.path, excerpt.start_line, excerpt.end_line)] = excerpt.content_hash
+        transcript = sealed.solidity_retrieval_transcript
+        for exchange in () if transcript is None else transcript.exchanges:
+            for record in exchange.result.records:
+                if record.content is not None:
+                    result[
+                        (
+                            record.entity.path,
+                            record.entity.start_line,
+                            record.entity.end_line,
+                        )
+                    ] = record.entity.source_hash
     return result
 
 
@@ -2491,6 +2971,84 @@ def _rendered_excerpt_byte_delta(excerpt: ContextExcerpt) -> int:
     return sum(len(part.encode("utf-8")) for part in parts) + len(parts)
 
 
+def provider_actor_model_payload(
+    evidence: ActorModelInputEvidence,
+    *,
+    role: str,
+) -> dict[str, Any]:
+    """Expose semantic actor facts only while the operator artifact is current."""
+
+    if evidence.state is ActorModelInputState.CURRENT and role == "judge":
+        return evidence.model_dump(
+            mode="json",
+            exclude={"evaluated_at", "evidence_sha256"},
+        )
+    source = evidence.source_evidence
+    return {
+        "schema_version": evidence.schema_version,
+        "state": evidence.state.value,
+        "configured": evidence.configured,
+        "configured_path": evidence.configured_path,
+        "source_binding": (
+            {
+                "source_sha256": source.source_sha256,
+                "source_bytes": source.source_bytes,
+                "actor_model_sha256": source.actor_model.artifact_sha256,
+                "evidence_sha256": source.evidence_sha256,
+            }
+            if source is not None
+            else None
+        ),
+        "rejected_source_sha256": evidence.rejected_source_sha256,
+        "rejected_source_bytes": evidence.rejected_source_bytes,
+        "limitations": list(evidence.limitations),
+        "semantic_actor_facts_withheld": True,
+    }
+
+
+def provider_actor_model_payload_sha256(
+    evidence: ActorModelInputEvidence,
+    *,
+    role: str,
+) -> str:
+    """Hash the exact timestamp-invariant actor projection exposed to one provider role."""
+
+    return hashlib.sha256(
+        json.dumps(
+            provider_actor_model_payload(evidence, role=role),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _provider_retrieval_policy_payload(package: ContextPackage) -> dict[str, Any] | None:
+    """Return the exact non-executing lookup contract exposed to a review role."""
+
+    policy = package.solidity_retrieval_policy
+    corpus_sha256 = package.solidity_retrieval_corpus_sha256
+    if policy is None:
+        return None
+    if corpus_sha256 is None:
+        raise ContextBoundaryError("retrieval policy lacks its exact corpus commitment")
+    planning_phase = package.solidity_retrieval_transcript is None
+    return {
+        "schema_version": "1.0",
+        "protocol": "mmaudit.host_validated_read_only_solidity_retrieval.v1",
+        "phase": "planning" if planning_phase else "results_final",
+        "additional_requests_authorized": planning_phase,
+        "corpus_sha256": corpus_sha256,
+        "permitted_operations": [operation.value for operation in SolidityRetrievalOperation],
+        "subjects": [
+            entity.model_dump(mode="json") for entity in package.solidity_retrieval_entities
+        ],
+        "arbitrary_execution_authorized": False,
+        "policy": policy.model_dump(mode="json"),
+    }
+
+
 def render_context(package: ContextPackage) -> str:
     """Serialize with explicit source delimiters and metadata outside bodies."""
 
@@ -2520,6 +3078,41 @@ def render_context(package: ContextPackage) -> str:
                 "<THREAT_MODEL_JSON>",
                 json.dumps(package.threat_model.model_dump(mode="json"), sort_keys=True),
                 "</THREAT_MODEL_JSON>",
+            ]
+        )
+    if package.actor_model_evidence is not None:
+        parts.extend(
+            [
+                "<OPERATOR_ACTOR_MODEL_EVIDENCE_JSON>",
+                json.dumps(
+                    provider_actor_model_payload(
+                        package.actor_model_evidence,
+                        role=package.role,
+                    ),
+                    sort_keys=True,
+                ),
+                "</OPERATOR_ACTOR_MODEL_EVIDENCE_JSON>",
+            ]
+        )
+    retrieval_policy_payload = _provider_retrieval_policy_payload(package)
+    if retrieval_policy_payload is not None:
+        parts.extend(
+            [
+                "<VALIDATED_SOLIDITY_RETRIEVAL_POLICY_JSON>",
+                json.dumps(retrieval_policy_payload, sort_keys=True),
+                "</VALIDATED_SOLIDITY_RETRIEVAL_POLICY_JSON>",
+            ]
+        )
+    if package.solidity_retrieval_transcript is not None:
+        parts.extend(
+            [
+                "<VALIDATED_SOLIDITY_RETRIEVAL_TRANSCRIPT_JSON>",
+                json.dumps(
+                    package.solidity_retrieval_transcript.model_dump(mode="json"),
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ),
+                "</VALIDATED_SOLIDITY_RETRIEVAL_TRANSCRIPT_JSON>",
             ]
         )
     solidity_payload = {
@@ -2586,7 +3179,7 @@ def revalidate_context_package(package: ContextPackage) -> ContextPackage:
     try:
         sealed = ContextPackage.model_validate(package.model_dump(mode="python"))
         rendered_bytes = len(render_context(sealed).encode("utf-8"))
-        source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed.excerpts)
+        source_bytes = sealed.delivered_source_bytes()
     except (
         AttributeError,
         OverflowError,
@@ -2679,7 +3272,9 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
 
     package = revalidate_context_package(package)
     rendered_bytes = len(render_context(package).encode("utf-8"))
-    source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in package.excerpts)
+    pushed_source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in package.excerpts)
+    source_bytes = package.delivered_source_bytes()
+    retrieved_source_bytes = source_bytes - pushed_source_bytes
     scanner_bytes = len(
         json.dumps(
             _scanner_context_payload(package.scanner_findings),
@@ -2716,15 +3311,38 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
         "formal_runs": [run.model_dump(mode="json") for run in package.formal_runs],
     }
 
-    def payload_bytes(value: Any) -> int:
+    def payload_bytes(value: Any, *, ensure_ascii: bool = True) -> int:
         if value is None or value == [] or value == {}:
             return 0
-        return len(json.dumps(value, sort_keys=True).encode("utf-8"))
+        return len(json.dumps(value, sort_keys=True, ensure_ascii=ensure_ascii).encode("utf-8"))
 
     framework_bytes = payload_bytes(framework_payload) if any(framework_payload.values()) else 0
     graph_bytes = payload_bytes(graph_payload)
     invariant_bytes = payload_bytes(invariant_payload) if any(invariant_payload.values()) else 0
-    accounted = source_bytes + scanner_bytes + framework_bytes + graph_bytes + invariant_bytes
+    retrieval_payload = {
+        "policy": _provider_retrieval_policy_payload(package),
+        "transcript": (
+            package.solidity_retrieval_transcript.model_dump(mode="json")
+            if package.solidity_retrieval_transcript is not None
+            else None
+        ),
+    }
+    workflow_bytes = (
+        max(
+            0,
+            payload_bytes(retrieval_payload, ensure_ascii=False) - retrieved_source_bytes,
+        )
+        if any(retrieval_payload.values())
+        else 0
+    )
+    accounted = (
+        source_bytes
+        + scanner_bytes
+        + framework_bytes
+        + graph_bytes
+        + invariant_bytes
+        + workflow_bytes
+    )
     if accounted > rendered_bytes:
         raise ContextBudgetError("context category accounting exceeds rendered context")
     return {
@@ -2735,7 +3353,7 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
         "prior_audit": 0,
         "scanner": scanner_bytes,
         "source": source_bytes,
-        "workflow": 0,
+        "workflow": workflow_bytes,
     }
 
 
@@ -2789,18 +3407,53 @@ def context_category_measurements(
         },
         sort_keys=True,
     )
+    pushed_source_projection = [
+        {
+            "path": excerpt.path,
+            "start_line": excerpt.start_line,
+            "end_line": excerpt.end_line,
+            "content_sha256": excerpt.content_hash,
+            "utf8_bytes": len(excerpt.content.encode("utf-8")),
+        }
+        for excerpt in package.excerpts
+    ]
+    transcript = package.solidity_retrieval_transcript
     source_projection = json.dumps(
-        [
-            {
-                "path": excerpt.path,
-                "start_line": excerpt.start_line,
-                "end_line": excerpt.end_line,
-                "content_sha256": excerpt.content_hash,
-                "utf8_bytes": len(excerpt.content.encode("utf-8")),
-            }
-            for excerpt in package.excerpts
-        ],
+        pushed_source_projection
+        if transcript is None
+        else {
+            "pushed": pushed_source_projection,
+            "retrieved": [
+                {
+                    "path": record.entity.path,
+                    "start_line": record.entity.start_line,
+                    "end_line": record.entity.end_line,
+                    "content_sha256": record.entity.source_hash,
+                    "utf8_bytes": len(record.content.encode("utf-8")),
+                    "request_sha256": exchange.request.request_sha256,
+                    "result_sha256": exchange.result.result_sha256,
+                }
+                for exchange in transcript.exchanges
+                for record in exchange.result.records
+                if record.content is not None
+            ],
+        },
         sort_keys=True,
+    )
+    retrieval_policy_payload = _provider_retrieval_policy_payload(package)
+    workflow_projection = (
+        ""
+        if retrieval_policy_payload is None
+        else json.dumps(
+            {
+                "policy": retrieval_policy_payload,
+                "transcript": (
+                    transcript.model_dump(mode="json") if transcript is not None else None
+                ),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
     )
     projections = {
         "framework": framework_projection,
@@ -2809,7 +3462,7 @@ def context_category_measurements(
         "prior_audit": "",
         "scanner": scanner_projection,
         "source": source_projection,
-        "workflow": "",
+        "workflow": workflow_projection,
     }
     projection_hashes = {
         category: hashlib.sha256(value.encode("utf-8")).hexdigest()

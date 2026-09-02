@@ -1,0 +1,218 @@
+{
+  "campaign_id": "scheduler-campaign-ed82daefb1c6eb53c2c9d7621a2aec71db6053de2168ee08c98927f6158c93da",
+  "capability_binding_sha256": "dca96f604389f6ae9f7673712928c54c8c3c16c5988b5540d4afc9270ae5e937",
+  "completion_authorized": false,
+  "coverage_credit_authorized": false,
+  "direct_child_result_sha256s": [
+    "00c9f1ba4a065ae9f96cedd1bab5cfc7cbec5c65df97b644c698f4a131478df7",
+    "c3bd011f71d74333046d849cdb6aef471300e429963d4aab8986c0e24acc3b1f"
+  ],
+  "entry_index": 2,
+  "entry_kind": "FAMILY_PROMOTED",
+  "entry_sha256": "71f7604f1cf4794bd548c92e52a3bc32a164e53916fd2380316ede33ab65fa91",
+  "evidence_authority": "comparison_required",
+  "family_closure_id": "scheduler-recovery-closure-dd45ad5c826c485471e748ba6c6f471ba7c567c40871f80cba9aa10a633ff70a",
+  "family_closure_sha256": "c29fac1f4750690778c70ba922ce1d480e80a11f957b4c489e60203e2844f2cd",
+  "family_id": "scheduler-recovery-family-8feb969c982c89fd8d9fbfc5d5386f3397980094a05c11240e0eccf251269229",
+  "family_index": 0,
+  "family_root_sha256": "c35e1ec5c2144827de46e7117ba8567b7655689762b3ca83e24e71fb3a80f31a",
+  "journal_version": "mmaudit.scheduler.truncation-recovery-journal.v1",
+  "original_truncated_result_sha256": "546f7e49a69720b6ad344a9ab40c7270bdd52745922a82c3754ffa06c1b99043",
+  "parent_task_id": "scheduler-task-96ec30a41619f932f316a4f09ead07cc1427770fe518ef55cf850f50f1cad9ac",
+  "previous_entry_sha256": "c29fac1f4750690778c70ba922ce1d480e80a11f957b4c489e60203e2844f2cd",
+  "promotion_id": "scheduler-recovery-promotion-80e83feeea3a2745b3d57db849820988726162cb798852964b5720bd39e6f8ff",
+  "promotion_status": "RECOVERED",
+  "provider_dispatch_authorized": false,
+  "recovered_output": {
+    "accepted_candidate_payload_sha256s": {
+      "cand-c2fd78c46dbbe161056618ba": "2eb0f72eeb1c91411dd42f68ecdce1cf36e7332556d09119a0e260e0f9c5b405"
+    },
+    "campaign_id": "scheduler-campaign-ed82daefb1c6eb53c2c9d7621a2aec71db6053de2168ee08c98927f6158c93da",
+    "candidate_origins": [
+      {
+        "accepted_candidate_id": "cand-c2fd78c46dbbe161056618ba",
+        "accepted_candidate_sha256": "2eb0f72eeb1c91411dd42f68ecdce1cf36e7332556d09119a0e260e0f9c5b405",
+        "accepted_frame_sequence": 1,
+        "accepted_frame_sha256": "90bf9887f4209ffe47a5599b5a18ab2488c3c2723b00cecc810580f846a189f7",
+        "context_request_evidence_sha256": "75468a9647d865739c0af19a403eea53718422a8fffc324f3f9e4bcee635a622",
+        "origin_kind": "PARENT_FRAME",
+        "origin_sha256": "cde4918b572dd6826dc9a11abf3e98fcebd59697242d4d6859933837fac8d97e",
+        "parent_projection_sha256": "7d92c3c08786c7da204471d3534708a73e0dfbc4d547d059e5a45242da02529a",
+        "raw_candidate_id": "retained-v1-direct-raw-candidate",
+        "raw_candidate_sha256": "b72c5153c396dd96f14af5911828c65941c8f0c2f40951011c8156b13d960470",
+        "request_id": "scheduler-request-ba09c8de8b06f3ca6f5b04e47555945505e3c8df6c15a93c0e0edfffb59da474",
+        "request_role": "source_audit",
+        "usage_record_sha256": "cacf436bf9dd1ae6f13745d176317b3ef17f4d8536ce1001473070f5945953b1"
+      }
+    ],
+    "completion_authorized": false,
+    "coverage_credit_authorized": false,
+    "delivered_source_descriptor_sha256s": [
+      "7bcb7fca16bb0549f481880a21b3226aabf5be4af86f39b439b1b2cd044e0fc2"
+    ],
+    "evidence_authority": "comparison_required",
+    "family_closure_sha256": "c29fac1f4750690778c70ba922ce1d480e80a11f957b4c489e60203e2844f2cd",
+    "family_root_sha256": "c35e1ec5c2144827de46e7117ba8567b7655689762b3ca83e24e71fb3a80f31a",
+    "original_truncated_result_sha256": "546f7e49a69720b6ad344a9ab40c7270bdd52745922a82c3754ffa06c1b99043",
+    "output_artifact_sha256": "cd368c3f6b0d65850940474f43f1ec17313ab7b9a86c988c886b4b812a62a469",
+    "output_id": "scheduler-recovered-output-05ab48c1ecad802ce824d0026f2564ee5b1abcc2e933f5974511ce7e1c237dc6",
+    "output_sha256": "f73f75f829a22efe03fb28828e52ef866b791310724202817833aa59fc97d7d0",
+    "parent_activation_sha256": "946bdf8a50a7a0194557d3adc87d787fb8b01c362891807c110a1f3263a090a6",
+    "parent_logical_request_id": "scheduler-request-ba09c8de8b06f3ca6f5b04e47555945505e3c8df6c15a93c0e0edfffb59da474",
+    "parent_provider_attempt_sha256": "1fa21062f3c6d02d9bc640f341124cd4413504cf331a1d3c4423fd41150bc95d",
+    "parent_task_id": "scheduler-task-96ec30a41619f932f316a4f09ead07cc1427770fe518ef55cf850f50f1cad9ac",
+    "pass_plan_id": "scheduler-plan-1b446ece504da8ad24190943138d5ea9ae93ed8c94e9465bf2f2586e31aed1ea",
+    "provider_dispatch_authorized": false,
+    "recovered_batch": {
+      "findings": [
+        {
+          "attack_path": [
+            "Exercise the bounded local transition."
+          ],
+          "candidate_id": "cand-c2fd78c46dbbe161056618ba",
+          "compensating_controls": [],
+          "confidence": 0.8,
+          "cwe": [],
+          "evidence": [
+            {
+              "description": "Synthetic model evidence for a defensive parser regression.",
+              "fingerprint": null,
+              "rule_id": null,
+              "source": "source_audit",
+              "type": "model"
+            }
+          ],
+          "execution_provenance": null,
+          "false_positive_conditions": [
+            "A local guard preserves the invariant."
+          ],
+          "impact": "Only the disposable synthetic fixture can enter the prohibited state.",
+          "locations": [
+            {
+              "content_hash": null,
+              "end_line": 9,
+              "path": "tests/fixtures/Synthetic.sol",
+              "start_line": 7,
+              "symbol": null
+            }
+          ],
+          "model_family": "synthetic/auditor",
+          "model_votes": [
+            {
+              "family": "synthetic/auditor",
+              "rationale": "A synthetic local transition may violate its declared invariant.",
+              "requested_model": "synthetic/auditor-v1",
+              "returned_model": "synthetic/auditor-v1",
+              "role": "source_audit",
+              "verdict": "proposed"
+            }
+          ],
+          "origin_kind": "model_review",
+          "owasp": [],
+          "preconditions": [
+            "The local synthetic transition is reachable."
+          ],
+          "recommendation": "Preserve the invariant and rerun the local negative regression.",
+          "role": "source_audit",
+          "severity": "high",
+          "sink": null,
+          "source": null,
+          "summary": "A synthetic local transition may violate its declared invariant.",
+          "title": "Synthetic bounded candidate",
+          "verification_test": {
+            "description": "Replay the disposable local negative-control fixture.",
+            "safe": true,
+            "type": "local"
+          }
+        }
+      ],
+      "surface_reviews": [
+        {
+          "assumptions": [],
+          "citation": {
+            "location": null,
+            "symbol": "surface-root-3"
+          },
+          "confidence": 0.0,
+          "contract": "SyntheticVault",
+          "evidence_observations": [],
+          "function_or_state_surface": "surface-3",
+          "invariant_considered": "Synthetic state remains within its declared local bound.",
+          "rationale": "The bounded synthetic surface was not completely reviewed.",
+          "reachability": null,
+          "review_role": "source_audit",
+          "status": "NOT_REVIEWED",
+          "surface_id": "model-surface:4c285c0e2ac4f1d48a4b2abd1764bbf28ee1e97639f7757e1e991b6c417049d3"
+        },
+        {
+          "assumptions": [],
+          "citation": {
+            "location": null,
+            "symbol": "surface-root-2"
+          },
+          "confidence": 0.0,
+          "contract": "SyntheticVault",
+          "evidence_observations": [],
+          "function_or_state_surface": "surface-2",
+          "invariant_considered": "Synthetic state remains within its declared local bound.",
+          "rationale": "The bounded synthetic surface was not completely reviewed.",
+          "reachability": null,
+          "review_role": "source_audit",
+          "status": "NOT_REVIEWED",
+          "surface_id": "model-surface:6096a57075a61f7679c02671a4924a758cd786c7326807939bde245bceb9e3a0"
+        },
+        {
+          "assumptions": [],
+          "citation": {
+            "location": null,
+            "symbol": "surface-root-0"
+          },
+          "confidence": 0.0,
+          "contract": "SyntheticVault",
+          "evidence_observations": [],
+          "function_or_state_surface": "surface-0",
+          "invariant_considered": "Synthetic state remains within its declared local bound.",
+          "rationale": "The bounded synthetic surface was not completely reviewed.",
+          "reachability": null,
+          "review_role": "source_audit",
+          "status": "NOT_REVIEWED",
+          "surface_id": "model-surface:8e9e3499644dd4864eed327ee11d6922fed7daacdcaab8ecaeb7cb66b9c6bc9b"
+        },
+        {
+          "assumptions": [],
+          "citation": {
+            "location": null,
+            "symbol": "surface-root-1"
+          },
+          "confidence": 0.0,
+          "contract": "SyntheticVault",
+          "evidence_observations": [],
+          "function_or_state_surface": "surface-1",
+          "invariant_considered": "Synthetic state remains within its declared local bound.",
+          "rationale": "The bounded synthetic surface was not completely reviewed.",
+          "reachability": null,
+          "review_role": "source_audit",
+          "status": "NOT_REVIEWED",
+          "surface_id": "model-surface:f40a135e6b843c3110bd4a347ae5ac2193cf7481997b619e137f4295b0fb6b12"
+        }
+      ]
+    },
+    "recovery_family_id": "scheduler-recovery-family-8feb969c982c89fd8d9fbfc5d5386f3397980094a05c11240e0eccf251269229",
+    "release_authorized": false,
+    "review_credit_authorized": false,
+    "scanner_fingerprints_by_request": [
+      [
+        "scheduler-request-ba09c8de8b06f3ca6f5b04e47555945505e3c8df6c15a93c0e0edfffb59da474",
+        []
+      ]
+    ],
+    "schema_version": "1.0",
+    "structural_surface_artifact_sha256": "21d1d0da71c3e137c5b2aa99415bf7181fba7338bb29f1e41a0c5278f83a37c5"
+  },
+  "recovery_plan_sha256": "63924bc53cc7d7a2553125a87bc8cf03468cfeef744d4c48163228babab152fd",
+  "release_authorized": false,
+  "request_limit_binding_sha256": "dd09c29ce21b88969d93d48dfb12030ebecc2c442ebf9d40939daae6185fa608",
+  "request_limit_id": "scheduler-request-ba09c8de8b06f3ca6f5b04e47555945505e3c8df6c15a93c0e0edfffb59da474",
+  "review_credit_authorized": false,
+  "schema_version": "1.0"
+}

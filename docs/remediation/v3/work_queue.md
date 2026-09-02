@@ -1317,7 +1317,24 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/context.py`, `src/mmaudit/solidity/retrieval.py`,
   `src/mmaudit/agents/base.py`, prompts, run-evidence schemas, regressions.
 - **Dependencies:** `V3-SCHEDULER-001`.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Result:** Added a fixed typed read-only vocabulary over already-indexed, already-redacted
+  Solidity evidence, with deterministic role budgets, refusal/omission evidence, private transcript
+  custody before primary activation, hash-only public custody, and exact replay/resume retention.
+  Empty or exhausted allocations retain the bounded single-shot fallback. Retry code and
+  configuration are unchanged.
+- **Validation:** Focused retrieval/scheduler matrices passed `18` and `60`; the failed-primary
+  integration passed `1`; release-schema/inventory validation passed `62`; and affected Ruff,
+  strict mypy, and generator verification passed. Repository-wide runs reached `3022` tests before
+  a sandbox-only socket bind (whose exact escalated rerun passed), then `5336` before the expected
+  stale governance hash after source/test edits; terminal governance/full rerun remains boundary
+  reconciliation and is not claimed as ticket evidence.
+- **Remaining limitation:** This provider-free capability proves no provider-backed audit,
+  candidate route, qualification, runtime authority, or release. It changes neither same-route
+  schema-retry code nor configuration.
+- **Next action:** `V3-PRICELEXEME-001` is the sole current successor at a selection-only boundary
+  with `implementation_started=false`. `V3-PRICEFORM-001` remains `QUEUED`, and
+  `V3-CANDROUTE-001` remains `PARTIAL` and downstream; grant no external authority.
 
 ## V3-ACTORMODEL-001 — Actor and incentive model as a required audit input
 
@@ -1375,7 +1392,25 @@ are invisible to source review by construction.
   consensus and severity assignment, specialist and judge prompts, report provenance, regressions.
 - **Dependencies:** None for the schema and input path; `V3-CONSENSUS-001` for severity
   consumption.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Result:** A bounded, identity-safe loader now accepts only typed, versioned, self-hashed
+  operator-authored actor evidence and records current, stale, missing, future, and invalid states.
+  Held and admitted-unfilled roles, concentration, capital-waterfall priority, revenue/failure
+  exposure, constraints, ordinary legitimate behavior, and code/model occupancy conflicts feed a
+  deterministic post-consensus calibration. Specialists and verifiers remain actor-blind; CURRENT
+  actor input gives the judge typed context without allowing judge status, severity, or confidence
+  to classify the finding. Baseline, evaluation, judge, report, manifest, scheduler, and schema
+  custody plus all three synthetic correction scenarios are retained.
+- **Validation:** Canonical generation/verification, Ruff, strict mypy over `221` source files, and
+  the broad affected matrix passed. The matrix result was `674 passed, 1 skipped, 2 deselected`;
+  the two deselected truncation-parser hygiene tests were separately reproduced and independently
+  traced to a pre-ticket checkpoint.
+- **Remaining limitation:** Operator actor facts are not independently authenticated. Legacy
+  scheduler-v1 replay is proven across real component loaders without one monolithic recovered-v1
+  fixture, and the two pre-existing parser regressions remain outside this ticket.
+- **Next action:** Select `V3-TAXONOMY-001` as the next dependency-ready local work unit at a new
+  boundary. No provider/network command, candidate selection, campaign, qualification, audit, or
+  release authority follows from this completion.
 
 ## V3-TAXONOMY-001 — Known-issue taxonomy with mandatory disposition
 
@@ -1395,7 +1430,36 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/model_coverage.py`, `src/mmaudit/solidity/economics.py`,
   reporting, regressions.
 - **Dependencies:** `V3-COVERAGE-001`.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Selection record:** Selected at `2026-08-31T00:25:18Z` for a provider-free implementation of
+  the hash-pinned defensive corpus, deterministic profile applicability, explicit dispositions,
+  report coverage, and maximum-assurance critical-gap gate. No model/provider call, candidate,
+  active selection plan, ledger, campaign, qualification, audit, or release authority changed.
+- **Result:** The provider-free, hash-pinned defensive taxonomy is bound to deterministic protocol
+  profiles, and every applicable class now requires an evidence-cited `REVIEWED`,
+  `NOT_APPLICABLE`, or `GAP` disposition with an explicit denominator. Critical gaps block
+  maximum-assurance `COMPLETE`, while taxonomy entries remain classification-only and cannot create
+  findings. Closure-private ordinary/recovery authority, durable promotion lineage, exact
+  capability identity, promoted-leaf consumers, ordinary-root system-prompt inheritance, lexically
+  captured authority classes, and exact recovery snapshot adoption are repaired. Frozen
+  scheduler-v1 bytes replace the drifting legacy helper, and consumer validation replays every
+  retained reference before applying the terminal live-authority gate.
+- **Validation:** Canonical generation and verification pass for the final `3892`-source autonomy
+  inventory. The assurance/report/learning matrix passed `291` tests; model-coverage/review/manifest
+  passed `233`; release/replay passed `314`; the changed scheduler matrix passed `350`; affected
+  units passed `457`; affected safe local integrations passed `40` with `8` explicit skips; and the
+  cumulative coverage and truncation integration matrices passed `11` and `9` respectively. The
+  current governance matrix passed `103` tests. Ruff check, Ruff format verification over `597`
+  files, strict mypy over `226` source files, strict JSON parsing, and diff integrity pass. The
+  terminal complete sequential suite exited `0` with `8073 passed, 22 skipped, 12 warnings in
+  9810.83s (2:43:30)`.
+- **Remaining limitation:** This provider-free capability does not prove a provider-backed audit,
+  candidate selection, qualification, runtime authority, or release. Release collection remains
+  intentionally `BLOCKED_TECHNICAL` before all side effects; no provider or operator action is
+  authorized.
+- **Next action:** `STOP` at this ticket boundary. `V3-RETRIEVAL-001` is the next dependency-ready
+  ticket, but it remains `QUEUED` and unselected. `V3-CANDROUTE-001` remains `PARTIAL`, and
+  `V3-PRICELEXEME-001` remains `QUEUED`, unselected, and unimplemented. Grant no external authority.
 
 ## V3-LEARNING-001 — Cross-audit learning corpus
 
@@ -1658,8 +1722,73 @@ are invisible to source review by construction.
 - **Remaining limitation:** No provider-backed retry, replacement candidate, successful real audit,
   qualification, runtime authority, or release is proven. The historical failed campaign used zero
   schema retries and is unchanged; the frozen qualification profile remains retry-off.
-- **Next action:** Stop after closure. `V3-REVOKERECON-001` is the next dependency-ready queued
-  provider-free ticket, but it is not selected in this work unit.
+- **Next action:** Historical at this ticket boundary. `V3-REVOKERECON-001` later completed its
+  provider-free requested-assignment reconciliation without selecting a replacement candidate or
+  granting external authority; no successor ticket was selected at this recorded boundary.
+
+## V3-CANDROUTE-001 — Restore an admissible candidate route
+
+- **Objective:** Restore at least one lineage-independent candidate path through constrained
+  discovery and provider-free live-route preflight without weakening unrelated safety predicates.
+- **Acceptance criteria:** Settle and record candidate reasoning-effort semantics; provide a supported
+  selection-plan endpoint-inventory refresh path or current inventory; prove a lineage-independent
+  candidate passes constrained discovery and `--live-route-preflight-only`; keep ZDR, operational,
+  structured-output, injective display-name, lineage, revocation, and every authority gate fail-closed.
+- **Files expected to change:** `src/mmaudit/models/candidate_selection.py`,
+  `src/mmaudit/models/route_constraints.py`, `src/mmaudit/cli.py`, schemas, status documents, and
+  focused regressions.
+- **Dependencies:** Provider-free operator sweep recorded on 2026-08-30 and
+  `V3-PLANSUCCESSOR-001` (`COMPLETE`).
+- **Status:** `PARTIAL`
+- **Evidence:** The shared AUTHRUNNER candidate profile genuinely emits `effort=high`, so exact
+  reasoning-effort inventory remains required for all four constraint purposes. Backward-compatible
+  plan schema v1.6 adds an explicit predecessor-bound `OPERATOR_STAGED_UNVERIFIED` endpoint refresh
+  that embeds no provider metadata or discovery evidence, grants no authority, and requires fresh
+  constrained discovery. A lineage-distinct synthetic route passes constrained discovery and the
+  mocked live-route preflight while missing-effort, revoked, and nonconforming routes remain closed.
+- **Remaining limitation:** No current real route is claimed admissible or selected; the active plan
+  is unchanged and `completed_real_audits` remains zero.
+- **Validation:** Ticket-focused `224 passed`; product governance `25 passed`; canonical generation,
+  targeted Ruff, and strict mypy pass. The wider affected matrix has no pass credit: it ended
+  `1141 passed, 16 failed` on pre-existing OpenRouter refresh-runtime defects reproduced at baseline.
+- **Next action:** Stop this work unit. Resume `V3-CANDROUTE-001` only with fresh nonauthorizing
+  operator evidence for a current real route, then replay schema v1.6 constrained discovery and
+  provider-free live-route preflight. Do not select a route from synthetic evidence or issue an
+  external command.
+
+## V3-ENDPOINTLIST-001 — Provider-free endpoint enumeration for candidate selection
+
+- **Objective:** Expose the existing authenticated metadata endpoint inventory for one exact model
+  so an operator can choose a current `MODEL_ID=PROVIDER_ENDPOINT` input without guessing.
+- **Acceptance criteria:** Report exact tags/slugs, operational state, ZDR eligibility, native
+  structured-output support, provider display-name injectivity, and reasoning-effort inventory;
+  issue no completion; do not open or mutate the cost ledger; never disclose or persist secrets;
+  and grant no selection, runner, qualification, egress, completion, or release authority.
+- **Files expected to change:** Endpoint-inventory typed projection, `src/mmaudit/cli.py`, generated
+  schema/inventory artifacts, focused recorded-metadata regressions, and status documents.
+- **Dependencies:** `V3-CANDROUTE-001` (`PARTIAL`) and its completed explicit unverified endpoint-
+  refresh mechanism. Current real-route evidence remains unavailable and is not inferred here.
+- **Status:** `COMPLETE`
+- **Reopened 2026-08-30:** Operator-reported live use found that all 112 surveyed endpoints lacked
+  endpoint-level reasoning-effort inventory while admission separately falls back to model-level
+  inventory. The diagnostic must report model-level and exact effective resolved efforts before it
+  satisfies its original route-choice acceptance criterion.
+- **Result:** Schema v1.1 joins the exact model-catalog fact used by admission to each endpoint and
+  reports model, endpoint, and admission-effective reasoning inventories with source, explicit-empty
+  veto, unavailable, and contradiction states. Model and endpoint structured-output facts are
+  separately visible, and the diagnostic shares admission's resolver. Exact route, status, ZDR,
+  provider-injectivity, successor-argument, self-hash, no-ledger, no-usage, secret, and nonauthority
+  controls remain fail-closed.
+- **Validation:** Corrected integrated validation passed `621` tests; adjacent isolation passed
+  `292`; CLI-only validation passed `27`; canonical generation, Ruff, and strict mypy pass.
+  Independent review found no blocker/HIGH. The wider affected run retained `16` known baseline
+  refresh-runtime failures and receives no pass credit.
+- **Remaining limitation:** The operator-reported v1.0 survey covered `12` models / `112` endpoints
+  and exposed the corrected gap, but v1.1 has not been run live and Codex did not perform or
+  authenticate those external reads. The survey found zero admissible candidates, the active plan
+  is unchanged, and `V3-CANDROUTE-001` remains `PARTIAL`.
+- **Next action:** Select `V3-ACTORMODEL-001`. Resume `V3-CANDROUTE-001` only with admissible-route
+  evidence or a separately reviewed policy decision; do not issue an external command here.
 
 ## V3-LIFECYCLE-001 — Finding lifecycle and triage state across runs
 

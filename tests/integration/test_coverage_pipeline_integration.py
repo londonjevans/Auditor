@@ -13,6 +13,7 @@ from mmaudit.constants import (
     CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
     CANDIDATE_INDEPENDENT_SPECIALIST_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
+    ExitCode,
 )
 from mmaudit.models.coverage_planning import (
     ModelPortfolioResourcePreflight,
@@ -20,7 +21,13 @@ from mmaudit.models.coverage_planning import (
     ModelSurfaceCoveragePlan,
 )
 from mmaudit.models.openrouter import trusted_openrouter_execution_evidence
-from mmaudit.models.scheduler import SchedulerArtifact, SchedulerPassKind, SchedulerTaskOutput
+from mmaudit.models.scheduler import (
+    SchedulerActivationStatus,
+    SchedulerArtifact,
+    SchedulerPassKind,
+    SchedulerTaskOutput,
+    SchedulerTaskPurpose,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     ExecutionEvidenceKind,
@@ -40,6 +47,10 @@ from tests.conftest import model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter
 from tests.integration import test_pipeline as pipeline_test_support
 from tests.integration.test_pipeline import StaticScannerRunner, _foundry_repo, _run
+
+_MISSING_PRE_DISPATCH_AUTHORITY_REASON = (
+    "model review lacked exact journal-derived pre-dispatch authorization"
+)
 
 
 def _compact_solidity_config(
@@ -121,6 +132,50 @@ def _coverage_request_surfaces(
         if task_id is not None:
             observed[task_id] = surfaces
     return observed
+
+
+def _assert_reopened_coverage_only_adds_missing_authority(
+    first_bytes: bytes,
+    resumed_bytes: bytes,
+) -> None:
+    assert resumed_bytes != first_bytes
+    first_payload = json.loads(first_bytes)
+    resumed_payload = json.loads(resumed_bytes)
+    first_references = [
+        reference
+        for surface in first_payload["coverage"]["surfaces"]
+        for reference in surface["evidence_references"]
+    ]
+    resumed_references = [
+        reference
+        for surface in resumed_payload["coverage"]["surfaces"]
+        for reference in surface["evidence_references"]
+    ]
+    assert first_references
+
+    def reference_key(reference: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            reference["surface_id"],
+            reference["request_id"],
+            reference["artifact_sha256"],
+        )
+
+    first_by_key = {reference_key(reference): reference for reference in first_references}
+    resumed_by_key = {reference_key(reference): reference for reference in resumed_references}
+    assert len(first_by_key) == len(first_references)
+    assert len(resumed_by_key) == len(resumed_references)
+    assert first_by_key.keys() == resumed_by_key.keys()
+
+    for key, first_reference in first_by_key.items():
+        resumed_reference = resumed_by_key[key]
+        assert not first_reference["credited"]
+        assert not resumed_reference["credited"]
+        first_reasons = set(first_reference["reason"].split("; "))
+        resumed_reasons = set(resumed_reference["reason"].split("; "))
+        assert _MISSING_PRE_DISPATCH_AUTHORITY_REASON not in first_reasons
+        assert resumed_reasons == first_reasons | {_MISSING_PRE_DISPATCH_AUTHORITY_REASON}
+        resumed_reference["reason"] = first_reference["reason"]
+    assert resumed_payload == first_payload
 
 
 def _install_bounded_compact_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,7 +276,11 @@ async def test_compact_surface_tasks_conserve_exact_requests_and_resume_without_
         resume_run_dir=first.run_dir,
     )
     assert resumed_fake.chat_calls == 0
-    assert (resumed.run_dir / "model-review-coverage.json").read_bytes() == (public_coverage_before)
+    resumed_coverage_bytes = (resumed.run_dir / "model-review-coverage.json").read_bytes()
+    _assert_reopened_coverage_only_adds_missing_authority(
+        public_coverage_before,
+        resumed_coverage_bytes,
+    )
 
 
 @pytest.mark.asyncio
@@ -323,6 +382,105 @@ async def test_resume_after_portfolio_release_before_blind_pass_seal_reuses_init
     assert (
         interrupted_run / "private" / "scheduler-journal" / "pass-results" / "pass-02-result.json"
     ).is_file()
+
+
+@pytest.mark.asyncio
+async def test_resumed_failed_blind_context_plan_skips_retained_terminal_results(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = _compact_solidity_config(config_factory)
+    _install_bounded_compact_fixture(monkeypatch)
+    control = tmp_path / "context-failure-resume-control"
+    control.mkdir(mode=0o700)
+    ledger = AtomicCostLedger.initialize(
+        (control / "model-cost-ledger.json").resolve(),
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    original_context_build = pipeline_runtime.ContextBuilder.build
+
+    def fail_source_context(
+        builder: Any,
+        role: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if role == "source_audit":
+            raise pipeline_runtime.ContextBudgetError("synthetic resumed context shortfall")
+        return original_context_build(builder, role, *args, **kwargs)
+
+    monkeypatch.setattr(
+        pipeline_runtime.ContextBuilder,
+        "build",
+        fail_source_context,
+    )
+    original_seal_pass_result = pipeline_runtime.PipelineScheduler.seal_pass_result
+    blind_seal_interruptions = 0
+
+    def crash_before_failed_blind_pass_seal(scheduler: Any) -> Any:
+        nonlocal blind_seal_interruptions
+        if scheduler.active_plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
+            blind_seal_interruptions += 1
+            raise RuntimeError("synthetic crash before failed blind pass seal")
+        return original_seal_pass_result(scheduler)
+
+    monkeypatch.setattr(
+        pipeline_runtime.PipelineScheduler,
+        "seal_pass_result",
+        crash_before_failed_blind_pass_seal,
+    )
+    output = tmp_path / "context-failure-resume-output"
+    with pytest.raises(RuntimeError, match="synthetic crash before failed blind pass seal"):
+        await _run(
+            config,
+            repository,
+            tmp_path,
+            FakeOpenRouter(mode="clean_no_candidates"),
+            scanner_runner=StaticScannerRunner(emit_finding=False),
+            cost_ledger=ledger,
+            output=output,
+        )
+
+    assert blind_seal_interruptions == 1
+    interrupted_runs = tuple(path for path in (output / "runs").iterdir() if path.is_dir())
+    assert len(interrupted_runs) == 1
+    interrupted_run = interrupted_runs[0]
+    result_paths = tuple(
+        (interrupted_run / "private" / "scheduler-journal" / "task-results").glob("*.json")
+    )
+    assert result_paths
+    assert not (
+        interrupted_run / "private" / "scheduler-journal" / "pass-results" / "pass-02-result.json"
+    ).exists()
+
+    monkeypatch.setattr(
+        pipeline_runtime.PipelineScheduler,
+        "seal_pass_result",
+        original_seal_pass_result,
+    )
+    resumed_fake = FakeOpenRouter(mode="clean_no_candidates")
+    resumed = await _run(
+        config,
+        repository,
+        tmp_path,
+        resumed_fake,
+        scanner_runner=StaticScannerRunner(emit_finding=False),
+        cost_ledger=ledger,
+        resume_run_dir=interrupted_run,
+        output=output,
+    )
+
+    assert resumed.exit_code is ExitCode.INCOMPLETE
+    assert resumed_fake.chat_calls == 0
+    assert resumed_fake.requests == []
+    assert (
+        interrupted_run / "private" / "scheduler-journal" / "pass-results" / "pass-02-result.json"
+    ).is_file()
+    assert not (
+        interrupted_run / "private" / "scheduler-journal" / "pass-plans" / "pass-03-plan.json"
+    ).exists()
 
 
 @pytest.mark.asyncio
@@ -549,7 +707,18 @@ async def test_clean_solidity_runtime_executes_exact_candidate_independent_speci
     }
     report_usage = {usage.request_id: usage for usage in first.report.usage}
     assert retained_usage == report_usage
-    assert {request.logical_request_id for request in scheduler.model_requests} == set(report_usage)
+    scheduler_requests_by_id = {
+        request.logical_request_id: request for request in scheduler.model_requests
+    }
+    untransported_request_ids = set(scheduler_requests_by_id) - set(report_usage)
+    assert set(scheduler_requests_by_id) == set(report_usage) | untransported_request_ids
+    assert untransported_request_ids
+    assert all(
+        scheduler_requests_by_id[request_id].purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        and scheduler_requests_by_id[request_id].activation_status
+        is SchedulerActivationStatus.PREFLIGHT_FAILED
+        for request_id in untransported_request_ids
+    )
     request_ids = {
         metadata["mmaudit_request_id"]
         for body in first_fake.requests
@@ -606,8 +775,13 @@ async def test_clean_solidity_runtime_executes_exact_candidate_independent_speci
     assert portfolio_hold.plan_sha256 == portfolio_preflight.preflight_sha256
     assert portfolio_hold.status is PortfolioHoldStatus.RELEASED
     assert portfolio_hold.remaining_slots == ()
-    assert portfolio_hold.released_slots == ()
-    assert all(slot.status is PortfolioSlotStatus.CLAIMED for slot in portfolio_hold.slots)
+    assert {slot.request_id for slot in portfolio_hold.released_slots} == (
+        untransported_request_ids
+    )
+    assert all(
+        slot.status in {PortfolioSlotStatus.CLAIMED, PortfolioSlotStatus.RELEASED}
+        for slot in portfolio_hold.slots
+    )
     hold_request_ids = {slot.request_id for slot in portfolio_hold.initial_slots}
     post_portfolio_usage_ids = {
         request_id
@@ -615,32 +789,33 @@ async def test_clean_solidity_runtime_executes_exact_candidate_independent_speci
         if usage.role in {"specialist:invariant_review", "specialist:report_quality"}
     }
     assert hold_request_ids == portfolio_request_ids
-    assert portfolio_request_ids | post_portfolio_usage_ids == set(report_usage)
+    transported_portfolio_request_ids = portfolio_request_ids - untransported_request_ids
+    assert transported_portfolio_request_ids | post_portfolio_usage_ids == set(report_usage)
     assert portfolio_request_ids.isdisjoint(post_portfolio_usage_ids)
     assert {report_usage[request_id].role for request_id in post_portfolio_usage_ids} == {
         "specialist:invariant_review",
         "specialist:report_quality",
     }
-    assert (
-        len(portfolio_hold.claimed_slots)
-        == len(portfolio_hold.initial_slots)
-        == len(portfolio_request_ids)
+    assert {slot.request_id for slot in portfolio_hold.claimed_slots} == (
+        transported_portfolio_request_ids
     )
+    assert len(portfolio_hold.initial_slots) == len(portfolio_request_ids)
     assert public_coverage["portfolio_hold_status"] == "released"
     assert public_coverage["portfolio_initial_slot_count"] == len(portfolio_request_ids)
-    assert public_coverage["portfolio_claimed_slot_count"] == len(portfolio_request_ids)
-    assert public_coverage["portfolio_released_slot_count"] == 0
+    assert public_coverage["portfolio_claimed_slot_count"] == len(transported_portfolio_request_ids)
+    assert public_coverage["portfolio_released_slot_count"] == len(untransported_request_ids)
     assert public_coverage["portfolio_held_slot_count"] == 0
     terminal_ledger_bytes = ledger_path.read_bytes()
 
     stable_artifact_names = (
         "candidate-findings.json",
-        "model-review-coverage.json",
+        "known-issue-taxonomy-coverage.json",
         "private/model-portfolio-resource-preflight.json",
         "scheduler-state.json",
         "specialist-execution.json",
     )
     stable_artifacts = {name: (first.run_dir / name).read_bytes() for name in stable_artifact_names}
+    first_coverage_bytes = (first.run_dir / "model-review-coverage.json").read_bytes()
     resumed_fake = FakeOpenRouter(
         mode="clean_no_candidates",
         extra_model_ids=specialist_model_ids,
@@ -663,6 +838,10 @@ async def test_clean_solidity_runtime_executes_exact_candidate_independent_speci
     assert {
         name: (resumed.run_dir / name).read_bytes() for name in stable_artifact_names
     } == stable_artifacts
+    _assert_reopened_coverage_only_adds_missing_authority(
+        first_coverage_bytes,
+        (resumed.run_dir / "model-review-coverage.json").read_bytes(),
+    )
 
 
 @pytest.mark.asyncio
@@ -707,7 +886,7 @@ async def test_infeasible_compact_resource_preflight_blocks_every_blind_transpor
 
 
 @pytest.mark.asyncio
-async def test_instance_preview_shadow_is_rejected_before_blind_transport(
+async def test_instance_preview_shadow_is_rejected_before_any_paid_transport(
     config_factory: Any,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -752,9 +931,10 @@ async def test_instance_preview_shadow_is_rejected_before_blind_transport(
         ExecutionEvidenceKind.MOCK,
         ExecutionEvidenceKind.MOCK,
     ]
-    assert fake.chat_calls == 1
+    assert fake.chat_calls == 0
+    assert fake.requests == []
     assert any(
-        "candidate-review resource_preview dispatch boundary changed before provider work" in reason
+        "portfolio resource preview client boundary changed" in reason
         for reason in result.report.incomplete_reasons
     )
 

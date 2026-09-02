@@ -45,6 +45,7 @@ from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
     DiscoveryModelMetadataBinding,
+    ModelDiscoveryValidationError,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
     _issue_real_openrouter_discovery_run,
@@ -142,9 +143,14 @@ class _MockClientFactory:
     orphan_usage_models: set[str] = field(default_factory=set)
     clients: list[OpenRouterClient] = field(default_factory=list)
     http_clients: list[httpx.AsyncClient] = field(default_factory=list)
-    calls: list[tuple[str, OpenRouterProviderPolicy, ReasoningPolicyArtifact]] = field(
-        default_factory=list
-    )
+    calls: list[
+        tuple[
+            str,
+            OpenRouterProviderPolicy,
+            ReasoningPolicyArtifact,
+            ExactRouteConstraint | None,
+        ]
+    ] = field(default_factory=list)
     request_bodies: list[dict[str, Any]] = field(default_factory=list)
     metadata_requests: list[str] = field(default_factory=list)
 
@@ -157,10 +163,18 @@ class _MockClientFactory:
         usage: UsageLedger,
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
+        candidate_revocation_route_constraint: ExactRouteConstraint | None,
         reasoning_policy: ReasoningPolicyArtifact,
         token_budgets: TokenBudgetConfig | None,
     ) -> OpenRouterClient:
-        self.calls.append((candidate.exact_model_id, provider_policy, reasoning_policy))
+        self.calls.append(
+            (
+                candidate.exact_model_id,
+                provider_policy,
+                reasoning_policy,
+                candidate_revocation_route_constraint,
+            )
+        )
         if candidate.exact_model_id in self.orphan_usage_models:
             usage.add(
                 UsageRecord(
@@ -327,6 +341,7 @@ class _MockClientFactory:
             usage=usage,
             base_url="https://fake.test/api/v1/",
             provider_policy=provider_policy,
+            candidate_revocation_route_constraint=candidate_revocation_route_constraint,
             reasoning_policy=reasoning_policy,
             token_budgets=token_budgets,
             test_only_mock_handler=handler,
@@ -338,6 +353,35 @@ class _MockClientFactory:
     async def close(self) -> None:
         for client in self.http_clients:
             await client.aclose()
+
+
+class _TrackingCandidateBenchmarkEvidenceSink:
+    def __init__(self, *, qualification_policy_sha256: str) -> None:
+        self._qualification_policy_sha256 = qualification_policy_sha256
+        self.events: list[str] = []
+
+    @property
+    def reports(self) -> tuple[ModelBenchmarkReport, ...]:
+        self.events.append("reports")
+        return ()
+
+    @property
+    def diagnostics(self) -> tuple[Any, ...]:
+        self.events.append("diagnostics")
+        return ()
+
+    @property
+    def qualification_policy_sha256(self) -> str:
+        self.events.append("qualification_policy_sha256")
+        return self._qualification_policy_sha256
+
+    def validate_candidate_start(self, **kwargs: Any) -> None:
+        del kwargs
+        self.events.append("validate_candidate_start")
+
+    def persist_candidate(self, **kwargs: Any) -> None:
+        del kwargs
+        self.events.append("persist_candidate")
 
 
 def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
@@ -1065,6 +1109,201 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         assert case.usage_record.routing["privacy_source_sha256"] == suite.corpus_sha256
     assert all(not client._credential for client in factory.clients)
     assert canary not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_candidate_benchmark_passes_frozen_candidate_role_to_transport_factory(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = _CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+        native_structured_output_parameter="structured_outputs",
+    )
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    factory = _MockClientFactory()
+    try:
+        await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+            budget=_budget(tmp_path / "budget", config),
+            usage=UsageLedger(),
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+        )
+    finally:
+        await factory.close()
+
+    constraint = factory.calls[0][3]
+    assert type(constraint) is ExactRouteConstraint
+    assert constraint.role is ExactRouteRole.CANDIDATE
+    assert constraint.exact_model_id == spec.model_id
+    assert constraint.provider_endpoint == spec.provider_endpoint
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_kind", "wrong_role"),
+    (
+        ("PRIMARY", ExactRouteRole.PRIMARY_JUDGE),
+        ("REPLAY", ExactRouteRole.REPLAY_JUDGE),
+    ),
+)
+async def test_authenticated_candidate_wrong_role_fails_before_any_campaign_state(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    run_kind: Literal["PRIMARY", "REPLAY"],
+    wrong_role: ExactRouteRole,
+) -> None:
+    config = _config(config_factory)
+    spec = _CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+        native_structured_output_parameter="structured_outputs",
+    )
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+        route_role=wrong_role,
+    )
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    previews = _authenticated_runner_cost_previews(
+        run_kind=run_kind,
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        registry=registry,
+        suite=suite,
+    )
+    qualification_policy = load_qualification_policy(POLICY_PATH)
+    sink = _TrackingCandidateBenchmarkEvidenceSink(
+        qualification_policy_sha256=qualification_policy.policy_sha256,
+    )
+    factory = _MockClientFactory()
+    budget = _budget(tmp_path / "budget", config)
+    ledger = budget.atomic_ledger
+    assert ledger is not None
+    ledger_before = ledger.snapshot()
+    usage = UsageLedger()
+
+    with pytest.raises(
+        ModelDiscoveryValidationError,
+        match="exact candidate-role route custody",
+    ):
+        await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=suite,
+            budget=budget,
+            usage=usage,
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+            evidence_sink=sink,
+            qualification_policy=qualification_policy,
+            authenticated_runner_run_kind=run_kind,
+            expected_request_cost_previews=previews,
+        )
+
+    assert sink.events == []
+    assert factory.calls == []
+    assert factory.clients == []
+    assert factory.request_bodies == []
+    assert usage.records == []
+    assert ledger.snapshot() == ledger_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("factory_constraint_mode", ("dropped", "swapped"))
+async def test_candidate_factory_constraint_mismatch_fails_before_dispatch(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    factory_constraint_mode: str,
+) -> None:
+    config = _config(config_factory)
+    spec = _CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+        native_structured_output_parameter="structured_outputs",
+    )
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    expected_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    profile = evidence[0].endpoint_snapshot.route_predicate_profile
+    assert type(expected_constraint) is ExactRouteConstraint
+    assert type(profile) is RoutePredicateProfile
+    factory_constraint = (
+        None
+        if factory_constraint_mode == "dropped"
+        else ExactRouteConstraint.build(
+            role=ExactRouteRole.PRIMARY_JUDGE,
+            exact_model_id=spec.model_id,
+            provider_endpoint=spec.provider_endpoint,
+            profile=profile,
+        )
+    )
+    delegate = _MockClientFactory()
+
+    def custody_changing_factory(**kwargs: Any) -> OpenRouterClient:
+        assert kwargs["candidate_revocation_route_constraint"] == expected_constraint
+        kwargs["candidate_revocation_route_constraint"] = factory_constraint
+        return delegate(**kwargs)
+
+    budget = _budget(tmp_path / "budget", config)
+    ledger = budget.atomic_ledger
+    assert ledger is not None
+    ledger_before = ledger.snapshot()
+    usage = UsageLedger()
+    try:
+        with pytest.raises(
+            OpenRouterModelError,
+            match="differs from the concrete client seal",
+        ):
+            await run_candidate_registry_benchmarks(
+                config=config,
+                discovery_manifest=manifest,
+                discovery_evidence=evidence,
+                candidate_registry=registry,
+                benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+                budget=budget,
+                usage=usage,
+                operator_api_key="synthetic-key",
+                explicitly_allow_synthetic_egress=True,
+                client_factory=custody_changing_factory,
+            )
+
+        assert len(delegate.calls) == 1
+        assert delegate.calls[0][3] == factory_constraint
+        assert delegate.metadata_requests == []
+        assert delegate.request_bodies == []
+        assert usage.records == []
+        assert ledger.snapshot() == ledger_before
+        assert len(delegate.clients) == 1
+        assert delegate.clients[0]._credential == bytearray()
+        assert delegate.http_clients[0].is_closed
+    finally:
+        await delegate.close()
 
 
 @pytest.mark.asyncio

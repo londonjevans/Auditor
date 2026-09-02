@@ -39,8 +39,8 @@ from mmaudit.models.truncation import (
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
-    candidate_review_batch_schema_sha256,
-    candidate_review_frame_wire_schema_sha256,
+    candidate_review_schema_algorithm_version,
+    candidate_review_typed_payload_projection,
 )
 from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_COMPLETION_TOKENS,
@@ -198,8 +198,139 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"unsupported recovery journal hash value: {type(value).__qualname__}")
 
 
-def _model_sha256(model: StrictModel, *, exclude: set[str]) -> str:
-    return _canonical_sha256(model.model_dump(mode="json", exclude=exclude))
+def _scheduler_projection(value: Any, *, algorithm_version: str) -> Any:
+    if isinstance(value, BaseModel):
+        return candidate_review_typed_payload_projection(
+            value,
+            algorithm_version=algorithm_version,
+        )
+    if isinstance(value, Mapping):
+        return {
+            key: _scheduler_projection(item, algorithm_version=algorithm_version)
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [_scheduler_projection(item, algorithm_version=algorithm_version) for item in value]
+    return value
+
+
+def _scheduler_canonical_sha256(value: Any, *, algorithm_version: str) -> str:
+    return _canonical_sha256(_scheduler_projection(value, algorithm_version=algorithm_version))
+
+
+def _model_sha256(
+    model: StrictModel,
+    *,
+    exclude: set[str],
+    algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
+) -> str:
+    projection = candidate_review_typed_payload_projection(
+        model,
+        algorithm_version=algorithm_version,
+    )
+    if not isinstance(projection, dict):
+        raise TypeError("recovery journal model projection has an invalid object shape")
+    for field_name in exclude:
+        projection.pop(field_name, None)
+    return _canonical_sha256(projection)
+
+
+def _recovered_output_algorithm_versions(
+    output: SchedulerRecoveredCandidateReviewOutput,
+) -> frozenset[str]:
+    """Resolve algorithms from immutable inner payload hashes, never field-set state."""
+
+    matches: set[str] = set()
+    for algorithm_version in (
+        "mmaudit.seven-pass-scheduler.v1",
+        "mmaudit.seven-pass-scheduler.v2",
+    ):
+        try:
+            candidate_hashes = {
+                candidate.candidate_id: _scheduler_canonical_sha256(
+                    candidate,
+                    algorithm_version=algorithm_version,
+                )
+                for candidate in output.recovered_batch.findings
+            }
+            output_sha256 = _scheduler_canonical_sha256(
+                output.recovered_batch,
+                algorithm_version=algorithm_version,
+            )
+        except (TypeError, ValueError):
+            continue
+        if (
+            output.accepted_candidate_payload_sha256s == candidate_hashes
+            and output.output_sha256 == output_sha256
+        ):
+            matches.add(algorithm_version)
+    if not matches:
+        raise ValueError("recovered candidate output lacks one coherent scheduler projection")
+    return frozenset(matches)
+
+
+def _recovered_output_algorithm_version(
+    output: SchedulerRecoveredCandidateReviewOutput,
+) -> str:
+    """Choose the exact sealed projection, with v2 only for actor-insensitive ambiguity."""
+
+    matches = _recovered_output_algorithm_versions(output)
+    return (
+        "mmaudit.seven-pass-scheduler.v1"
+        if matches == {"mmaudit.seven-pass-scheduler.v1"}
+        else "mmaudit.seven-pass-scheduler.v2"
+    )
+
+
+def _recovery_entry_algorithm_versions(value: object) -> frozenset[str]:
+    """Resolve every immutable scheduler-algorithm marker carried by one entry."""
+
+    def field(name: str) -> object:
+        if isinstance(value, BaseModel):
+            return getattr(value, name, None)
+        if isinstance(value, Mapping):
+            return value.get(name)
+        return None
+
+    versions: set[str] = set()
+    recovered_output = field("recovered_output")
+    if isinstance(recovered_output, SchedulerRecoveredCandidateReviewOutput):
+        output_versions = _recovered_output_algorithm_versions(recovered_output)
+        if len(output_versions) == 1:
+            versions.update(output_versions)
+    projection = field("truncation_projection")
+    if isinstance(projection, CandidateReviewTruncationProjection):
+        versions.add(
+            candidate_review_schema_algorithm_version(
+                wire_schema_sha256=projection.wire_schema_sha256,
+                normalized_batch_schema_sha256=projection.normalized_batch_schema_sha256,
+            )
+        )
+    normalization = field("runtime_normalization_evidence")
+    if isinstance(normalization, CandidateReviewNormalizationEvidence):
+        versions.add(
+            candidate_review_schema_algorithm_version(
+                wire_schema_sha256=normalization.wire_schema_sha256,
+                normalized_batch_schema_sha256=normalization.normalized_batch_schema_sha256,
+            )
+        )
+    if len(versions) > 1:
+        raise ValueError("recovery entry mixes scheduler serialization algorithms")
+    return frozenset(versions)
+
+
+def _recovery_entry_algorithm_version(value: object) -> str:
+    """Select an entry projection after requiring every immutable marker to agree."""
+
+    versions = _recovery_entry_algorithm_versions(value)
+    return next(iter(versions), "mmaudit.seven-pass-scheduler.v2")
+
+
+def _entry_body_sha256(value: object) -> str:
+    return _scheduler_canonical_sha256(
+        value,
+        algorithm_version=_recovery_entry_algorithm_version(value),
+    )
 
 
 def _bounded_tuple[ItemT](
@@ -312,7 +443,17 @@ def _parser_channel_state(
 def _projection_channel_bindings(
     projection: CandidateReviewTruncationProjection,
 ) -> tuple[TruncationRecoveryChannelBinding, ...]:
-    findings_inventory = tuple(item.model_dump(mode="json") for item in projection.findings)
+    algorithm_version = candidate_review_schema_algorithm_version(
+        wire_schema_sha256=projection.wire_schema_sha256,
+        normalized_batch_schema_sha256=projection.normalized_batch_schema_sha256,
+    )
+    findings_inventory = tuple(
+        candidate_review_typed_payload_projection(
+            item,
+            algorithm_version=algorithm_version,
+        )
+        for item in projection.findings
+    )
     surface_inventory = tuple(item.model_dump(mode="json") for item in projection.surface_reviews)
     summary_frames = tuple(
         frame.model_dump(mode="json")
@@ -548,7 +689,11 @@ class _SchedulerTruncationRecoveryEntry(_NonAuthorizingRecoveryJournalModel):
     def entry_chain_shape_and_hash_are_exact(self) -> Self:
         if (self.entry_index == 0) != (self.previous_entry_sha256 is None):
             raise ValueError("scheduler truncation recovery predecessor shape is inconsistent")
-        if self.entry_sha256 != _model_sha256(self, exclude={"entry_sha256"}):
+        if self.entry_sha256 != _model_sha256(
+            self,
+            exclude={"entry_sha256"},
+            algorithm_version=_recovery_entry_algorithm_version(self),
+        ):
             raise ValueError("scheduler truncation recovery entry hash is inconsistent")
         return self
 
@@ -665,7 +810,7 @@ class SchedulerTruncationRecoveryFamilyRoot(_SchedulerTruncationRecoveryEntry):
             }
         )
         body = {**values, "family_id": family_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def family_root_is_projection_bound_and_exact(self) -> Self:
@@ -845,7 +990,7 @@ class SchedulerTruncationRecoveryChildActivation(_SchedulerTruncationRecoveryEnt
             }
         )
         body = {**values, "activation_id": activation_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def activation_identity_and_hashes_are_exact(self) -> Self:
@@ -958,7 +1103,7 @@ class SchedulerTruncationRecoveryChildPreflightResult(_SchedulerTruncationRecove
             }
         )
         body = {**values, "result_id": result_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def preflight_terminal_is_zero_cost_and_activation_bound(self) -> Self:
@@ -1043,7 +1188,7 @@ class SchedulerTruncationRecoveryChildDispatch(_SchedulerTruncationRecoveryEntry
             }
         )
         body = {**values, "dispatch_id": dispatch_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def dispatch_identity_is_exact(self) -> Self:
@@ -1061,6 +1206,33 @@ class SchedulerTruncationRecoveryChildDispatch(_SchedulerTruncationRecoveryEntry
 
 def _require_every_field_supplied(model: BaseModel, *, label: str) -> None:
     if set(type(model).model_fields) - model.model_fields_set:
+        raise ValueError(f"scheduler recovery {label} relies on omitted defaults")
+
+
+_CONTEXT_RETRIEVAL_SERIALIZATION_DEFAULTS: dict[str, object] = {
+    "retrieval_policy_sha256": None,
+    "retrieval_corpus_sha256": None,
+    "retrieval_transcript_sha256": None,
+    "retrieval_request_sha256s": (),
+    "retrieval_result_sha256s": (),
+    "retrieval_exchange_sha256s": (),
+    "retrieval_exhausted": None,
+    "retrieval_single_shot_fallback_required": None,
+}
+
+
+def _require_exact_context_request_fields(
+    context: ContextRequestEvidence,
+    *,
+    label: str,
+) -> None:
+    """Permit only canonical retrieval-field omissions in versioned context evidence."""
+
+    missing = set(type(context).model_fields) - context.model_fields_set
+    for field_name, serialized_default in _CONTEXT_RETRIEVAL_SERIALIZATION_DEFAULTS.items():
+        if getattr(context, field_name) == serialized_default:
+            missing.discard(field_name)
+    if missing:
         raise ValueError(f"scheduler recovery {label} relies on omitted defaults")
 
 
@@ -1155,7 +1327,10 @@ def _freeze_exact_specialist_success_outcome(
         context = ContextRequestEvidence.model_validate(raw_context)
     except (TypeError, ValueError):
         raise ValueError("specialist recovery child context-request custody is invalid") from None
-    _require_every_field_supplied(context, label="specialist context-request evidence")
+    _require_exact_context_request_fields(
+        context,
+        label="specialist context-request evidence",
+    )
     assert activation.request_role is not None
     specialist_role = activation.request_role.removeprefix("specialist:")
     if (
@@ -1996,7 +2171,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             result_identity["activation_id"] = lifecycle.activation_id
         result_id = "scheduler-recovery-result-" + _canonical_sha256(result_identity)
         body = {**values, "result_id": result_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def result_shape_resources_and_identity_are_exact(self) -> Self:
@@ -2457,10 +2632,7 @@ class SchedulerTruncationRecoveryChildResult(_SchedulerTruncationRecoveryEntry):
             or usage.status != "success"
             or usage.finish_reason != "stop"
             or usage.validated_response_sha256 != exact_normalization.wire_validated_response_sha256
-            or usage.schema_sha256 != candidate_review_frame_wire_schema_sha256()
             or exact_normalization.wire_schema_sha256 != usage.schema_sha256
-            or exact_normalization.normalized_batch_schema_sha256
-            != candidate_review_batch_schema_sha256()
             or exact_artifact.schema_version != "1.1"
             or exact_artifact.request_id != self.child_logical_request_id
             or exact_artifact.review_role != usage.role
@@ -2656,7 +2828,7 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
             }
         )
         body = {**values, "closure_id": closure_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def closure_inventory_identity_and_hash_are_exact(self) -> Self:
@@ -2942,10 +3114,27 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
         scanner_fingerprints_by_request: Iterable[tuple[str, tuple[str, ...]]],
         delivered_source_descriptor_sha256s: Iterable[str],
         recursive_tree: bool = False,
+        algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
     ) -> SchedulerRecoveredCandidateReviewOutput:
         if type(recursive_tree) is not bool:
             raise TypeError("recovered candidate output recursive-tree marker is invalid")
-        batch = CandidateReviewBatch.model_validate_json(recovered_batch.model_dump_json())
+        if algorithm_version not in {
+            "mmaudit.seven-pass-scheduler.v1",
+            "mmaudit.seven-pass-scheduler.v2",
+        }:
+            raise ValueError("recovered candidate output uses an unknown scheduler algorithm")
+        batch = CandidateReviewBatch.model_validate_json(
+            json.dumps(
+                candidate_review_typed_payload_projection(
+                    recovered_batch,
+                    algorithm_version=algorithm_version,
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+        )
         origins = tuple(
             sorted(
                 _bounded_tuple(
@@ -2957,7 +3146,10 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             )
         )
         accepted_hashes = {
-            candidate.candidate_id: _canonical_sha256(candidate.model_dump(mode="json"))
+            candidate.candidate_id: _scheduler_canonical_sha256(
+                candidate,
+                algorithm_version=algorithm_version,
+            )
             for candidate in batch.findings
         }
         scanner_projection = tuple(
@@ -2989,7 +3181,10 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             )
             else "1.0"
         )
-        output_sha256 = _canonical_sha256(batch.model_dump(mode="json"))
+        output_sha256 = _scheduler_canonical_sha256(
+            batch,
+            algorithm_version=algorithm_version,
+        )
         output_id = "scheduler-recovered-output-" + _canonical_sha256(
             {
                 "domain": (
@@ -3029,11 +3224,23 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             "output_sha256": output_sha256,
             "output_id": output_id,
         }
-        return cls(**values, output_artifact_sha256=_canonical_sha256(values))
+        return cls(
+            **values,
+            output_artifact_sha256=_scheduler_canonical_sha256(
+                values,
+                algorithm_version=algorithm_version,
+            ),
+        )
 
     @model_validator(mode="after")
     def recovered_inventory_identity_and_hash_are_exact(self) -> Self:
+        algorithm_version = _recovered_output_algorithm_version(self)
         candidates = tuple(self.recovered_batch.findings)
+        if algorithm_version == "mmaudit.seven-pass-scheduler.v2" and any(
+            not {"actor_model_applicability", "actor_context"} <= candidate.model_fields_set
+            for candidate in candidates
+        ):
+            raise ValueError("current recovered candidate requires explicit actor annotations")
         candidate_ids = tuple(item.candidate_id for item in candidates)
         origin_ids = tuple(item.accepted_candidate_id for item in self.candidate_origins)
         if (
@@ -3042,7 +3249,10 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             or tuple(self.accepted_candidate_payload_sha256s) != candidate_ids
             or any(
                 self.accepted_candidate_payload_sha256s[item.candidate_id]
-                != _canonical_sha256(item.model_dump(mode="json"))
+                != _scheduler_canonical_sha256(
+                    item,
+                    algorithm_version=algorithm_version,
+                )
                 for item in candidates
             )
             or any(
@@ -3087,7 +3297,10 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             for item in self.delivered_source_descriptor_sha256s
         ):
             raise ValueError("recovered source descriptor inventory is not canonical")
-        expected_output_sha256 = _canonical_sha256(self.recovered_batch.model_dump(mode="json"))
+        expected_output_sha256 = _scheduler_canonical_sha256(
+            self.recovered_batch,
+            algorithm_version=algorithm_version,
+        )
         expected_output_id = "scheduler-recovered-output-" + _canonical_sha256(
             {
                 "domain": (
@@ -3108,7 +3321,11 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             self.output_sha256 != expected_output_sha256
             or self.output_id != expected_output_id
             or self.output_artifact_sha256
-            != _model_sha256(self, exclude={"output_artifact_sha256"})
+            != _model_sha256(
+                self,
+                exclude={"output_artifact_sha256"},
+                algorithm_version=algorithm_version,
+            )
         ):
             raise ValueError("recovered candidate output identity or hash is inconsistent")
         return self
@@ -3301,7 +3518,7 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
             }
         )
         body = {**values, "promotion_id": promotion_id}
-        return cls(**body, entry_sha256=_canonical_sha256(body))
+        return cls(**body, entry_sha256=_entry_body_sha256(body))
 
     @model_validator(mode="after")
     def promotion_identity_output_and_hash_are_exact(self) -> Self:
@@ -3579,11 +3796,34 @@ def validate_truncation_recovery_entry_chain(
     )
     validated: list[SchedulerTruncationRecoveryEntry] = []
     previous: SchedulerTruncationRecoveryEntry | None = None
+    chain_algorithm_version: str | None = None
     for index, entry in enumerate(materialized):
         expected_type = SCHEDULER_TRUNCATION_RECOVERY_ENTRY_TYPES.get(entry.entry_kind)
         if expected_type is None or type(entry) is not expected_type:
             raise ValueError("scheduler truncation recovery entry kind/type is inconsistent")
-        frozen = expected_type.model_validate(entry.model_dump(mode="python"), strict=True)
+        algorithm_version = _recovery_entry_algorithm_version(entry)
+        frozen = expected_type.model_validate_json(
+            json.dumps(
+                candidate_review_typed_payload_projection(
+                    entry,
+                    algorithm_version=algorithm_version,
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+        entry_algorithms = _recovery_entry_algorithm_versions(frozen)
+        if entry_algorithms:
+            entry_algorithm = next(iter(entry_algorithms))
+            if chain_algorithm_version is None:
+                chain_algorithm_version = entry_algorithm
+            elif entry_algorithm != chain_algorithm_version:
+                raise ValueError(
+                    "scheduler truncation recovery chain mixes serialization algorithms"
+                )
         if (
             isinstance(entry, SchedulerTruncationRecoveryChildResult)
             and isinstance(frozen, SchedulerTruncationRecoveryChildResult)

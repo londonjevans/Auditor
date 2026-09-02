@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.orchestration.scheduler as scheduler_module
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.scheduler import (
     ABSENT_QUALIFICATION_SHA256,
     ABSENT_SEMANTIC_SHARD_INVENTORY_SHA256,
     SCHEDULER_ANALYSIS_INPUT_LABELS,
+    SCHEDULER_ANALYSIS_INPUT_LABELS_V1,
     SCHEDULER_PASS_ORDER,
     SchedulerAbsenceReason,
     SchedulerAnalysisInputDescriptor,
@@ -52,9 +57,11 @@ from mmaudit.models.scheduler import (
     build_scheduler_model_request_evidence,
     build_scheduler_truncation_recovery_model_request_evidence,
     repository_pseudo_shard_id,
+    scheduler_candidate_payload_sha256,
     scheduler_canonical_sha256,
     scheduler_role_requires_specialist_accepted_outcome,
     scheduler_source_tree_sha256,
+    scheduler_typed_payload_projection,
 )
 from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
@@ -68,6 +75,7 @@ from mmaudit.models.schemas import (
     Evidence,
     FalsificationDecision,
     FalsificationVerdict,
+    JudgeDecision,
     Location,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
@@ -81,6 +89,7 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
+from mmaudit.reporting.json_report import stable_json
 from tests.scheduler_support import (
     SchedulerFixtureModelTask,
     build_complete_scheduler_fixture,
@@ -92,6 +101,7 @@ from tests.scheduler_support import (
     scheduler_test_delivered_source_descriptor_sha256s,
     scheduler_test_host_activation_input_sha256,
     scheduler_test_model_fields,
+    scheduler_test_model_surface_review_request_manifest_sha256,
     scheduler_test_response_schema_sha256,
 )
 
@@ -122,6 +132,29 @@ def _analysis_inventory() -> SchedulerAnalysisInputInventory:
             value={"label": label},
         )
         for label in SCHEDULER_ANALYSIS_INPUT_LABELS
+    )
+
+
+def _legacy_analysis_inventory() -> SchedulerAnalysisInputInventory:
+    descriptors = tuple(
+        sorted(
+            (
+                SchedulerAnalysisInputDescriptor.build(
+                    label=label,
+                    type_name="SyntheticProjection",
+                    value={"label": label},
+                )
+                for label in SCHEDULER_ANALYSIS_INPUT_LABELS_V1
+            ),
+            key=lambda item: item.label,
+        )
+    )
+    body = {
+        "schema_version": "1.0",
+        "descriptors": [item.model_dump(mode="json") for item in descriptors],
+    }
+    return SchedulerAnalysisInputInventory.model_validate(
+        {**body, "analysis_input_sha256": scheduler_canonical_sha256(body)}
     )
 
 
@@ -203,6 +236,34 @@ def _manifest(seed: str = "base") -> SchedulerCampaignManifest:
     )
 
 
+def _legacy_manifest(seed: str = "legacy") -> SchedulerCampaignManifest:
+    inventory = _inventory(seed)
+    legacy_analysis = _legacy_analysis_inventory()
+    bindings_body = _bindings(seed, inventory).model_dump(
+        mode="json",
+        exclude={"bindings_sha256"},
+    )
+    bindings_body["algorithm_version"] = "mmaudit.seven-pass-scheduler.v1"
+    bindings_body["analysis_input_sha256"] = legacy_analysis.analysis_input_sha256
+    bindings = SchedulerBindings.model_validate(
+        {
+            **bindings_body,
+            "bindings_sha256": scheduler_canonical_sha256(bindings_body),
+        }
+    )
+    manifest_body = _manifest(seed).model_dump(
+        mode="json",
+        exclude={"campaign_id", "manifest_sha256"},
+    )
+    manifest_body["algorithm_version"] = "mmaudit.seven-pass-scheduler.v1"
+    manifest_body["bindings"] = bindings.model_dump(mode="json")
+    campaign_id = "scheduler-campaign-" + scheduler_canonical_sha256(manifest_body)
+    bound_body = {**manifest_body, "campaign_id": campaign_id}
+    return SchedulerCampaignManifest.model_validate(
+        {**bound_body, "manifest_sha256": scheduler_canonical_sha256(bound_body)}
+    )
+
+
 _HOST_ROLES = {
     SchedulerPassKind.FINDING_REDUCTION: "host:finding_reducer",
     SchedulerPassKind.CROSS_SHARD_INTEGRATION: "host:cross_shard_integrator",
@@ -242,6 +303,29 @@ def _task(
             resolved_role = _HOST_ROLES.get(pass_kind, "host:computation")
         else:
             resolved_role = _MODEL_ROLES.get(pass_kind, "specialist")
+    resolved_scope = scope or SchedulerScope.global_scope()
+    resolved_candidate_ids = tuple(candidate_ids)
+    candidate_review_contract = kind is SchedulerTaskKind.MODEL_REQUEST and (
+        pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+        or (
+            pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+            and resolved_role == "business_logic"
+        )
+    )
+    model_surface_manifest_sha256 = "f" * 64 if candidate_review_contract else None
+    if candidate_review_contract:
+        # Intentionally invalid boundary tasks must still reach pass-plan validation.
+        with suppress(ValueError):
+            model_surface_manifest_sha256 = (
+                scheduler_test_model_surface_review_request_manifest_sha256(
+                    manifest=manifest,
+                    pass_kind=pass_kind,
+                    scope=resolved_scope,
+                    task_key=key,
+                    role=resolved_role,
+                    candidate_ids=resolved_candidate_ids,
+                )
+            )
     response_schema_sha256 = _sha256(f"schema:{key}")
     if kind is SchedulerTaskKind.MODEL_REQUEST:
         # Intentionally invalid role/pass combinations must reach pass-plan validation.
@@ -253,16 +337,17 @@ def _task(
     return SchedulerTaskPlan.build(
         manifest=manifest,
         pass_kind=pass_kind,
-        scope=scope or SchedulerScope.global_scope(),
+        scope=resolved_scope,
         task_kind=kind,
         task_key=key,
         role=resolved_role,
         requested_model=requested_model,
         root_lineage=resolved_lineage,
-        candidate_ids=candidate_ids,
+        candidate_ids=resolved_candidate_ids,
         input_sha256=_sha256(f"recipe-input:{recipe_seed or key}"),
         prompt_sha256=_sha256(f"recipe-prompt:{recipe_seed or key}"),
         response_schema_sha256=response_schema_sha256,
+        model_surface_review_request_manifest_sha256=model_surface_manifest_sha256,
         **(
             scheduler_test_model_fields(f"model-task:{key}")
             if kind is SchedulerTaskKind.MODEL_REQUEST
@@ -1218,6 +1303,163 @@ def test_result_and_normalized_output_bind_the_exact_activation() -> None:
     changed = _activation(bundle.plan, bundle.plan.tasks[0], seed="changed")
     with pytest.raises(ValueError, match="differs from its exact task activation"):
         output.require_exact_activation(changed)
+
+
+def _detached_pre_actor_output(
+    payload: object,
+    *,
+    schema_version: str,
+) -> SchedulerTaskOutput:
+    task_id = f"scheduler-task-{'1' * 64}"
+    activation_id = f"scheduler-activation-{'2' * 64}"
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    output_id = "scheduler-output-" + scheduler_canonical_sha256(
+        {
+            "domain": "mmaudit.scheduler.task-output-identity.v1",
+            "activation_id": activation_id,
+            "task_id": task_id,
+        }
+    )
+    body: dict[str, object] = {
+        "schema_version": schema_version,
+        "evidence_authority": "comparison_required",
+        "campaign_id": f"scheduler-campaign-{'3' * 64}",
+        "pass_plan_id": f"scheduler-plan-{'4' * 64}",
+        "task_id": task_id,
+        "logical_request_id": f"scheduler-request-{'5' * 64}",
+        "activation_id": activation_id,
+        "activation_sha256": "6" * 64,
+        "model_completion_evidence": None,
+        "specialist_accepted_outcome": None,
+        "model_surface_review_requests": [],
+        "model_surface_review_artifact": None,
+        "reviewed_source_descriptor_sha256s": [],
+        "reviewed_candidate_ids": [],
+        "payload": payload,
+        "payload_utf8_bytes": len(encoded),
+        "output_sha256": hashlib.sha256(encoded).hexdigest(),
+        "output_id": output_id,
+    }
+    hash_body = dict(body)
+    if schema_version != "1.0":
+        body["accepted_candidate_payload_sha256s"] = {}
+        body["accepted_candidates"] = []
+        hash_body = dict(body)
+    return SchedulerTaskOutput.model_validate(
+        {
+            **body,
+            "output_artifact_sha256": scheduler_canonical_sha256(hash_body),
+        }
+    )
+
+
+def test_scheduler_v1_replays_exact_pre_actor_candidate_and_judge_payload_hashes(
+    tmp_path: Path,
+) -> None:
+    candidate = _terminal_authority_candidate()
+    judgment = JudgeDecision(
+        group_id=candidate.candidate_id,
+        status="needs_review",
+        severity="high",
+        confidence=0.75,
+        rationale="Synthetic pre-actor scheduler judgment.",
+    )
+    legacy_candidate = scheduler_typed_payload_projection(
+        candidate,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    legacy_judgment = scheduler_typed_payload_projection(
+        judgment,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    candidate_payload = {"findings": [legacy_candidate], "surface_reviews": []}
+    judge_payload = {"decisions": [legacy_judgment]}
+
+    candidate_output = _detached_pre_actor_output(candidate_payload, schema_version="1.0")
+    judge_output = _detached_pre_actor_output(judge_payload, schema_version="1.1")
+
+    assert candidate_output.output_sha256 == (
+        "793ae9dd2038268654e70d89f0b09f5eecd48796ae154ac6b0c92f84f79b4deb"
+    )
+    assert candidate_output.output_artifact_sha256 == (
+        "ee6834f1c0c8300c0771edc30f149dfd83c289dd43db7a4f2369d112994aa795"
+    )
+    assert judge_output.output_sha256 == (
+        "3a5af0588a90fa94346cf7fba1ed18accf514d71995d78a4ed1b39b198cf22e7"
+    )
+    assert judge_output.output_artifact_sha256 == (
+        "de522741a7f2762a64112a7cafe751fc4e9ac9fb0065285af407b324716c1d68"
+    )
+    assert candidate_output.output_sha256 == scheduler_canonical_sha256(candidate_payload)
+    assert judge_output.output_sha256 == scheduler_canonical_sha256(judge_payload)
+    assert scheduler_candidate_payload_sha256(
+        candidate,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    ) == scheduler_canonical_sha256(legacy_candidate)
+    assert {"actor_model_applicability", "actor_context"}.isdisjoint(legacy_candidate)
+    assert {"actor_model_applicability", "actor_context"}.isdisjoint(legacy_judgment)
+
+    root_descriptor = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        for index, output in enumerate((candidate_output, judge_output)):
+            encoded_output = stable_json(
+                scheduler_typed_payload_projection(
+                    output,
+                    algorithm_version="mmaudit.seven-pass-scheduler.v1",
+                )
+            )
+            assert "actor_model_applicability" not in encoded_output
+            assert "actor_context" not in encoded_output
+            filename = f"retained-v1-output-{index}.json"
+            path = tmp_path / filename
+            path.write_text(encoded_output, encoding="utf-8")
+            path.chmod(0o600)
+            assert (
+                scheduler_module._read_model(
+                    root_descriptor,
+                    {},
+                    filename,
+                    SchedulerTaskOutput,
+                )
+                == output
+            )
+    finally:
+        os.close(root_descriptor)
+
+    current_candidate = scheduler_typed_payload_projection(
+        candidate,
+        algorithm_version="mmaudit.seven-pass-scheduler.v2",
+    )
+    current_judgment = scheduler_typed_payload_projection(
+        judgment,
+        algorithm_version="mmaudit.seven-pass-scheduler.v2",
+    )
+    assert {"actor_model_applicability", "actor_context"} <= set(current_candidate)
+    assert {"actor_model_applicability", "actor_context"} <= set(current_judgment)
+    annotated_candidate_payload = candidate.model_dump(mode="python")
+    annotated_candidate_payload["actor_model_applicability"] = "no_privileged_actor_required"
+    annotated_candidate = CandidateFinding.model_validate(annotated_candidate_payload)
+    annotated_judgment_payload = judgment.model_dump(mode="python")
+    annotated_judgment_payload["actor_model_applicability"] = "no_privileged_actor_required"
+    annotated_judgment = JudgeDecision.model_validate(annotated_judgment_payload)
+    with pytest.raises(ValueError, match="v1 typed payload cannot carry actor annotations"):
+        scheduler_typed_payload_projection(
+            annotated_candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        )
+    with pytest.raises(ValueError, match="v1 typed payload cannot carry actor annotations"):
+        scheduler_typed_payload_projection(
+            annotated_judgment,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        )
+    with pytest.raises(ValidationError, match="typed serialization"):
+        _detached_pre_actor_output(candidate_payload, schema_version="1.2")
 
 
 def test_model_output_must_equal_exact_provider_validated_response() -> None:
@@ -2176,8 +2418,38 @@ def test_analysis_input_inventory_requires_every_exact_typed_projection() -> Non
         sorted(SCHEDULER_ANALYSIS_INPUT_LABELS)
     )
     assert len(inventory.analysis_input_sha256) == 64
-    with pytest.raises(ValidationError, match="at least 24 items"):
+    with pytest.raises(ValidationError, match="incomplete or duplicated"):
         SchedulerAnalysisInputInventory.build(descriptors[:-1])
+
+
+def test_scheduler_v1_artifact_accepts_exact_legacy_24_descriptor_inventory() -> None:
+    manifest = _legacy_manifest("legacy-analysis-inventory")
+    analysis_inventory = _legacy_analysis_inventory()
+    assert manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v1"
+    assert len(analysis_inventory.descriptors) == len(SCHEDULER_ANALYSIS_INPUT_LABELS_V1) == 24
+    assert manifest.bindings.analysis_input_sha256 == analysis_inventory.analysis_input_sha256
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    evidence = SchedulerJournalEvidence.build(
+        manifest=manifest,
+        analysis_input_inventory=analysis_inventory,
+        summary=summary,
+        plans=(),
+        model_requests=(),
+        activations=(),
+        outputs=(),
+        task_results=(),
+        result_observations=(),
+        events=(),
+    )
+    artifact = SchedulerArtifact.build(
+        summary=summary,
+        journal_evidence=evidence,
+        model_requests=(),
+    )
+
+    assert evidence.analysis_input_descriptor_count == 24
+    assert len(evidence.analysis_input_descriptor_sha256s) == 24
+    assert SchedulerArtifact.model_validate(artifact.model_dump(mode="python")) == artifact
 
 
 def test_complete_fixture_supports_typed_model_tasks_across_later_passes() -> None:

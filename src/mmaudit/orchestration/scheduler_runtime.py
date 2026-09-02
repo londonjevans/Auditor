@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from mmaudit.config import AuditConfig, AuditRunOptions
 from mmaudit.isolation.dependencies import DependencyPreparationRun
+from mmaudit.models.actor_model import ActorModelInputEvidence
 from mmaudit.models.openrouter import (
     DeliveredSourceDescriptor,
     ModelRequestPrivacyBinding,
@@ -33,6 +34,7 @@ from mmaudit.models.refresh_runtime import (
     VerifiedAuditModelRefreshGuard,
     VerifiedAuditModelRefreshPricingAuthority,
 )
+from mmaudit.models.retrieval import SolidityRetrievalTranscript
 from mmaudit.models.scheduler import (
     ABSENT_COST_LEDGER_BASELINE_SHA256,
     ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256,
@@ -55,6 +57,8 @@ from mmaudit.models.scheduler import (
     SchedulerPrivacyEvidenceCustody,
     SchedulerProviderAttemptEvidence,
     SchedulerReportBinding,
+    SchedulerRetrievalBinding,
+    SchedulerRetrievalCustody,
     SchedulerScope,
     SchedulerShardDescriptor,
     SchedulerShardInventory,
@@ -62,9 +66,11 @@ from mmaudit.models.scheduler import (
     SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskPlan,
+    SchedulerTaskPurpose,
     SchedulerTaskResult,
     SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
+    scheduler_auxiliary_response_schema_model_registry,
     scheduler_canonical_sha256,
     scheduler_response_schema_model_registry,
 )
@@ -167,6 +173,9 @@ _HOST_RESPONSE_SCHEMA_SHA256 = scheduler_canonical_sha256(
 # self-hashes are excluded only where their preimage contains one of the listed
 # incidental fields; the independently useful content/tool hashes remain bound.
 _SEMANTIC_FIELD_EXCLUSIONS: dict[str, frozenset[str]] = {
+    # Fresh re-observation changes these two custody fields on resume; state and
+    # the exact source/model hashes retain every analysis-relevant actor fact.
+    "ActorModelInputEvidence": frozenset({"evaluated_at", "evidence_sha256"}),
     "DependencyPreparationResult": frozenset({"prepared_path"}),
     "FormalEvidence": frozenset(),
     "FormalToolRun": frozenset(
@@ -950,6 +959,7 @@ def build_scheduler_analysis_input_inventory(
     model_surface_review_assignments: dict[str, list[ModelSurfaceReviewRequest]],
     disposable_roots: Iterable[Path] = (),
     audited_exclusion_roots: Iterable[Path] = (),
+    actor_model_evidence: ActorModelInputEvidence | None = None,
 ) -> SchedulerAnalysisInputInventory:
     """Commit every deterministic pre-scheduler input without private paths or source text."""
 
@@ -1005,6 +1015,11 @@ def build_scheduler_analysis_input_inventory(
         for role, requests in sorted(model_surface_review_assignments.items())
     }
     typed_values: tuple[tuple[str, str, object], ...] = (
+        (
+            "actor_model_evidence",
+            "ActorModelInputEvidence|None",
+            _optional_semantic_projection(actor_model_evidence, projection_roots),
+        ),
         (
             "run_options",
             "AuditRunOptions",
@@ -1285,36 +1300,60 @@ class PipelineScheduler:
         system_prompt_sha256: str,
         response_schema_sha256: str,
         candidate_ids: Iterable[str] = (),
+        model_surface_review_request_manifest_sha256: str | None = None,
+        purpose: SchedulerTaskPurpose = SchedulerTaskPurpose.PRIMARY,
+        parent_task_id: str | None = None,
     ) -> SchedulerTaskPlan:
         if self.journal.manifest.privacy_evidence_custody is None:
             raise ValueError("scheduled model task lacks exact pre-dispatch privacy custody")
-        if response_schema_sha256 not in scheduler_response_schema_hashes():
-            raise ValueError("scheduled model task uses an unregistered response schema")
-        candidate_review_contract = pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW or (
-            pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic"
+        registered_response_schema_sha256s = (
+            frozenset(scheduler_auxiliary_response_schema_model_registry())
+            if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            else scheduler_response_schema_hashes()
         )
+        if response_schema_sha256 not in registered_response_schema_sha256s:
+            raise ValueError("scheduled model task uses an unregistered response schema")
+        candidate_review_contract = purpose is SchedulerTaskPurpose.PRIMARY and (
+            pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            or (pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic")
+        )
+        if candidate_review_contract and model_surface_review_request_manifest_sha256 is None:
+            raise ValueError(
+                "scheduler-v2 candidate-review task requires a sealed surface manifest"
+            )
         if candidate_review_contract and (
             response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
             or not candidate_review_protocol_implementation_is_pristine()
         ):
             raise ValueError("new scheduler candidate reviews require the exact framed wire schema")
-        input_recipe_sha256 = scheduler_canonical_sha256(
-            {
-                "domain": "mmaudit.scheduler.model-input-recipe.v1",
-                "pass_kind": pass_kind,
-                "scope_sha256": scope.scope_sha256,
-                "task_key": task_key,
-                "role": role,
-            }
-        )
-        prompt_recipe_sha256 = scheduler_canonical_sha256(
-            {
-                "domain": "mmaudit.scheduler.model-prompt-recipe.v1",
-                "prompt_set_sha256": self.journal.manifest.bindings.prompt_set_sha256,
-                "task_key": task_key,
-                "role": role,
-            }
-        )
+        input_recipe: dict[str, object] = {
+            "domain": "mmaudit.scheduler.model-input-recipe.v1",
+            "pass_kind": pass_kind,
+            "scope_sha256": scope.scope_sha256,
+            "task_key": task_key,
+            "role": role,
+        }
+        prompt_recipe: dict[str, object] = {
+            "domain": "mmaudit.scheduler.model-prompt-recipe.v1",
+            "prompt_set_sha256": self.journal.manifest.bindings.prompt_set_sha256,
+            "task_key": task_key,
+            "role": role,
+        }
+        if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+            input_recipe.update(
+                {
+                    "purpose": purpose.value,
+                    "parent_task_id": parent_task_id,
+                }
+            )
+            prompt_recipe.update(
+                {
+                    "purpose": purpose.value,
+                    "parent_task_id": parent_task_id,
+                }
+            )
+        input_recipe_sha256 = scheduler_canonical_sha256(input_recipe)
+        prompt_recipe_sha256 = scheduler_canonical_sha256(prompt_recipe)
         return SchedulerTaskPlan.build(
             manifest=self.journal.manifest,
             pass_kind=pass_kind,
@@ -1325,11 +1364,20 @@ class PipelineScheduler:
             requested_model=requested_model,
             root_lineage=root_lineage,
             candidate_ids=candidate_ids,
+            model_surface_review_request_manifest_sha256=(
+                model_surface_review_request_manifest_sha256
+            ),
             input_sha256=input_recipe_sha256,
             prompt_sha256=prompt_recipe_sha256,
             system_prompt_sha256=system_prompt_sha256,
-            normalizer_sha256=scheduler_response_normalizer_sha256(response_schema_sha256),
+            normalizer_sha256=(
+                None
+                if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                else scheduler_response_normalizer_sha256(response_schema_sha256)
+            ),
             response_schema_sha256=response_schema_sha256,
+            purpose=purpose,
+            parent_task_id=parent_task_id,
         )
 
     def host_task(
@@ -1543,6 +1591,65 @@ class PipelineScheduler:
             raise ValueError("completed scheduler task lacks a successful retained output")
         return self.journal.reconstruct_output(task.task_id, output_type)
 
+    def completed_retrieval_binding_for_task(
+        self,
+        pass_result: SchedulerPassResult,
+        task: SchedulerTaskPlan,
+    ) -> SchedulerRetrievalBinding:
+        """Recover and revalidate one completed primary's private retrieval transcript."""
+
+        result = self.completed_result_for_task(pass_result, task)
+        binding = self.journal.retrieval_binding_for_task(task.task_id)
+        if binding is None and result.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            outputs = tuple(
+                output
+                for output in self.journal.outputs
+                if output.task_id == task.task_id
+                and output.output_artifact_sha256 == result.output_artifact_sha256
+            )
+            if len(outputs) == 1:
+                binding = outputs[0].retrieval_binding
+        if binding is None:
+            raise ValueError("completed scheduler task lacks one private retrieval binding")
+        activation = next(
+            (
+                item
+                for item in self.journal.activations
+                if item.task_id == task.task_id
+                and item.activation_sha256 == result.activation_sha256
+            ),
+            None,
+        )
+        planner_task = self._retrieval_planning_child(pass_result.plan, task)
+        planner_result = self.completed_result_for_task(pass_result, planner_task)
+        planner_outputs = tuple(
+            output
+            for output in self.journal.outputs
+            if output.task_id == planner_task.task_id
+            and output.output_artifact_sha256 == planner_result.output_artifact_sha256
+        )
+        if len(planner_outputs) != 1:
+            raise ValueError("completed retrieval task lacks its exact planner output")
+        expected = SchedulerRetrievalBinding.build_pre_activation(
+            plan=pass_result.plan,
+            primary_task=task,
+            planner_task=planner_task,
+            planner_output=planner_outputs[0],
+            planner_result=planner_result,
+            transcript=binding.transcript,
+        )
+        if binding != expected:
+            raise ValueError("completed scheduler retrieval binding differs from private custody")
+        if activation is not None:
+            binding.require_exact_primary(
+                plan=pass_result.plan,
+                task=task,
+                activation=activation,
+            )
+        if result.retrieval_custody != SchedulerRetrievalCustody.from_binding(binding):
+            raise ValueError("completed scheduler result differs from retrieval custody")
+        return SchedulerRetrievalBinding.model_validate(binding.model_dump(mode="python"))
+
     def effective_completed_status_for_task(
         self,
         pass_result: SchedulerPassResult,
@@ -1639,6 +1746,44 @@ class PipelineScheduler:
                 raise ValueError("resumed task upstream results differ from durable activation")
             return
         self._upstream_results[task.task_id] = values
+
+    def build_retrieval_binding(
+        self,
+        *,
+        primary_task: SchedulerTaskPlan,
+        planner_task: SchedulerTaskPlan,
+        transcript: SolidityRetrievalTranscript,
+    ) -> SchedulerRetrievalBinding:
+        """Build and persist a full local transcript before primary activation."""
+
+        self._require_active_task(primary_task)
+        self._require_active_task(planner_task)
+        expected_planner = self._retrieval_planning_child(self.active_plan, primary_task)
+        if planner_task != expected_planner:
+            raise ValueError("scheduler retrieval planner differs from its exact primary child")
+        planner_result = self.result_for_task(planner_task)
+        if (
+            planner_result is None
+            or planner_result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+        ):
+            raise ValueError("scheduler retrieval planner lacks a successful terminal result")
+        planner_outputs = tuple(
+            output
+            for output in self.journal.outputs
+            if output.task_id == planner_task.task_id
+            and output.output_artifact_sha256 == planner_result.output_artifact_sha256
+        )
+        if len(planner_outputs) != 1:
+            raise ValueError("scheduler retrieval planner lacks one exact retained output")
+        binding = SchedulerRetrievalBinding.build_pre_activation(
+            plan=self.active_plan,
+            primary_task=primary_task,
+            planner_task=planner_task,
+            planner_output=planner_outputs[0],
+            planner_result=planner_result,
+            transcript=transcript,
+        )
+        return self.journal.persist_retrieval_binding(primary_task.task_id, binding)
 
     def prepare_truncation_recovery_child(
         self,
@@ -1867,7 +2012,12 @@ class PipelineScheduler:
             or task.requested_model != requested_model
             or task.system_prompt_sha256 != system_prompt_sha256
             or task.response_schema_sha256 != schema_sha256
-            or schema_sha256 not in scheduler_response_schema_hashes()
+            or schema_sha256
+            not in (
+                frozenset(scheduler_auxiliary_response_schema_model_registry())
+                if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                else scheduler_response_schema_hashes()
+            )
         ):
             raise OpenRouterSchemaError(
                 "provider request differs from its exact active scheduler task"
@@ -1896,6 +2046,21 @@ class PipelineScheduler:
             for delivered in delivered_sources
         )
         existing = self._activations.get(task.task_id)
+        retrieval_planning_result = self._retrieval_planning_result_for_primary(
+            self.active_plan,
+            task,
+        )
+        retrieval_binding = self.journal.retrieval_binding_for_task(task.task_id)
+        if (
+            retrieval_planning_result is not None
+            and retrieval_planning_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+            and retrieval_binding is None
+        ):
+            raise OpenRouterSchemaError(
+                "retrieval-bound provider request lacks durable transcript custody"
+            )
+        if retrieval_binding is not None:
+            retrieval_binding.require_exact_planned_primary(plan=self.active_plan, task=task)
         if existing is None:
             activation = self.journal.activate_task(
                 task.task_id,
@@ -1919,6 +2084,7 @@ class PipelineScheduler:
                 response_schema_sha256=schema_sha256,
                 delivered_source_descriptor_sha256s=(delivered_source_descriptor_sha256s),
                 upstream_task_result_sha256s=existing.upstream_task_result_sha256s,
+                retrieval_planning_result=retrieval_planning_result,
             )
             if (
                 task.task_id not in self.journal.dispatchable_task_ids
@@ -1927,6 +2093,12 @@ class PipelineScheduler:
             ):
                 raise OpenRouterSchemaError(
                     "resumed provider request differs from its durable activation"
+                )
+            if retrieval_binding is not None:
+                retrieval_binding.require_exact_primary(
+                    plan=self.active_plan,
+                    task=task,
+                    activation=existing,
                 )
         return _issue_trusted_request_limit_scope(logical_request_id)
 
@@ -2025,6 +2197,7 @@ class PipelineScheduler:
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
         normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
     ) -> SchedulerTaskResult:
         self._require_active_task(task)
         activation = self._activation(task)
@@ -2082,6 +2255,7 @@ class PipelineScheduler:
                 model_surface_review_artifact=model_surface_review_artifact,
                 accepted_candidates=accepted_candidates,
                 normalization_evidence=normalization_evidence,
+                retrieval_binding=retrieval_binding,
             )
         except ValueError:
             attempt = self._persist_accountable_provider_attempt(task, (usage,))
@@ -2150,11 +2324,13 @@ class PipelineScheduler:
             if len(exact_usage_records) > 1:
                 break
         if task.task_id not in self._activations:
+            retrieval_binding = self.journal.retrieval_binding_for_task(task.task_id)
             result = SchedulerTaskResult.build_preflight_failure(
                 plan=self.active_plan,
                 task=task,
                 terminal_status=status,
                 terminal_evidence_sha256=evidence_sha256,
+                retrieval_binding=retrieval_binding,
             )
             self.journal.record_preflight_failure(result)
             return result
@@ -2167,12 +2343,14 @@ class PipelineScheduler:
             if released is not None:
                 return released
         if task.task_id in self.journal.dispatchable_task_ids:
+            retrieval_binding = self.journal.retrieval_binding_for_task(task.task_id)
             result = SchedulerTaskResult.build(
                 plan=self.active_plan,
                 task=task,
                 activation=self._activation(task),
                 terminal_status=status,
                 terminal_evidence_sha256=evidence_sha256,
+                retrieval_binding=retrieval_binding,
             )
             self.journal.record_activated_preflight_failure(result)
             return result
@@ -2294,6 +2472,43 @@ class PipelineScheduler:
 
     def close(self) -> None:
         self.journal.close()
+
+    @staticmethod
+    def _retrieval_planning_child(
+        plan: SchedulerPassPlan,
+        primary_task: SchedulerTaskPlan,
+    ) -> SchedulerTaskPlan:
+        children = tuple(
+            task
+            for task in plan.tasks
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            and task.parent_task_id == primary_task.task_id
+        )
+        if len(children) != 1:
+            raise ValueError("scheduler primary lacks one exact retrieval-planning child")
+        return children[0]
+
+    def _retrieval_planning_result_for_primary(
+        self,
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+    ) -> SchedulerTaskResult | None:
+        children = tuple(
+            candidate
+            for candidate in plan.tasks
+            if candidate.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            and candidate.parent_task_id == task.task_id
+        )
+        if len(children) > 1:
+            raise ValueError("scheduler primary has multiple retrieval-planning children")
+        if not children:
+            return None
+        matches = tuple(
+            result for result in self.journal.task_results if result.task_id == children[0].task_id
+        )
+        if len(matches) != 1:
+            raise ValueError("scheduler primary lacks its terminal retrieval-child result")
+        return matches[0]
 
     def _truncation_recovery_child(
         self,
@@ -2522,7 +2737,12 @@ class PipelineScheduler:
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
         normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
     ) -> SchedulerTaskResult:
+        retained_retrieval_binding = self.journal.retrieval_binding_for_task(task.task_id)
+        if retrieval_binding is not None and retrieval_binding != retained_retrieval_binding:
+            raise ValueError("scheduler result retrieval binding differs from durable custody")
+        retrieval_binding = retained_retrieval_binding
         output = (
             self.journal.persist_output(
                 task.task_id,
@@ -2533,6 +2753,7 @@ class PipelineScheduler:
                 model_surface_review_artifact=model_surface_review_artifact,
                 accepted_candidates=accepted_candidates,
                 normalization_evidence=normalization_evidence,
+                retrieval_binding=retrieval_binding,
             )
             if terminal_status is SchedulerTerminalStatus.SUCCEEDED
             else None
@@ -2544,6 +2765,7 @@ class PipelineScheduler:
             terminal_status=terminal_status,
             terminal_evidence_sha256=terminal_evidence_sha256,
             output=output,
+            retrieval_binding=retrieval_binding,
         )
         self.journal.record_terminal(result)
         return result

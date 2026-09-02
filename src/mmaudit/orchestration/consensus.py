@@ -474,6 +474,12 @@ def _candidate_claim_key(candidate: CandidateFinding) -> _CandidateClaimKey | No
         "false_positive_conditions": candidate.false_positive_conditions,
         "recommendation": candidate.recommendation,
         "verification_test": candidate.verification_test.model_dump(mode="json"),
+        "actor_model_applicability": candidate.actor_model_applicability.value,
+        "actor_context": (
+            candidate.actor_context.model_dump(mode="json")
+            if candidate.actor_context is not None
+            else None
+        ),
     }
     return json.dumps(
         payload,
@@ -799,6 +805,7 @@ def merge_group(
     consensus_review: ConsensusReviewArtifact | None = None,
     cross_examinations: Iterable[CandidateCrossExaminationDecision] = (),
     deterministically_rejected_candidate_ids: frozenset[str] = frozenset(),
+    apply_judge_classification: bool = True,
 ) -> Finding:
     """Merge evidence while preventing a judge from exceeding consensus."""
 
@@ -869,7 +876,8 @@ def merge_group(
     )
     status = cap
     if (
-        not valid_execution_candidates
+        apply_judge_classification
+        and not valid_execution_candidates
         and judge is not None
         and _STATUS_RANK[judge.status] < _STATUS_RANK[status]
     ):
@@ -885,7 +893,7 @@ def merge_group(
             (primary.severity, judge.severity),
             key=lambda value: SEVERITY_ORDER[value.value],
         )
-        if judge is not None
+        if judge is not None and apply_judge_classification
         else primary.severity
     )
     confidence = (
@@ -893,7 +901,7 @@ def merge_group(
         if valid_execution_candidates
         else min(
             max(candidate.confidence for candidate in primary_pool),
-            judge.confidence if judge is not None else 1.0,
+            judge.confidence if judge is not None and apply_judge_classification else 1.0,
         )
     )
     # Execution-origin groups retain linked candidates in contributor IDs and review
@@ -1061,6 +1069,8 @@ def merge_group(
         contributing_candidate_ids=[candidate.candidate_id for candidate in group.candidates],
         evidence_strength=evidence_strength,
         reproduction_state=reproduction_state,
+        actor_model_applicability=primary.actor_model_applicability,
+        actor_context=primary.actor_context,
     )
 
 

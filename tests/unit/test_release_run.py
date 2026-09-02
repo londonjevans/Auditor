@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.release_artifacts as release_artifact_module
 import mmaudit.release_run as release_run_module
 from mmaudit.config import (
     AuditConfig,
@@ -24,11 +25,14 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.sharding import SolidityCoverageArtifact
 from mmaudit.orchestration.manifest import (
+    KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+    KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
     ManifestBindingSet,
     ManifestFileBinding,
     ManifestHashBinding,
     RunConfigurationBinding,
     RunEvidenceManifest,
+    _seal_run_evidence_manifest,
     canonical_sha256,
     collect_run_artifacts,
     seal_run_evidence_manifest,
@@ -59,6 +63,7 @@ from tests.language_capability_support import (
     write_language_capability_artifact,
 )
 from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.taxonomy_custody_support import write_exact_taxonomy_custody
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40
@@ -303,6 +308,12 @@ def _write_run(
     }
     required_artifacts.discard("run-evidence-manifest.json")
     required_artifacts.discard("maximum_assurance_traceability.json")
+    required_artifacts.difference_update(
+        {
+            KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+            KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+        }
+    )
     for name in sorted(required_artifacts):
         (run_dir / name).write_text('{"synthetic":true}\n', encoding="utf-8")
     _write_report_artifacts(
@@ -318,7 +329,7 @@ def _write_run(
         sha256=_sha("synthetic target source"),
         size=len("synthetic target source"),
     )
-    manifest = seal_run_evidence_manifest(
+    manifest = _seal_run_evidence_manifest(
         run_id=run_id,
         repository_root_name="synthetic-target-repository",
         git_commit=commit,
@@ -326,7 +337,7 @@ def _write_run(
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
         artifacts=collect_run_artifacts(run_dir),
-        schema_version="1.2",
+        schema_version="1.3",
         tool_version="test",
     )
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
@@ -349,6 +360,7 @@ def test_observer_binds_target_run_configuration_and_exact_evidence_file(
     evidence = observe_release_artifacts(run_dir, ROOT)
     run_configuration = manifest.run_configuration
     assert run_configuration is not None
+    assert manifest.schema_version == "1.3"
 
     binding = observe_release_run_binding(run_dir, ROOT, evidence_path)
 
@@ -389,6 +401,58 @@ def test_observer_binds_target_run_configuration_and_exact_evidence_file(
         binding.model_dump(mode="json", exclude={"binding_sha256"})
     )
     assert "product_candidate_commit" not in ReleaseRunBinding.model_fields
+
+
+def test_release_run_binding_accepts_manifest_14(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE)
+    run_dir = tmp_path / "run"
+    legacy = _write_run(run_dir, config, run_id="release-run-current")
+    taxonomy_bindings = write_exact_taxonomy_custody(run_dir)
+    write_json(
+        run_dir / "private" / "model-review-artifacts.json",
+        {"schema_version": "1.0", "artifacts": []},
+    )
+    current_bindings = legacy.bindings.model_copy(
+        update={
+            "coverage": sorted(
+                [*legacy.bindings.coverage, *taxonomy_bindings],
+                key=lambda binding: binding.identifier,
+            )
+        }
+    )
+    assert legacy.run_configuration is not None
+    current = seal_run_evidence_manifest(
+        run_id=legacy.run_id,
+        repository_root_name=legacy.repository_root_name,
+        git_commit=legacy.git_commit,
+        sources=legacy.sources,
+        run_configuration=legacy.run_configuration,
+        bindings=current_bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version="test",
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", current)
+    monkeypatch.setattr(
+        release_artifact_module,
+        "validate_manifest_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        release_artifact_module,
+        "validate_traceability_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+    evidence_path = tmp_path / "release-artifact-evidence.json"
+    _write_evidence(run_dir, evidence_path)
+
+    binding = observe_release_run_binding(run_dir, ROOT, evidence_path)
+
+    assert current.schema_version == "1.4"
+    assert binding.manifest_sha256 == current.manifest_sha256
 
 
 def test_observer_rejects_artifact_evidence_from_another_run(

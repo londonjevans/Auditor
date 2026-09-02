@@ -9,15 +9,23 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, JsonValue, model_validator
 
+from mmaudit.models.actor_model import (
+    ActorAssessmentDisposition,
+    ActorModelApplicability,
+    ActorModelEvaluation,
+    ActorModelInputState,
+    ActorSeverity,
+)
 from mmaudit.models.scheduler import (
     SchedulerCostLedgerBaseline,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AnalysisState,
     AuditModelRefreshEvidence,
     AuditModelRefreshPricingAttemptEvidence,
@@ -39,6 +47,8 @@ from mmaudit.models.schemas import (
     Finding,
     FindingOriginKind,
     FindingStatus,
+    JudgeDecision,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityAssessment,
     LanguageCapabilityStatus,
     Location,
@@ -56,6 +66,9 @@ from mmaudit.models.schemas import (
     UsageRecord,
     VerificationDecision,
     VerificationVerdict,
+    _finding_has_actor_model_evidence,
+    _finding_inventories_have_actor_model_evidence,
+    _legacy_actor_model_finding_inventory_schema_properties,
     validate_audit_model_refresh_pricing_usage_custody,
     validate_audit_model_refresh_usage_custody,
     validate_audit_model_selection_usage_custody,
@@ -75,6 +88,7 @@ from mmaudit.scanners.projection import project_scanner_finding
 _MAX_SOURCE_EXCERPT_EVIDENCE_BYTES = 1_000_000
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$"
 _SCHEDULER_REQUEST_PATTERN = r"^(?:scheduler-request|scheduler-recovery-request)-[0-9a-f]{64}$"
+_PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS = frozenset({"1.1", "1.2"})
 
 SCANNER_SOURCE_EVIDENCE_PATH = "private/scanner-source-evidence.json"
 
@@ -90,7 +104,12 @@ MANIFEST_BOUND_REPORT_DELIVERABLES = frozenset(
     }
 )
 REQUIRED_REPORT_DELIVERABLES = frozenset(
-    {*MANIFEST_BOUND_REPORT_DELIVERABLES, "run-evidence-manifest.json"}
+    {
+        *MANIFEST_BOUND_REPORT_DELIVERABLES,
+        "known-issue-taxonomy-coverage.json",
+        "known-issue-taxonomy.json",
+        "run-evidence-manifest.json",
+    }
 )
 
 
@@ -98,14 +117,21 @@ def _language_capability_schema_contract(
     *,
     current_version: str,
     legacy_versions: tuple[str, ...],
+    compatible_current_versions: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Describe the exact field-presence contract for versioned public artifacts."""
 
+    current_versions = tuple(sorted({current_version, *compatible_current_versions}))
+    current_selector = (
+        {"const": current_version}
+        if len(current_versions) == 1
+        else {"enum": list(current_versions)}
+    )
     return {
         "allOf": [
             {
                 "if": {
-                    "properties": {"schema_version": {"const": current_version}},
+                    "properties": {"schema_version": current_selector},
                 },
                 "then": {
                     "properties": {"language_capability": {"not": {"type": "null"}}},
@@ -128,6 +154,7 @@ def _validate_versioned_language_capability_payload(
     *,
     current_version: str,
     legacy_versions: frozenset[str],
+    compatible_current_versions: frozenset[str] = frozenset(),
 ) -> object:
     """Reject omitted current evidence and retroactive fields on legacy versions."""
 
@@ -135,11 +162,106 @@ def _validate_versioned_language_capability_payload(
         return value
     schema_version = value.get("schema_version", current_version)
     has_language_capability = "language_capability" in value
-    if schema_version == current_version and not has_language_capability:
+    if (
+        schema_version in {current_version, *compatible_current_versions}
+        and not has_language_capability
+    ):
         raise ValueError("current artifact requires typed language capability evidence")
     if schema_version in legacy_versions and has_language_capability:
         raise ValueError("legacy artifact cannot carry language capability evidence")
     return value
+
+
+def _candidate_payload_for_findings_artifact_version(
+    candidate: CandidateFinding,
+    *,
+    schema_version: Literal["1.1", "1.2", "1.3"],
+) -> dict[str, Any]:
+    """Project actor-neutral candidates onto their versioned forensic hash shape."""
+
+    payload = candidate.model_dump(mode="json")
+    if (
+        schema_version in {"1.1", "1.2"}
+        and candidate.actor_model_applicability is ActorModelApplicability.UNSTATED
+        and candidate.actor_context is None
+    ):
+        payload.pop("actor_model_applicability", None)
+        payload.pop("actor_context", None)
+    return payload
+
+
+def _candidate_has_actor_model_evidence(value: object) -> bool:
+    """Return whether one raw or typed candidate carries non-default actor evidence."""
+
+    if isinstance(value, CandidateFinding):
+        applicability: object = value.actor_model_applicability
+        context: object = value.actor_context
+    elif isinstance(value, Mapping):
+        applicability = value.get(
+            "actor_model_applicability",
+            ActorModelApplicability.UNSTATED,
+        )
+        context = value.get("actor_context")
+    else:
+        return False
+    return (
+        applicability
+        not in {
+            ActorModelApplicability.UNSTATED,
+            ActorModelApplicability.UNSTATED.value,
+        }
+        or context is not None
+    )
+
+
+def _sequence_has_candidate_actor_model_evidence(value: object) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, str | bytes)
+        and any(_candidate_has_actor_model_evidence(item) for item in value)
+    )
+
+
+def _findings_artifact_has_nested_actor_model_evidence(
+    value: Mapping[object, object],
+) -> bool:
+    """Inspect every final and candidate inventory, including forensic records."""
+
+    if _finding_inventories_have_actor_model_evidence(
+        value,
+        ("findings", "rejected_findings", "filtered_findings"),
+    ) or _sequence_has_candidate_actor_model_evidence(value.get("candidate_findings")):
+        return True
+    records = value.get("records")
+    if not isinstance(records, Sequence) or isinstance(records, str | bytes):
+        return False
+    for record in records:
+        if isinstance(record, Mapping):
+            finding = record.get("finding")
+            candidates = record.get("candidate_findings")
+        else:
+            finding = getattr(record, "finding", None)
+            candidates = getattr(record, "candidate_findings", None)
+        if _finding_has_actor_model_evidence(
+            finding
+        ) or _sequence_has_candidate_actor_model_evidence(candidates):
+            return True
+    return False
+
+
+def _legacy_actor_model_candidate_inventory_schema() -> dict[str, Any]:
+    """Constrain one pre-actor candidate inventory to neutral actor defaults."""
+
+    return {
+        "items": {
+            "properties": {
+                "actor_model_applicability": {
+                    "const": ActorModelApplicability.UNSTATED.value,
+                },
+                "actor_context": {"type": "null"},
+            }
+        }
+    }
 
 
 def _money_text(value: Decimal) -> str:
@@ -513,7 +635,11 @@ def scanner_source_authority_from_runs(
         )
     except ValueError as exc:
         raise ValueError("scanner source authority has invalid scanner projection") from exc
-    if projected != canonical_finding:
+    # Actor calibration is independently replayed and cannot change scanner source authority.
+    scanner_bound_finding = canonical_finding.model_copy(
+        update={"actor_assessment": projected.actor_assessment}
+    )
+    if projected != scanner_bound_finding:
         raise ValueError("scanner source authority differs from the exact scanner projection")
 
     matching_validations = [
@@ -682,13 +808,84 @@ class FindingsArtifact(ReportStatusProjection):
 
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra=_language_capability_schema_contract(
-            current_version="1.2",
-            legacy_versions=("1.1",),
-        ),
+        json_schema_extra={
+            "allOf": [
+                *_language_capability_schema_contract(
+                    current_version="1.3",
+                    compatible_current_versions=("1.2",),
+                    legacy_versions=("1.1",),
+                )["allOf"],
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.3"}},
+                    },
+                    "then": {
+                        "properties": {
+                            "actor_model_baseline": {"not": {"type": "null"}},
+                            "actor_model_evaluation": {"not": {"type": "null"}},
+                        },
+                        "required": [
+                            "actor_model_baseline",
+                            "actor_model_evaluation",
+                            "judge_decisions",
+                        ],
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "schema_version": {
+                                "enum": cast(
+                                    list[JsonValue],
+                                    sorted(_PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS),
+                                ),
+                            }
+                        },
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "judge_decisions": {"maxItems": 0},
+                            **_legacy_actor_model_finding_inventory_schema_properties(
+                                ("findings", "rejected_findings", "filtered_findings")
+                            ),
+                            "candidate_findings": (
+                                _legacy_actor_model_candidate_inventory_schema()
+                            ),
+                            "records": {
+                                "items": {
+                                    "properties": {
+                                        "finding": {
+                                            "properties": {
+                                                "actor_model_applicability": {
+                                                    "const": (
+                                                        ActorModelApplicability.UNSTATED.value
+                                                    )
+                                                },
+                                                "actor_context": {"type": "null"},
+                                                "actor_assessment": {"type": "null"},
+                                            }
+                                        },
+                                        "candidate_findings": (
+                                            _legacy_actor_model_candidate_inventory_schema()
+                                        ),
+                                    }
+                                }
+                            },
+                        },
+                        "not": {
+                            "anyOf": [
+                                {"required": ["actor_model_baseline"]},
+                                {"required": ["actor_model_evaluation"]},
+                            ]
+                        },
+                    },
+                },
+            ]
+        },
     )
 
-    schema_version: Literal["1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.1", "1.2", "1.3"] = "1.3"
     language_capability: LanguageCapabilityAssessment | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -704,6 +901,15 @@ class FindingsArtifact(ReportStatusProjection):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    actor_model_baseline: ActorModelBaselineArtifact | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    actor_model_evaluation: ActorModelEvaluation | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    judge_decisions: list[JudgeDecision] = Field(default_factory=list, max_length=100_000)
     terminal_candidate_dispositions: list[CandidateTerminalDisposition] = Field(max_length=100_000)
     verification_decisions: list[VerificationDecision] = Field(max_length=100_000)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(max_length=100_000)
@@ -716,14 +922,184 @@ class FindingsArtifact(ReportStatusProjection):
     def language_capability_is_versioned(cls, value: object) -> object:
         return _validate_versioned_language_capability_payload(
             value,
-            current_version="1.2",
+            current_version="1.3",
+            compatible_current_versions=frozenset({"1.2"}),
             legacy_versions=frozenset({"1.1"}),
         )
 
+    @model_validator(mode="before")
+    @classmethod
+    def actor_model_evaluation_is_versioned(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        schema_version = value.get("schema_version", "1.3")
+        has_actor_baseline = "actor_model_baseline" in value
+        has_actor_evaluation = "actor_model_evaluation" in value
+        if schema_version == "1.3" and (
+            not has_actor_baseline
+            or value.get("actor_model_baseline") is None
+            or not has_actor_evaluation
+            or value.get("actor_model_evaluation") is None
+            or "judge_decisions" not in value
+        ):
+            raise ValueError(
+                "findings artifact schema 1.3 requires actor-model baseline, evaluation, "
+                "and judge decisions"
+            )
+        if schema_version in _PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS and (
+            has_actor_baseline or has_actor_evaluation
+        ):
+            raise ValueError("legacy findings artifact cannot carry actor-model evidence")
+        if schema_version in _PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS and value.get("judge_decisions"):
+            raise ValueError("legacy findings artifact cannot carry actor judge decisions")
+        if (
+            schema_version in _PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS
+            and _findings_artifact_has_nested_actor_model_evidence(value)
+        ):
+            raise ValueError("legacy findings artifact cannot carry nested actor-model evidence")
+        return value
+
     @model_validator(mode="after")
     def current_language_capability_is_non_null(self) -> FindingsArtifact:
-        if self.schema_version == "1.2" and self.language_capability is None:
+        if self.schema_version in {"1.2", "1.3"} and self.language_capability is None:
             raise ValueError("current artifact requires non-null language capability evidence")
+        return self
+
+    @model_validator(mode="after")
+    def actor_model_evaluation_matches_findings(self) -> FindingsArtifact:
+        evaluation = self.actor_model_evaluation
+        baseline = self.actor_model_baseline
+        if self.schema_version == "1.3" and (evaluation is None or baseline is None):
+            raise ValueError(
+                "findings artifact schema 1.3 requires actor-model baseline and evaluation"
+            )
+        if evaluation is None:
+            if baseline is not None:
+                raise ValueError("forensic actor-model baseline requires its evaluation")
+            if self.judge_decisions:
+                raise ValueError("forensic actor judge decisions require their typed evaluation")
+            return self
+        if baseline is None:
+            raise ValueError("forensic actor-model evaluation requires its retained baseline")
+        all_findings = (*self.findings, *self.rejected_findings, *self.filtered_findings)
+        if any(finding.actor_assessment is None for finding in all_findings):
+            raise ValueError("actor-model evaluation requires assessment on every finding")
+        expected_bindings = tuple(
+            sorted(
+                (
+                    finding.id,
+                    finding.actor_assessment.baseline_finding_sha256,
+                    finding.actor_assessment.assessment_sha256,
+                )
+                for finding in all_findings
+                if finding.actor_assessment is not None
+            )
+        )
+        observed_bindings = tuple(
+            (
+                binding.finding_id,
+                binding.baseline_finding_sha256,
+                binding.assessment_sha256,
+            )
+            for binding in evaluation.finding_assessments
+        )
+        if observed_bindings != expected_bindings:
+            raise ValueError("forensic actor-model evaluation differs from finding assessments")
+
+        input_evidence = evaluation.input_evidence
+        source = input_evidence.source_evidence
+        expected_model_sha256 = source.actor_model.artifact_sha256 if source is not None else None
+        expected_source_sha256 = source.source_sha256 if source is not None else None
+        governance_by_id = {
+            governance.conflict_id: governance for governance in evaluation.governance_findings
+        }
+        for finding in all_findings:
+            assessment = finding.actor_assessment
+            if assessment is None:
+                raise ValueError("forensic actor assessment is unavailable")
+            if (
+                assessment.input_state is not input_evidence.state
+                or assessment.actor_model_sha256 != expected_model_sha256
+                or assessment.actor_model_source_sha256 != expected_source_sha256
+            ):
+                raise ValueError("finding actor assessment differs from forensic input evidence")
+            if assessment.calibrated_severity is not ActorSeverity(finding.severity.value):
+                raise ValueError("finding severity differs from its forensic actor calibration")
+            context = finding.actor_context
+            if context is None:
+                if assessment.role_id is not None:
+                    raise ValueError("actor assessment invents context absent from its finding")
+                if (
+                    input_evidence.state is ActorModelInputState.CURRENT
+                    and finding.actor_model_applicability
+                    is ActorModelApplicability.NO_PRIVILEGED_ACTOR_REQUIRED
+                    and assessment.disposition
+                    is not ActorAssessmentDisposition.NOT_APPLICABLE_NONPRIVILEGED
+                ):
+                    raise ValueError(
+                        "nonprivileged finding differs from its forensic actor assessment"
+                    )
+            elif (
+                assessment.role_id != context.role_id
+                or assessment.severity_basis != context.severity_basis
+                or assessment.harmed_party_disposition != context.harmed_party_disposition
+                or assessment.harmed_party_id != context.harmed_party_id
+                or assessment.privileged_action_required is not context.privileged_action_required
+                or assessment.permission != context.permission
+                or assessment.misconduct_required is not context.misconduct_required
+                or assessment.ordinary_legitimate_behavior
+                is not context.ordinary_legitimate_behavior
+                or assessment.action_against_stated_interest
+                is not context.action_against_stated_interest
+                or assessment.stated_interest != context.stated_interest
+                or assessment.applied_constraint_ids != context.relevant_constraint_ids
+                or assessment.required_concentrated_role_ids
+                != context.required_concentrated_role_ids
+                or assessment.relevant_economic_exposures != context.relevant_economic_exposures
+                or assessment.plausibility_rationale != context.plausibility_rationale
+                or assessment.plausibility_evidence_reference_ids
+                != context.plausibility_evidence_reference_ids
+            ):
+                raise ValueError("finding actor assessment differs from its forensic context")
+            if assessment.governance_conflict_id is not None:
+                governance = governance_by_id.get(assessment.governance_conflict_id)
+                if governance is None or finding.id not in governance.source_finding_ids:
+                    raise ValueError("finding actor governance conflict lacks forensic custody")
+            if (
+                source is not None
+                and context is not None
+                and input_evidence.state is ActorModelInputState.CURRENT
+            ):
+                role = source.actor_model.role(context.role_id)
+                if role is not None and (
+                    assessment.role_occupancy is not role.occupancy
+                    or assessment.holder_party_id != role.holder_party_id
+                    or assessment.concentrated_with_role_ids != role.concentrated_with_role_ids
+                ):
+                    raise ValueError(
+                        "finding actor role facts differ from forensic operator evidence"
+                    )
+                holder = (
+                    source.actor_model.party(role.holder_party_id)
+                    if role is not None and role.holder_party_id is not None
+                    else None
+                )
+                if assessment.holder_fee_revenue_exposure != (
+                    holder.fee_revenue_exposure.state if holder is not None else None
+                ) or assessment.holder_protocol_failure_loss != (
+                    holder.protocol_failure_loss.state if holder is not None else None
+                ):
+                    raise ValueError(
+                        "finding actor exposure facts differ from forensic operator evidence"
+                    )
+        from mmaudit.orchestration.actor_model import validate_actor_model_evaluation
+
+        validate_actor_model_evaluation(
+            findings=all_findings,
+            evaluation=evaluation,
+            baseline_artifact=baseline,
+            judge_decisions=self.judge_decisions,
+        )
         return self
 
     @model_validator(mode="after")
@@ -919,7 +1295,12 @@ class FindingsArtifact(ReportStatusProjection):
             candidate.candidate_id: candidate for candidate in self.candidate_findings
         }
         if any(
-            scheduler_canonical_sha256(candidate_by_id[candidate_id].model_dump(mode="json"))
+            scheduler_canonical_sha256(
+                _candidate_payload_for_findings_artifact_version(
+                    candidate_by_id[candidate_id],
+                    schema_version=self.schema_version,
+                )
+            )
             != self.consensus_review.candidate_payload_sha256s[candidate_id]
             for candidate_id in self.consensus_review.candidate_ids
         ):
@@ -939,13 +1320,67 @@ class FindingsArtifact(ReportStatusProjection):
 class CoverageArtifact(ReportStatusProjection):
     """Compact typed coverage projection with full typed coverage bodies retained."""
 
-    schema_version: Literal["1.1"] = "1.1"
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.2"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {"taxonomy_coverage": {"not": {"type": "null"}}},
+                        "required": ["taxonomy_coverage"],
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.1"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {"not": {"required": ["taxonomy_coverage"]}},
+                },
+            ]
+        },
+    )
+
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     run_id: str = Field(min_length=1, max_length=160)
     scanner_only: bool
     scope_assessment: AuditScopeAssessment | None
     solidity_coverage: SolidityCoverage | None
     model_review_coverage: ModelReviewCoverage | None
+    taxonomy_coverage: KnownIssueTaxonomyCoverage | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     generic_source_coverage: dict[str, CoverageMetric] | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def taxonomy_custody_is_versioned(cls, value: object) -> object:
+        """Require taxonomy custody on 1.2 and reject retroactive legacy fields."""
+
+        if not isinstance(value, Mapping):
+            return value
+        schema_version = value.get("schema_version", "1.2")
+        has_taxonomy = "taxonomy_coverage" in value
+        if schema_version == "1.2" and (not has_taxonomy or value.get("taxonomy_coverage") is None):
+            raise ValueError("coverage artifact schema 1.2 requires taxonomy coverage")
+        if schema_version == "1.1" and has_taxonomy:
+            raise ValueError("coverage artifact schema 1.1 cannot carry taxonomy coverage")
+        return value
+
+    @model_validator(mode="after")
+    def taxonomy_custody_matches_version(self) -> CoverageArtifact:
+        """Keep constructed instances on the same exact field-presence boundary."""
+
+        if self.schema_version == "1.2" and self.taxonomy_coverage is None:
+            raise ValueError("coverage artifact schema 1.2 requires taxonomy coverage")
+        if self.schema_version == "1.1" and self.taxonomy_coverage is not None:
+            raise ValueError("coverage artifact schema 1.1 cannot carry taxonomy coverage")
+        return self
 
     @model_validator(mode="after")
     def generic_coverage_matches_capability(self) -> CoverageArtifact:
@@ -1808,7 +2243,7 @@ def build_findings_artifact(
     candidates: Sequence[CandidateFinding] = (),
     reproduction_resolutions: Sequence[CandidateReproductionResolution] = (),
     source_excerpts: Mapping[str, SourceExcerptEvidence] | None = None,
-    schema_version: Literal["1.1", "1.2"] | None = None,
+    schema_version: Literal["1.1", "1.2", "1.3"] | None = None,
 ) -> FindingsArtifact:
     """Build an exact candidate-linked forensic finding inventory."""
 
@@ -1905,14 +2340,43 @@ def build_findings_artifact(
         )
     terminal_dispositions.sort(key=lambda item: item.candidate_id)
     projection = effective_report_status(report)
-    resolved_schema_version: Literal["1.1", "1.2"] = schema_version or (
-        "1.2" if projection.language_capability is not None else "1.1"
+    resolved_schema_version: Literal["1.1", "1.2", "1.3"] = schema_version or (
+        "1.3"
+        if report.schema_version in {"1.3", "1.4"}
+        else "1.2"
+        if projection.language_capability is not None
+        else "1.1"
     )
+    legacy_actor_payload: dict[object, object] = {
+        "findings": report.findings,
+        "rejected_findings": report.rejected_findings,
+        "filtered_findings": report.filtered_findings,
+        "candidate_findings": candidates,
+        "records": records,
+    }
+    if resolved_schema_version in _PRE_ACTOR_FINDINGS_ARTIFACT_VERSIONS and (
+        report.actor_model_baseline is not None
+        or report.actor_model_evaluation is not None
+        or bool(report.judge_decisions)
+        or _findings_artifact_has_nested_actor_model_evidence(legacy_actor_payload)
+    ):
+        raise ValueError(
+            f"findings artifact schema {resolved_schema_version} cannot discard actor-model evidence"
+        )
     projection_payload = projection.model_dump(mode="python")
     if resolved_schema_version == "1.1":
         projection_payload.pop("language_capability", None)
+    actor_evidence_payload = (
+        {
+            "actor_model_baseline": report.actor_model_baseline,
+            "actor_model_evaluation": report.actor_model_evaluation,
+        }
+        if resolved_schema_version == "1.3"
+        else {}
+    )
     return FindingsArtifact(
         **projection_payload,
+        **actor_evidence_payload,
         schema_version=resolved_schema_version,
         run_id=report.run_id,
         reporting_severity_threshold=reporting_threshold,
@@ -1922,6 +2386,11 @@ def build_findings_artifact(
         records=records,
         candidate_findings=sorted(candidates, key=lambda item: item.candidate_id),
         consensus_review=report.consensus_review,
+        judge_decisions=(
+            sorted(report.judge_decisions, key=lambda item: item.group_id)
+            if resolved_schema_version == "1.3"
+            else []
+        ),
         terminal_candidate_dispositions=terminal_dispositions,
         verification_decisions=_sorted_verifications(report.verification_decisions),
         cross_examination_decisions=_sorted_cross_examinations(report.cross_examination_decisions),
@@ -1943,8 +2412,14 @@ def build_coverage_artifact(report: AuditReport) -> CoverageArtifact:
         and report.language_capability.status is LanguageCapabilityStatus.REDUCED
         else None
     )
+    taxonomy_coverage = report.taxonomy_coverage if report.schema_version == "1.4" else None
+    taxonomy_payload = (
+        {"taxonomy_coverage": taxonomy_coverage} if taxonomy_coverage is not None else {}
+    )
     return CoverageArtifact(
         **projection.model_dump(mode="python"),
+        **taxonomy_payload,
+        schema_version="1.2" if taxonomy_coverage is not None else "1.1",
         run_id=report.run_id,
         scanner_only=scanner_only,
         scope_assessment=report.scope_assessment,

@@ -108,6 +108,15 @@ from mmaudit.models.schemas import (
     InvariantSpec,
     InvariantSuite,
     InvariantTemplate,
+    KnownIssueApplicability,
+    KnownIssueCitation,
+    KnownIssueCitationKind,
+    KnownIssueCriticality,
+    KnownIssueDisposition,
+    KnownIssueItemDisposition,
+    KnownIssueTaxonomy,
+    KnownIssueTaxonomyCoverage,
+    KnownIssueTaxonomyItem,
     LanguageCapabilityAssessment,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
@@ -126,6 +135,8 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    ProtocolProfileAssessment,
+    ProtocolProfileKind,
     QualityGateResult,
     RepositoryCodeExecutionState,
     RepositoryMap,
@@ -215,6 +226,7 @@ from mmaudit.orchestration.scheduler import create_scheduler_journal
 from mmaudit.orchestration.scheduler_runtime import build_scheduler_bindings
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.solidity.invariants import detect_protocol_profiles
 from mmaudit.traceability import (
     ImplementationStatus,
     MaximumAssuranceTraceability,
@@ -256,12 +268,8 @@ from tests.unit.test_model_coverage import (
     _SOURCE as _PROMOTED_SURFACE_SOURCE,
 )
 from tests.unit.test_model_coverage import (
-    _artifact as _promoted_ordinary_artifact,
-)
-from tests.unit.test_model_coverage import (
-    _bind_usage_to_context as _bind_promoted_usage_to_context,
-)
-from tests.unit.test_model_coverage import (
+    _authorized_ordinary_review_evidence,
+    _AuthorizedOrdinaryReviewEvidence,
     _build_promoted_parent_surface_fixture,
     _build_promoted_recursive_parent_surface_fixture,
     _promoted_surface_context,
@@ -553,6 +561,107 @@ def _model_metric(numerator: int, denominator: int, detail: str) -> CoverageMetr
         failures=[],
         state=AnalysisState.MODEL_ONLY,
         detail=detail,
+    )
+
+
+def _complete_taxonomy_coverage(
+    assessment: ProtocolProfileAssessment,
+    reviewed_surface: ModelReviewSurface,
+) -> KnownIssueTaxonomyCoverage:
+    item_values = {
+        "item_id": "KI-SYNTHETIC-ASSURANCE",
+        "title": "Synthetic assurance coverage class",
+        "category": "assurance",
+        "criticality": KnownIssueCriticality.CRITICAL,
+        "applicable_protocol_profiles": [ProtocolProfileKind.SOLIDITY_GENERAL],
+        "defensive_question": "Review the synthetic source-bound assurance surface.",
+        "economic_template": None,
+    }
+    item_sha256 = KnownIssueTaxonomyItem.calculate_item_sha256(item_values)
+    item = KnownIssueTaxonomyItem(
+        **item_values,
+        item_sha256=item_sha256,
+        review_surface_subject_id=f"known-issue:KI-SYNTHETIC-ASSURANCE:{item_sha256}",
+    )
+    corpus_values = {
+        "schema_version": "1.0",
+        "taxonomy_version": "1.0",
+        "purpose": "defensive_failure_mode_coverage",
+        "finding_authority": False,
+        "items": [item.model_dump(mode="json")],
+    }
+    corpus = KnownIssueTaxonomy(
+        **corpus_values,
+        corpus_sha256=KnownIssueTaxonomy.calculate_corpus_sha256(corpus_values),
+    )
+    credited_reference = next(
+        reference for reference in reviewed_surface.evidence_references if reference.credited
+    )
+    disposition = KnownIssueItemDisposition(
+        item_id=item.item_id,
+        applicability=KnownIssueApplicability.APPLICABLE,
+        disposition=KnownIssueDisposition.REVIEWED,
+        matched_profiles=[ProtocolProfileKind.SOLIDITY_GENERAL],
+        reviewed_surface_ids=[reviewed_surface.surface_id],
+        citations=sorted(
+            [
+                KnownIssueCitation(
+                    kind=KnownIssueCitationKind.CORPUS,
+                    reference=f"known-issue-taxonomy:{item.item_id}",
+                    evidence_sha256=item.item_sha256,
+                    detail="Synthetic pinned defensive classification.",
+                ),
+                KnownIssueCitation(
+                    kind=KnownIssueCitationKind.PROFILE_ASSESSMENT,
+                    reference="protocol-profile-assessment:1.0",
+                    evidence_sha256=assessment.assessment_sha256,
+                    detail="Complete synthetic host profile assessment.",
+                ),
+                KnownIssueCitation(
+                    kind=KnownIssueCitationKind.MODEL_REVIEW,
+                    reference=(f"{reviewed_surface.surface_id}:{credited_reference.request_id}"),
+                    evidence_sha256=credited_reference.artifact_sha256,
+                    locations=reviewed_surface.locations,
+                    detail="Credited synthetic review proves consideration only.",
+                ),
+            ],
+            key=lambda citation: (
+                citation.kind.value,
+                citation.reference,
+                citation.evidence_sha256,
+            ),
+        ),
+        rationale="The applicable synthetic class received exact credited review.",
+    )
+    metric = CoverageMetric(
+        numerator=1,
+        denominator=1,
+        population=1,
+        percentage=100.0,
+        exclusions=[],
+        not_applicable_evidence=[],
+        confidence=1,
+        provenance=[CoverageProvenance.SYMBOL_INDEX, CoverageProvenance.MODEL_REVIEW],
+        failures=[],
+        state=AnalysisState.MODEL_ONLY,
+        detail="Synthetic content-bound known-issue review coverage.",
+    )
+    coverage_values = {
+        "schema_version": "1.0",
+        "finding_authority": False,
+        "corpus": corpus.model_dump(mode="json"),
+        "corpus_raw_sha256": canonical_sha256(corpus.model_dump(mode="json")),
+        "profile_assessment": assessment.model_dump(mode="json"),
+        "dispositions": [disposition.model_dump(mode="json")],
+        "overall": metric.model_dump(mode="json"),
+        "critical": metric.model_dump(mode="json"),
+        "critical_gap_ids": [],
+        "critical_gate_passed": True,
+        "limitations": [],
+    }
+    return KnownIssueTaxonomyCoverage(
+        **coverage_values,
+        coverage_sha256=KnownIssueTaxonomyCoverage.calculate_coverage_sha256(coverage_values),
     )
 
 
@@ -2345,6 +2454,37 @@ def _complete_runtime(
         },
         traceability=_implemented_traceability(),
     )
+    assert runtime.index is not None
+    assert runtime.graphs is not None
+    assert runtime.invariants is not None
+    assert runtime.model_review_coverage is not None
+    profile_assessment = detect_protocol_profiles(
+        runtime.index,
+        runtime.graphs,
+        {"src/Vault.sol": "contract Vault {}\n"},
+    )
+    invariants = InvariantSuite.model_validate(
+        {
+            **runtime.invariants.model_dump(mode="json"),
+            "protocol_profiles": [
+                profile.value for profile in profile_assessment.detected_profiles
+            ],
+            "protocol_profile_assessment": profile_assessment.model_dump(mode="json"),
+        }
+    )
+    runtime = replace(
+        runtime,
+        invariants=invariants,
+        taxonomy_coverage=_complete_taxonomy_coverage(
+            profile_assessment,
+            runtime.model_review_coverage.surfaces[0],
+        ),
+        artifacts={
+            *runtime.artifacts,
+            "known-issue-taxonomy-coverage.json",
+            "known-issue-taxonomy.json",
+        },
+    )
     invariant_result = runtime.invariant_executions[0]
     runtime.invariant_executions[0] = InvariantExecutionResult.model_validate(
         {
@@ -2574,6 +2714,42 @@ def _bind_promoted_assurance_usage(
     return reattest_synthetic_real_usage(priced)
 
 
+def _authorized_promoted_assurance_ordinary_evidence(
+    *,
+    config: AuditConfig,
+    authorities: _AssurancePolicySelectionFixture,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    index: SoliditySymbolIndex,
+    graphs: SolidityGraphSet,
+    reviewers: tuple[tuple[str, str, str], ...],
+) -> _AuthorizedOrdinaryReviewEvidence:
+    """Issue exact ordinary dispatch authority before binding assurance route evidence."""
+
+    contexts = tuple(
+        _promoted_surface_context(
+            requests,
+            _promoted_surface_usage(role, model_id, seed),
+            index,
+            graphs,
+        )
+        for role, model_id, seed in reviewers
+    )
+    evidence = _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=list(requests),
+        reviewers=tuple((role, model_id) for role, model_id, _seed in reviewers),
+        contexts=contexts,
+    )
+    return replace(
+        evidence,
+        usage_records=tuple(
+            _bind_promoted_assurance_usage(usage, authorities) for usage in evidence.usage_records
+        ),
+    )
+
+
 def _assurance_promoted_surface_fixture(
     *,
     config: AuditConfig,
@@ -2754,29 +2930,35 @@ def _runtime_with_promoted_parent_surface(
         specialist_role=specialist_role,
         parent_retained_count=parent_retained_count,
     )
-    ordinary_model_id = config.models.business_logic.primary
-    ordinary_usage = _promoted_surface_usage(
-        "business_logic",
-        ordinary_model_id,
-        "promoted-assurance-ordinary-review",
+    ordinary_reviewers = (
+        (
+            "business_logic",
+            config.models.business_logic.primary,
+            "promoted-assurance-ordinary-review",
+        ),
     )
-    ordinary_context = _promoted_surface_context(
-        fixture.requests,
-        ordinary_usage,
-        index,
-        graphs,
+    if specialist_role is not None:
+        ordinary_reviewers += (
+            (
+                "source_audit",
+                config.models.source_audit.primary,
+                "promoted-assurance-specialist-source-review",
+            ),
+        )
+    ordinary_evidence = _authorized_promoted_assurance_ordinary_evidence(
+        config=config,
+        authorities=authorities,
+        requests=fixture.requests,
+        index=index,
+        graphs=graphs,
+        reviewers=ordinary_reviewers,
     )
-    _bind_promoted_usage_to_context(ordinary_usage, ordinary_context)
-    ordinary_usage = _bind_promoted_assurance_usage(ordinary_usage, authorities)
-    ordinary_artifact = _promoted_ordinary_artifact(
-        list(fixture.requests),
-        ordinary_usage,
-        index,
-        graphs,
-        context=ordinary_context,
-    )
-    coverage_usages = [fixture.parent_usage, *fixture.child_usages, ordinary_usage]
-    coverage_artifacts = [*fixture.child_artifacts, ordinary_artifact]
+    coverage_usages = [
+        fixture.parent_usage,
+        *fixture.child_usages,
+        *ordinary_evidence.usage_records,
+    ]
+    coverage_artifacts = [*fixture.child_artifacts, *ordinary_evidence.artifacts]
     coverage_contexts = {
         fixture.parent_usage.request_id: [fixture.parent_context],
         **{
@@ -2787,32 +2969,8 @@ def _runtime_with_promoted_parent_surface(
                 strict=True,
             )
         },
-        ordinary_usage.request_id: [ordinary_context],
+        **ordinary_evidence.contexts_by_request,
     }
-    if specialist_role is not None:
-        source_usage = _promoted_surface_usage(
-            "source_audit",
-            config.models.source_audit.primary,
-            "promoted-assurance-specialist-source-review",
-        )
-        source_context = _promoted_surface_context(
-            fixture.requests,
-            source_usage,
-            index,
-            graphs,
-        )
-        _bind_promoted_usage_to_context(source_usage, source_context)
-        source_usage = _bind_promoted_assurance_usage(source_usage, authorities)
-        source_artifact = _promoted_ordinary_artifact(
-            list(fixture.requests),
-            source_usage,
-            index,
-            graphs,
-            context=source_context,
-        )
-        coverage_usages.append(source_usage)
-        coverage_artifacts.append(source_artifact)
-        coverage_contexts[source_usage.request_id] = [source_context]
     recovery_coordinates = tuple(
         (
             request.logical_request_id,
@@ -2821,21 +2979,25 @@ def _runtime_with_promoted_parent_surface(
         )
         for request in fixture.scheduler_artifact.recovery_model_requests
     )
-    coverage = build_model_review_coverage(
-        config,
-        usage_records=coverage_usages,
-        review_artifacts=coverage_artifacts,
-        review_contexts_by_request=coverage_contexts,
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        minimum_critical_root_lineages=2,
-        audited_suite_coverage=audited_suite,
-        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
-        recovery_usage_coordinates=recovery_coordinates,
-        promoted_recovery_surface_coverages=(fixture.surface_capability,),
-    )
+    try:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=coverage_usages,
+            review_artifacts=coverage_artifacts,
+            review_contexts_by_request=coverage_contexts,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            minimum_critical_root_lineages=2,
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recovery_surface_coverages=(fixture.surface_capability,),
+            ordinary_review_authorizations=ordinary_evidence.authorizations,
+        )
+    finally:
+        ordinary_evidence.close()
     assert coverage.critical_gate_passed, " | ".join(
         f"{surface.label}:{surface.critical}:{surface.reviewed}:"
         + ",".join(
@@ -2885,33 +3047,27 @@ def _runtime_with_promoted_recursive_parent_surface(
             parent_retained_count=parent_retained_count,
         )
     )
-    ordinary_usage = _promoted_surface_usage(
-        "business_logic",
-        config.models.business_logic.primary,
-        "promoted-recursive-assurance-ordinary-review",
-    )
-    ordinary_context = _promoted_surface_context(
-        fixture.requests,
-        ordinary_usage,
-        index,
-        graphs,
-    )
-    _bind_promoted_usage_to_context(ordinary_usage, ordinary_context)
-    ordinary_usage = _bind_promoted_assurance_usage(ordinary_usage, authorities)
-    ordinary_artifact = _promoted_ordinary_artifact(
-        list(fixture.requests),
-        ordinary_usage,
-        index,
-        graphs,
-        context=ordinary_context,
+    ordinary_evidence = _authorized_promoted_assurance_ordinary_evidence(
+        config=config,
+        authorities=authorities,
+        requests=fixture.requests,
+        index=index,
+        graphs=graphs,
+        reviewers=(
+            (
+                "business_logic",
+                config.models.business_logic.primary,
+                "promoted-recursive-assurance-ordinary-review",
+            ),
+        ),
     )
     coverage_usages = [
         fixture.parent_usage,
         fixture.bridge_usage,
         *fixture.leaf_usages,
-        ordinary_usage,
+        *ordinary_evidence.usage_records,
     ]
-    coverage_artifacts = [*fixture.leaf_artifacts, ordinary_artifact]
+    coverage_artifacts = [*fixture.leaf_artifacts, *ordinary_evidence.artifacts]
     coverage_contexts = {
         fixture.parent_usage.request_id: [fixture.parent_context],
         fixture.bridge_usage.request_id: [fixture.bridge_context],
@@ -2923,7 +3079,7 @@ def _runtime_with_promoted_recursive_parent_surface(
                 strict=True,
             )
         },
-        ordinary_usage.request_id: [ordinary_context],
+        **ordinary_evidence.contexts_by_request,
     }
     recovery_coordinates = tuple(
         (
@@ -2934,21 +3090,25 @@ def _runtime_with_promoted_recursive_parent_surface(
         for request in fixture.scheduler_artifact.recovery_model_requests
         if request.terminal_status.value == "SUCCEEDED"
     )
-    coverage = build_model_review_coverage(
-        config,
-        usage_records=coverage_usages,
-        review_artifacts=coverage_artifacts,
-        review_contexts_by_request=coverage_contexts,
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        minimum_critical_root_lineages=2,
-        audited_suite_coverage=audited_suite,
-        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
-        recovery_usage_coordinates=recovery_coordinates,
-        promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
-    )
+    try:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=coverage_usages,
+            review_artifacts=coverage_artifacts,
+            review_contexts_by_request=coverage_contexts,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            minimum_critical_root_lineages=2,
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
+            ordinary_review_authorizations=ordinary_evidence.authorizations,
+        )
+    finally:
+        ordinary_evidence.close()
     assert coverage.critical_gate_passed
     promoted_runtime = replace(
         runtime,
@@ -3294,6 +3454,67 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     assert "candidate falsifier lineages=minimum=2/2 across 1 candidate(s)" in (
         certified_ensemble.detail
     )
+
+
+def test_maximum_assurance_critical_taxonomy_gap_blocks_complete(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    coverage = runtime.taxonomy_coverage
+    assert coverage is not None
+    reviewed = coverage.dispositions[0]
+    gap = reviewed.model_copy(
+        update={
+            "disposition": KnownIssueDisposition.GAP,
+            "reviewed_surface_ids": [],
+            "citations": [
+                citation
+                for citation in reviewed.citations
+                if citation.kind is not KnownIssueCitationKind.MODEL_REVIEW
+            ],
+            "rationale": "Synthetic applicable critical class lacks credited review.",
+        }
+    )
+    gap_metric = coverage.critical.model_copy(
+        update={
+            "numerator": 0,
+            "percentage": 0.0,
+            "failures": [f"{gap.item_id} is an explicit GAP"],
+        }
+    )
+    coverage_values = {
+        **coverage.model_dump(mode="json", exclude={"coverage_sha256"}),
+        "dispositions": [gap.model_dump(mode="json")],
+        "overall": gap_metric.model_dump(mode="json"),
+        "critical": gap_metric.model_dump(mode="json"),
+        "critical_gap_ids": [gap.item_id],
+        "critical_gate_passed": False,
+        "limitations": ["1 known-issue class remains an explicit coverage GAP"],
+    }
+    gap_coverage = KnownIssueTaxonomyCoverage.model_validate(
+        {
+            **coverage_values,
+            "coverage_sha256": KnownIssueTaxonomyCoverage.calculate_coverage_sha256(
+                coverage_values
+            ),
+        }
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, taxonomy_coverage=gap_coverage)
+    )
+
+    clause = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "known_issue_taxonomy_critical_disposition"
+    )
+    assert assessment.contract_version == "1.1"
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert clause.required and clause.blocking and not clause.passed
+    assert clause.artifacts == [
+        "known-issue-taxonomy-coverage.json",
+        "known-issue-taxonomy.json",
+    ]
 
 
 def test_maximum_assurance_accepts_bounded_refreshed_prices_without_mutating_baseline(
@@ -4863,31 +5084,37 @@ def test_assurance_direct_consumption_requires_complete_parent_and_child_partiti
 
     index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
     assert fixture.requests == requests
-    ordinary_material = []
-    for role, model_id, seed in (
-        (
-            "source_audit",
-            config.models.source_audit.primary,
-            f"direct-substitute-source-{parent_retained_count}",
+    ordinary_evidence = _authorized_promoted_assurance_ordinary_evidence(
+        config=config,
+        authorities=authorities,
+        requests=fixture.requests,
+        index=index,
+        graphs=graphs,
+        reviewers=(
+            (
+                "source_audit",
+                config.models.source_audit.primary,
+                f"direct-substitute-source-{parent_retained_count}",
+            ),
+            (
+                "business_logic",
+                config.models.business_logic.primary,
+                f"direct-substitute-business-{parent_retained_count}",
+            ),
         ),
+    )
+    ordinary_material = [
         (
-            "business_logic",
-            config.models.business_logic.primary,
-            f"direct-substitute-business-{parent_retained_count}",
-        ),
-    ):
-        usage = _promoted_surface_usage(role, model_id, seed)
-        context = _promoted_surface_context(fixture.requests, usage, index, graphs)
-        _bind_promoted_usage_to_context(usage, context)
-        usage = _bind_promoted_assurance_usage(usage, authorities)
-        artifact = _promoted_ordinary_artifact(
-            list(fixture.requests),
             usage,
-            index,
-            graphs,
-            context=context,
+            ordinary_evidence.contexts_by_request[usage.request_id][0],
+            artifact,
         )
-        ordinary_material.append((usage, context, artifact))
+        for usage, artifact in zip(
+            ordinary_evidence.usage_records,
+            ordinary_evidence.artifacts,
+            strict=True,
+        )
+    ]
 
     coverage_usages = [
         fixture.parent_usage,
@@ -4919,21 +5146,25 @@ def test_assurance_direct_consumption_requires_complete_parent_and_child_partiti
         for request in fixture.scheduler_artifact.recovery_model_requests
         if request.terminal_status.value == "SUCCEEDED"
     )
-    exact_coverage = build_model_review_coverage(
-        config,
-        usage_records=coverage_usages,
-        review_artifacts=coverage_artifacts,
-        review_contexts_by_request=coverage_contexts,
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        minimum_critical_root_lineages=2,
-        audited_suite_coverage=audited_suite,
-        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
-        recovery_usage_coordinates=recovery_coordinates,
-        promoted_recovery_surface_coverages=(fixture.surface_capability,),
-    )
+    try:
+        exact_coverage = build_model_review_coverage(
+            config,
+            usage_records=coverage_usages,
+            review_artifacts=coverage_artifacts,
+            review_contexts_by_request=coverage_contexts,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            minimum_critical_root_lineages=2,
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recovery_surface_coverages=(fixture.surface_capability,),
+            ordinary_review_authorizations=ordinary_evidence.authorizations,
+        )
+    finally:
+        ordinary_evidence.close()
     assert exact_coverage.critical_gate_passed
     if parent_retained_count == 0:
         assert all(
@@ -5149,27 +5380,37 @@ def test_assurance_recursive_consumption_requires_complete_parent_and_leaf_parti
 
     index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
     assert fixture.requests == requests
-    ordinary_material = []
-    for role, model_id, seed in (
-        ("source_audit", config.models.source_audit.primary, "retained-substitute-source"),
-        (
-            "business_logic",
-            config.models.business_logic.primary,
-            "retained-substitute-business",
+    ordinary_evidence = _authorized_promoted_assurance_ordinary_evidence(
+        config=config,
+        authorities=authorities,
+        requests=fixture.requests,
+        index=index,
+        graphs=graphs,
+        reviewers=(
+            (
+                "source_audit",
+                config.models.source_audit.primary,
+                "retained-substitute-source",
+            ),
+            (
+                "business_logic",
+                config.models.business_logic.primary,
+                "retained-substitute-business",
+            ),
         ),
-    ):
-        usage = _promoted_surface_usage(role, model_id, seed)
-        context = _promoted_surface_context(fixture.requests, usage, index, graphs)
-        _bind_promoted_usage_to_context(usage, context)
-        usage = _bind_promoted_assurance_usage(usage, authorities)
-        artifact = _promoted_ordinary_artifact(
-            list(fixture.requests),
+    )
+    ordinary_material = [
+        (
             usage,
-            index,
-            graphs,
-            context=context,
+            ordinary_evidence.contexts_by_request[usage.request_id][0],
+            artifact,
         )
-        ordinary_material.append((usage, context, artifact))
+        for usage, artifact in zip(
+            ordinary_evidence.usage_records,
+            ordinary_evidence.artifacts,
+            strict=True,
+        )
+    ]
 
     coverage_usages = [
         fixture.parent_usage,
@@ -5203,21 +5444,25 @@ def test_assurance_recursive_consumption_requires_complete_parent_and_leaf_parti
         for request in fixture.scheduler_artifact.recovery_model_requests
         if request.terminal_status.value == "SUCCEEDED"
     )
-    exact_coverage = build_model_review_coverage(
-        config,
-        usage_records=coverage_usages,
-        review_artifacts=coverage_artifacts,
-        review_contexts_by_request=coverage_contexts,
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        minimum_critical_root_lineages=2,
-        audited_suite_coverage=audited_suite,
-        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
-        recovery_usage_coordinates=recovery_coordinates,
-        promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
-    )
+    try:
+        exact_coverage = build_model_review_coverage(
+            config,
+            usage_records=coverage_usages,
+            review_artifacts=coverage_artifacts,
+            review_contexts_by_request=coverage_contexts,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            minimum_critical_root_lineages=2,
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+            recovery_usage_coordinates=recovery_coordinates,
+            promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
+            ordinary_review_authorizations=ordinary_evidence.authorizations,
+        )
+    finally:
+        ordinary_evidence.close()
     assert exact_coverage.critical_gate_passed
     exact_runtime = replace(
         runtime,

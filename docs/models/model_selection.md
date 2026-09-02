@@ -868,16 +868,91 @@ its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain
 `V3-AUTONOMY-001` Phase 2 remains paused. No qualification, runner, seal, audit, benchmark, or release
 authority exists.
 
-### Current operator-result reconciliation — 2026-08-28T07:56Z
+### Current operator-result reconciliation — 2026-09-01T04:49Z
 
-The current operator-supplied record is 148,339 bytes / 2,648 lines at SHA-256
-`d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089`. It is uncommitted,
-nonauthorizing, and was not independently authenticated by Codex. Its newest provider-free entry
-reports that the one correct candidate tombstone rejects the revoked DeepSeek/`parasail/fp8`
-assignment but also blocks every unrevoked alternative because plan eligibility evaluates the whole
-pinned route set. The ledger remains 57 entries / `0.68118684` USD and completed real audits remain
-zero. `V3-REVOKERECON-001` is queued and unselected; no candidate assignment or successor plan is
-authorized by this evidence.
+The current operator-supplied record is 162,656 bytes / 2,902 lines at SHA-256
+`af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b`. It is committed at
+remote-resolved `4c553590fedd4d297442f0a73da703d993f5eec9`, is nonauthorizing, and was not independently
+authenticated by Codex. Its newest entry accepts both outstanding refusals. Candidate requests
+genuinely emit `effort=high` through the shared `model_benchmark` policy and reserve reasoning
+tokens, so `REASONING_EFFORT_SUPPORT` remains required for every role and all four route-constraint
+purposes. The predicate remains unchanged.
+
+The ordinary JSON numeric-price path also remains inadmissible. Once parsing has converted the
+provider's decimal lexeme to a binary float, `Decimal(str(value))` proves only the chosen
+reserialization, not identity to the original decimal. The operator withdrew the earlier proposal
+to admit numerics that appear to convert without loss and, at the AF7 evidence boundary, queued
+`V3-PRICELEXEME-001` to pursue lossless price-lexeme custody. The operator reports that
+`json.loads(..., parse_float=Decimal)` retains the decimal directly; Codex has not independently
+verified that operator-side experiment. A later direct operator directive now selects
+`V3-PRICELEXEME-001` as the sole `IN_PROGRESS` ticket after `V3-RETRIEVAL-001` reached `COMPLETE`.
+This is a selection-only boundary: `implementation_started=false`, and no decoder, pricing, retry,
+or configuration change has been made. Exactness was not relaxed, and existing sealed evidence must
+remain byte-identical under any future implementation.
+
+The operator names `x-ai/grok-4.6=amazon-bedrock/us-west-2` only as a conditional future route after
+a sound lossless-custody implementation. It is not currently admissible or selected. Under the
+current constraint and custody model there are zero admissible candidates, the active plan remains
+unchanged and non-runnable, and `V3-CANDROUTE-001` remains `PARTIAL`. The AF7 record's queued,
+unselected, and unimplemented description of `V3-PRICELEXEME-001` remains historical evidence at
+that exact boundary; the newer directive changes only the local ticket selection state. The
+operator reports zero new spend, the unchanged 57-entry / `0.68118684` USD ledger, and zero
+completed real audits. No route, command, run index, provider action, campaign, qualification,
+audit, release, or runtime authority is current.
+
+The historical `2026-08-30T19:00Z` credentialed metadata-only schema-v1.0 survey covered 12 models
+and 112 endpoints, found zero endpoint-level reasoning-effort inventories, and exposed a diagnostic
+omission rather than evidence for relaxing admission: route admission uses model inventory only when
+endpoint inventory is absent, but v1.0 did not show the model or effective resolved value. The
+corrected local schema v1.1 described below has not been exercised live, and no repeat external
+command is required. The prior 15:18 entry remains historical evidence that the provider-free
+plan-successor mechanism worked and that a complete plan-allowed sweep found zero admissible
+candidates.
+
+The local provider-free successor mechanism remains `COMPLETE`. The emitter accepts an explicit
+model/endpoint already present in the predecessor inventory, emits a fresh private schema-v1.5
+artifact, records the exact v1.4 or v1.5 predecessor digest, and derives every entry, profile,
+constraint, role-assignment, and plan hash. It preserves judge constraints and false authority
+fields, rejects no-op, unlisted, judge-colliding, tombstoned, tampered, and coherently resealed
+transitions, and does not load secrets or contact a provider. Publication holds directory-descriptor
+custody, requires a private owned parent, revalidates parent identity, and attests exact-inode cleanup
+after failure.
+
+`V3-CANDROUTE-001` has now settled the candidate reasoning question: under the current shared
+AUTHRUNNER profile, the candidate really does emit `reasoning.effort = high`, reserve reasoning
+tokens, and require exact endpoint-first/model-fallback effort inventory at discovery, request
+preview, registration, and live-route preflight. `REASONING_EFFORT_SUPPORT` therefore remains
+required for the candidate and all four route-constraint purposes. No role or predicate was relaxed.
+
+The local successor emitter also supports the explicit `--refresh-endpoint-inventory` transition for
+a previously unlisted exact endpoint. That transition emits schema v1.6, binds the predecessor entry
+hash and complete predecessor endpoint inventory, records `OPERATOR_STAGED_UNVERIFIED`, and requires
+fresh constrained discovery. It embeds no provider metadata or discovery evidence and grants no
+endpoint, provider, selection, or runtime authority. Omission still rejects an unlisted endpoint;
+using the flag for an already-listed endpoint is also rejected. A synthetic lineage-distinct Gemma
+route proves the refreshed plan can pass constrained discovery and the actual mocked
+`--live-route-preflight-only` boundary with no completion, usage, ledger mutation, or output bundle.
+This is a supported staging and validation path, not evidence that any current real endpoint is
+admissible. `V3-CANDROUTE-001` therefore remains `PARTIAL`; the active v1.4 plan is unchanged and no
+replacement is selected. Fresh operator evidence for a current real route is required before the
+ticket can resume.
+
+`V3-ENDPOINTLIST-001` supplies the bounded diagnostic surface
+`mmaudit models list-endpoints --model EXACT_ID [--json]`. The operator-reported `2026-08-30T19:00Z`
+live use of schema v1.0 enumerated `112` endpoints across `12` models and found no endpoint-level
+reasoning-effort inventory. That evidence exposed a diagnostic gap: admission falls back to the
+model-catalog inventory when an endpoint inventory is absent, but v1.0 did not report the model or
+effective value. Schema v1.1 corrects the local contract. It reports separate model and endpoint
+structured-output facts plus endpoint, model, and exact admission-effective reasoning inventories,
+including source, explicit-empty veto, unavailable, and contradictory states. The diagnostic and
+admission share the same endpoint-first resolver. Exact tags/slugs, raw operational status,
+exact-identity ZDR eligibility, provider-name injectivity, and unambiguous
+`MODEL_ID=PROVIDER_ENDPOINT` successor arguments remain present. Output remains strict,
+self-hashed, and nonauthorizing: no model completion, cost-ledger open, usage, selection, or runtime
+authority occurs. Codex validated v1.1 only with local synthetic metadata; the operator performed
+the earlier credentialed metadata survey, not Codex. Those v1.0 outputs are historical evidence and
+do not independently validate v1.1. The survey found zero admissible candidates,
+`V3-CANDROUTE-001` remains `PARTIAL`, and the active plan remains unchanged.
 
 The immediately preceding operator entry reports that fresh `r23` discovery, the exact materialized
 qualification policy, and paid smoke index 22 cleared the
@@ -889,17 +964,15 @@ promoted into repository authority.
 
 The active schema-v1.4 selection plan remains byte-unchanged at self-hash
 `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, keeps every authority flag
-false, and still names DeepSeek V4 on `parasail/fp8` as its candidate constraint. The tombstone
-correctly makes that assignment non-runnable, but current whole-plan revocation evaluation also
-rejects every alternative assignment. The plan is now stale and non-runnable, not silently
-rewritten, and no replacement candidate is selected. `V3-REVOKERECON-001` must preserve the
-tombstone while evaluating the route
-actually assigned or emitting a supported successor plan; only then can separate reselection freeze
-fresh evidence and empirically validate structured-output conformance before another paid campaign.
-The operator reports plan-route refusal for MiniMax/Coreweave, Gemma/DeepInfra, and Tencent/Novita,
-while the revoked DeepSeek/Parasail incumbent is correctly refused at assignment with reason
-`EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`. No repository command emits a successor selection
-plan; hand-editing this hash-pinned input is not an approved workaround.
+false, and still names DeepSeek V4 on `parasail/fp8` as its candidate constraint. The tombstone makes
+that assignment non-runnable. The plan is not silently rewritten, the operator-reported sweep plan is
+not promoted into repository authority, and no replacement candidate is selected. The completed
+local reconciliation preserves exact candidate/PRIMARY/REPLAY role custody through discovery and
+transport. A synthetic revoked-predecessor-to-live-successor regression proves constrained discovery
+and the actual `--live-route-preflight-only` CLI path without a completion, usage record, ledger
+mutation, output bundle, provider network, or authority. Predecessor-bound discovery remains valid
+historical evidence but cannot substitute for successor custody; the current operator sweep then
+shows that correct custody alone does not make any presently listed route admissible.
 
 The operator reports that the 24-case campaign launched, then failed closed after roughly 24 logical
 requests and `0.20264508` USD. Nine requests reached `SCHEMA_VALIDATION_FAILED`; 15 completed
@@ -960,16 +1033,23 @@ route capability—not repair—is the correction.
 
 The full 24-case REAL command is deliberately withheld. Operator evidence reports that
 `V3-RUNTIMEADMIT-001` admitted one campaign, which failed closed on the candidate and grants no
-reusable admission. The current provider-free blocker is earlier: the correct DeepSeek/Parasail
-tombstone is evaluated against every route in pinned plan
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, so MiniMax/Coreweave,
-Gemma/DeepInfra, and Tencent/Novita alternative discovery are all refused while the revoked incumbent
-is correctly rejected at assignment. No repository path emits a successor plan.
-`V3-REVOKERECON-001` must make an unrevoked alternative discoverable without resurrecting the
-revoked route. Every later prerequisite and a separate explicit operator request would still be
-required for a launch; historical smoke success and the local mechanism grant no authority. No
-command or run index is current. AUTHSEAL publication, qualification, calibration, benchmark, audit,
-the full run, and release remain blocked.
+reusable admission. The active plan
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f` still selects the revoked
+DeepSeek/Parasail candidate. The completed provider-free `V3-REVOKERECON-001` mechanism allows an
+unrevoked requested assignment to be evaluated without resurrecting the incumbent, and
+`V3-PLANSUCCESSOR-001` supplies exact predecessor-bound constrained custody. The current operator
+record reports that the emitter produced sweep artifact `00b6aa8f...`, but a complete constrained
+sweep found zero admissible plan-allowed candidates. That artifact is not active or independently
+inspected by Codex, and no replacement is selected. `V3-CANDROUTE-001` is `PARTIAL` after a local,
+provider-free, nonauthorizing mechanism slice; its explicit unverified endpoint-refresh mechanism
+and synthetic preflight proof do not establish a current real route. The operator ran the earlier
+schema-v1.0 `models list-endpoints --model EXACT_ID [--json]` metadata diagnostic, but Codex neither
+ran nor independently authenticated that credentialed survey. Schema v1.1 corrects the discovered
+model-fallback visibility gap locally; no repeat external command is required, and a later v1.1 run
+would remain nonauthorizing. Every later prerequisite and a separate explicit operator request would
+still be required for a launch; historical smoke success and the local mechanism grant no authority.
+No command or run index is current. Replacement selection, empirical validation, AUTHSEAL
+publication, qualification, calibration, benchmark, audit, the full run, and release remain blocked.
 
 ## Queue-derived model-work status
 

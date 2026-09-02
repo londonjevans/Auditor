@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from mmaudit.agents.base import AgentBase, AgentRequestProtocol, build_agent_request_protocol
+from mmaudit.models.actor_model import ActorModelInputEvidence
 from mmaudit.models.openrouter import OpenRouterSchemaError
 from mmaudit.models.schemas import ContextPackage, JudgeDecisionBatch, ThreatModel
-from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.context import (
+    provider_actor_model_payload_sha256,
+    render_context,
+)
 
 
 def _prepared_judgment_workflow(payload: object) -> tuple[str, int, str]:
@@ -93,15 +97,26 @@ class JudgeAgent(AgentBase):
         *,
         groups: list[dict[str, Any]],
         threat_model: ThreatModel | None,
+        actor_model_evidence: ActorModelInputEvidence | None = None,
     ) -> PreparedJudgmentInput:
         """Prepare the exact non-context judgment workflow."""
 
-        return PreparedJudgmentInput.build(
-            {
-                "candidate_groups": groups,
-                "threat_model": (threat_model.model_dump(mode="json") if threat_model else None),
+        payload: dict[str, Any] = {
+            "candidate_groups": groups,
+            "threat_model": (threat_model.model_dump(mode="json") if threat_model else None),
+        }
+        if actor_model_evidence is not None:
+            source = actor_model_evidence.source_evidence
+            payload["actor_model_binding"] = {
+                "state": actor_model_evidence.state.value,
+                "provider_projection_sha256": provider_actor_model_payload_sha256(
+                    actor_model_evidence,
+                    role="judge",
+                ),
+                "source_sha256": source.source_sha256 if source else None,
+                "actor_model_sha256": (source.actor_model.artifact_sha256 if source else None),
             }
-        )
+        return PreparedJudgmentInput.build(payload)
 
     async def run(
         self,
@@ -112,7 +127,11 @@ class JudgeAgent(AgentBase):
         prepared_input: PreparedJudgmentInput | None = None,
         logical_request_id: str | None = None,
     ) -> JudgeDecisionBatch:
-        expected_input = self.prepare_input(groups=groups, threat_model=threat_model)
+        expected_input = self.prepare_input(
+            groups=groups,
+            threat_model=threat_model,
+            actor_model_evidence=context.actor_model_evidence,
+        )
         if prepared_input is not None and prepared_input != expected_input:
             raise OpenRouterSchemaError(
                 "prepared judgment workflow differs from submitted judgment evidence"

@@ -274,7 +274,7 @@ def terminal_learning_capture_is_eligible(
         not scanner_only
         and tenant_scope_id is not None
         and privacy_source_classification is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
-        and report.schema_version == "1.2"
+        and report.schema_version in {"1.2", "1.3", "1.4"}
         and report.completed
         and report.run_status is AuditRunStatus.COMPLETE
         and bool(report.usage)
@@ -294,8 +294,8 @@ def build_terminal_learning_capture(
     """Project exact terminal evidence into one nonauthorizing private record."""
 
     validated_report = AuditReport.model_validate(report.model_dump(mode="python"))
-    if validated_report.schema_version != "1.2":
-        raise ValueError("terminal learning capture requires report schema 1.2")
+    if validated_report.schema_version not in {"1.2", "1.3", "1.4"}:
+        raise ValueError("terminal learning capture requires report schema 1.2, 1.3, or 1.4")
     if not validated_report.completed or validated_report.run_status is not AuditRunStatus.COMPLETE:
         raise ValueError("terminal learning capture requires a completed audit")
     if not validated_report.usage or any(
@@ -888,6 +888,7 @@ def _surface_kind(kind: ModelReviewSurfaceKind) -> LearningSurfaceKind:
         ModelReviewSurfaceKind.STATE: LearningSurfaceKind.STATE,
         ModelReviewSurfaceKind.INVARIANT: LearningSurfaceKind.INVARIANT,
         ModelReviewSurfaceKind.TEMPLATE: LearningSurfaceKind.OTHER,
+        ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS: LearningSurfaceKind.OTHER,
     }[kind]
 
 

@@ -318,12 +318,14 @@ async def test_real_counterexample_originates_pipeline_finding_but_safe_control_
         manifest_path=manifest_path,
         run_dir=result.run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert verification.status is RunVerificationStatus.CURRENT
 
     replay = await OfflineReplayOrchestrator(
         config,
+        configuration_root=repository,
         invariant_runner=invariant_runner,
     ).replay(
         manifest_path=manifest_path,

@@ -19,6 +19,17 @@ fail_on_missed = false
 max_bytes = 2000000
 max_findings = 2000
 
+[actor_model]
+# Optional repository-relative, operator-authored JSON; see schemas/actor_model.schema.json.
+# path = "audit/actor-model.json"
+required = false
+max_bytes = 1000000
+# A configured path requires these subject and semantic-content pins.
+# expected_subject_id = "operator-reviewed-subject"
+# expected_model_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# Add this optional pin when the exact JSON source bytes must also match.
+# expected_source_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
 [repository]
 root = "."
 ignore_file = ".mmauditignore"

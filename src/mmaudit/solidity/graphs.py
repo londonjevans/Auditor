@@ -215,6 +215,12 @@ _PROXY_SLOT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("beacon", re.compile(r"\bBEACON_SLOT\b", re.I)),
     ("rollback", re.compile(r"\bROLLBACK_SLOT\b", re.I)),
 )
+_SOURCE_ORACLE_MEMBER_CALL = re.compile(
+    r"\b(?P<target>[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*|\s*\[[^\]\n]{0,128}\]|"
+    r"\s*\([^;{}\n]{0,512}\))*)\s*\.\s*"
+    r"(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\{[^}]*\})?\s*\("
+)
 
 _GRAPH_SELECTION_ALGORITHM = "mmaudit.semantic-graph-risk-order.v1"
 _OMISSION_SAMPLE_LIMIT = 16
@@ -2711,6 +2717,20 @@ def _source_semantic_edges(
                 source,
             )
         )
+        retained_call_spans = {
+            (match.start("target"), match.start("member")) for match in call_matches
+        }
+        for match in _SOURCE_ORACLE_MEMBER_CALL.finditer(source):
+            member = match.group("member")
+            oracle_target_label = match.group("target")
+            span = (match.start("target"), match.start("member"))
+            if span in retained_call_spans or (
+                member not in _ORACLE_MEMBERS and not _looks_oracle(oracle_target_label)
+            ):
+                continue
+            call_matches.append(match)
+            retained_call_spans.add(span)
+        call_matches.sort(key=lambda match: (match.start(), match.end()))
         external_calls: list[tuple[re.Match[str], str, SolidityGraphNode]] = []
         message_member_seen = False
         for match in call_matches:

@@ -525,10 +525,16 @@ def test_resume_rejects_multiple_released_child_suffixes_before_mutation(
         raise SimulatedProcessDeath
 
     monkeypatch.setattr(journal, "_refresh_journal_head_checkpoint", crash_before_checkpoint)
-    for child, activation in zip(children, activations, strict=True):
+    for ordinal, (child, activation) in enumerate(
+        zip(children, activations, strict=True),
+    ):
         reservation = ledger.reserve(child.child_logical_request_id, Decimal("0.10"))
         ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
-        with pytest.raises(SimulatedProcessDeath):
+        expected_error: type[BaseException] = SimulatedProcessDeath if ordinal == 0 else ValueError
+        expected_match = (
+            None if ordinal == 0 else "scheduler recovery snapshot changed after private custody"
+        )
+        with pytest.raises(expected_error, match=expected_match):
             journal.record_truncation_recovery_child_released_failure(
                 child.child_task_id,
                 failed_usage_record=_released_recovery_usage(activation),

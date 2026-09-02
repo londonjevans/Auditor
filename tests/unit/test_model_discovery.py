@@ -265,7 +265,11 @@ def _discover(
     )
 
 
-def _constrained_route_bundle() -> tuple[
+def _constrained_route_bundle(
+    *,
+    exact_model_id: str = "alpha/atlas-secure",
+    endpoint_id: str = "approved-provider/fp8",
+) -> tuple[
     ReasoningPolicyArtifact,
     RoutePredicateProfile,
     ExactRouteConstraint,
@@ -291,8 +295,8 @@ def _constrained_route_bundle() -> tuple[
     )
     constraint = ExactRouteConstraint.build(
         role=ExactRouteRole.CANDIDATE,
-        exact_model_id="alpha/atlas-secure",
-        provider_endpoint="approved-provider/fp8",
+        exact_model_id=exact_model_id,
+        provider_endpoint=endpoint_id,
         profile=profile,
     )
     return policy, profile, constraint
@@ -300,6 +304,8 @@ def _constrained_route_bundle() -> tuple[
 
 def _constrained_discover(
     *,
+    exact_model_id: str = "alpha/atlas-secure",
+    endpoint_id: str = "approved-provider/fp8",
     model: dict[str, Any] | None = None,
     endpoint: dict[str, Any] | None = None,
     endpoint_inventory: tuple[dict[str, Any], ...] | None = None,
@@ -315,16 +321,19 @@ def _constrained_discover(
         max_completion_tokens=20_000,
     )
     observed_endpoints = endpoint_inventory or (selected_endpoint,)
-    policy, profile, constraint = _constrained_route_bundle()
+    policy, profile, constraint = _constrained_route_bundle(
+        exact_model_id=exact_model_id,
+        endpoint_id=endpoint_id,
+    )
     payload = validate_openrouter_constrained_model_discovery(
-        exact_model_id="alpha/atlas-secure",
+        exact_model_id=exact_model_id,
         models_payload={"data": [selected_model]},
         single_model_payload={"data": copy.deepcopy(selected_model)},
-        configured_provider_endpoints=("approved-provider/fp8",),
+        configured_provider_endpoints=(endpoint_id,),
         provider_policy_mode="only",
         endpoint_payload={
             "data": {
-                "id": "alpha/atlas-secure",
+                "id": exact_model_id,
                 "endpoints": [
                     {key: value for key, value in item.items() if key != "model_id"}
                     for item in observed_endpoints
@@ -461,6 +470,40 @@ def test_constrained_discovery_custodies_and_rechecks_complete_route_report() ->
     assert snapshot.route_predicate_report == report
     assert report.facts_sha256 == snapshot.normalized_route_facts.facts_sha256
     assert OpenRouterModelDiscoveryPayload.model_validate_json(payload.model_dump_json()) == payload
+
+
+def test_xai_shaped_constrained_numeric_price_emits_no_discovery_artifact_or_report() -> None:
+    exact_model_id = "x-ai/grok-4.6"
+    endpoint_id = "amazon-bedrock/us-west-2"
+    model = _model(
+        model=exact_model_id,
+        canonical_slug="x-ai/grok-4.6-20260830",
+        max_completion_tokens=20_000,
+    )
+    endpoint = _endpoint(
+        model=exact_model_id,
+        endpoint_id=endpoint_id,
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    endpoint["provider_name"] = "Amazon Bedrock"
+    endpoint["pricing"]["completion"] = 0.000002
+    emitted_discovery_artifacts: list[OpenRouterModelDiscoveryPayload] = []
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="endpoint prices must be exact decimal strings",
+    ):
+        emitted_discovery_artifacts.append(
+            _constrained_discover(
+                exact_model_id=exact_model_id,
+                endpoint_id=endpoint_id,
+                model=model,
+                endpoint=endpoint,
+            )[0]
+        )
+
+    assert emitted_discovery_artifacts == []
 
 
 def test_constrained_discovery_allows_unrelated_provider_display_name_duplicates() -> None:

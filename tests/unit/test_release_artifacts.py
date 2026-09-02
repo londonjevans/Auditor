@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -29,10 +30,13 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.sharding import SolidityCoverageArtifact
 from mmaudit.orchestration.manifest import (
+    KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+    KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
     ManifestBindingSet,
     ManifestHashBinding,
     RunConfigurationBinding,
     RunEvidenceManifest,
+    _seal_run_evidence_manifest,
     canonical_sha256,
     collect_run_artifacts,
     seal_run_evidence_manifest,
@@ -68,12 +72,17 @@ from tests.language_capability_support import (
     write_language_capability_artifact,
 )
 from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.taxonomy_custody_support import write_exact_taxonomy_custody
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
 SCHEMA_URI = "https://mmaudit.local/schemas/release_artifact_evidence.schema.json"
 COMMIT = "a" * 40
 RUN_ID = "release-artifact-test"
+FROZEN_PRE_ACTOR_REPORT = (
+    ROOT / "tests" / "fixtures" / "release" / "pre_actor_audit_report_1_0.json"
+)
+FROZEN_PRE_ACTOR_REPORT_SHA256 = "9c4535d6a3ca64f6d1f21e912d3bd8596a6072f833b21586619036ffd544f45a"
 
 
 def _sha(value: str) -> str:
@@ -136,7 +145,7 @@ def _seal_manifest(
     *,
     commit: str = COMMIT,
 ) -> RunEvidenceManifest:
-    manifest = seal_run_evidence_manifest(
+    manifest = _seal_run_evidence_manifest(
         run_id=RUN_ID,
         repository_root_name="synthetic-release-repository",
         git_commit=commit,
@@ -144,7 +153,7 @@ def _seal_manifest(
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
         artifacts=collect_run_artifacts(run_dir),
-        schema_version="1.2",
+        schema_version="1.3",
         tool_version="test",
     )
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
@@ -328,6 +337,12 @@ def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
     }
     required_artifacts.discard("run-evidence-manifest.json")
     required_artifacts.discard("maximum_assurance_traceability.json")
+    required_artifacts.difference_update(
+        {
+            KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+            KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+        }
+    )
     for name in sorted(required_artifacts):
         (run_dir / name).write_text('{"synthetic":true}\n', encoding="utf-8")
     _write_report_artifacts(run_dir, _report(config))
@@ -342,12 +357,20 @@ def _generated_schema() -> dict[str, Any]:
     return schema
 
 
-def test_observer_binds_actual_manifest_inventory_and_traceability(
+def test_observer_classifies_manifest_13_with_pre_actor_report_as_legacy_compatibility(
     tmp_path: Path,
     config_factory,
 ) -> None:
     run_dir = tmp_path / "run"
     manifest = _write_run(run_dir, config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE))
+    legacy_report = AuditReport.model_validate_json((run_dir / "final-findings.json").read_bytes())
+    assert manifest.schema_version == "1.3"
+    assert legacy_report.schema_version == "1.0"
+    assert legacy_report.actor_model_evaluation is None
+    assert not {
+        "actor-model-baseline.json",
+        "actor-model-evaluation.json",
+    } & {binding.path for binding in manifest.artifacts}
 
     evidence = observe_release_artifacts(run_dir, ROOT)
 
@@ -366,10 +389,125 @@ def test_observer_binds_actual_manifest_inventory_and_traceability(
         evidence.model_dump(mode="json", exclude={"evidence_sha256"})
     )
 
+
+def test_observer_accepts_manifest_14_at_current_release_boundary(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    legacy = _write_run(run_dir, config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE))
+    current_coverage_bindings = write_exact_taxonomy_custody(run_dir)
+    write_json(
+        run_dir / "private" / "model-review-artifacts.json",
+        {"schema_version": "1.0", "artifacts": []},
+    )
+    current_bindings = legacy.bindings.model_copy(
+        update={
+            "coverage": sorted(
+                [*legacy.bindings.coverage, *current_coverage_bindings],
+                key=lambda binding: binding.identifier,
+            )
+        }
+    )
+    assert legacy.run_configuration is not None
+    current = seal_run_evidence_manifest(
+        run_id=legacy.run_id,
+        repository_root_name=legacy.repository_root_name,
+        git_commit=legacy.git_commit,
+        sources=legacy.sources,
+        run_configuration=legacy.run_configuration,
+        bindings=current_bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version="test",
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", current)
+    monkeypatch.setattr(
+        release_artifact_module,
+        "validate_manifest_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        release_artifact_module,
+        "validate_traceability_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+
+    evidence = observe_release_artifacts(run_dir, ROOT)
+
+    assert current.schema_version == "1.4"
+    assert evidence.manifest_sha256 == current.manifest_sha256
+
     output = tmp_path / "release-artifact-evidence.json"
     write_release_artifact_evidence(output, evidence)
     assert load_release_artifact_evidence(output) == evidence
     assert oct(output.stat().st_mode & 0o777) == "0o600"
+
+
+def test_frozen_pre_actor_report_parses_without_rewriting_its_serialized_identity() -> None:
+    frozen = FROZEN_PRE_ACTOR_REPORT.read_bytes()
+    assert hashlib.sha256(frozen).hexdigest() == FROZEN_PRE_ACTOR_REPORT_SHA256
+    assert b"actor_model" not in frozen
+    assert b"actor_context" not in frozen
+    assert b"actor_assessment" not in frozen
+    assert b"judge_decisions" not in frozen
+
+    report = AuditReport.model_validate_json(frozen)
+    replay_payload = report.model_dump(mode="json", exclude_unset=True)
+    replay = (json.dumps(replay_payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
+
+    assert report.schema_version == "1.0"
+    assert report.actor_model_evaluation is None
+    assert report.judge_decisions == []
+    assert replay == frozen
+    assert hashlib.sha256(replay).hexdigest() == FROZEN_PRE_ACTOR_REPORT_SHA256
+
+
+def test_observer_preserves_legacy_report_bundle_manifest_schema_1_2(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "legacy-report-bundle"
+    current = _write_run(run_dir, config_factory())
+    frozen_hashes: dict[str, str] = {}
+    for name in ("final-findings.json", "findings.json"):
+        path = run_dir / name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("actor_model_baseline", None)
+        payload.pop("actor_model_evaluation", None)
+        payload.pop("judge_decisions", None)
+        frozen = (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        path.write_bytes(frozen)
+        assert b"actor_model" not in frozen
+        assert b"judge_decisions" not in frozen
+        frozen_hashes[name] = hashlib.sha256(frozen).hexdigest()
+
+    payload = current.model_dump(mode="json", exclude={"manifest_sha256"})
+    payload["schema_version"] = "1.2"
+    payload["artifacts"] = [
+        binding.model_dump(mode="json") for binding in collect_run_artifacts(run_dir)
+    ]
+    legacy = RunEvidenceManifest.model_validate(
+        {
+            **payload,
+            "manifest_sha256": canonical_sha256(payload),
+        }
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
+
+    evidence = observe_release_artifacts(run_dir, ROOT)
+
+    assert legacy.schema_version == "1.2"
+    assert evidence.manifest_sha256 == legacy.manifest_sha256
+    observed = {binding.path: binding.sha256 for binding in evidence.artifacts}
+    assert {name: observed[name] for name in frozen_hashes} == frozen_hashes
+    assert {
+        name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest() for name in frozen_hashes
+    } == frozen_hashes
 
 
 @pytest.mark.parametrize(
@@ -385,6 +523,7 @@ def test_manifest_schema_1_2_rejects_coherently_resealed_missing_report_delivera
     manifest = _write_run(run_dir, config_factory())
     (run_dir / artifact_name).unlink()
     payload = manifest.model_dump(mode="json")
+    payload["schema_version"] = "1.2"
     payload["artifacts"] = [
         binding for binding in payload["artifacts"] if binding["path"] != artifact_name
     ]
@@ -556,6 +695,64 @@ def test_observer_rejects_linked_run_root_or_ancestor(
         observe_release_artifacts(observed_path, ROOT)
 
 
+def test_observer_rejects_run_root_swapped_during_resolution(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    displaced = tmp_path / "displaced-run"
+    absolute_run = Path(os.path.abspath(run_dir))
+    original_resolve = Path.resolve
+    swapped = False
+
+    def swap_root_during_resolve(path: Path, *, strict: bool = False) -> Path:
+        nonlocal swapped
+        if path == absolute_run and not swapped:
+            swapped = True
+            run_dir.rename(displaced)
+            run_dir.mkdir()
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", swap_root_during_resolve)
+
+    with pytest.raises(ValueError, match="changed while being resolved"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+def test_observer_rejects_run_root_swapped_after_initial_validation(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    alternate = tmp_path / "alternate-run"
+    displaced = tmp_path / "displaced-run"
+    shutil.copytree(run_dir, alternate)
+    original_require = release_artifact_module._require_unlinked_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, *, label: str):
+        nonlocal swapped
+        observation = original_require(path, label=label)
+        if label == "release run" and not swapped:
+            swapped = True
+            run_dir.rename(displaced)
+            alternate.rename(run_dir)
+        return observation
+
+    monkeypatch.setattr(
+        release_artifact_module,
+        "_require_unlinked_directory",
+        validate_then_swap,
+    )
+
+    with pytest.raises(ValueError, match="release run root changed during custody"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
 def test_observer_rejects_linked_and_hardlinked_artifacts(
     tmp_path: Path,
     config_factory,
@@ -689,7 +886,7 @@ def test_observer_rejects_legacy_manifest_without_reconstructable_config(
         RunEvidenceManifest.model_validate(payload),
     )
 
-    with pytest.raises(ValueError, match=r"schema 1\.2"):
+    with pytest.raises(ValueError, match=r"schema 1\.2, 1\.3, or 1\.4"):
         observe_release_artifacts(run_dir, ROOT)
 
 
@@ -744,6 +941,43 @@ def test_evidence_writer_rejects_same_size_path_replacement_after_close(
     with pytest.raises(ValueError, match="not a unique regular file"):
         write_release_artifact_evidence(output, evidence)
     assert output.read_bytes() == b"x" * serialized_size
+
+
+def test_evidence_writer_rejects_parent_swapped_after_initial_observation(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    evidence = observe_release_artifacts(run_dir, ROOT)
+    evidence_parent = tmp_path / "evidence-parent"
+    evidence_parent.mkdir()
+    alternate = tmp_path / "alternate-parent"
+    alternate.mkdir()
+    displaced = tmp_path / "displaced-parent"
+    output = evidence_parent / "evidence.json"
+    original_require = release_artifact_module._require_unlinked_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, *, label: str):
+        nonlocal swapped
+        observation = original_require(path, label=label)
+        if label == "release-evidence parent" and not swapped:
+            swapped = True
+            evidence_parent.rename(displaced)
+            alternate.rename(evidence_parent)
+        return observation
+
+    monkeypatch.setattr(
+        release_artifact_module,
+        "_require_unlinked_directory",
+        validate_then_swap,
+    )
+
+    with pytest.raises(ValueError, match="release-evidence parent root changed during custody"):
+        write_release_artifact_evidence(output, evidence)
+    assert not output.exists()
 
 
 def test_evidence_model_rejects_inventory_and_self_hash_tampering(
@@ -849,6 +1083,7 @@ def test_release_validator_full_mode_requires_every_authoritative_input(
     assert "--evidence-root" in result.stderr
     assert "--release-repository" in result.stderr
     assert "--target-repository" in result.stderr
+    assert "--configuration-root" in result.stderr
     assert "--artifact-evidence-file" in result.stderr
     assert "--run-verification-file" in result.stderr
     assert "valid" not in result.stdout
@@ -877,6 +1112,30 @@ def test_release_validator_artifact_only_rejects_report_inputs(tmp_path: Path) -
     assert "valid" not in result.stdout
 
 
+def test_release_validator_artifact_only_rejects_configuration_root(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--artifact-only",
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--configuration-root",
+            str(tmp_path / "configuration"),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--artifact-only does not accept full-report options" in result.stderr
+    assert "--configuration-root" in result.stderr
+    assert "valid" not in result.stdout
+
+
 def test_release_validator_full_mode_forwards_only_explicit_authoritative_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -899,6 +1158,7 @@ def test_release_validator_full_mode_forwards_only_explicit_authoritative_inputs
         "release_repository_root": tmp_path / "release-repository",
         "emitted_run_dir": tmp_path / "run",
         "target_repository_root": tmp_path / "target-repository",
+        "configuration_root": tmp_path / "configuration",
         "artifact_evidence_path": tmp_path / "artifact-evidence.json",
         "run_verification_path": tmp_path / "raw-run-verification.json",
     }
@@ -918,6 +1178,8 @@ def test_release_validator_full_mode_forwards_only_explicit_authoritative_inputs
             str(paths["emitted_run_dir"]),
             "--target-repository",
             str(paths["target_repository_root"]),
+            "--configuration-root",
+            str(paths["configuration_root"]),
             "--artifact-evidence-file",
             str(paths["artifact_evidence_path"]),
             "--run-verification-file",
@@ -962,6 +1224,8 @@ def test_release_validator_require_complete_propagates_fail_closed_policy(
                 str(tmp_path / "run"),
                 "--target-repository",
                 str(tmp_path / "target-repository"),
+                "--configuration-root",
+                str(tmp_path / "configuration"),
                 "--artifact-evidence-file",
                 str(tmp_path / "artifact-evidence.json"),
                 "--run-verification-file",

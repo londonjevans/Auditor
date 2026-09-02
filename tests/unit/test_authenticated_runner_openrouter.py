@@ -11,6 +11,7 @@ from typing import Any, Never, cast
 import pytest
 
 import mmaudit.cli as cli_module
+import mmaudit.models.openrouter as openrouter_module
 import mmaudit.orchestration.authenticated_runner_openrouter as adapter_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationRunKind,
@@ -1000,7 +1001,11 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    harness = await execution_fixtures._harness(tmp_path, config_factory)
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
     assert harness.budget.atomic_ledger is not None
     budget, usage = cli_module._budget_and_usage(
         harness.config,
@@ -1030,6 +1035,7 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
         source_kind=AuthenticatedRunnerGenerationSubject.CANDIDATE,
         prepared=None,
         candidate_report=None,
+        route_constraint=(harness.discovery_evidence[0].endpoint_snapshot.exact_route_constraint),
     )
     try:
         assert client.token_budgets == harness.config.token_budgets
@@ -1037,6 +1043,67 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
         assert client.usage is usage
         assert usage.records == []
         assert budget.atomic_ledger.snapshot() == before
+    finally:
+        await client.close()
+        await adapter.close()
+        secrets.clear()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_candidate_campaign_client_retains_exact_candidate_constraint(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    harness = await execution_fixtures._harness(
+        tmp_path,
+        config_factory,
+        constrained_routes=True,
+    )
+    launch = AuthenticatedRunnerOpenRouterLaunch(
+        config=harness.config,
+        explicitly_allow_synthetic_egress=True,
+        public_lineage_capability=harness.public_lineage,
+        ground_truth_capability=harness.ground_truth,
+        benchmark_suite=harness.suite,
+        candidate_discovery_manifest=harness.discovery_manifest,
+        candidate_discovery_evidence=harness.discovery_evidence,
+        candidate_registry=harness.registry,
+        qualification_policy=harness.policy,
+        budget=harness.budget,
+        usage=harness.usage,
+        run_plans=harness.plans,
+    )
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-unit-key"})
+    adapter = adapter_module._OpenRouterExecutionAdapter(launch=launch, secrets=secrets)
+    candidate = harness.registry.candidates[0]
+    client = adapter._new_candidate_campaign_client(
+        api_key="synthetic-provider-free-unit-key",
+        config=harness.config,
+        budget=harness.budget,
+        usage=harness.usage,
+        candidate=candidate,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=(candidate.approved_provider_endpoint,),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=(
+            harness.discovery_evidence[0].endpoint_snapshot.exact_route_constraint
+        ),
+        reasoning_policy=build_reasoning_policy(harness.config),
+        token_budgets=harness.config.token_budgets,
+    )
+    try:
+        projection = openrouter_module._lookup_trusted_candidate_revocation_constraint(client)
+        assert projection is not None
+        assert projection[1:4] == (
+            ExactRouteRole.CANDIDATE.value,
+            candidate.exact_model_id,
+            candidate.approved_provider_endpoint,
+        )
+        assert projection[5] == (
+            harness.discovery_evidence[0].endpoint_snapshot.exact_route_constraint.constraint_sha256
+        )
     finally:
         await client.close()
         await adapter.close()
@@ -1068,6 +1135,9 @@ async def test_judge_refresh_full_admission_rejects_after_metadata_before_regist
             certification=True,
             only=(judge.approved_provider_endpoint,),
             allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=(
+            plan.judge_discovery_evidence[0].endpoint_snapshot.exact_route_constraint
         ),
         reasoning_policy=build_reasoning_policy(harness.config),
         token_budgets=harness.config.token_budgets,
@@ -1127,6 +1197,9 @@ async def test_judge_refresh_rejects_pricing_drift_without_registration_or_compl
             certification=True,
             only=(judge.approved_provider_endpoint,),
             allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=(
+            plan.judge_discovery_evidence[0].endpoint_snapshot.exact_route_constraint
         ),
         reasoning_policy=build_reasoning_policy(harness.config),
         token_budgets=harness.config.token_budgets,

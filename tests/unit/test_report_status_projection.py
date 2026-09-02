@@ -4,7 +4,13 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.constants import ANALYSIS_ROLES
+from mmaudit.models.actor_model import (
+    ActorModelEvaluation,
+    ActorModelInputEvidence,
+    ActorModelInputState,
+)
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AnalysisState,
     AuditProfile,
     AuditQualityStatus,
@@ -166,6 +172,43 @@ def _current_report_with_consensus(
     return AuditReport.model_validate(payload)
 
 
+def _successor_report_without_findings() -> AuditReport:
+    coverage = _coverage()
+    floor = _assessment(coverage=coverage, required_model_roles=ANALYSIS_ROLES)
+    base = AuditReport.model_validate(
+        _typed_report_payload(
+            floor=floor,
+            scanner_runs=[],
+            usage=[],
+            coverage=coverage,
+        )
+    )
+    actor_input = ActorModelInputEvidence.build(
+        evaluated_at=base.generated_at,
+        state=ActorModelInputState.MISSING,
+        configured=False,
+        configured_path=None,
+        limitations=(
+            "operator actor model was not configured for this synthetic successor report",
+        ),
+    )
+    actor_evaluation = ActorModelEvaluation.build(
+        evaluated_at=base.generated_at,
+        input_evidence=actor_input,
+        governance_findings=(),
+        finding_assessments=(),
+    )
+    return AuditReport.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "schema_version": "1.3",
+            "actor_model_baseline": ActorModelBaselineArtifact.build(()),
+            "actor_model_evaluation": actor_evaluation,
+            "judge_decisions": [],
+        }
+    )
+
+
 def test_findings_artifact_versions_bind_language_capability_presence() -> None:
     finding = _finding(FindingStatus.CONFIRMED)
     capability = matched_solidity_language_capability(
@@ -177,11 +220,20 @@ def test_findings_artifact_versions_bind_language_capability_presence() -> None:
     current = build_findings_artifact(report, candidates=[_candidate(finding)])
     assert current.schema_version == "1.2"
     assert current.language_capability == capability
+    assert current.actor_model_baseline is None
+    assert current.actor_model_evaluation is None
+    assert current.judge_decisions == []
     assert "consensus_review" not in current.model_dump(mode="json")
+    assert "actor_model_baseline" not in current.model_dump(mode="json")
+    assert "actor_model_evaluation" not in current.model_dump(mode="json")
     missing_current = current.model_dump(mode="json")
     missing_current.pop("language_capability")
     with pytest.raises(ValidationError, match="requires typed language capability"):
         FindingsArtifact.model_validate(missing_current)
+    actor_field_on_pre_actor = current.model_dump(mode="json")
+    actor_field_on_pre_actor["actor_model_evaluation"] = None
+    with pytest.raises(ValidationError, match="legacy findings artifact cannot carry actor-model"):
+        FindingsArtifact.model_validate(actor_field_on_pre_actor)
 
     legacy = build_findings_artifact(
         report,
@@ -200,7 +252,9 @@ def test_findings_artifact_versions_bind_language_capability_presence() -> None:
 def test_findings_artifact_preserves_typed_consensus_review() -> None:
     finding = _finding(FindingStatus.NEEDS_REVIEW)
     candidate = _candidate(finding)
-    consensus_review, _ = _uniform_review_evidence([candidate])
+    consensus_review, _ = _uniform_review_evidence(
+        [candidate], algorithm_version="mmaudit.seven-pass-scheduler.v1"
+    )
     report = _current_report_with_consensus(
         findings=[finding],
         consensus_review=consensus_review,
@@ -216,14 +270,18 @@ def test_findings_artifact_preserves_typed_consensus_review() -> None:
 def test_findings_artifact_rejects_consensus_review_for_unknown_candidate() -> None:
     finding = _finding(FindingStatus.NEEDS_REVIEW)
     candidate = _candidate(finding)
-    consensus_review, _ = _uniform_review_evidence([candidate])
+    consensus_review, _ = _uniform_review_evidence(
+        [candidate], algorithm_version="mmaudit.seven-pass-scheduler.v1"
+    )
     report = _current_report_with_consensus(
         findings=[finding],
         consensus_review=consensus_review,
     )
     artifact = build_findings_artifact(report, candidates=[candidate])
     unknown_candidate = candidate.model_copy(update={"candidate_id": "candidate-unknown"})
-    unknown_review, _ = _uniform_review_evidence([unknown_candidate])
+    unknown_review, _ = _uniform_review_evidence(
+        [unknown_candidate], algorithm_version="mmaudit.seven-pass-scheduler.v1"
+    )
     payload = artifact.model_dump(mode="python")
     payload["consensus_review"] = unknown_review.model_dump(mode="python")
 
@@ -234,7 +292,9 @@ def test_findings_artifact_rejects_consensus_review_for_unknown_candidate() -> N
 def test_findings_artifact_rejects_mismatched_consensus_primary_review() -> None:
     finding = _finding(FindingStatus.NEEDS_REVIEW)
     candidate = _candidate(finding)
-    consensus_review, _ = _uniform_review_evidence([candidate])
+    consensus_review, _ = _uniform_review_evidence(
+        [candidate], algorithm_version="mmaudit.seven-pass-scheduler.v1"
+    )
     report = _current_report_with_consensus(
         findings=[finding],
         consensus_review=consensus_review,
@@ -247,6 +307,7 @@ def test_findings_artifact_rejects_mismatched_consensus_primary_review() -> None
             VerificationVerdict.VERIFIED,
             VerificationVerdict.VERIFIED,
         ),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
     )
     payload = artifact.model_dump(mode="python")
     payload["consensus_review"] = mismatched_review.model_dump(mode="python")
@@ -261,7 +322,9 @@ def test_findings_artifact_rejects_mismatched_consensus_primary_review() -> None
 def test_findings_artifact_rejects_consensus_candidate_payload_drift() -> None:
     finding = _finding(FindingStatus.NEEDS_REVIEW)
     candidate = _candidate(finding)
-    consensus_review, _ = _uniform_review_evidence([candidate])
+    consensus_review, _ = _uniform_review_evidence(
+        [candidate], algorithm_version="mmaudit.seven-pass-scheduler.v1"
+    )
     report = _current_report_with_consensus(
         findings=[finding],
         consensus_review=consensus_review,
@@ -389,6 +452,19 @@ def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf(
         "Language capability evidence was not recorded" in notification["message"]["text"]
         for notification in invocation["toolExecutionNotifications"]
     )
+
+
+def test_successor_report_preserves_current_status_projection() -> None:
+    report = _successor_report_without_findings()
+
+    projection = effective_report_status(report)
+
+    assert report.schema_version == "1.3"
+    assert projection.run_status is report.run_status
+    assert projection.completed is report.completed
+    assert projection.quality_gates == report.quality_gates
+    assert projection.limitations == report.incomplete_reasons
+    assert LEGACY_MINIMUM_FLOOR_LIMITATION not in projection.limitations
 
 
 def test_legacy_complete_assurance_is_rendered_only_as_unverified_in_markdown() -> None:
@@ -641,6 +717,7 @@ def test_closed_consensus_status_controls_rendered_disposition_while_preserving_
             VerificationVerdict.VERIFIED,
             VerificationVerdict.VERIFIED,
         ),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
     )
     report = _current_report_with_consensus(
         findings=[finding],

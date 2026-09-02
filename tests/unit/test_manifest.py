@@ -4,8 +4,10 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -24,7 +26,7 @@ from mmaudit.config import (
     LoadedAuditConfig,
     ModelRetryPolicy,
 )
-from mmaudit.constants import DEFAULT_EXCLUSIONS, ExitCode
+from mmaudit.constants import ANALYSIS_ROLES, DEFAULT_EXCLUSIONS, ExitCode
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.reasoning import (
     ReasoningExecutionEvidence,
@@ -39,15 +41,18 @@ from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.scheduler import SchedulerArtifact
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AuditReport,
     CandidateFinding,
     CandidateReproductionResolution,
     ExecutionEvidenceKind,
+    Finding,
     LanguageCapabilityArtifact,
     LanguageCapabilityFileEvidence,
     LanguageCapabilityProfile,
     Location,
     ModelRequestValidationStatus,
+    PropertyCorpus,
     RepositoryDifferentialRunStatus,
     RepositoryFile,
     RepositoryForkRpcPrivacyEvidence,
@@ -56,16 +61,29 @@ from mmaudit.models.schemas import (
     ScannerRun,
     ScannerStatus,
     SolidityCoverage,
+    SolidityProjectMetadata,
+    SolidityProjectType,
     UsageRecord,
 )
 from mmaudit.models.usage import request_token_plan_from_usage
+from mmaudit.orchestration.actor_model import (
+    build_actor_model_evaluation,
+    calibrate_finding,
+    load_actor_model,
+)
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
+from mmaudit.orchestration.coverage import generic_source_coverage_metrics
 from mmaudit.orchestration.manifest import (
+    ACTOR_MODEL_BASELINE_ARTIFACT_PATH,
+    ACTOR_MODEL_EVALUATION_ARTIFACT_PATH,
     AUDIT_MODEL_REFRESH_BINDING_IDS,
     AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
     AUDIT_MODEL_SELECTION_BINDING_IDS,
     AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
+    KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+    KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+    MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
     ManifestBindingSet,
     ManifestFileBinding,
     ManifestHashBinding,
@@ -73,6 +91,7 @@ from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     _audit_model_refresh_bindings,
     _model_bindings,
+    _seal_run_evidence_manifest,
     _seed_bindings,
     _validate_audit_model_refresh_evidence,
     _validate_scanner_stream_artifact_custody,
@@ -85,6 +104,11 @@ from mmaudit.orchestration.manifest import (
     seal_run_evidence_manifest,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
+)
+from mmaudit.orchestration.run_status import (
+    assess_minimum_analysis_floor,
+    audit_quality_status_for_run_status,
+    minimum_analysis_floor_quality_gate,
 )
 from mmaudit.orchestration.verification import (
     RunVerification,
@@ -111,6 +135,12 @@ from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.locations import validate_location
 from mmaudit.scanners.normalization import reparse_trusted_scanner_stdout
 from mmaudit.scanners.projection import project_scanner_finding
+from mmaudit.solidity.properties import build_property_corpus
+from mmaudit.solidity.taxonomy import (
+    build_known_issue_taxonomy_coverage,
+    known_issue_taxonomy_quality_gate,
+    load_known_issue_taxonomy,
+)
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
@@ -123,6 +153,40 @@ from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
+
+
+def _empty_property_corpus() -> PropertyCorpus:
+    return PropertyCorpus(
+        properties=[],
+        limitations=[],
+        corpus_hash=canonical_sha256(
+            {
+                "schema_version": "1.0",
+                "property_hashes": [],
+                "limitations": [],
+            }
+        ),
+    )
+
+
+def _drop_taxonomy_manifest_leaves(payload: dict[str, Any]) -> None:
+    """Remove schema-1.4-only taxonomy and raw-review leaves from a legacy fixture."""
+
+    payload["artifacts"] = [
+        item
+        for item in payload["artifacts"]
+        if item["path"]
+        not in {
+            KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+            KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+            MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
+        }
+    ]
+    payload["bindings"]["coverage"] = [
+        item
+        for item in payload["bindings"]["coverage"]
+        if not item["identifier"].startswith("known-issue-taxonomy/")
+    ]
 
 
 def _successful_model_retry_routing(policy: ModelRetryPolicy) -> dict[str, object]:
@@ -168,7 +232,7 @@ def _model_retry_usage(
     )
 
 
-def _report(config) -> AuditReport:
+def _legacy_report(config: AuditConfig) -> AuditReport:
     empty_overrides = AuditConfigOverrides()
     run_options = AuditRunOptions()
     capability_files = (
@@ -237,6 +301,106 @@ def _report(config) -> AuditReport:
     )
 
 
+def _report(config: AuditConfig) -> AuditReport:
+    """Build a minimal current report with exact actor and taxonomy custody."""
+
+    legacy = _legacy_report(config)
+    assert legacy.language_capability is not None
+    evm_applicable = legacy.language_capability.evm_portfolio_applicable
+    projects = (
+        [
+            SolidityProjectMetadata(
+                project_type=SolidityProjectType.FOUNDRY,
+                project_root=".",
+                source_directories=["src"],
+            )
+        ]
+        if evm_applicable
+        else []
+    )
+    coverage_metrics = (
+        {}
+        if evm_applicable
+        else generic_source_coverage_metrics(
+            legacy.repository,
+            (),
+            require_scanner_completion=False,
+        )
+    )
+    floor = assess_minimum_analysis_floor(
+        repository=legacy.repository,
+        compilations=(),
+        scanner_runs=(),
+        usage=(),
+        required_model_roles=ANALYSIS_ROLES,
+        coverage_metrics=coverage_metrics,
+        solidity_applicable=evm_applicable,
+        static_analysis_applicable=evm_applicable,
+    )
+    actor_input = load_actor_model(
+        Path.cwd(),
+        config.actor_model,
+        evaluated_at=legacy.generated_at,
+    )
+    actor_baseline = ActorModelBaselineArtifact.build(())
+    actor_evaluation = build_actor_model_evaluation(
+        actor_input=actor_input,
+        findings=(),
+        baseline_artifact=actor_baseline,
+        governance_findings=(),
+    )
+    taxonomy_coverage = build_known_issue_taxonomy_coverage(
+        load_known_issue_taxonomy(),
+        invariants=None,
+        model_review_coverage=None,
+    )
+    empty_corpus = (
+        build_property_corpus(None, None, []) if evm_applicable else _empty_property_corpus()
+    )
+    payload = legacy.model_dump(mode="python")
+    payload.update(
+        {
+            "schema_version": "1.4",
+            "completed": floor.minimum_floor_met,
+            "incomplete_reasons": floor.limitations,
+            "quality_status": audit_quality_status_for_run_status(floor.run_status),
+            "run_status": floor.run_status,
+            "accounted_cost_usd_exact": "0",
+            "minimum_analysis_floor": floor,
+            "quality_gates": [
+                minimum_analysis_floor_quality_gate(floor),
+                known_issue_taxonomy_quality_gate(taxonomy_coverage, required=False),
+            ],
+            "actor_model_baseline": actor_baseline,
+            "actor_model_evaluation": actor_evaluation,
+            "judge_decisions": [],
+            "taxonomy_coverage": taxonomy_coverage,
+            "metadata": {
+                **legacy.metadata,
+                "run_started_at": legacy.generated_at.isoformat(),
+                "scanner_only": floor.scanner_only,
+                "solidity": {
+                    "projects": [project.model_dump(mode="json") for project in projects],
+                    "compilation": [],
+                    "index_summary": {
+                        "entities": 0,
+                        "ast_sources": 0,
+                        "fallback_sources": 0,
+                    },
+                    "graph_summary": {"edges": 0, "warnings": 0},
+                    "shard_summary": None,
+                    "property_corpus_summary": {
+                        "properties": len(empty_corpus.properties),
+                        "limitations": len(empty_corpus.limitations),
+                        "corpus_hash": empty_corpus.corpus_hash,
+                    },
+                },
+            },
+        }
+    )
+    return AuditReport.model_validate(payload)
+
+
 def _with_repository_capability(
     report: AuditReport,
     repository: RepositoryMap,
@@ -261,6 +425,38 @@ def _with_repository_capability(
         update={
             "repository": repository,
             "language_capability": capability.assessment,
+        }
+    )
+
+
+def _with_current_findings(
+    report: AuditReport,
+    findings: list[Finding],
+) -> AuditReport:
+    """Rebuild exact missing-input actor custody for a current fixture's findings."""
+
+    assert report.actor_model_evaluation is not None
+    baselines = [finding.model_copy(update={"actor_assessment": None}) for finding in findings]
+    baseline_artifact = ActorModelBaselineArtifact.build(baselines)
+    calibrated = [
+        calibrate_finding(
+            finding,
+            actor_context=finding.actor_context,
+            actor_input=report.actor_model_evaluation.input_evidence,
+        ).finding
+        for finding in baselines
+    ]
+    evaluation = build_actor_model_evaluation(
+        actor_input=report.actor_model_evaluation.input_evidence,
+        findings=calibrated,
+        baseline_artifact=baseline_artifact,
+        governance_findings=(),
+    )
+    return report.model_copy(
+        update={
+            "findings": calibrated,
+            "actor_model_baseline": baseline_artifact,
+            "actor_model_evaluation": evaluation,
         }
     )
 
@@ -456,6 +652,10 @@ def _write_required_artifacts(
         raise ValueError("supplied language capability differs from the report")
     payloads = {
         "language-capability.json": language_artifact.model_dump(mode="json"),
+        "solidity-projects.json": {
+            "schema_version": "1.0",
+            "projects": report.metadata.get("solidity", {}).get("projects", []),
+        },
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
         "invariant-harness-plan.json": {
             "schema_version": "1.0",
@@ -517,11 +717,102 @@ def _write_required_artifacts(
             "findings": [candidate.model_dump(mode="json") for candidate in candidates],
         },
     }
+    if report.schema_version in {"1.2", "1.3", "1.4"}:
+        evm_applicable = bool(
+            report.language_capability is not None
+            and report.language_capability.evm_portfolio_applicable
+        )
+        empty_corpus = (
+            build_property_corpus(report.invariants, None, [])
+            if evm_applicable
+            else _empty_property_corpus()
+        )
+        payloads.update(
+            {
+                "solidity-index.json": {"schema_version": "1.0", "index": None},
+                "solidity-graphs.json": {"schema_version": "1.0", "graphs": None},
+                "solidity-shards.json": {"schema_version": "1.0", "inventory": None},
+                "solidity-invariants.json": {
+                    "schema_version": "1.0",
+                    "invariants": (
+                        report.invariants.model_dump(mode="json")
+                        if report.invariants is not None
+                        else None
+                    ),
+                },
+                "invariant-harness-plan.json": {
+                    "schema_version": "1.0",
+                    "harnesses": [],
+                },
+                "property-corpus.json": {
+                    "schema_version": "1.0",
+                    "corpus": empty_corpus.model_dump(mode="json"),
+                },
+                "invariant-execution-results.json": {
+                    "schema_version": "1.0",
+                    "harnesses": [],
+                    "results": [
+                        result.model_dump(mode="json") for result in report.invariant_executions
+                    ],
+                },
+                "formal-results.json": {
+                    "schema_version": "1.0",
+                    "runs": [run.model_dump(mode="json") for run in report.formal_runs],
+                    "dynamic_engine_comparisons": [],
+                },
+                "invariant-review.json": {
+                    "schema_version": "1.0",
+                    "review": (
+                        report.invariant_review.model_dump(mode="json")
+                        if report.invariant_review is not None
+                        else None
+                    ),
+                },
+                "economic-simulation-plan.json": {
+                    "schema_version": "1.0",
+                    "templates": [
+                        plan.model_dump(mode="json") for plan in report.economic_simulations
+                    ],
+                },
+                "execution-origin-dispositions.json": {
+                    "schema_version": "1.0",
+                    "dispositions": [
+                        disposition.model_dump(mode="json")
+                        for disposition in report.execution_origin_dispositions
+                    ],
+                },
+            }
+        )
     run_dir.mkdir(exist_ok=True)
     for name, payload in payloads.items():
         (run_dir / name).write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
+        )
+    if report.schema_version in {"1.3", "1.4"}:
+        assert report.actor_model_baseline is not None
+        assert report.actor_model_evaluation is not None
+        write_json(
+            run_dir / ACTOR_MODEL_BASELINE_ARTIFACT_PATH,
+            report.actor_model_baseline,
+        )
+        write_json(
+            run_dir / ACTOR_MODEL_EVALUATION_ARTIFACT_PATH,
+            report.actor_model_evaluation,
+        )
+    if report.schema_version == "1.4":
+        taxonomy = load_known_issue_taxonomy()
+        assert report.taxonomy_coverage is not None
+        (run_dir / KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH).write_bytes(taxonomy.raw_bytes)
+        write_json(
+            run_dir / KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+            report.taxonomy_coverage,
+        )
+        private_dir = run_dir / "private"
+        private_dir.mkdir(exist_ok=True, mode=0o700)
+        write_json(
+            private_dir / "model-review-artifacts.json",
+            {"schema_version": "1.0", "artifacts": []},
         )
     if report.repository_suite_differential is not None:
         (run_dir / "repository-suite-differential.json").write_text(
@@ -698,14 +989,35 @@ def _reseal_current_artifacts(
     return resealed
 
 
+def _legacy_report_projection(report: AuditReport) -> AuditReport:
+    report_payload = report.model_dump(mode="python")
+    report_payload["schema_version"] = "1.0"
+    report_payload["quality_gates"] = []
+    for current_only_field in (
+        "accounted_cost_usd_exact",
+        "run_status",
+        "minimum_analysis_floor",
+        "actor_model_baseline",
+        "actor_model_evaluation",
+        "judge_decisions",
+        "taxonomy_coverage",
+    ):
+        report_payload.pop(current_only_field, None)
+    return AuditReport.model_validate(report_payload)
+
+
 def _rewrite_as_sealed_schema_1_1(
     run_dir: Path,
     current: RunEvidenceManifest,
     report: AuditReport,
+    config: AuditConfig,
     *,
     retain_model_execution: bool = False,
-) -> RunEvidenceManifest:
-    """Project an already-sealed pre-report-bundle manifest for compatibility tests."""
+) -> tuple[RunEvidenceManifest, AuditReport]:
+    """Build an exact sealed legacy report/manifest pair for compatibility tests."""
+
+    legacy_report = _legacy_report_projection(report)
+    _write_required_artifacts(run_dir, legacy_report)
 
     retained = {"audit-results.sarif"}
     if retain_model_execution:
@@ -713,10 +1025,22 @@ def _rewrite_as_sealed_schema_1_1(
     for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - retained:
         (run_dir / artifact_name).unlink()
     (run_dir / RUN_TERMINAL_REPORT_AUTHORITY_PATH).unlink()
+    for current_only_artifact in (
+        ACTOR_MODEL_BASELINE_ARTIFACT_PATH,
+        ACTOR_MODEL_EVALUATION_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+        MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
+        "execution-origin-dispositions.json",
+        "solidity-invariants.json",
+    ):
+        path = run_dir / current_only_artifact
+        if path.exists():
+            path.unlink()
     metadata_path = run_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["completed"] = report.completed
-    metadata["incomplete_reasons"] = report.incomplete_reasons
+    metadata["completed"] = legacy_report.completed
+    metadata["incomplete_reasons"] = legacy_report.incomplete_reasons
     for current_status_field in (
         "quality_status",
         "run_status",
@@ -731,6 +1055,7 @@ def _rewrite_as_sealed_schema_1_1(
     )
     payload = current.model_dump(mode="json")
     payload["schema_version"] = "1.1"
+    _drop_taxonomy_manifest_leaves(payload)
     legacy_coverage = [
         binding
         for binding in payload["bindings"]["coverage"]
@@ -740,9 +1065,9 @@ def _rewrite_as_sealed_schema_1_1(
         ManifestHashBinding(
             identifier="quality-gates/report",
             sha256=canonical_sha256(
-                [gate.model_dump(mode="json") for gate in report.quality_gates]
+                [gate.model_dump(mode="json") for gate in legacy_report.quality_gates]
             ),
-            details={"gates": str(len(report.quality_gates))},
+            details={"gates": str(len(legacy_report.quality_gates))},
         ).model_dump(mode="json")
     )
     payload["bindings"]["coverage"] = sorted(
@@ -755,9 +1080,103 @@ def _rewrite_as_sealed_schema_1_1(
     payload["manifest_sha256"] = canonical_sha256(
         {key: value for key, value in payload.items() if key != "manifest_sha256"}
     )
-    legacy = RunEvidenceManifest.model_validate(payload)
+    candidate = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", candidate)
+    legacy = rebuild_run_evidence_manifest_for_verification(
+        run_dir=run_dir,
+        report=legacy_report,
+        config=config,
+        sealed_manifest=candidate,
+    )
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
-    return legacy
+    return legacy, legacy_report
+
+
+def _rewrite_as_sealed_schema_1_2(
+    run_dir: Path,
+    current: RunEvidenceManifest,
+    report: AuditReport,
+    config: AuditConfig,
+) -> tuple[RunEvidenceManifest, AuditReport]:
+    """Build an exact sealed report-bundle-era legacy pair."""
+
+    legacy_report = _legacy_report_projection(report)
+    _write_required_artifacts(run_dir, legacy_report)
+    for current_only_artifact in (
+        ACTOR_MODEL_BASELINE_ARTIFACT_PATH,
+        ACTOR_MODEL_EVALUATION_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+        MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
+        "execution-origin-dispositions.json",
+        "solidity-invariants.json",
+    ):
+        path = run_dir / current_only_artifact
+        if path.exists():
+            path.unlink()
+    payload = current.model_dump(mode="json")
+    payload["schema_version"] = "1.2"
+    _drop_taxonomy_manifest_leaves(payload)
+    payload["artifacts"] = [
+        artifact.model_dump(mode="json") for artifact in collect_run_artifacts(run_dir)
+    ]
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    candidate = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", candidate)
+    legacy = rebuild_run_evidence_manifest_for_verification(
+        run_dir=run_dir,
+        report=legacy_report,
+        config=config,
+        sealed_manifest=candidate,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
+    return legacy, legacy_report
+
+
+def _write_current_schema_1_4_manifest_fixture(
+    run_dir: Path,
+    config: AuditConfig,
+) -> RunEvidenceManifest:
+    """Issue a structurally current manifest with exact taxonomy leaf custody."""
+
+    from tests.unit import test_manifest_taxonomy_custody as taxonomy_support
+    from tests.unit import test_release_artifacts as release_support
+
+    report, resource = taxonomy_support._current_report()
+    required_paths = MANIFEST_BOUND_REPORT_DELIVERABLES | {
+        LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+        RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    }
+    run_dir.mkdir()
+    for artifact_name in sorted(required_paths):
+        artifact_path = run_dir / artifact_name
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            '{"synthetic":"current-manifest-custody"}\n',
+            encoding="utf-8",
+        )
+    (run_dir / "known-issue-taxonomy.json").write_bytes(resource.raw_bytes)
+    assert report.taxonomy_coverage is not None
+    write_json(
+        run_dir / "known-issue-taxonomy-coverage.json",
+        report.taxonomy_coverage,
+    )
+    write_json(
+        run_dir / MODEL_REVIEW_ARTIFACT_INVENTORY_PATH,
+        {"schema_version": "1.0", "artifacts": []},
+    )
+    return seal_run_evidence_manifest(
+        run_id="manifest-current-fixture",
+        repository_root_name="synthetic-manifest-repository",
+        git_commit=None,
+        sources=[],
+        run_configuration=release_support._run_configuration(config),
+        bindings=taxonomy_support._manifest_bindings(taxonomy=True),
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version="test",
+    )
 
 
 def _write_qualified_verifiable_run(
@@ -841,7 +1260,7 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert first.model_dump_json() == second.model_dump_json()
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.source_tree_sha256
-    assert first.schema_version == "1.3"
+    assert first.schema_version == "1.4"
     assert first.run_configuration is not None
     assert first.run_configuration.requested_profile.value == "standard"
     assert first.run_configuration.achieved_profile is None
@@ -853,10 +1272,39 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert set(ManifestBindingSet.model_fields) == {
         name for name, bindings in first.bindings if bindings
     }
-    assert any(binding.identifier.startswith("seed/") for binding in first.bindings.seeds)
+    assert [binding.identifier for binding in first.bindings.seeds] == ["seed-set"]
     assert {binding.path for binding in first.artifacts} == {
         binding.path for binding in collect_run_artifacts(first_run)
     }
+
+
+def test_current_manifest_issuance_requires_canonical_private_model_review_inventory(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    inventory_path = run_dir / "private" / "model-review-artifacts.json"
+
+    inventory_path.unlink()
+    with pytest.raises(ValueError, match=r"model-review-artifacts\.json"):
+        build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+
+    write_json(
+        inventory_path,
+        {"schema_version": "1.0", "artifacts": [], "unexpected": True},
+    )
+    with pytest.raises(ValueError, match="private model-review artifact inventory is invalid"):
+        build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+
+    write_json(
+        inventory_path,
+        {"schema_version": "1.0", "artifacts": []},
+    )
+    manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    assert "private/model-review-artifacts.json" in {binding.path for binding in manifest.artifacts}
 
 
 def test_manifest_refresh_bindings_are_exact_non_authorizing_custody(
@@ -968,7 +1416,6 @@ def test_manifest_rejects_coherently_resealed_refresh_route_tamper(
     )
     report = _report(runtime.config).model_copy(
         update={
-            "schema_version": "1.2",
             "audit_model_selection": runtime.audit_selection_evidence.selection,
             "audit_model_refresh_evidence": tampered,
         }
@@ -995,22 +1442,30 @@ def test_manifest_rejects_coherently_resealed_refresh_route_tamper(
         )
 
 
-def test_legacy_completed_report_new_issuance_uses_fail_closed_status_projection(
+def test_sealed_legacy_completed_report_preserves_fail_closed_status_projection(
     tmp_path: Path,
     config_factory,
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "run"
-    report = _report(config)
+    report = _legacy_report(config)
     assert report.schema_version == "1.0"
     assert report.completed
     _write_required_artifacts(run_dir, report)
+    from tests.unit import test_release_artifacts as release_support
 
-    manifest = build_run_evidence_manifest(
-        run_dir=run_dir,
-        report=report,
-        config=config,
+    manifest = _seal_run_evidence_manifest(
+        run_id=report.run_id,
+        repository_root_name=report.repository.root_name,
+        git_commit=report.repository.git_commit,
+        sources=[],
+        run_configuration=release_support._run_configuration(config),
+        bindings=release_support._bindings(),
+        artifacts=collect_run_artifacts(run_dir),
+        schema_version="1.3",
+        tool_version="test",
     )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
     metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
 
     assert manifest.schema_version == "1.3"
@@ -1208,16 +1663,11 @@ def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "run"
-    report = _report(config)
-    _write_required_artifacts(run_dir, report)
-    current = build_run_evidence_manifest(
-        run_dir=run_dir,
-        report=report,
-        config=config,
-    )
+    current = _write_current_schema_1_4_manifest_fixture(run_dir, config)
+    assert current.schema_version == "1.4"
     assert current.run_configuration is not None
 
-    with pytest.raises(ValueError, match=r"new manifest issuance requires schema 1\.3"):
+    with pytest.raises(ValueError, match=r"new manifest issuance requires schema 1\.4"):
         seal_run_evidence_manifest(
             run_id=current.run_id,
             repository_root_name=current.repository_root_name,
@@ -1254,10 +1704,10 @@ def test_new_manifest_issuance_rejects_legacy_findings_custody(
     _write_required_artifacts(run_dir, report)
     write_json(
         run_dir / "findings.json",
-        build_findings_artifact(report, schema_version="1.1"),
+        build_findings_artifact(_legacy_report(config), schema_version="1.1"),
     )
 
-    with pytest.raises(ValueError, match="current typed findings custody"):
+    with pytest.raises(ValueError, match=r"actor-bound findings schema 1\.3 custody"):
         build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
 
 
@@ -1267,20 +1717,24 @@ def test_sealed_legacy_manifest_accepts_legacy_model_execution_custody(
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "sealed-legacy-model-execution"
-    report = _report(config)
-    _write_required_artifacts(run_dir, report)
-    current = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
-    write_json(
-        run_dir / "model-execution.json",
-        build_model_execution_artifact(report, schema_version="1.0"),
-    )
-    legacy = _rewrite_as_sealed_schema_1_1(
-        run_dir,
-        current,
-        report,
-        retain_model_execution=True,
-    )
+    report = _legacy_report(config)
+    _write_required_artifacts(run_dir, report, legacy_model_execution=True)
+    from tests.unit import test_release_artifacts as release_support
 
+    legacy = _seal_run_evidence_manifest(
+        run_id=report.run_id,
+        repository_root_name=report.repository.root_name,
+        git_commit=report.repository.git_commit,
+        sources=[],
+        run_configuration=release_support._run_configuration(config),
+        bindings=release_support._bindings(),
+        artifacts=collect_run_artifacts(run_dir),
+        schema_version="1.1",
+        tool_version="test",
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
+
+    assert legacy.schema_version == "1.1"
     validate_manifest_artifacts(legacy, run_dir)
 
 
@@ -1641,8 +2095,11 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
             ],
         }
     )
-    report = _with_repository_capability(base_report, repository_map, config).model_copy(
-        update={"scanner_runs": [scanner_run], "findings": [projected]}
+    report = _with_current_findings(
+        _with_repository_capability(base_report, repository_map, config).model_copy(
+            update={"scanner_runs": [scanner_run]}
+        ),
+        [projected],
     )
     source_contents = {location.path: source_content}
     _write_required_artifacts(run_dir, report, source_contents=source_contents)
@@ -1653,7 +2110,7 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
     tampered_finding = projected.model_copy(
         update={"impact": "A contradictory narrative not emitted by the scanner projection."}
     )
-    tampered_report = report.model_copy(update={"findings": [tampered_finding]})
+    tampered_report = _with_current_findings(report, [tampered_finding])
     _write_required_artifacts(
         run_dir,
         tampered_report,
@@ -1690,7 +2147,7 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
     with pytest.raises(ValueError, match="replay-authorized scanner evidence"):
         validate_manifest_artifacts(coherently_resealed, run_dir)
 
-    uncredited_raw_report = coherently_resealed_report.model_copy(update={"findings": []})
+    uncredited_raw_report = _with_current_findings(coherently_resealed_report, [])
     _write_required_artifacts(
         run_dir,
         uncredited_raw_report,
@@ -1837,9 +2294,7 @@ def test_manifest_rejects_coherently_resealed_solidity_coverage_disagreement(
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "run"
-    report = _report(config).model_copy(
-        update={"solidity_coverage": SolidityCoverage(files_discovered=1)}
-    )
+    report = _report(config)
     _write_required_artifacts(run_dir, report)
     manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
@@ -1854,6 +2309,31 @@ def test_manifest_rejects_coherently_resealed_solidity_coverage_disagreement(
     resealed = _reseal_current_artifacts(run_dir, manifest)
 
     with pytest.raises(ValueError, match="Solidity coverage differs from the final report"):
+        validate_manifest_artifacts(resealed, run_dir)
+
+
+def test_manifest_rejects_coherently_resealed_model_review_coverage_disagreement(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    from tests.unit.test_known_issue_taxonomy import _surface_coverage
+
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+    write_json(
+        run_dir / "model-review-coverage.json",
+        {
+            "schema_version": report.schema_version,
+            "coverage": _surface_coverage().model_dump(mode="json"),
+        },
+    )
+    resealed = _reseal_current_artifacts(run_dir, manifest)
+
+    with pytest.raises(ValueError, match="model-review coverage differs from the final report"):
         validate_manifest_artifacts(resealed, run_dir)
 
 
@@ -1945,6 +2425,7 @@ def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
     legacy = manifest.model_dump(mode="json")
     legacy["schema_version"] = "1.0"
     legacy.pop("run_configuration")
+    _drop_taxonomy_manifest_leaves(legacy)
     legacy["manifest_sha256"] = canonical_sha256(
         {key: value for key, value in legacy.items() if key != "manifest_sha256"}
     )
@@ -1954,6 +2435,7 @@ def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
 
     legacy_with_provenance = manifest.model_dump(mode="json")
     legacy_with_provenance["schema_version"] = "1.0"
+    _drop_taxonomy_manifest_leaves(legacy_with_provenance)
     legacy_with_provenance["manifest_sha256"] = canonical_sha256(
         {
             key: value
@@ -2480,6 +2962,7 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
         "1.1",
         "1.2",
         "1.3",
+        "1.4",
     ]
     expected_profiles = {"quick", "standard", "deep", "maximum-assurance"}
     assert (
@@ -2545,17 +3028,19 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     legacy_rule = next(
         rule
         for rule in compatibility
-        if rule["if"]["properties"]["schema_version"].get("const") == "1.0"
+        if rule["if"].get("properties", {}).get("schema_version", {}).get("const") == "1.0"
     )
     current_rule = next(
         rule
         for rule in compatibility
-        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.1", "1.2", "1.3"}
+        if set(rule["if"].get("properties", {}).get("schema_version", {}).get("enum", []))
+        == {"1.1", "1.2", "1.3", "1.4"}
     )
     report_bundle_rule = next(
         rule
         for rule in compatibility
-        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.2", "1.3"}
+        if set(rule["if"].get("properties", {}).get("schema_version", {}).get("enum", []))
+        == {"1.2", "1.3", "1.4"}
     )
     assert legacy_rule["then"]["properties"]["run_configuration"] == {"type": "null"}
     assert "run_configuration" in current_rule["then"]["required"]
@@ -2629,12 +3114,14 @@ def test_verify_run_is_current_and_serializes_deterministically(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     second = verify_run_evidence(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2643,6 +3130,20 @@ def test_verify_run_is_current_and_serializes_deterministically(
     assert not first.mismatches
     assert first.manifest_sha256 == manifest.manifest_sha256
     assert RunVerification.model_validate_json(first.model_dump_json()) == first
+
+    missing_root = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert missing_root.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.category is RunVerificationCategory.CONFIGURATION
+        and mismatch.identifier == "language-capability/discovery/configuration-root"
+        and mismatch.kind is RunVerificationMismatchKind.UNVERIFIABLE
+        for mismatch in missing_root.mismatches
+    )
 
     tampered = first.model_dump(mode="json")
     tampered["status"] = RunVerificationStatus.STALE
@@ -2710,6 +3211,7 @@ def test_verify_run_revalidates_every_unfiltered_language_inventory_source(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert current.status is RunVerificationStatus.CURRENT, [
@@ -2721,6 +3223,7 @@ def test_verify_run_revalidates_every_unfiltered_language_inventory_source(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2731,6 +3234,119 @@ def test_verify_run_revalidates_every_unfiltered_language_inventory_source(
         and mismatch.kind is RunVerificationMismatchKind.CHANGED
         for mismatch in stale.mismatches
     )
+
+
+def test_verify_run_uses_external_configuration_root_not_planted_target_ignore(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, report = _write_verifiable_run(tmp_path, config)
+    configuration_root = tmp_path / "external-configuration"
+    configuration_root.mkdir()
+    (configuration_root / ".mmauditignore").write_text("/.mmauditignore\n", encoding="utf-8")
+    (repository / ".mmauditignore").write_text(
+        "/.mmauditignore\n/src/Vault.sol\n",
+        encoding="utf-8",
+    )
+    assert report.language_capability is not None
+    language_artifact = LanguageCapabilityArtifact(
+        assessment=report.language_capability,
+        files=tuple(
+            LanguageCapabilityFileEvidence(
+                path=item.path,
+                sha256=item.sha256,
+                size=item.size,
+                lines=item.lines,
+                language=item.language,
+            )
+            for item in report.repository.files
+        ),
+        omitted=tuple(report.repository.omitted_files),
+        effective_ignore_rules=(*DEFAULT_EXCLUSIONS, "/.mmauditignore"),
+        runtime_output_exclusion_root=None,
+    )
+    _write_required_artifacts(run_dir, report, language_artifact=language_artifact)
+    manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+
+    current = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        configuration_root=configuration_root,
+        config=config,
+    )
+    wrong_root = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        configuration_root=repository,
+        config=config,
+    )
+
+    assert current.status is RunVerificationStatus.CURRENT, current.mismatches
+    assert wrong_root.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.identifier == "language-capability/source-inventory/reconstruction"
+        and mismatch.kind is RunVerificationMismatchKind.UNVERIFIABLE
+        for mismatch in wrong_root.mismatches
+    )
+
+
+def test_effective_discovery_policy_derives_canonical_in_repository_output_root(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    repository = tmp_path / "repository"
+    run_dir = repository / "custom-audit-output" / "runs" / "run-id"
+    run_dir.mkdir(parents=True)
+    config = config_factory()
+
+    _rules, output_exclusion = verification_module._effective_discovery_policy(
+        run_dir=run_dir,
+        repository_root=repository,
+        configuration_root=repository,
+        config=config,
+    )
+
+    assert output_exclusion == "custom-audit-output"
+
+    moved_run = tmp_path / "moved-run" / "run-id"
+    moved_run.mkdir(parents=True)
+    _moved_rules, moved_output_exclusion = verification_module._effective_discovery_policy(
+        run_dir=moved_run,
+        repository_root=repository,
+        configuration_root=repository,
+        config=config,
+    )
+
+    assert moved_output_exclusion is None
+
+
+def test_verify_run_rejects_configuration_root_with_linked_ancestor(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    real_parent = tmp_path / "trusted-configuration"
+    configuration_root = real_parent / "root"
+    configuration_root.mkdir(parents=True)
+    linked_parent = tmp_path / "linked-configuration"
+    try:
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with pytest.raises(ValueError, match="configuration root may not traverse a link"):
+        verify_run_evidence(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            configuration_root=linked_parent / "root",
+            config=config,
+        )
 
 
 def test_verify_run_rejects_source_added_after_language_inventory_was_sealed(
@@ -2744,6 +3360,7 @@ def test_verify_run_rejects_source_added_after_language_inventory_was_sealed(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert current.status is RunVerificationStatus.CURRENT
@@ -2755,23 +3372,133 @@ def test_verify_run_rejects_source_added_after_language_inventory_was_sealed(
     added = repository / "src" / "LateAdded.sol"
     added.parent.mkdir(parents=True, exist_ok=True)
     added.write_text("contract LateAdded {}\n", encoding="utf-8")
-    added_sha256 = hashlib.sha256(added.read_bytes()).hexdigest()
 
     stale = verify_run_evidence(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
     assert stale.status is RunVerificationStatus.STALE
     assert any(
         mismatch.category is RunVerificationCategory.SOURCE
-        and mismatch.identifier == "language-capability/src/LateAdded.sol"
-        and mismatch.kind is RunVerificationMismatchKind.UNEXPECTED
-        and mismatch.observed_sha256 == added_sha256
+        and mismatch.identifier == "language-capability/source-inventory/reconstruction"
+        and mismatch.kind is RunVerificationMismatchKind.UNVERIFIABLE
         for mismatch in stale.mismatches
     )
+
+
+def test_verify_run_rejects_transient_ignore_edit_restored_during_discovery(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    ignore_path = repository / ".mmauditignore"
+    ignore_path.write_bytes(b"")
+    original_discover = verification_module.discover_repository
+
+    def discover_with_transient_ignore(*args, **kwargs):
+        ignore_path.write_text("/src/Vault.sol\n", encoding="utf-8")
+        try:
+            return original_discover(*args, **kwargs)
+        finally:
+            ignore_path.write_bytes(b"")
+
+    monkeypatch.setattr(
+        verification_module,
+        "discover_repository",
+        discover_with_transient_ignore,
+    )
+
+    with pytest.raises(ValueError, match="configuration ignore input changed"):
+        verify_run_evidence(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            configuration_root=repository,
+            config=config,
+        )
+
+
+def test_verify_run_rejects_transient_configuration_ancestor_swap_and_restore(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    trusted_parent = tmp_path / "trusted-parent"
+    repository, run_dir, _manifest, _report = _write_verifiable_run(
+        trusted_parent / "fixture",
+        config,
+    )
+    displaced_parent = tmp_path / "displaced-parent"
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(trusted_parent, target_is_directory=True)
+        probe.unlink()
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    original_discover = verification_module.discover_repository
+
+    def discover_after_transient_ancestor_swap(*args, **kwargs):
+        trusted_parent.rename(displaced_parent)
+        trusted_parent.symlink_to(displaced_parent, target_is_directory=True)
+        trusted_parent.unlink()
+        displaced_parent.rename(trusted_parent)
+        return original_discover(*args, **kwargs)
+
+    monkeypatch.setattr(
+        verification_module,
+        "discover_repository",
+        discover_after_transient_ancestor_swap,
+    )
+
+    with pytest.raises(ValueError, match="configuration root changed"):
+        verify_run_evidence(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            configuration_root=repository,
+            config=config,
+        )
+
+
+def test_verify_run_rejects_repository_swapped_after_initial_validation(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    alternate = tmp_path / "alternate-repository"
+    displaced = tmp_path / "displaced-repository"
+    shutil.copytree(repository, alternate)
+    original_safe_directory = verification_module._safe_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, label: str):
+        nonlocal swapped
+        observation = original_safe_directory(path, label)
+        if label == "repository" and not swapped:
+            swapped = True
+            repository.rename(displaced)
+            alternate.rename(repository)
+        return observation
+
+    monkeypatch.setattr(verification_module, "_safe_directory", validate_then_swap)
+
+    with pytest.raises(ValueError, match="root changed during custody"):
+        verify_run_evidence(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            configuration_root=repository,
+            config=config,
+        )
 
 
 def test_verify_run_detects_source_changed_between_descriptor_read_and_rediscovery(
@@ -2795,6 +3522,7 @@ def test_verify_run_detects_source_changed_between_descriptor_read_and_rediscove
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2872,6 +3600,7 @@ def test_verify_run_rejects_linked_parent_in_language_inventory_source(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2890,12 +3619,25 @@ def test_verify_run_reconstructs_an_already_sealed_schema_1_1_manifest(
 ) -> None:
     config = config_factory()
     repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
-    legacy = _rewrite_as_sealed_schema_1_1(run_dir, current, report)
+    legacy, legacy_report = _rewrite_as_sealed_schema_1_1(
+        run_dir,
+        current,
+        report,
+        config,
+    )
+    rebuilt = rebuild_run_evidence_manifest_for_verification(
+        run_dir=run_dir,
+        report=legacy_report,
+        config=config,
+        sealed_manifest=legacy,
+    )
+    assert rebuilt == legacy
 
     verification = verify_run_evidence(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2909,18 +3651,19 @@ def test_verify_run_preserves_schema_1_2_as_explicit_retry_off_legacy(
     config_factory,
 ) -> None:
     config = config_factory()
-    repository, run_dir, current, _report_value = _write_verifiable_run(tmp_path, config)
-    payload = current.model_dump(mode="json", exclude={"manifest_sha256"})
-    payload["schema_version"] = "1.2"
-    legacy = RunEvidenceManifest.model_validate(
-        {**payload, "manifest_sha256": canonical_sha256(payload)}
+    repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
+    legacy, _legacy_report_value = _rewrite_as_sealed_schema_1_2(
+        run_dir,
+        current,
+        report,
+        config,
     )
-    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
 
     verification = verify_run_evidence(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -2935,13 +3678,18 @@ def test_legacy_rebuild_requires_the_exact_on_disk_sealed_manifest(
 ) -> None:
     config = config_factory()
     _repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
-    legacy = _rewrite_as_sealed_schema_1_1(run_dir, current, report)
+    legacy, legacy_report = _rewrite_as_sealed_schema_1_1(
+        run_dir,
+        current,
+        report,
+        config,
+    )
     (run_dir / "run-evidence-manifest.json").unlink()
 
     with pytest.raises(ValueError, match=r"run-evidence-manifest\.json"):
         rebuild_run_evidence_manifest_for_verification(
             run_dir=run_dir,
-            report=report,
+            report=legacy_report,
             config=config,
             sealed_manifest=legacy,
         )
@@ -3012,6 +3760,7 @@ def test_verify_run_checks_sealed_qualified_evidence_without_recreating_authorit
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -3101,6 +3850,7 @@ def test_verify_run_rejects_resealed_qualified_evidence_tamper(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
 
@@ -3144,6 +3894,7 @@ def test_verify_run_rejects_report_configuration_identity_resealed_into_manifest
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
     )
 
     assert verification.status is RunVerificationStatus.STALE
@@ -3164,7 +3915,7 @@ def test_verify_run_detects_every_security_relevant_drift_category(
 ) -> None:
     config = config_factory()
     repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
-    _rewrite_as_sealed_schema_1_1(run_dir, current, report)
+    _rewrite_as_sealed_schema_1_1(run_dir, current, report, config)
     (repository / "src" / "Vault.sol").write_text(
         "contract Vault { function changed() external {} }\n",
         encoding="utf-8",
@@ -3231,6 +3982,7 @@ def test_verify_run_detects_every_security_relevant_drift_category(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=changed_config,
     )
 

@@ -41,6 +41,7 @@ from mmaudit.models.scheduler import (
 from mmaudit.models.schemas import (
     ContextPackage,
     ModelReviewSurfaceKind,
+    ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
 )
 from mmaudit.models.truncation import (
@@ -250,6 +251,11 @@ def _scheduler_task(
         normalizer_sha256=normalizer_sha256,
         response_schema_sha256=selected_response_schema_sha256,
         candidate_ids=candidate_ids,
+        model_surface_review_request_manifest_sha256=(
+            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                tuple(context.requested_model_surfaces)
+            )
+        ),
     )
 
 

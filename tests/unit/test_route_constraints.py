@@ -61,6 +61,12 @@ PARAMETERS = (
     "temperature",
 )
 HIGH_EFFORTS: tuple[ReasoningEffort, ...] = ("high",)
+EXACT_ROUTE_CONSTRAINT_PURPOSES: tuple[RouteConstraintPurpose, ...] = (
+    RouteConstraintPurpose.DISCOVERY_PUBLICATION,
+    RouteConstraintPurpose.REGISTRY_PUBLICATION,
+    RouteConstraintPurpose.NONCREDITING_SMOKE_ADMISSION,
+    RouteConstraintPurpose.FULL_CAMPAIGN_ADMISSION,
+)
 
 
 def _pricing() -> tuple[ExactRoutePrice, ...]:
@@ -373,7 +379,11 @@ def test_route_predicate_helper_code_mutation_fails_closed(helper_name: str) -> 
 
 @pytest.mark.parametrize(
     "helper_name",
-    ("output_mode_request_parameters", "require_exact_openrouter_model_id"),
+    (
+        "output_mode_request_parameters",
+        "require_exact_openrouter_model_id",
+        "resolve_effective_reasoning_effort_inventory",
+    ),
 )
 def test_imported_route_helper_code_mutation_fails_closed(helper_name: str) -> None:
     helper = getattr(route_constraints_module, helper_name)
@@ -1087,6 +1097,43 @@ def test_reasoning_effort_is_endpoint_first_with_only_absence_fallback() -> None
             RoutePredicateDisposition.UNAVAILABLE,
             RoutePredicateReason.REASONING_EFFORT_INVENTORY_UNAVAILABLE,
         ),
+    )
+
+
+def test_route_constraint_purpose_inventory_is_exact() -> None:
+    assert tuple(RouteConstraintPurpose) == EXACT_ROUTE_CONSTRAINT_PURPOSES
+
+
+@pytest.mark.parametrize("purpose", EXACT_ROUTE_CONSTRAINT_PURPOSES)
+def test_candidate_reasoning_effort_inventory_is_required_for_every_purpose(
+    purpose: RouteConstraintPurpose,
+) -> None:
+    profile = _profile()
+    constraint = _constraint(profile)
+    assert constraint.role is ExactRouteRole.CANDIDATE
+    report = evaluate_route_predicates(
+        profile=profile,
+        constraint=constraint,
+        facts=_facts(
+            profile=profile,
+            constraint=constraint,
+            endpoint_supported_reasoning_efforts=None,
+            model_supported_reasoning_efforts=None,
+        ),
+    )
+
+    with pytest.raises(RoutePredicateRequirementError) as error:
+        require_route_predicates(report, purpose=purpose)
+
+    reasoning_failures = tuple(
+        failure
+        for failure in error.value.failures
+        if failure.predicate_id is RoutePredicateId.REASONING_EFFORT_SUPPORT
+    )
+    assert len(reasoning_failures) == 1
+    assert reasoning_failures[0].disposition is RoutePredicateDisposition.UNAVAILABLE
+    assert (
+        reasoning_failures[0].reason is RoutePredicateReason.REASONING_EFFORT_INVENTORY_UNAVAILABLE
     )
 
 

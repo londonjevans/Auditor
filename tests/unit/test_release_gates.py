@@ -127,14 +127,61 @@ def test_every_gate_has_one_canonical_self_hashed_semantic_plan() -> None:
     assert get_release_gate_fixed_plan(ReleaseGateId.RUFF_FORMAT).arguments == (
         "format",
         "--check",
+        "--no-cache",
+        "--isolated",
+        "--target-version",
+        "py312",
+        "--line-length",
+        "100",
+        "--extend-exclude",
+        "config/public_model_lineage/sources/**",
+        "--extend-exclude",
+        "docs/remediation/v3/operator_captures/**",
         ".",
     )
-    assert get_release_gate_fixed_plan(ReleaseGateId.RUFF_CHECK).arguments == ("check", ".")
-    assert get_release_gate_fixed_plan(ReleaseGateId.MYPY).arguments == ()
+    assert get_release_gate_fixed_plan(ReleaseGateId.RUFF_CHECK).arguments == (
+        "check",
+        "--no-cache",
+        "--isolated",
+        "--target-version",
+        "py312",
+        "--line-length",
+        "100",
+        "--select",
+        "E,F,I,UP,B,SIM,RUF",
+        "--ignore",
+        "E501",
+        "--extend-exclude",
+        "config/public_model_lineage/sources/**",
+        "--extend-exclude",
+        "docs/remediation/v3/operator_captures/**",
+        ".",
+    )
+    assert get_release_gate_fixed_plan(ReleaseGateId.MYPY).arguments == (
+        "--no-incremental",
+        "--config-file",
+        "{devnull}",
+        "--strict",
+        "--python-version",
+        "3.12",
+        "--disable-error-code",
+        "import-untyped",
+        "src/mmaudit",
+    )
     assert get_release_gate_fixed_plan(ReleaseGateId.PYTEST).arguments == (
         "-q",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "pytest_asyncio.plugin",
+        "-c",
+        "{devnull}",
+        "--rootdir=.",
+        "--confcutdir=.",
+        "--import-mode=importlib",
         "--junitxml",
         "{evidence_root}/release-gate-pytest-junit.xml",
+        "tests",
     )
 
 

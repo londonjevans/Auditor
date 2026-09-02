@@ -21,7 +21,14 @@ from mmaudit.config import (
 )
 from mmaudit.constants import VERSION
 from mmaudit.language_plugins import parse_language_capability_payload
-from mmaudit.models.schemas import AuditReport, StrictModel
+from mmaudit.models.schemas import (
+    AuditReport,
+    InvariantSuite,
+    LanguageCapabilityArtifact,
+    StrictModel,
+)
+from mmaudit.models.sharding import SolidityGraphsArtifact, SolidityIndexArtifact
+from mmaudit.orchestration.actor_model import withhold_actor_model_from_discovery
 from mmaudit.orchestration.manifest import (
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
     ManifestFileBinding,
@@ -36,15 +43,41 @@ from mmaudit.orchestration.manifest import (
     validate_solidity_shard_artifacts,
 )
 from mmaudit.orchestration.prior_audit import withhold_prior_audit_from_discovery
+from mmaudit.orchestration.scope import filter_discovery_for_scope
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.status import report_status_metadata
-from mmaudit.repository.discovery import discover_repository, source_language_for_path
-from mmaudit.repository.ignore import IgnoreMatcher, normalize_relative_path
+from mmaudit.repository.configuration_custody import (
+    ConfigurationInputObservation,
+    observe_configuration_input,
+    require_unchanged_configuration_input,
+)
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    observe_unlinked_directory,
+    require_unchanged_unlinked_directory,
+)
+from mmaudit.repository.discovery import (
+    DiscoveryResult,
+    discover_repository,
+    source_language_for_path,
+)
+from mmaudit.repository.ignore import (
+    IgnoreMatcher,
+    normalize_relative_path,
+    safe_ignore_file,
+)
 from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.solidity.invariants import validate_protocol_profile_replay
+from mmaudit.solidity.projects import discover_solidity_projects
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_REPORT_BYTES = 100_000_000
 _MAX_VERIFICATION_BYTES = 100_000_000
+_PROFILE_REPLAY_ARTIFACT_NAMES = (
+    "solidity-graphs.json",
+    "solidity-index.json",
+    "solidity-invariants.json",
+)
 
 
 class RunVerificationStatus(StrEnum):
@@ -163,11 +196,22 @@ def verify_run_evidence(
     manifest_path: Path,
     run_dir: Path,
     repository_root: Path,
+    configuration_root: Path | None = None,
     config: AuditConfig | None = None,
     file_config: AuditConfig | None = None,
 ) -> RunVerification:
     """Reconcile local files and projections without running repository code."""
 
+    root_observation = _safe_directory(run_dir, "run")
+    source_observation = _safe_directory(repository_root, "repository")
+    configuration_root_observation = (
+        None if configuration_root is None else _safe_directory(configuration_root, "configuration")
+    )
+    root = root_observation.path
+    source_root = source_observation.path
+    trusted_configuration_root = (
+        None if configuration_root_observation is None else configuration_root_observation.path
+    )
     manifest = load_run_evidence_manifest(manifest_path)
     resolved_config = config
     if manifest.run_configuration is not None and file_config is not None:
@@ -179,18 +223,51 @@ def verify_run_evidence(
         resolved_config = resolve_run_evidence_config(manifest)
     elif resolved_config is None and file_config is not None:
         resolved_config = file_config.effective()
-    root = _safe_directory(run_dir, "run")
-    source_root = _safe_directory(repository_root, "repository")
+    configuration_before: ConfigurationInputObservation | None = None
+    if trusted_configuration_root is not None and resolved_config is not None:
+        configuration_before = observe_configuration_input(
+            configuration_root=trusted_configuration_root,
+            configured_ignore_path=resolved_config.repository.ignore_file,
+        )
+        assert configuration_root_observation is not None
+        require_unchanged_unlinked_directory(
+            configuration_root_observation,
+            label="run verification configuration",
+        )
     mismatches: list[RunVerificationMismatch] = []
     mismatches.extend(_source_mismatches(manifest, source_root))
-    mismatches.extend(
-        _language_capability_source_mismatches(
-            manifest=manifest,
-            run_dir=root,
-            repository_root=source_root,
-            config=resolved_config,
-        )
+    language_mismatches, reconstructed_discovery = _language_capability_source_mismatches(
+        manifest=manifest,
+        run_dir=root,
+        repository_root=source_root,
+        configuration_root=trusted_configuration_root,
+        config=resolved_config,
     )
+    mismatches.extend(language_mismatches)
+    if configuration_before is not None and resolved_config is not None:
+        require_unchanged_configuration_input(
+            configuration_before,
+            configured_ignore_path=resolved_config.repository.ignore_file,
+        )
+        assert configuration_root_observation is not None
+        require_unchanged_unlinked_directory(
+            configuration_root_observation,
+            label="run verification configuration",
+        )
+    protocol_profile_replay_discovery: DiscoveryResult | None = None
+    if reconstructed_discovery is not None and resolved_config is not None:
+        try:
+            scope_projects = discover_solidity_projects(
+                reconstructed_discovery,
+                resolved_config.smart_contracts,
+            )
+            protocol_profile_replay_discovery = filter_discovery_for_scope(
+                reconstructed_discovery,
+                scope_projects,
+                resolved_config.scope.mode,
+            )
+        except (OSError, ValueError):
+            protocol_profile_replay_discovery = None
 
     observed_artifacts = collect_run_artifacts(root)
     mismatches.extend(
@@ -229,12 +306,20 @@ def verify_run_evidence(
                     expected_sha256=(shard_binding.sha256 if shard_binding is not None else None),
                 )
             )
+        mismatches.extend(
+            _protocol_profile_replay_mismatches(
+                manifest=manifest,
+                report=report,
+                run_dir=root,
+                discovery=protocol_profile_replay_discovery,
+            )
+        )
     metadata_binding = next(
         (binding for binding in manifest.artifacts if binding.path == "metadata.json"),
         None,
     )
     emitted_metadata, metadata_present = _load_metadata_artifact(root, metadata_binding)
-    if manifest.schema_version in {"1.1", "1.2", "1.3"} and not metadata_present:
+    if manifest.schema_version in {"1.1", "1.2", "1.3", "1.4"} and not metadata_present:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
@@ -247,7 +332,7 @@ def verify_run_evidence(
                 expected_sha256=(metadata_binding.sha256 if metadata_binding is not None else None),
             )
         )
-    elif manifest.schema_version in {"1.1", "1.2", "1.3"} and metadata_binding is None:
+    elif manifest.schema_version in {"1.1", "1.2", "1.3", "1.4"} and metadata_binding is None:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
@@ -348,6 +433,7 @@ def verify_run_evidence(
                 report=projection_report,
                 config=resolved_config,
                 sealed_manifest=manifest,
+                protocol_profile_replay_discovery=protocol_profile_replay_discovery,
                 **build_arguments,
             )
         except (OSError, ValueError):
@@ -363,6 +449,20 @@ def verify_run_evidence(
             mismatches.extend(_identity_mismatches(manifest, observed_manifest))
             mismatches.extend(_run_configuration_mismatches(manifest, observed_manifest))
             mismatches.extend(_binding_mismatches(manifest, observed_manifest))
+
+    require_unchanged_unlinked_directory(
+        source_observation,
+        label="run verification repository",
+    )
+    if configuration_root_observation is not None:
+        require_unchanged_unlinked_directory(
+            configuration_root_observation,
+            label="run verification configuration",
+        )
+    require_unchanged_unlinked_directory(
+        root_observation,
+        label="run verification run",
+    )
 
     ordered = sorted(
         mismatches,
@@ -530,22 +630,26 @@ def _language_capability_source_mismatches(
     manifest: RunEvidenceManifest,
     run_dir: Path,
     repository_root: Path,
+    configuration_root: Path | None,
     config: AuditConfig | None,
-) -> list[RunVerificationMismatch]:
+) -> tuple[list[RunVerificationMismatch], DiscoveryResult | None]:
     binding = next(
         (item for item in manifest.artifacts if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH),
         None,
     )
     if binding is None:
-        if manifest.schema_version not in {"1.2", "1.3"}:
-            return []
-        return [
-            RunVerificationMismatch(
-                category=RunVerificationCategory.ARTIFACT,
-                identifier="language-capability/source-inventory",
-                kind=RunVerificationMismatchKind.UNVERIFIABLE,
-            )
-        ]
+        if manifest.schema_version not in {"1.2", "1.3", "1.4"}:
+            return [], None
+        return (
+            [
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.ARTIFACT,
+                    identifier="language-capability/source-inventory",
+                    kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                )
+            ],
+            None,
+        )
     try:
         with open_manifest_bound_json_artifacts(
             run_dir,
@@ -560,15 +664,18 @@ def _language_capability_source_mismatches(
             for item in artifact.files
         ]
     except (OSError, TypeError, ValueError):
-        return [
-            RunVerificationMismatch(
-                category=RunVerificationCategory.ARTIFACT,
-                identifier="language-capability/source-inventory",
-                kind=RunVerificationMismatchKind.UNVERIFIABLE,
-                expected_sha256=binding.sha256,
-                expected_size=binding.size,
-            )
-        ]
+        return (
+            [
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.ARTIFACT,
+                    identifier="language-capability/source-inventory",
+                    kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                    expected_sha256=binding.sha256,
+                    expected_size=binding.size,
+                )
+            ],
+            None,
+        )
 
     mismatches = _source_binding_mismatches(
         source_bindings,
@@ -594,32 +701,30 @@ def _language_capability_source_mismatches(
                 kind=RunVerificationMismatchKind.UNVERIFIABLE,
             )
         )
-        return mismatches
+        return mismatches, None
+
+    if configuration_root is None and manifest.schema_version == "1.4":
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.CONFIGURATION,
+                identifier="language-capability/discovery/configuration-root",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+            )
+        )
+        return mismatches, None
 
     try:
-        matcher = IgnoreMatcher.from_effective_rules(artifact.effective_ignore_rules)
-        output_exclusion = artifact.runtime_output_exclusion_root
-        if output_exclusion is not None:
-            try:
-                current_run_relative = run_dir.resolve(strict=True).relative_to(
-                    repository_root.resolve(strict=True)
-                )
-            except (OSError, ValueError):
-                current_run_relative = None
-            output_parts = PurePosixPath(output_exclusion).parts
-            if (
-                current_run_relative is not None
-                and current_run_relative.parts[: len(output_parts)] == output_parts
-            ):
-                matcher.rules.append("/" + output_exclusion + "/")
-        observed_discovery = discover_repository(
-            repository_root,
-            config.repository,
-            matcher,
-        )
-        observed_discovery, _withheld = withhold_prior_audit_from_discovery(
-            observed_discovery,
-            config.prior_audit.path,
+        observed_discovery = _reconstruct_current_discovery(
+            artifact=artifact,
+            run_dir=run_dir,
+            repository_root=repository_root,
+            configuration_root=configuration_root or repository_root,
+            config=config,
+            changed_since=(
+                manifest.run_configuration.run_options.changed_since
+                if manifest.run_configuration is not None
+                else None
+            ),
         )
     except (OSError, ValueError):
         mismatches.append(
@@ -629,7 +734,7 @@ def _language_capability_source_mismatches(
                 kind=RunVerificationMismatchKind.UNVERIFIABLE,
             )
         )
-        return mismatches
+        return mismatches, None
 
     expected_by_path = {item.path: item for item in artifact.files}
     observed_by_path = {item.relative_path: item for item in observed_discovery.files}
@@ -687,7 +792,159 @@ def _language_capability_source_mismatches(
                 observed_size=len(observed_omitted),
             )
         )
-    return mismatches
+    return mismatches, observed_discovery
+
+
+def _reconstruct_current_discovery(
+    *,
+    artifact: LanguageCapabilityArtifact,
+    run_dir: Path,
+    repository_root: Path,
+    configuration_root: Path,
+    config: AuditConfig,
+    changed_since: str | None,
+) -> DiscoveryResult:
+    """Replay the retained bounded-discovery policy against current repository bytes."""
+
+    expected_rules, output_exclusion = _effective_discovery_policy(
+        run_dir=run_dir,
+        repository_root=repository_root,
+        configuration_root=configuration_root,
+        config=config,
+    )
+    if artifact.effective_ignore_rules != expected_rules:
+        raise ValueError("retained discovery ignore rules differ from effective configuration")
+    if output_exclusion is not None and artifact.runtime_output_exclusion_root != output_exclusion:
+        raise ValueError("retained output exclusion differs from the current run location")
+    matcher = IgnoreMatcher.from_effective_rules(expected_rules)
+    if output_exclusion is not None:
+        matcher.rules.append("/" + output_exclusion + "/")
+    discovery = discover_repository(
+        repository_root,
+        config.repository,
+        matcher,
+        changed_since=changed_since,
+    )
+    discovery, _prior_withheld = withhold_prior_audit_from_discovery(
+        discovery,
+        config.prior_audit.path,
+    )
+    discovery, _actor_withheld = withhold_actor_model_from_discovery(
+        discovery,
+        config.actor_model.path,
+    )
+    return discovery
+
+
+def _effective_discovery_policy(
+    *,
+    run_dir: Path,
+    repository_root: Path,
+    configuration_root: Path,
+    config: AuditConfig,
+) -> tuple[tuple[str, ...], str | None]:
+    """Rebuild trusted discovery policy without accepting artifact-supplied exclusions."""
+
+    ignore_path = safe_ignore_file(
+        configuration_root,
+        config.repository.ignore_file,
+    )
+    matcher = IgnoreMatcher.from_file(ignore_path)
+    retained_rules = list(matcher.rules)
+    if config.prior_audit.path is not None:
+        retained_rules.append("/" + normalize_relative_path(config.prior_audit.path))
+    if config.actor_model.path is not None:
+        retained_rules.append("/" + normalize_relative_path(config.actor_model.path))
+    if config.dependency_preparation.offline_snapshot_path is not None:
+        snapshot_parent = PurePosixPath(
+            normalize_relative_path(config.dependency_preparation.offline_snapshot_path)
+        ).parent
+        retained_rules.append("/" + snapshot_parent.as_posix().rstrip("/") + "/")
+
+    try:
+        resolved_run = run_dir.resolve(strict=True)
+        runs_root = resolved_run.parent
+        if runs_root.name != "runs":
+            raise ValueError("run directory is not in the canonical output layout")
+        output_root = runs_root.parent.relative_to(repository_root.resolve(strict=True))
+    except (OSError, ValueError):
+        output_exclusion = None
+    else:
+        normalized_output = output_root.as_posix().rstrip("/")
+        output_exclusion = normalized_output if normalized_output not in {"", "."} else None
+    return tuple(retained_rules), output_exclusion
+
+
+def _protocol_profile_replay_mismatches(
+    *,
+    manifest: RunEvidenceManifest,
+    report: AuditReport,
+    run_dir: Path,
+    discovery: DiscoveryResult | None,
+) -> list[RunVerificationMismatch]:
+    """Fail closed when retained profile classifications do not replay from current source."""
+
+    if manifest.schema_version != "1.4" or report.schema_version != "1.4":
+        return []
+    capability = report.language_capability
+    if capability is None or not capability.evm_portfolio_applicable or report.invariants is None:
+        return []
+
+    bindings_by_path = {binding.path: binding for binding in manifest.artifacts}
+    invariant_binding = bindings_by_path.get("solidity-invariants.json")
+
+    def unverifiable() -> list[RunVerificationMismatch]:
+        return [
+            RunVerificationMismatch(
+                category=RunVerificationCategory.ARTIFACT,
+                identifier="protocol-profile/source-replay",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                expected_sha256=(
+                    invariant_binding.sha256 if invariant_binding is not None else None
+                ),
+                expected_size=(invariant_binding.size if invariant_binding is not None else None),
+            )
+        ]
+
+    required_bindings = tuple(
+        binding
+        for name in _PROFILE_REPLAY_ARTIFACT_NAMES
+        if (binding := bindings_by_path.get(name)) is not None
+    )
+    if discovery is None or len(required_bindings) != len(_PROFILE_REPLAY_ARTIFACT_NAMES):
+        return unverifiable()
+
+    try:
+        with open_manifest_bound_json_artifacts(
+            run_dir,
+            _PROFILE_REPLAY_ARTIFACT_NAMES,
+            required_bindings=required_bindings,
+            max_bytes=_MAX_VERIFICATION_BYTES,
+        ) as payloads:
+            index_artifact = SolidityIndexArtifact.model_validate(payloads["solidity-index.json"])
+            graphs_artifact = SolidityGraphsArtifact.model_validate(
+                payloads["solidity-graphs.json"]
+            )
+            invariant_payload = payloads["solidity-invariants.json"]
+            if set(invariant_payload) != {"schema_version", "invariants"}:
+                raise ValueError("Solidity invariant artifact envelope is invalid")
+            if invariant_payload["schema_version"] != "1.0":
+                raise ValueError("Solidity invariant artifact schema is unsupported")
+            retained_suite = InvariantSuite.model_validate(invariant_payload["invariants"])
+
+        if retained_suite != report.invariants:
+            raise ValueError("Solidity invariant artifact differs from the final report")
+        if index_artifact.index is None:
+            raise ValueError("Solidity index artifact is unavailable")
+        validate_protocol_profile_replay(
+            discovery,
+            index_artifact.index,
+            graphs_artifact.graphs,
+            retained_suite,
+        )
+    except (OSError, TypeError, ValueError):
+        return unverifiable()
+    return []
 
 
 def _file_binding_mismatches(
@@ -922,7 +1179,7 @@ def _metadata_artifact_mismatches(
         if run_configuration is not None
         else report.metadata.get("configuration_provenance")
     )
-    if manifest.schema_version in {"1.2", "1.3"}:
+    if manifest.schema_version in {"1.2", "1.3", "1.4"}:
         status_metadata = report_status_metadata(report)
         status_comparisons: tuple[
             tuple[RunVerificationCategory, str, Any, Any],
@@ -1211,10 +1468,5 @@ def _decode_json_object(data: bytes, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _safe_directory(path: Path, label: str) -> Path:
-    if path.is_symlink() or path.is_junction():
-        raise ValueError(f"run verification {label} root may not be a link")
-    resolved = path.resolve(strict=True)
-    if not resolved.is_dir():
-        raise ValueError(f"run verification {label} root must be a directory")
-    return resolved
+def _safe_directory(path: Path, label: str) -> DirectoryCustodyObservation:
+    return observe_unlinked_directory(path, label=f"run verification {label}")

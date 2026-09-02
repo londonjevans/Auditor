@@ -1,0 +1,218 @@
+{
+  "schema_version": "1.0",
+  "authorship": "operator_authored",
+  "subject_id": "synthetic-orchard-vault",
+  "subject_name": "Synthetic Orchard Vault",
+  "authored_at": "2026-08-01T00:00:00Z",
+  "valid_from": "2026-08-01T00:00:00Z",
+  "valid_until": "2027-01-01T00:00:00Z",
+  "evidence_references": [
+    {
+      "evidence_id": "adr-roles",
+      "kind": "adr",
+      "description": "Synthetic role-admission record for local defensive regression tests.",
+      "content_sha256": null
+    },
+    {
+      "evidence_id": "operator-operations",
+      "kind": "operator_assertion",
+      "description": "Synthetic operating and incentive facts for local defensive tests.",
+      "content_sha256": null
+    }
+  ],
+  "parties": [
+    {
+      "party_id": "anchor-party",
+      "display_name": "Synthetic Anchor",
+      "capital_positions": [
+        {
+          "position_id": "anchor-first-loss",
+          "waterfall_id": "synthetic-loss-waterfall",
+          "description": "Synthetic capital absorbs losses before the senior pool.",
+          "asset_or_exposure": "synthetic first-loss units",
+          "amount_description": "bounded fixture amount",
+        "amount_exact": "100.0",
+        "amount_unit": "synthetic-unit",
+        "materiality": "material",
+        "seniority": "first_loss",
+          "loss_absorption_order": 0
+        }
+      ],
+      "fee_revenue_exposure": {
+        "state": "present",
+        "description": "Synthetic fees depend on healthy protocol operation."
+      },
+      "protocol_failure_loss": {
+        "state": "present",
+        "description": "Synthetic first-loss capital and future fees are lost on failure."
+      },
+      "stated_interests": [
+        "preserve senior depositor repayment",
+        "protect synthetic first-loss capital"
+      ],
+      "evidence_reference_ids": [
+        "adr-roles",
+        "operator-operations"
+      ]
+    },
+    {
+      "party_id": "end-user-pool",
+      "display_name": "Synthetic Senior Pool",
+      "capital_positions": [
+        {
+          "position_id": "senior-pool-capital",
+          "waterfall_id": "synthetic-loss-waterfall",
+          "description": "Synthetic senior capital absorbs loss after junior positions.",
+          "asset_or_exposure": "synthetic senior units",
+          "amount_description": "bounded fixture amount",
+        "amount_exact": "800.0",
+        "amount_unit": "synthetic-unit",
+        "materiality": "material",
+        "seniority": "senior",
+          "loss_absorption_order": 2
+        }
+      ],
+      "fee_revenue_exposure": {
+        "state": "none",
+        "description": "Synthetic senior users receive no protocol fees."
+      },
+      "protocol_failure_loss": {
+        "state": "present",
+        "description": "Synthetic senior capital may be impaired after junior loss."
+      },
+      "stated_interests": [
+        "receive repayment after synthetic junior protection"
+      ],
+      "evidence_reference_ids": [
+        "operator-operations"
+      ]
+    },
+    {
+      "party_id": "originator-party",
+      "display_name": "Synthetic Originator",
+      "capital_positions": [
+        {
+          "position_id": "originator-junior-capital",
+          "waterfall_id": "synthetic-loss-waterfall",
+          "description": "Synthetic junior capital absorbs loss before senior users.",
+          "asset_or_exposure": "synthetic junior units",
+          "amount_description": "bounded fixture amount",
+        "amount_exact": "200.0",
+        "amount_unit": "synthetic-unit",
+        "materiality": "material",
+        "seniority": "junior",
+          "loss_absorption_order": 1
+        }
+      ],
+      "fee_revenue_exposure": {
+        "state": "present",
+        "description": "Synthetic revenue depends on borrowers repaying."
+      },
+      "protocol_failure_loss": {
+        "state": "present",
+        "description": "Synthetic servicing revenue and junior capital are lost on failure."
+      },
+      "stated_interests": [
+        "maximize sustainable borrower repayment",
+        "preserve synthetic servicing revenue"
+      ],
+      "evidence_reference_ids": [
+        "operator-operations"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "role_id": "anchor_curator",
+      "display_name": "Synthetic Anchor Curator",
+      "code_identifiers": [
+        "ANCHOR_CURATOR_ROLE"
+      ],
+      "occupancy": "currently_held",
+      "holder_party_id": "anchor-party",
+      "admitted_holder_class": null,
+      "concentrated_with_role_ids": [
+        "risk_council"
+      ],
+      "permissions": [
+        "request synthetic redemption",
+        "review synthetic allocation"
+      ],
+      "operational_constraints": [
+        {
+          "constraint_id": "request-anchored-cooldown",
+          "effect": "reduces_opportunistic_execution",
+          "description": "A synthetic 21-day request-anchored cooldown prevents opportunistic execution.",
+          "duration_seconds": 1814400,
+          "applies_to_permissions": [
+            "request synthetic redemption"
+          ],
+          "required_approver_role_ids": []
+        }
+      ],
+      "evidence_reference_ids": [
+        "adr-roles",
+        "operator-operations"
+      ]
+    },
+    {
+      "role_id": "risk_council",
+      "display_name": "Synthetic Risk Council",
+      "code_identifiers": [
+        "RISK_COUNCIL_ROLE"
+      ],
+      "occupancy": "currently_held",
+      "holder_party_id": "anchor-party",
+      "admitted_holder_class": null,
+      "concentrated_with_role_ids": [
+        "anchor_curator"
+      ],
+      "permissions": [
+        "pause synthetic allocation"
+      ],
+      "operational_constraints": [],
+      "evidence_reference_ids": [
+        "adr-roles"
+      ]
+    },
+    {
+      "role_id": "servicer",
+      "display_name": "Synthetic Servicer",
+      "code_identifiers": [
+        "SERVICER_ROLE"
+      ],
+      "occupancy": "currently_held",
+      "holder_party_id": "originator-party",
+      "admitted_holder_class": null,
+      "concentrated_with_role_ids": [],
+      "permissions": [
+        "defer synthetic past-due mark",
+        "record synthetic repayment"
+      ],
+      "operational_constraints": [],
+      "evidence_reference_ids": [
+        "operator-operations"
+      ]
+    },
+    {
+      "role_id": "third_party_curator",
+      "display_name": "Synthetic Admitted Curator",
+      "code_identifiers": [
+        "CURATOR_ROLE"
+      ],
+      "occupancy": "admitted_unfilled",
+      "holder_party_id": null,
+      "admitted_holder_class": "approved synthetic third-party curator",
+      "concentrated_with_role_ids": [],
+      "permissions": [
+        "request synthetic redemption",
+        "review synthetic allocation"
+      ],
+      "operational_constraints": [],
+      "evidence_reference_ids": [
+        "adr-roles"
+      ]
+    }
+  ],
+  "artifact_sha256": "8e3ef39b2e2e33065e1e2aed1607f005f441a61f88c2066c088afbd34c5b7bbd"
+}

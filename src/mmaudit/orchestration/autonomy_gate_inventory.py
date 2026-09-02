@@ -42,13 +42,13 @@ _GATE_ID_PATTERN = r"^gate-[a-z0-9][a-z0-9-]{0,98}$"
 _MAX_SOURCES = 4_096
 _MAX_GATES = 128
 _FROZEN_AUDIT_CONFIG_PATHS_SHA256 = (
-    "8256308697e907f2bd9a389fdc664920d574b1a4f20a0403139015eadd7b033a"
+    "9d419244ecac1ec4833d030836573f8269bf533a4946b3d243d3a0a6d4e1e759"
 )
 _FROZEN_AUDIT_RUN_OPTION_PATHS_SHA256 = (
     "f38d9261cd2d800e74e2ebeb73819e2d8bbcc0010ebd627a4a751aa68abf658a"
 )
 _FROZEN_AUDIT_OVERRIDE_PATHS_SHA256 = (
-    "67191e0672193937ebbf7a48360aa1c54d8deb981eefeb2f98202c99f3fa51b8"
+    "b15da15083f0e7fae393a05aabae3f1bee3bf408fda66a86ce2d6088c9abd3c7"
 )
 _FROZEN_ENVIRONMENT_OVERRIDE_PAIRS_SHA256 = (
     "9f4ff8a30f85a148c52b097ea7550a55efb8ee04815ef7563879c7a6281f8d23"
@@ -63,17 +63,17 @@ _FROZEN_PIPELINE_RUN_PARAMETERS_SHA256 = (
     "55123fbc974864c8cae44eef98ac34c9c46bb625ea6784420290870367fe4748"
 )
 _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
-    "0df2886a62bef5dd22bc4dc5c5a34520a14cbbbe7f598d17f48496e92c52b054"
+    "de1c412bb4c42aef17210e8d0d7ad92a4b203e941cc4677c6b84410887e0c0a7"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "33807a982d1c1077d700a71b16a3c8e3258eb499d455f233a18ec69ae314fcfa"
+    "9cfb89edc56aca130fb8e39003edb7d906e6b9e6c7f772b6a652d13a7906d5b8"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "f9571d5d99af0e85f922208691f8173db738a7bf55afa29bd5d441f8d715577a"
+    "1e39c70ae93165af150e66875663384489a66c42d582ef0766f90d6cc992ba0b"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "3e2e6bd333ed5553fd6f602fad2e257040b2cebd4ead3860849647957eef2352"
+    "d1c0a4ed1a8ec889655d477793d5a301cdb353672b4ac4087eda61a87b16627b"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -225,16 +225,16 @@ class AutonomyGateInventory(StrictModel):
     )
     source_count: int = Field(ge=1, le=_MAX_SOURCES)
     source_occurrence_count: int = Field(ge=1, le=_MAX_SOURCES)
-    audit_config_leaf_locator_count: Literal[507]
-    audit_config_leaf_occurrence_count: Literal[510]
+    audit_config_leaf_locator_count: Literal[513]
+    audit_config_leaf_occurrence_count: Literal[516]
     audit_config_shared_locator_count: Literal[3]
     audit_run_option_leaf_count: Literal[16]
-    audit_override_path_count: Literal[46]
+    audit_override_path_count: Literal[51]
     environment_override_count: Literal[28]
     cli_run_parameter_count: Literal[53]
     pipeline_init_parameter_count: Literal[26]
     pipeline_run_parameter_count: Literal[16]
-    completion_entrypoint_parameter_count: Literal[323]
+    completion_entrypoint_parameter_count: Literal[336]
     source_kind_counts: dict[CompletionInputSourceKind, int] = Field(
         min_length=len(CompletionInputSourceKind),
         max_length=len(CompletionInputSourceKind),
@@ -1041,6 +1041,10 @@ def _audit_gate_for_path(path: str) -> str | None:
         return "gate-client-audit-scope"
     if path.startswith("prior_audit."):
         return "gate-full-quality-analysis"
+    if path == "actor_model.path":
+        return "gate-client-audit-scope"
+    if path.startswith("actor_model."):
+        return "gate-full-quality-analysis"
     if path.startswith("repository."):
         if path in {
             "repository.root",
@@ -1574,6 +1578,8 @@ def _command_parameter_classification(
 
     if parameter_name in {"no_color", "verbose", "ctx"}:
         return SourceCoverageClassification.NON_GATING_CONTROL, None
+    if (command_name, parameter_name) == ("models_list_endpoints", "json_output"):
+        return SourceCoverageClassification.NON_GATING_CONTROL, None
     if (command_name, parameter_name) in {
         ("explain_command", "finding_id"),
         ("main", "version"),
@@ -1605,6 +1611,14 @@ def _command_parameter_classification(
         "candidate_selection_plan",
         "candidate_selection_ranking_source",
     }:
+        return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
+    if command_name == "models_emit_selection_plan_successor" and parameter_name in {
+        "candidate",
+        "predecessor_plan",
+        "refresh_endpoint_inventory",
+    }:
+        return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
+    if command_name == "models_list_endpoints" and parameter_name == "model_id":
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
     if command_name == "models_refresh" and parameter_name in {
         "hard_max_age_hours",
@@ -1668,7 +1682,7 @@ def _command_parameter_classification(
         return SourceCoverageClassification.GATE, "gate-cost-ledger-provisioning"
     if any(token in parameter_name for token in ("budget", "cost_cap", "cost_tripwire")):
         return SourceCoverageClassification.GATE, "gate-budget-ceiling"
-    if parameter_name in {"config_path", "retry_continuity_config"}:
+    if parameter_name in {"config_path", "configuration_root", "retry_continuity_config"}:
         return SourceCoverageClassification.GATE, "gate-managed-profile"
     if parameter_name in {
         "repo",
@@ -2433,6 +2447,10 @@ def _direct_environment_gate(
             "models/public_lineage_authority.py",
         }:
             return "gate-autonomous-model-authority"
+        if relative_path == "orchestration/scheduler.py":
+            if "privacy_evidence_custody" in scope:
+                return "gate-client-privacy-consent"
+            return "gate-release-evidence-pipeline"
         if relative_path == "orchestration/truncation_recovery_evidence.py":
             return "gate-release-evidence-pipeline"
         if relative_path == "isolation/container.py":
@@ -2470,6 +2488,8 @@ def _direct_environment_gate(
     if relative_path == "orchestration/pipeline.py" and kind == "host-platform":
         return "gate-report-delivery"
     if kind == "host-identity":
+        if relative_path == "models/candidate_selection.py":
+            return "gate-autonomous-model-authority"
         if relative_path == "isolation/container.py":
             return "gate-reproduction-capability-policy"
         if relative_path == "isolation/hardhat_loopback_relay.py":
@@ -2879,6 +2899,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/authenticated_runner_durable_bundle.py": "gate-managed-output-provisioning",
     "models/authenticated_runner_execution.py": "gate-managed-output-provisioning",
     "models/authenticated_runner_smoke_corpus.py": "gate-authenticated-real-campaign",
+    "models/actor_model.py": "gate-full-quality-analysis",
     "models/calibration.py": "gate-benchmark-evidence-authority",
     "models/candidate_registry_bridge.py": "gate-autonomous-model-authority",
     "models/candidate_revocation.py": "gate-autonomous-model-authority",
@@ -2896,6 +2917,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/retry_continuity.py": "gate-managed-profile",
     "operator_secrets.py": "gate-provider-secret-transport",
     "orchestration/autonomy_gate_inventory.py": "gate-runtime-package-integrity",
+    "orchestration/actor_model.py": "gate-client-audit-scope",
     "orchestration/certification.py": "gate-release-evidence-pipeline",
     "orchestration/ci.py": "gate-release-evidence-pipeline",
     "orchestration/context_manifest.py": "gate-full-quality-analysis",
@@ -2922,7 +2944,10 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "release_validation.py": "gate-release-evidence-pipeline",
     "release_verification.py": "gate-release-evidence-pipeline",
     "reporting/json_report.py": "gate-report-delivery",
+    "repository/configuration_custody.py": "gate-managed-profile",
+    "repository/directory_custody.py": "gate-release-evidence-pipeline",
     "repository/discovery.py": "gate-client-audit-scope",
+    "repository/file_custody.py": "gate-release-evidence-pipeline",
     "repository/ignore.py": "gate-client-audit-scope",
     "repository/locations.py": "gate-client-audit-scope",
     "repository/privacy_provenance.py": "gate-synthetic-public-scope",
@@ -2954,6 +2979,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "solidity/projects.py": "gate-full-quality-analysis",
     "solidity/reproduction.py": "gate-full-quality-analysis",
     "solidity/reproduction_integrity.py": "gate-full-quality-analysis",
+    "solidity/taxonomy.py": "gate-full-quality-analysis",
     "traceability.py": "gate-release-evidence-pipeline",
 }
 
@@ -2965,7 +2991,15 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
     if relative_path == "cli.py":
         if "cost_ledger" in expression:
             return "gate-cost-ledger-provisioning"
-        if scope in {"_audit_config_overrides", "_cache_path"} or "config_path" in expression:
+        if (
+            scope
+            in {
+                "_audit_config_overrides",
+                "_cache_path",
+                "_verification_configuration_root",
+            }
+            or "config_path" in expression
+        ):
             return "gate-managed-profile"
         if "authenticated_runner" in scope:
             return "gate-managed-output-provisioning"
@@ -3638,16 +3672,16 @@ def build_autonomy_gate_inventory(
         "logical_gates": [item.model_dump(mode="json") for item in logical_gates],
         "source_count": len(source_coverage),
         "source_occurrence_count": sum(item.source_occurrence_count for item in source_coverage),
-        "audit_config_leaf_locator_count": 507,
-        "audit_config_leaf_occurrence_count": 510,
+        "audit_config_leaf_locator_count": 513,
+        "audit_config_leaf_occurrence_count": 516,
         "audit_config_shared_locator_count": 3,
         "audit_run_option_leaf_count": 16,
-        "audit_override_path_count": 46,
+        "audit_override_path_count": 51,
         "environment_override_count": 28,
         "cli_run_parameter_count": 53,
         "pipeline_init_parameter_count": 26,
         "pipeline_run_parameter_count": 16,
-        "completion_entrypoint_parameter_count": 323,
+        "completion_entrypoint_parameter_count": 336,
         "source_kind_counts": {
             kind.value: sum(item.source_kind is kind for item in source_coverage)
             for kind in CompletionInputSourceKind

@@ -284,7 +284,7 @@
       "items": {
         "type": "string"
       },
-      "maxItems": 16,
+      "maxItems": 32,
       "minItems": 3,
       "title": "Argv",
       "type": "array"

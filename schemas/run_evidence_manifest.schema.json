@@ -23,7 +23,8 @@
         "1.0",
         "1.1",
         "1.2",
-        "1.3"
+        "1.3",
+        "1.4"
       ]
     },
     "generated_by": {
@@ -113,10 +114,205 @@
       "if": {
         "properties": {
           "schema_version": {
+            "const": "1.4"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "known-issue-taxonomy-coverage.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "known-issue-taxonomy.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "private/model-review-artifacts.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ]
+          },
+          "bindings": {
+            "properties": {
+              "coverage": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "known-issue-taxonomy/corpus"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "known-issue-taxonomy/corpus-raw"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "known-issue-taxonomy/coverage"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "known-issue-taxonomy/profile-assessment"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ]
+              }
+            },
+            "required": [
+              "coverage"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
             "enum": [
+              "1.0",
               "1.1",
               "1.2",
               "1.3"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "path": {
+                    "enum": [
+                      "known-issue-taxonomy-coverage.json",
+                      "known-issue-taxonomy.json",
+                      "private/model-review-artifacts.json"
+                    ]
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          "bindings": {
+            "properties": {
+              "coverage": {
+                "not": {
+                  "contains": {
+                    "properties": {
+                      "identifier": {
+                        "enum": [
+                          "known-issue-taxonomy/corpus",
+                          "known-issue-taxonomy/corpus-raw",
+                          "known-issue-taxonomy/coverage",
+                          "known-issue-taxonomy/profile-assessment"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "identifier"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "coverage"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.1",
+              "1.2",
+              "1.3",
+              "1.4"
             ]
           }
         },
@@ -141,7 +337,8 @@
           "schema_version": {
             "enum": [
               "1.2",
-              "1.3"
+              "1.3",
+              "1.4"
             ]
           }
         },
@@ -1162,6 +1359,11 @@
         "path": {
           "type": "string",
           "enum": [
+            "actor_model.expected_model_sha256",
+            "actor_model.expected_source_sha256",
+            "actor_model.expected_subject_id",
+            "actor_model.path",
+            "actor_model.required",
             "execution.budget_usd",
             "execution.concurrency",
             "execution.cost_ledger_path",
@@ -1236,6 +1438,7 @@
           "properties": {
             "path": {
               "enum": [
+                "actor_model.required",
                 "maximum_assurance.allow_downgrade",
                 "maximum_assurance.benchmark_gate",
                 "maximum_assurance.require",
@@ -1314,6 +1517,10 @@
           "properties": {
             "path": {
               "enum": [
+                "actor_model.expected_model_sha256",
+                "actor_model.expected_source_sha256",
+                "actor_model.expected_subject_id",
+                "actor_model.path",
                 "execution.cost_ledger_path",
                 "prior_audit.path",
                 "privacy.maximum_model_retention",
@@ -1345,7 +1552,7 @@
       "properties": {
         "entries": {
           "type": "array",
-          "maxItems": 46,
+          "maxItems": 51,
           "items": {
             "$ref": "#/$defs/auditConfigOverride"
           }

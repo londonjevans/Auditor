@@ -64,8 +64,11 @@ def test_rootless_backend_discovery_requires_verified_non_repository_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
     runtime = tmp_path / "podman"
     runtime.write_text("synthetic runtime marker\n", encoding="utf-8")
+    monkeypatch.chdir(repository)
     monkeypatch.setattr("mmaudit.isolation.container.shutil.which", lambda _: str(runtime))
     monkeypatch.setattr("mmaudit.isolation.container.os.getuid", lambda: 1000, raising=False)
     monkeypatch.setattr("mmaudit.isolation.container.os.getgid", lambda: 1000, raising=False)
@@ -110,6 +113,12 @@ def test_rootless_container_command_has_fixed_isolation_and_resource_controls(
     )
 
     rendered = " ".join(command)
+    resolved_private = private.resolve()
+    runtime_dir = resolved_private / "container-runtime"
+    seccomp_path = Path(command[command.index("no-new-privileges") + 2].removeprefix("seccomp="))
+    mount_arguments = [
+        command[index + 1] for index, token in enumerate(command[:-1]) if token == "--mount"
+    ]
     assert command[:2] == ["/usr/bin/podman", "run"]
     assert command[command.index("--pull") : command.index("--pull") + 2] == ["--pull", "never"]
     assert command[command.index("--network") : command.index("--network") + 2] == [
@@ -149,7 +158,12 @@ def test_rootless_container_command_has_fixed_isolation_and_resource_controls(
     assert "/mmaudit-output/forge-cache" in command
     assert _IMAGE in command
     assert "docker.sock" not in rendered
-    assert str(Path.home()) not in rendered
+    assert Path(command[command.index("--cidfile") + 1]) == runtime_dir / "container.cid"
+    assert seccomp_path == runtime_dir / "seccomp.json"
+    assert mount_arguments == [
+        f"type=bind,src={workspace.resolve()},dst=/workspace,readonly",
+        f"type=bind,src={writable.resolve()},dst=/mmaudit-output,rw",
+    ]
     assert all(
         token not in rendered
         for token in (
@@ -160,7 +174,6 @@ def test_rootless_container_command_has_fixed_isolation_and_resource_controls(
         )
     )
 
-    seccomp_path = Path(command[command.index("no-new-privileges") + 2].removeprefix("seccomp="))
     profile = json.loads(seccomp_path.read_text(encoding="utf-8"))
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
     allowed = set(profile["syscalls"][0]["names"])

@@ -167,6 +167,109 @@ def test_release_schemas_are_exact_strict_generated_models() -> None:
         assert schema["additionalProperties"] is False
 
 
+def test_run_evidence_manifest_14_taxonomy_custody_contract_is_exact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = json.loads(
+        (ROOT / "schemas" / "run_evidence_manifest.schema.json").read_text(encoding="utf-8")
+    )
+    all_of = schema["allOf"]
+    run_configuration_rules = (
+        release_schema_generator.run_evidence_manifest_run_configuration_rules()
+    )
+    report_bundle_rule = release_schema_generator.run_evidence_manifest_report_bundle_rule()
+    taxonomy_rules = release_schema_generator.run_evidence_manifest_taxonomy_custody_rules()
+    remaining_rules = [
+        *release_schema_generator.run_evidence_manifest_audit_model_selection_rules(),
+        *release_schema_generator.run_evidence_manifest_audit_model_refresh_rules(),
+        *release_schema_generator.run_evidence_manifest_audit_model_refresh_pricing_rules(),
+    ]
+    expected_rules = [
+        *run_configuration_rules,
+        report_bundle_rule,
+        *taxonomy_rules,
+        *remaining_rules,
+    ]
+
+    assert schema["properties"]["schema_version"] == {"enum": ["1.0", "1.1", "1.2", "1.3", "1.4"]}
+    assert run_configuration_rules[1]["if"]["properties"]["schema_version"] == {
+        "enum": ["1.1", "1.2", "1.3", "1.4"]
+    }
+    assert report_bundle_rule["if"]["properties"]["schema_version"] == {
+        "enum": ["1.2", "1.3", "1.4"]
+    }
+    assert len(all_of) == len(expected_rules)
+    assert all(rule in all_of for rule in expected_rules)
+
+    current_rule, legacy_rule = taxonomy_rules
+    artifact_constraints = current_rule["then"]["properties"]["artifacts"]["allOf"]
+    assert [
+        (
+            constraint["contains"]["properties"]["path"]["const"],
+            constraint["minContains"],
+            constraint["maxContains"],
+        )
+        for constraint in artifact_constraints
+    ] == [
+        ("known-issue-taxonomy-coverage.json", 1, 1),
+        ("known-issue-taxonomy.json", 1, 1),
+        ("private/model-review-artifacts.json", 1, 1),
+    ]
+    coverage_constraints = current_rule["then"]["properties"]["bindings"]["properties"]["coverage"][
+        "allOf"
+    ]
+    assert [
+        (
+            constraint["contains"]["properties"]["identifier"]["const"],
+            constraint["minContains"],
+            constraint["maxContains"],
+        )
+        for constraint in coverage_constraints
+    ] == [
+        ("known-issue-taxonomy/corpus", 1, 1),
+        ("known-issue-taxonomy/corpus-raw", 1, 1),
+        ("known-issue-taxonomy/coverage", 1, 1),
+        ("known-issue-taxonomy/profile-assessment", 1, 1),
+    ]
+    assert legacy_rule["if"]["properties"]["schema_version"] == {
+        "enum": ["1.0", "1.1", "1.2", "1.3"]
+    }
+    legacy_properties = legacy_rule["then"]["properties"]
+    assert legacy_properties["artifacts"]["not"]["contains"]["properties"]["path"] == {
+        "enum": [
+            "known-issue-taxonomy-coverage.json",
+            "known-issue-taxonomy.json",
+            "private/model-review-artifacts.json",
+        ]
+    }
+    assert legacy_properties["bindings"]["properties"]["coverage"]["not"]["contains"]["properties"][
+        "identifier"
+    ] == {
+        "enum": [
+            "known-issue-taxonomy/corpus",
+            "known-issue-taxonomy/corpus-raw",
+            "known-issue-taxonomy/coverage",
+            "known-issue-taxonomy/profile-assessment",
+        ]
+    }
+    assert release_schema_generator._run_evidence_manifest_contract_is_current()
+
+    tampered = json.loads(json.dumps(schema))
+    taxonomy_rule_index = tampered["allOf"].index(current_rule)
+    tampered["allOf"][taxonomy_rule_index]["then"]["properties"]["artifacts"]["allOf"][0][
+        "maxContains"
+    ] = 2
+    schema_root = tmp_path / "schemas"
+    schema_root.mkdir()
+    (schema_root / "run_evidence_manifest.schema.json").write_text(
+        json.dumps(tampered),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release_schema_generator, "SCHEMA_ROOT", schema_root)
+    assert not release_schema_generator._run_evidence_manifest_contract_is_current()
+
+
 def test_route_runtime_evidence_schema_is_exact_nonauthorizing_and_bounded() -> None:
     filename = "route_runtime_evidence_artifact.schema.json"
     assert MODELS[filename] is RouteRuntimeEvidenceArtifact
@@ -548,6 +651,7 @@ def test_model_portfolio_resource_preflight_schema_binds_all_task_envelopes() ->
     )
     assert definitions["ModelPortfolioTaskKind"]["enum"] == [
         "orientation",
+        "retrieval_planning",
         "compact_coverage",
         "source_audit",
         "whole_protocol",
@@ -2089,17 +2193,37 @@ def test_audit_model_selection_evidence_has_a_strict_external_authority_schema()
 
 
 def test_versioned_report_artifacts_bind_language_capability_without_rewriting_legacy() -> None:
-    contracts = {
-        "findings_artifact.schema.json": (["1.1", "1.2"], ["1.1"]),
-        "model_execution_artifact.schema.json": (["1.0", "1.1", "1.2"], ["1.0", "1.1"]),
+    contracts: dict[str, tuple[list[str], list[str], str, list[str]]] = {
+        "findings_artifact.schema.json": (
+            ["1.1", "1.2", "1.3"],
+            ["1.1"],
+            "1.3",
+            ["1.2", "1.3"],
+        ),
+        "model_execution_artifact.schema.json": (
+            ["1.0", "1.1", "1.2"],
+            ["1.0", "1.1"],
+            "1.2",
+            ["1.2"],
+        ),
     }
-    for filename, (versions, legacy_versions) in contracts.items():
+    for filename, (
+        versions,
+        legacy_versions,
+        default_version,
+        capability_versions,
+    ) in contracts.items():
         schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
         assert schema["properties"]["schema_version"]["enum"] == versions
-        assert schema["properties"]["schema_version"]["default"] == "1.2"
+        assert schema["properties"]["schema_version"]["default"] == default_version
+        capability_selector = (
+            {"const": capability_versions[0]}
+            if len(capability_versions) == 1
+            else {"enum": capability_versions}
+        )
         language_rules = [
             {
-                "if": {"properties": {"schema_version": {"const": "1.2"}}},
+                "if": {"properties": {"schema_version": capability_selector}},
                 "then": {
                     "properties": {"language_capability": {"not": {"type": "null"}}},
                     "required": ["language_capability"],
@@ -2124,7 +2248,50 @@ def test_versioned_report_artifacts_bind_language_capability_without_rewriting_l
                 "then": {"properties": {"schema_version": {"const": "1.2"}}},
             }
         else:
-            assert len(schema["allOf"]) == 2
+            current_actor_rule, pre_actor_rule = schema["allOf"][2:]
+            assert current_actor_rule == {
+                "if": {
+                    "properties": {"schema_version": {"const": "1.3"}},
+                },
+                "then": {
+                    "properties": {
+                        "actor_model_baseline": {"not": {"type": "null"}},
+                        "actor_model_evaluation": {"not": {"type": "null"}},
+                    },
+                    "required": [
+                        "actor_model_baseline",
+                        "actor_model_evaluation",
+                        "judge_decisions",
+                    ],
+                },
+            }
+            assert pre_actor_rule["if"] == {
+                "properties": {"schema_version": {"enum": ["1.1", "1.2"]}},
+                "required": ["schema_version"],
+            }
+            pre_actor_then = pre_actor_rule["then"]
+            assert pre_actor_then["not"] == {
+                "anyOf": [
+                    {"required": ["actor_model_baseline"]},
+                    {"required": ["actor_model_evaluation"]},
+                ]
+            }
+            pre_actor_properties = pre_actor_then["properties"]
+            assert pre_actor_properties["judge_decisions"] == {"maxItems": 0}
+            for inventory_name in ("findings", "rejected_findings", "filtered_findings"):
+                finding_properties = pre_actor_properties[inventory_name]["items"]["properties"]
+                assert finding_properties["actor_model_applicability"] == {"const": "unstated"}
+                assert finding_properties["actor_context"] == {"type": "null"}
+                assert finding_properties["actor_assessment"] == {"type": "null"}
+            candidate_properties = pre_actor_properties["candidate_findings"]["items"]["properties"]
+            assert candidate_properties == {
+                "actor_model_applicability": {"const": "unstated"},
+                "actor_context": {"type": "null"},
+            }
+            record_properties = pre_actor_properties["records"]["items"]["properties"]
+            assert record_properties["candidate_findings"]["items"]["properties"] == (
+                candidate_properties
+            )
 
 
 def test_models_config_schema_separates_identity_from_optional_measured_quality() -> None:

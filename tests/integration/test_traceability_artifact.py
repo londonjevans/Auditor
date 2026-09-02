@@ -26,6 +26,7 @@ def test_traceability_artifact_is_generated_and_revalidated(tmp_path: Path) -> N
         matrix,
         repository_root=ROOT,
         runtime_artifacts=runtime_artifacts,
+        runtime_schema_version="1.4",
     )
     write_traceability_artifact(artifact, matrix)
     loaded = MaximumAssuranceTraceability.model_validate_json(artifact.read_text(encoding="utf-8"))

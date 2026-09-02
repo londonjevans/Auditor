@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import StrEnum
@@ -34,6 +35,16 @@ from mmaudit.constants import (
     ANALYSIS_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
+from mmaudit.models.actor_model import (
+    ActorAssessmentDisposition,
+    ActorModelApplicability,
+    ActorModelEvaluation,
+    ActorModelInputEvidence,
+    ActorModelInputState,
+    ActorSeverity,
+    CandidateActorContext,
+    FindingActorAssessment,
+)
 from mmaudit.models.identity import OpenRouterIdentityStrength
 from mmaudit.models.output_modes import (
     STRUCTURED_OUTPUT_PROTOCOL_VERSION,
@@ -45,6 +56,12 @@ from mmaudit.models.reasoning import (
     INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
     ReasoningExecutionEvidence,
     TokenDetailAccountingEvidence,
+)
+from mmaudit.models.retrieval import (
+    SolidityRetrievalEntity,
+    SolidityRetrievalRolePolicy,
+    SolidityRetrievalTranscript,
+    require_solidity_retrieval_transcript_within_policy,
 )
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 from mmaudit.models.token_planning import (
@@ -110,20 +127,41 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _require_explicit_nested_model_fields(value: object) -> None:
+def _require_explicit_nested_model_fields(
+    value: object,
+    *,
+    allow_legacy_candidate_actor_defaults: bool = False,
+) -> None:
     """Reject detached artifacts that rely on Pydantic-filled security defaults."""
 
     if isinstance(value, BaseModel):
-        if set(type(value).model_fields) - value.model_fields_set:
+        missing = set(type(value).model_fields) - value.model_fields_set
+        if allow_legacy_candidate_actor_defaults and isinstance(value, CandidateFinding):
+            if (
+                value.actor_model_applicability is not ActorModelApplicability.UNSTATED
+                or value.actor_context is not None
+            ):
+                raise ValueError("legacy durable evidence cannot carry actor annotations")
+            missing -= {"actor_model_applicability", "actor_context"}
+        if missing:
             raise ValueError("durable evidence requires every nested model field explicitly")
         for field_name in type(value).model_fields:
-            _require_explicit_nested_model_fields(getattr(value, field_name))
+            _require_explicit_nested_model_fields(
+                getattr(value, field_name),
+                allow_legacy_candidate_actor_defaults=allow_legacy_candidate_actor_defaults,
+            )
     elif isinstance(value, Mapping):
         for child in value.values():
-            _require_explicit_nested_model_fields(child)
+            _require_explicit_nested_model_fields(
+                child,
+                allow_legacy_candidate_actor_defaults=allow_legacy_candidate_actor_defaults,
+            )
     elif isinstance(value, list | tuple):
         for child in value:
-            _require_explicit_nested_model_fields(child)
+            _require_explicit_nested_model_fields(
+                child,
+                allow_legacy_candidate_actor_defaults=allow_legacy_candidate_actor_defaults,
+            )
 
 
 def _validate_audit_model_selection(value: object) -> object:
@@ -1263,6 +1301,7 @@ class ModelReviewSurfaceKind(StrEnum):
     STATE = "state"
     INVARIANT = "invariant"
     TEMPLATE = "template"
+    KNOWN_ISSUE_CLASS = "known_issue_class"
 
 
 class InvariantCategory(StrEnum):
@@ -2692,7 +2731,7 @@ class MaximumAssuranceRequirement(StrictModel):
 class MaximumAssuranceAssessment(StrictModel):
     """Machine-readable result of applying the maximum-assurance contract."""
 
-    contract_version: Literal["1.0"] = "1.0"
+    contract_version: Literal["1.0", "1.1"] = "1.0"
     requested: bool
     required: bool
     downgrade_allowed: bool
@@ -2766,9 +2805,12 @@ class CandidateFinding(StrictModel):
     role: str | None
     model_family: str | None
     model_votes: list[ModelVote] = Field(default_factory=list)
+    actor_model_applicability: ActorModelApplicability = ActorModelApplicability.UNSTATED
+    actor_context: CandidateActorContext | None = None
 
     @model_validator(mode="after")
     def origin_fields_are_exact(self) -> CandidateFinding:
+        self._validate_actor_applicability()
         if self.origin_kind is CandidateOriginKind.MODEL_REVIEW:
             if self.execution_provenance is not None:
                 raise ValueError("model-review candidates cannot claim execution provenance")
@@ -2804,6 +2846,16 @@ class CandidateFinding(StrictModel):
         if any(item.type == "model" for item in self.evidence):
             raise ValueError("execution-origin candidates cannot contain model evidence")
         return self
+
+    def _validate_actor_applicability(self) -> None:
+        if (
+            self.actor_model_applicability is ActorModelApplicability.PRIVILEGED_ACTOR_REQUIRED
+        ) != (self.actor_context is not None):
+            raise ValueError(
+                "privileged actor applicability requires exactly one typed actor context"
+            )
+        if self.actor_context is not None and not self.actor_context.privileged_action_required:
+            raise ValueError("typed actor context must describe privileged conduct")
 
 
 class CandidateFindingArtifact(StrictModel):
@@ -2944,10 +2996,30 @@ class Finding(StrictModel):
     contributing_candidate_ids: list[str] = Field(default_factory=list)
     evidence_strength: EvidenceStrength = EvidenceStrength.NONE
     reproduction_state: ReproductionState = ReproductionState.NOT_ATTEMPTED
+    actor_model_applicability: ActorModelApplicability = Field(
+        default=ActorModelApplicability.UNSTATED,
+        exclude_if=lambda value: value is ActorModelApplicability.UNSTATED,
+    )
+    actor_context: CandidateActorContext | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    actor_assessment: FindingActorAssessment | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def accepted_findings_are_complete(self) -> Finding:
         self._validate_origin_fields()
+        if (
+            self.actor_model_applicability is ActorModelApplicability.PRIVILEGED_ACTOR_REQUIRED
+        ) != (self.actor_context is not None):
+            raise ValueError(
+                "privileged actor applicability requires exactly one typed actor context"
+            )
+        if self.actor_context is not None and not self.actor_context.privileged_action_required:
+            raise ValueError("typed actor context must describe privileged conduct")
         if self.status is FindingStatus.REJECTED:
             return self
         required_collections = (
@@ -3028,6 +3100,127 @@ class Finding(StrictModel):
             raise ValueError(
                 "active execution-origin finding requires deterministic execution strength"
             )
+
+
+def _finding_has_actor_model_evidence(value: object) -> bool:
+    """Return whether one raw or typed finding carries non-default actor evidence."""
+
+    if isinstance(value, Finding):
+        applicability: object = value.actor_model_applicability
+        context: object = value.actor_context
+        assessment: object = value.actor_assessment
+    elif isinstance(value, Mapping):
+        applicability = value.get(
+            "actor_model_applicability",
+            ActorModelApplicability.UNSTATED,
+        )
+        context = value.get("actor_context")
+        assessment = value.get("actor_assessment")
+    else:
+        return False
+    return (
+        applicability
+        not in {
+            ActorModelApplicability.UNSTATED,
+            ActorModelApplicability.UNSTATED.value,
+        }
+        or context is not None
+        or assessment is not None
+    )
+
+
+def _finding_inventories_have_actor_model_evidence(
+    value: Mapping[object, object],
+    inventory_names: tuple[str, ...],
+) -> bool:
+    """Return whether any named raw finding inventory carries actor evidence."""
+
+    for inventory_name in inventory_names:
+        inventory = value.get(inventory_name)
+        if (
+            isinstance(inventory, Sequence)
+            and not isinstance(inventory, str | bytes)
+            and any(_finding_has_actor_model_evidence(item) for item in inventory)
+        ):
+            return True
+    return False
+
+
+def _legacy_actor_model_finding_inventory_schema_properties(
+    inventory_names: tuple[str, ...],
+) -> dict[str, Any]:
+    """Constrain legacy finding inventories to the actor-neutral field defaults."""
+
+    return {
+        inventory_name: {
+            "items": {
+                "properties": {
+                    "actor_model_applicability": {"const": ActorModelApplicability.UNSTATED.value},
+                    "actor_context": {"type": "null"},
+                    "actor_assessment": {"type": "null"},
+                }
+            }
+        }
+        for inventory_name in inventory_names
+    }
+
+
+class ActorFindingBaseline(StrictModel):
+    """Exact pre-calibration finding retained before actor evidence changes severity."""
+
+    finding: Finding
+    finding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, finding: Finding) -> ActorFindingBaseline:
+        baseline = Finding.model_validate(finding.model_dump(mode="python"))
+        if baseline.actor_assessment is not None:
+            raise ValueError("actor finding baseline must precede actor assessment")
+        payload = baseline.model_dump(mode="json")
+        return cls(finding=baseline, finding_sha256=_canonical_model_sha256(payload))
+
+    @model_validator(mode="after")
+    def baseline_is_exact(self) -> ActorFindingBaseline:
+        if self.finding.actor_assessment is not None:
+            raise ValueError("actor finding baseline cannot carry actor assessment")
+        if self.finding_sha256 != _canonical_model_sha256(self.finding.model_dump(mode="json")):
+            raise ValueError("actor finding baseline hash differs from its finding")
+        return self
+
+
+class ActorModelBaselineArtifact(StrictModel):
+    """Canonical upstream finding inventory supplied to actor calibration."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    findings: tuple[ActorFindingBaseline, ...] = Field(
+        default=(),
+        max_length=100_000,
+    )
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(cls, findings: Iterable[Finding]) -> ActorModelBaselineArtifact:
+        records = tuple(
+            sorted(
+                (ActorFindingBaseline.build(finding) for finding in findings),
+                key=lambda item: item.finding.id,
+            )
+        )
+        payload = {
+            "schema_version": "1.0",
+            "findings": [item.model_dump(mode="json") for item in records],
+        }
+        return cls(**payload, artifact_sha256=_canonical_model_sha256(payload))
+
+    @model_validator(mode="after")
+    def inventory_and_hash_are_exact(self) -> ActorModelBaselineArtifact:
+        identifiers = tuple(item.finding.id for item in self.findings)
+        if identifiers != tuple(sorted(set(identifiers))):
+            raise ValueError("actor finding baselines must be unique and sorted")
+        payload = self.model_dump(mode="json", exclude={"artifact_sha256"})
+        if self.artifact_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("actor-model baseline artifact hash is inconsistent")
+        return self
 
 
 class ThreatBoundary(StrictModel):
@@ -3392,10 +3585,16 @@ class ModelSurfaceReviewArtifact(StrictModel):
     artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @staticmethod
-    def calculate_artifact_sha256(payload: dict[str, Any]) -> str:
+    def calculate_artifact_sha256(
+        payload: dict[str, Any],
+        *,
+        algorithm_version: str | None = None,
+    ) -> str:
         """Hash a JSON-compatible artifact payload without its digest field."""
 
-        canonical = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        canonical = copy.deepcopy(
+            {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        )
         if canonical.get("schema_version", "1.0") == "1.0":
             for field_name in (
                 "normalized_response_sha256",
@@ -3403,6 +3602,38 @@ class ModelSurfaceReviewArtifact(StrictModel):
                 "normalized_response",
             ):
                 canonical.pop(field_name, None)
+        else:
+            from mmaudit.models.truncation import candidate_review_schema_algorithm_version
+
+            normalization = canonical.get("normalization_evidence")
+            if not isinstance(normalization, Mapping):
+                raise ValueError("model surface artifact lacks typed normalization evidence")
+            inferred_algorithm = candidate_review_schema_algorithm_version(
+                wire_schema_sha256=str(normalization.get("wire_schema_sha256", "")),
+                normalized_batch_schema_sha256=str(
+                    normalization.get("normalized_batch_schema_sha256", "")
+                ),
+            )
+            if algorithm_version is not None and algorithm_version != inferred_algorithm:
+                raise ValueError("model surface artifact scheduler algorithm is inconsistent")
+            algorithm_version = inferred_algorithm
+            if algorithm_version == "mmaudit.seven-pass-scheduler.v1":
+                normalized_response = canonical.get("normalized_response")
+                if not isinstance(normalized_response, Mapping):
+                    raise ValueError("model surface artifact lacks its normalized response")
+                findings = normalized_response.get("findings")
+                if not isinstance(findings, list):
+                    raise ValueError("model surface artifact findings have an invalid shape")
+                for finding in findings:
+                    if not isinstance(finding, dict):
+                        raise ValueError("model surface artifact finding has an invalid shape")
+                    if (
+                        finding.get("actor_model_applicability", "unstated") != "unstated"
+                        or finding.get("actor_context") is not None
+                    ):
+                        raise ValueError("legacy model surface artifact carries actor annotations")
+                    finding.pop("actor_model_applicability", None)
+                    finding.pop("actor_context", None)
         return hashlib.sha256(
             json.dumps(
                 canonical,
@@ -3494,6 +3725,8 @@ class ModelSurfaceReviewArtifact(StrictModel):
             )
             from mmaudit.models.truncation import (
                 candidate_review_protocol_implementation_is_pristine,
+                candidate_review_schema_algorithm_version,
+                candidate_review_typed_payload_projection,
             )
 
             assert self.normalized_response_sha256 is not None
@@ -3504,10 +3737,24 @@ class ModelSurfaceReviewArtifact(StrictModel):
                 or type(self.normalization_evidence) is not NormalizationEvidence
             ):
                 raise ValueError("model surface normalization implementation changed")
+            algorithm_version = candidate_review_schema_algorithm_version(
+                wire_schema_sha256=self.normalization_evidence.wire_schema_sha256,
+                normalized_batch_schema_sha256=(
+                    self.normalization_evidence.normalized_batch_schema_sha256
+                ),
+            )
             _require_explicit_nested_model_fields(self.normalization_evidence)
-            _require_explicit_nested_model_fields(self.normalized_response)
+            _require_explicit_nested_model_fields(
+                self.normalized_response,
+                allow_legacy_candidate_actor_defaults=(
+                    algorithm_version == "mmaudit.seven-pass-scheduler.v1"
+                ),
+            )
             _require_explicit_nested_model_fields(self.records)
-            normalized_payload = self.normalized_response.model_dump(mode="json")
+            normalized_payload = candidate_review_typed_payload_projection(
+                self.normalized_response,
+                algorithm_version=algorithm_version,
+            )
             normalized_sha256 = hashlib.sha256(
                 json.dumps(
                     normalized_payload,
@@ -3518,7 +3765,11 @@ class ModelSurfaceReviewArtifact(StrictModel):
                 ).encode()
             ).hexdigest()
             findings_payload = [
-                finding.model_dump(mode="json") for finding in self.normalized_response.findings
+                candidate_review_typed_payload_projection(
+                    finding,
+                    algorithm_version=algorithm_version,
+                )
+                for finding in self.normalized_response.findings
             ]
             surface_payload = [record.model_dump(mode="json") for record in self.records]
             surface_sha256 = hashlib.sha256(
@@ -3558,7 +3809,10 @@ class ModelSurfaceReviewArtifact(StrictModel):
                 or tuple(self.normalized_response.surface_reviews) != self.records
             ):
                 raise ValueError("model surface normalization custody is inconsistent")
-        expected_artifact_hash = self.calculate_artifact_sha256(self.model_dump(mode="json"))
+        expected_artifact_hash = self.calculate_artifact_sha256(
+            self.model_dump(mode="json"),
+            algorithm_version=(algorithm_version if self.schema_version == "1.1" else None),
+        )
         if self.artifact_sha256 != expected_artifact_hash:
             raise ValueError("model surface review artifact hash is inconsistent")
         return self
@@ -4037,13 +4291,27 @@ class JudgeBatch(StrictModel):
 
 
 class JudgeDecision(StrictModel):
-    group_id: str
+    group_id: str = Field(min_length=1, max_length=500)
     status: FindingStatus
     severity: Severity
     confidence: float = Field(ge=0, le=1)
     cwe: list[str] = Field(default_factory=list)
     owasp: list[str] = Field(default_factory=list)
     rationale: str
+    actor_model_applicability: ActorModelApplicability = ActorModelApplicability.UNSTATED
+    actor_context: CandidateActorContext | None = None
+
+    @model_validator(mode="after")
+    def actor_annotation_is_typed(self) -> JudgeDecision:
+        if (
+            self.actor_model_applicability is ActorModelApplicability.PRIVILEGED_ACTOR_REQUIRED
+        ) != (self.actor_context is not None):
+            raise ValueError(
+                "judge privileged actor applicability requires exactly one typed context"
+            )
+        if self.actor_context is not None and not self.actor_context.privileged_action_required:
+            raise ValueError("judge actor context must describe privileged conduct")
+        return self
 
 
 class JudgeDecisionBatch(StrictModel):
@@ -9154,12 +9422,170 @@ class InvariantSpec(StrictModel):
     evidence_hash: str
 
 
+class ProtocolProfileKind(StrEnum):
+    """Closed protocol profiles derived only from retained deterministic source facts."""
+
+    SOLIDITY_GENERAL = "solidity_general"
+    ERC20_TOKEN = "erc20_token"
+    ERC721 = "erc721"
+    ERC1155 = "erc1155"
+    ERC4626_VAULT = "erc4626_vault"
+    STAKING = "staking"
+    LENDING = "lending"
+    AMM = "amm"
+    GOVERNANCE = "governance"
+    BRIDGE = "bridge"
+    ORACLE_CONSUMER = "oracle_consumer"
+    UPGRADEABLE_SYSTEM = "upgradeable_system"
+    TOKEN_DISTRIBUTION = "token_distribution"
+    STATE_MACHINE = "state_machine"
+
+
+class ProtocolProfileDetectionRule(StrEnum):
+    """Host-owned rule families that may establish one protocol profile."""
+
+    CONTRACT_SYMBOL_SET = "contract_symbol_set"
+    INDEXED_SYMBOL = "indexed_symbol"
+    SOURCE_MARKER = "source_marker"
+    SEMANTIC_GRAPH = "semantic_graph"
+
+
+class ProtocolProfileStatus(StrEnum):
+    """Evidence-derived outcome for every member of the closed profile inventory."""
+
+    DETECTED = "detected"
+    NOT_DETECTED = "not_detected"
+    INDETERMINATE = "indeterminate"
+
+
+class ProtocolProfileEvidence(StrictModel):
+    """Source-linked evidence for one host-derived protocol-profile classification."""
+
+    profile: ProtocolProfileKind
+    status: ProtocolProfileStatus
+    rule: ProtocolProfileDetectionRule
+    matched_facts: list[str] = Field(min_length=1, max_length=50)
+    entity_ids: list[str] = Field(default_factory=list, max_length=100)
+    locations: list[Location] = Field(default_factory=list, max_length=100)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def calculate_evidence_sha256(cls, values: Mapping[str, Any]) -> str:
+        payload = {key: value for key, value in values.items() if key != "evidence_sha256"}
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=(lambda item: item.value if isinstance(item, StrEnum) else str(item)),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @model_validator(mode="after")
+    def evidence_is_canonical(self) -> ProtocolProfileEvidence:
+        if self.matched_facts != sorted(set(self.matched_facts)):
+            raise ValueError("protocol-profile matched facts must be unique and sorted")
+        if self.entity_ids != sorted(set(self.entity_ids)):
+            raise ValueError("protocol-profile entity IDs must be unique and sorted")
+        if self.status is ProtocolProfileStatus.DETECTED and not self.locations:
+            raise ValueError("detected protocol profiles require source-linked locations")
+        expected_locations = sorted(
+            self.locations,
+            key=lambda item: (
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.symbol or "",
+                item.content_hash or "",
+            ),
+        )
+        if self.locations != expected_locations or len(self.locations) != len(
+            {location.model_dump_json() for location in self.locations}
+        ):
+            raise ValueError("protocol-profile locations must be unique and sorted")
+        payload = self.model_dump(mode="json")
+        if self.evidence_sha256 != self.calculate_evidence_sha256(payload):
+            raise ValueError("protocol-profile evidence hash is inconsistent")
+        return self
+
+
+class ProtocolProfileAssessment(StrictModel):
+    """Complete, self-hashed result of deterministic protocol-profile detection."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    classification_complete: bool
+    classifications: list[ProtocolProfileEvidence] = Field(min_length=1, max_length=50)
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+    assessment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def calculate_assessment_sha256(cls, values: Mapping[str, Any]) -> str:
+        payload = {key: value for key, value in values.items() if key != "assessment_sha256"}
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=(lambda item: item.value if isinstance(item, StrEnum) else str(item)),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @property
+    def detected_profiles(self) -> list[ProtocolProfileKind]:
+        return [
+            item.profile
+            for item in self.classifications
+            if item.status is ProtocolProfileStatus.DETECTED
+        ]
+
+    @model_validator(mode="after")
+    def assessment_is_canonical(self) -> ProtocolProfileAssessment:
+        if self.classifications != sorted(
+            self.classifications, key=lambda item: item.profile.value
+        ):
+            raise ValueError("protocol-profile evidence must be sorted by closed profile")
+        profiles = [item.profile for item in self.classifications]
+        if profiles != sorted(ProtocolProfileKind, key=lambda item: item.value):
+            raise ValueError(
+                "protocol-profile evidence must cover every closed profile exactly once"
+            )
+        if self.limitations != sorted(set(self.limitations)):
+            raise ValueError("protocol-profile limitations must be unique and sorted")
+        expected_complete = all(
+            item.status is not ProtocolProfileStatus.INDETERMINATE for item in self.classifications
+        )
+        if self.classification_complete is not expected_complete:
+            raise ValueError("protocol-profile completeness differs from classification inventory")
+        if self.classification_complete == bool(self.limitations):
+            raise ValueError("only incomplete protocol-profile classification needs limitations")
+        payload = self.model_dump(mode="json")
+        if self.assessment_sha256 != self.calculate_assessment_sha256(payload):
+            raise ValueError("protocol-profile assessment hash is inconsistent")
+        return self
+
+
 class InvariantSuite(StrictModel):
     invariants: list[InvariantSpec] = Field(default_factory=list)
     protocol_profiles: list[str] = Field(default_factory=list)
+    protocol_profile_assessment: ProtocolProfileAssessment | None = None
     warnings: list[str] = Field(default_factory=list)
     templates_available_count: int = Field(default=0, ge=0)
     executable_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def typed_protocol_profiles_match_legacy_projection(self) -> InvariantSuite:
+        if self.protocol_profiles != sorted(set(self.protocol_profiles)):
+            raise ValueError("protocol profiles must be unique and sorted")
+        if self.protocol_profile_assessment is not None and self.protocol_profiles != [
+            profile.value for profile in self.protocol_profile_assessment.detected_profiles
+        ]:
+            raise ValueError("protocol-profile projection differs from typed evidence")
+        return self
 
 
 class InvariantReviewDecision(StrictModel):
@@ -11517,6 +11943,332 @@ class ModelReviewCoverage(StrictModel):
         return self
 
 
+class KnownIssueCriticality(StrEnum):
+    """Taxonomy priority used only for coverage gating, never finding creation."""
+
+    CRITICAL = "critical"
+    NON_CRITICAL = "non_critical"
+
+
+class KnownIssueApplicability(StrEnum):
+    """Host-derived applicability state for one taxonomy item."""
+
+    APPLICABLE = "applicable"
+    NOT_APPLICABLE = "not_applicable"
+    UNKNOWN = "unknown"
+
+
+class KnownIssueDisposition(StrEnum):
+    """The only permitted non-finding disposition outcomes."""
+
+    REVIEWED = "REVIEWED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    GAP = "GAP"
+
+
+class KnownIssueCitationKind(StrEnum):
+    """Typed evidence references retained with a taxonomy disposition."""
+
+    CORPUS = "corpus"
+    PROFILE_ASSESSMENT = "profile_assessment"
+    PROFILE_EVIDENCE = "profile_evidence"
+    MODEL_REVIEW = "model_review"
+
+
+class KnownIssueTaxonomyItem(StrictModel):
+    """One defensive failure-mode classification with no operational procedure."""
+
+    item_id: str = Field(pattern=r"^KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$")
+    title: str = Field(min_length=1, max_length=200)
+    category: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    criticality: KnownIssueCriticality
+    applicable_protocol_profiles: list[ProtocolProfileKind] = Field(min_length=1, max_length=20)
+    defensive_question: str = Field(min_length=1, max_length=1_000)
+    economic_template: EconomicSimulationKind | None = None
+    item_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    review_surface_subject_id: str = Field(
+        pattern=r"^known-issue:KI-[A-Z0-9]+(?:-[A-Z0-9]+)*:[0-9a-f]{64}$"
+    )
+
+    @classmethod
+    def calculate_item_sha256(cls, values: Mapping[str, Any]) -> str:
+        payload = {
+            key: value
+            for key, value in values.items()
+            if key not in {"item_sha256", "review_surface_subject_id"}
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=(lambda item: item.value if isinstance(item, StrEnum) else str(item)),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @model_validator(mode="after")
+    def item_is_canonical_and_nonprocedural(self) -> KnownIssueTaxonomyItem:
+        if self.applicable_protocol_profiles != sorted(
+            set(self.applicable_protocol_profiles), key=lambda item: item.value
+        ):
+            raise ValueError("taxonomy protocol profiles must be unique and sorted")
+        payload = self.model_dump(mode="json")
+        if self.item_sha256 != self.calculate_item_sha256(payload):
+            raise ValueError("taxonomy item semantic hash is inconsistent")
+        if self.review_surface_subject_id != f"known-issue:{self.item_id}:{self.item_sha256}":
+            raise ValueError("taxonomy review surface must bind the item ID and semantic hash")
+        if any(
+            phrase in self.defensive_question.casefold()
+            for phrase in (
+                "step-by-step",
+                "exploit procedure",
+                "payload",
+                "steal funds",
+                "bypass safeguards",
+            )
+        ):
+            raise ValueError("taxonomy content must remain defensive and nonprocedural")
+        return self
+
+
+class KnownIssueTaxonomy(StrictModel):
+    """Versioned, semantic-self-hashed defensive known-issue corpus."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    taxonomy_version: Literal["1.0"] = "1.0"
+    purpose: Literal["defensive_failure_mode_coverage"] = "defensive_failure_mode_coverage"
+    finding_authority: Literal[False] = False
+    items: list[KnownIssueTaxonomyItem] = Field(min_length=1, max_length=500)
+    corpus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def calculate_corpus_sha256(cls, values: Mapping[str, Any]) -> str:
+        payload = {key: value for key, value in values.items() if key != "corpus_sha256"}
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=(lambda item: item.value if isinstance(item, StrEnum) else str(item)),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @model_validator(mode="after")
+    def corpus_is_complete_and_canonical(self) -> KnownIssueTaxonomy:
+        if self.items != sorted(self.items, key=lambda item: item.item_id):
+            raise ValueError("taxonomy items must be sorted by stable ID")
+        item_ids = [item.item_id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("taxonomy item IDs must be unique")
+        mapped_templates = [
+            item.economic_template for item in self.items if item.economic_template is not None
+        ]
+        if len(mapped_templates) != len(set(mapped_templates)):
+            raise ValueError("an economic template may map to only one taxonomy item")
+        payload = self.model_dump(mode="json")
+        if self.corpus_sha256 != self.calculate_corpus_sha256(payload):
+            raise ValueError("taxonomy corpus semantic hash is inconsistent")
+        return self
+
+
+class KnownIssueCitation(StrictModel):
+    """One immutable reference supporting applicability or review disposition."""
+
+    kind: KnownIssueCitationKind
+    reference: str = Field(min_length=1, max_length=500)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    locations: list[Location] = Field(default_factory=list, max_length=100)
+    detail: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def locations_are_canonical(self) -> KnownIssueCitation:
+        expected = sorted(
+            self.locations,
+            key=lambda item: (
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.symbol or "",
+                item.content_hash or "",
+            ),
+        )
+        if self.locations != expected or len(self.locations) != len(
+            {location.model_dump_json() for location in self.locations}
+        ):
+            raise ValueError("taxonomy citation locations must be unique and sorted")
+        return self
+
+
+class KnownIssueItemDisposition(StrictModel):
+    """One explicit taxonomy outcome; this model is never a candidate or finding."""
+
+    item_id: str = Field(pattern=r"^KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$")
+    applicability: KnownIssueApplicability
+    disposition: KnownIssueDisposition
+    matched_profiles: list[ProtocolProfileKind] = Field(default_factory=list, max_length=20)
+    reviewed_surface_ids: list[str] = Field(default_factory=list, max_length=100)
+    citations: list[KnownIssueCitation] = Field(min_length=1, max_length=1_000)
+    rationale: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def disposition_is_evidence_backed(self) -> KnownIssueItemDisposition:
+        if self.matched_profiles != sorted(set(self.matched_profiles), key=lambda item: item.value):
+            raise ValueError("taxonomy matched profiles must be unique and sorted")
+        if self.reviewed_surface_ids != sorted(set(self.reviewed_surface_ids)):
+            raise ValueError("taxonomy reviewed surfaces must be unique and sorted")
+        citation_keys = [
+            (item.kind.value, item.reference, item.evidence_sha256) for item in self.citations
+        ]
+        if citation_keys != sorted(set(citation_keys)):
+            raise ValueError("taxonomy citations must be unique and sorted")
+        has_model_review = any(
+            citation.kind is KnownIssueCitationKind.MODEL_REVIEW for citation in self.citations
+        )
+        if self.applicability is KnownIssueApplicability.NOT_APPLICABLE:
+            if (
+                self.disposition is not KnownIssueDisposition.NOT_APPLICABLE
+                or self.matched_profiles
+                or self.reviewed_surface_ids
+                or has_model_review
+            ):
+                raise ValueError("non-applicable taxonomy items require a clean NOT_APPLICABLE")
+        elif self.applicability is KnownIssueApplicability.UNKNOWN:
+            if self.disposition is not KnownIssueDisposition.GAP or self.reviewed_surface_ids:
+                raise ValueError("unknown taxonomy applicability must fail closed as GAP")
+        elif self.disposition is KnownIssueDisposition.REVIEWED:
+            if not self.matched_profiles or not self.reviewed_surface_ids or not has_model_review:
+                raise ValueError("REVIEWED requires matched profiles and credited surface evidence")
+        elif self.disposition is KnownIssueDisposition.GAP:
+            if not self.matched_profiles or self.reviewed_surface_ids or has_model_review:
+                raise ValueError("an applicable GAP cannot claim model-review credit")
+        else:
+            raise ValueError("an applicable taxonomy item must be REVIEWED or GAP")
+        return self
+
+
+class KnownIssueTaxonomyCoverage(StrictModel):
+    """Complete taxonomy disposition inventory and coverage denominator."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    finding_authority: Literal[False] = False
+    corpus: KnownIssueTaxonomy
+    corpus_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    profile_assessment: ProtocolProfileAssessment | None = None
+    dispositions: list[KnownIssueItemDisposition]
+    overall: CoverageMetric
+    critical: CoverageMetric
+    critical_gap_ids: list[str] = Field(default_factory=list)
+    critical_gate_passed: bool
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+    coverage_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def calculate_coverage_sha256(cls, values: Mapping[str, Any]) -> str:
+        payload = {key: value for key, value in values.items() if key != "coverage_sha256"}
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=(lambda item: item.value if isinstance(item, StrEnum) else str(item)),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @model_validator(mode="after")
+    def denominator_and_dispositions_are_complete(self) -> KnownIssueTaxonomyCoverage:
+        corpus_items = {item.item_id: item for item in self.corpus.items}
+        disposition_ids = [item.item_id for item in self.dispositions]
+        if disposition_ids != sorted(corpus_items):
+            raise ValueError("every taxonomy corpus item requires exactly one disposition")
+        profile_evidence = (
+            {item.profile: item for item in self.profile_assessment.classifications}
+            if self.profile_assessment is not None
+            else {}
+        )
+        for disposition in self.dispositions:
+            item = corpus_items[disposition.item_id]
+            matched = sorted(
+                (
+                    profile
+                    for profile in item.applicable_protocol_profiles
+                    if profile_evidence.get(profile) is not None
+                    and profile_evidence[profile].status is ProtocolProfileStatus.DETECTED
+                ),
+                key=lambda profile: profile.value,
+            )
+            expected_applicability = (
+                KnownIssueApplicability.APPLICABLE
+                if matched
+                else (
+                    KnownIssueApplicability.UNKNOWN
+                    if not profile_evidence
+                    or any(
+                        profile_evidence[profile].status is ProtocolProfileStatus.INDETERMINATE
+                        for profile in item.applicable_protocol_profiles
+                    )
+                    else KnownIssueApplicability.NOT_APPLICABLE
+                )
+            )
+            if disposition.applicability is not expected_applicability:
+                raise ValueError("taxonomy applicability differs from typed profile evidence")
+            if disposition.matched_profiles != matched:
+                raise ValueError("taxonomy matched profiles differ from typed profile evidence")
+        included = [
+            item
+            for item in self.dispositions
+            if item.applicability is not KnownIssueApplicability.NOT_APPLICABLE
+        ]
+        reviewed = [item for item in included if item.disposition is KnownIssueDisposition.REVIEWED]
+        critical_included = [
+            item
+            for item in included
+            if corpus_items[item.item_id].criticality is KnownIssueCriticality.CRITICAL
+        ]
+        critical_reviewed = [
+            item for item in critical_included if item.disposition is KnownIssueDisposition.REVIEWED
+        ]
+        if (self.overall.numerator, self.overall.denominator, self.overall.population) != (
+            len(reviewed),
+            len(included),
+            len(self.dispositions),
+        ):
+            raise ValueError("taxonomy overall coverage metric differs from dispositions")
+        critical_population = sum(
+            item.criticality is KnownIssueCriticality.CRITICAL for item in self.corpus.items
+        )
+        if (
+            self.critical.numerator,
+            self.critical.denominator,
+            self.critical.population,
+        ) != (
+            len(critical_reviewed),
+            len(critical_included),
+            critical_population,
+        ):
+            raise ValueError("taxonomy critical coverage metric differs from dispositions")
+        expected_gaps = sorted(
+            item.item_id
+            for item in critical_included
+            if item.disposition is KnownIssueDisposition.GAP
+        )
+        if self.critical_gap_ids != expected_gaps:
+            raise ValueError("taxonomy critical gaps differ from item dispositions")
+        if self.critical_gate_passed != (bool(critical_included) and not expected_gaps):
+            raise ValueError("taxonomy critical gate differs from complete disposition evidence")
+        if self.limitations != sorted(set(self.limitations)):
+            raise ValueError("taxonomy coverage limitations must be unique and sorted")
+        payload = self.model_dump(mode="json")
+        if self.coverage_sha256 != self.calculate_coverage_sha256(payload):
+            raise ValueError("taxonomy coverage semantic hash is inconsistent")
+        return self
+
+
 class EconomicTemplateExecutionCoverage(StrictModel):
     """Per-template generated-harness lifecycle evidence."""
 
@@ -11954,10 +12706,58 @@ class ContextExecutionEvidence(StrictModel):
 class ContextRequestEvidence(ContextExecutionEvidence):
     """Self-hashed request-to-context binding retained with provider usage evidence."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     request_id: str = Field(min_length=1, max_length=200)
     request_role: str = Field(min_length=1, max_length=200)
     relationship: ContextRequestRelationship
+    requested_surface_manifest_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    source_location_proof_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=100_000,
+        exclude_if=lambda value: not value,
+    )
+    retrieval_policy_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    retrieval_corpus_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    retrieval_transcript_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    retrieval_request_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=8,
+        exclude_if=lambda value: not value,
+    )
+    retrieval_result_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=8,
+        exclude_if=lambda value: not value,
+    )
+    retrieval_exchange_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=8,
+        exclude_if=lambda value: not value,
+    )
+    retrieval_exhausted: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    retrieval_single_shot_fallback_required: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @classmethod
@@ -11974,10 +12774,29 @@ class ContextRequestEvidence(ContextExecutionEvidence):
         configured_maximum_source_tokens_per_request: int,
         effective_source_byte_ceiling: int,
         rendered_sha256: str,
+        requested_surface_manifest_sha256: str | None = None,
+        source_location_proof_sha256s: tuple[str, ...] = (),
+        retrieval_policy: SolidityRetrievalRolePolicy | None = None,
+        retrieval_corpus_sha256: str | None = None,
+        retrieval_transcript: SolidityRetrievalTranscript | None = None,
     ) -> ContextRequestEvidence:
         relationship = _context_request_relationship(request_role, context_role)
+        if (retrieval_policy is None) != (retrieval_corpus_sha256 is None):
+            raise ValueError("context retrieval policy and corpus binding are all-or-none")
+        if retrieval_transcript is not None and (
+            retrieval_policy is None
+            or retrieval_transcript.role != retrieval_policy.role
+            or retrieval_transcript.policy_sha256 != retrieval_policy.policy_sha256
+            or retrieval_transcript.corpus_sha256 != retrieval_corpus_sha256
+        ):
+            raise ValueError("context retrieval transcript differs from its policy or corpus")
+        if retrieval_policy is not None and retrieval_transcript is not None:
+            require_solidity_retrieval_transcript_within_policy(
+                retrieval_policy,
+                retrieval_transcript,
+            )
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if retrieval_policy is not None else "1.0",
             "request_id": request_id,
             "request_role": request_role,
             "context_role": context_role,
@@ -11992,6 +12811,40 @@ class ContextRequestEvidence(ContextExecutionEvidence):
             "effective_source_byte_ceiling": effective_source_byte_ceiling,
             "rendered_sha256": rendered_sha256,
         }
+        if requested_surface_manifest_sha256 is not None:
+            payload["requested_surface_manifest_sha256"] = requested_surface_manifest_sha256
+        if source_location_proof_sha256s:
+            payload["source_location_proof_sha256s"] = source_location_proof_sha256s
+        if retrieval_policy is not None:
+            assert retrieval_corpus_sha256 is not None
+            payload["retrieval_policy_sha256"] = retrieval_policy.policy_sha256
+            payload["retrieval_corpus_sha256"] = retrieval_corpus_sha256
+        if retrieval_transcript is not None:
+            payload.update(
+                {
+                    "retrieval_transcript_sha256": retrieval_transcript.transcript_sha256,
+                    "retrieval_exhausted": retrieval_transcript.retrieval_exhausted,
+                    "retrieval_single_shot_fallback_required": (
+                        retrieval_transcript.single_shot_fallback_required
+                    ),
+                }
+            )
+            if retrieval_transcript.exchanges:
+                payload.update(
+                    {
+                        "retrieval_request_sha256s": tuple(
+                            exchange.request.request_sha256
+                            for exchange in retrieval_transcript.exchanges
+                        ),
+                        "retrieval_result_sha256s": tuple(
+                            exchange.result.result_sha256
+                            for exchange in retrieval_transcript.exchanges
+                        ),
+                        "retrieval_exchange_sha256s": tuple(
+                            exchange.exchange_sha256 for exchange in retrieval_transcript.exchanges
+                        ),
+                    }
+                )
         evidence_sha256 = hashlib.sha256(
             json.dumps(
                 payload,
@@ -12004,6 +12857,51 @@ class ContextRequestEvidence(ContextExecutionEvidence):
 
     @model_validator(mode="after")
     def relationship_and_hash_are_exact(self) -> ContextRequestEvidence:
+        if self.source_location_proof_sha256s != tuple(
+            sorted(set(self.source_location_proof_sha256s))
+        ) or any(
+            re.fullmatch(r"[0-9a-f]{64}", proof_sha256) is None
+            for proof_sha256 in self.source_location_proof_sha256s
+        ):
+            raise ValueError("context source-location proofs must be canonical hashes")
+        if self.source_location_proof_sha256s and self.requested_surface_manifest_sha256 is None:
+            raise ValueError("context source-location proofs require a model-surface manifest")
+        retrieval_enabled = self.retrieval_policy_sha256 is not None
+        if retrieval_enabled != (self.schema_version == "1.1") or retrieval_enabled != (
+            self.retrieval_corpus_sha256 is not None
+        ):
+            raise ValueError("context retrieval binding is incomplete or incorrectly versioned")
+        transcript_fields = (
+            self.retrieval_transcript_sha256,
+            self.retrieval_exhausted,
+            self.retrieval_single_shot_fallback_required,
+        )
+        any_transcript_field = any(item is not None for item in transcript_fields)
+        transcript_present = all(item is not None for item in transcript_fields)
+        if any_transcript_field != transcript_present:
+            raise ValueError("context retrieval transcript coordinates are incomplete")
+        hash_inventories = (
+            self.retrieval_request_sha256s,
+            self.retrieval_result_sha256s,
+            self.retrieval_exchange_sha256s,
+        )
+        if (
+            any(
+                len(values) != len(set(values))
+                or any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values)
+                for values in hash_inventories
+            )
+            or len({len(values) for values in hash_inventories}) != 1
+        ):
+            raise ValueError("context retrieval exchange hash inventories are inconsistent")
+        if not transcript_present and any(hash_inventories):
+            raise ValueError("context retrieval hashes exist without a transcript")
+        if transcript_present and not retrieval_enabled:
+            raise ValueError("context retrieval transcript lacks its policy and corpus binding")
+        if transcript_present:
+            expected_single_shot = bool(self.retrieval_exhausted) or not any(hash_inventories)
+            if self.retrieval_single_shot_fallback_required is not expected_single_shot:
+                raise ValueError("context retrieval fallback differs from its exchange state")
         expected_relationship = _context_request_relationship(
             self.request_role,
             self.context_role,
@@ -14293,11 +15191,30 @@ class ContextPackage(StrictModel):
     scanner_findings: tuple[ScannerFinding, ...]
     excerpts: tuple[ContextExcerpt, ...]
     requested_model_surfaces: tuple[ModelSurfaceReviewRequest, ...] = ()
+    actor_model_evidence: ActorModelInputEvidence | None = None
     threat_model: ThreatModel | None = None
     solidity_projects: tuple[SolidityProjectMetadata, ...] = ()
     solidity_compilations: tuple[SolidityCompilationResult, ...] = ()
     solidity_index: SoliditySymbolIndex | None = None
     solidity_graphs: SolidityGraphSet | None = None
+    solidity_retrieval_policy: SolidityRetrievalRolePolicy | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    solidity_retrieval_corpus_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    solidity_retrieval_entities: tuple[SolidityRetrievalEntity, ...] = Field(
+        default=(),
+        max_length=100_000,
+        exclude_if=lambda value: not value,
+    )
+    solidity_retrieval_transcript: SolidityRetrievalTranscript | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     solidity_invariants: InvariantSuite | None = None
     invariant_executions: tuple[InvariantExecutionResult, ...] = ()
     economic_simulations: tuple[EconomicSimulationPlan, ...] = ()
@@ -14355,12 +15272,57 @@ class ContextPackage(StrictModel):
         )
         if effective > configured_bytes or effective > self.byte_budget:
             raise ValueError("effective context-package source ceiling exceeds its governing limit")
-        delivered_source_bytes = sum(
-            len(excerpt.content.encode("utf-8")) for excerpt in self.excerpts
-        )
+        delivered_source_bytes = self.delivered_source_bytes()
         if delivered_source_bytes > effective:
             raise ValueError("context-package source content exceeds its effective source ceiling")
+        retrieval_coordinates = (
+            self.solidity_retrieval_policy,
+            self.solidity_retrieval_corpus_sha256,
+        )
+        if any(item is None for item in retrieval_coordinates) and any(
+            item is not None for item in retrieval_coordinates
+        ):
+            raise ValueError("context-package retrieval policy and corpus binding are all-or-none")
+        retrieval_entity_ids = tuple(
+            entity.subject_id for entity in self.solidity_retrieval_entities
+        )
+        if retrieval_entity_ids != tuple(sorted(set(retrieval_entity_ids))):
+            raise ValueError("context-package retrieval entities must be unique and canonical")
+        if self.solidity_retrieval_entities and self.solidity_retrieval_policy is None:
+            raise ValueError("context-package retrieval entities lack policy and corpus custody")
+        policy = self.solidity_retrieval_policy
+        transcript = self.solidity_retrieval_transcript
+        if policy is not None:
+            try:
+                _context_request_relationship(policy.role, self.role)
+            except ValueError:
+                raise ValueError(
+                    "context-package retrieval policy role differs from its context role"
+                ) from None
+        if transcript is not None:
+            if policy is None:
+                raise ValueError("context-package retrieval transcript lacks its role policy")
+            if (
+                transcript.role != policy.role
+                or transcript.policy_sha256 != policy.policy_sha256
+                or transcript.corpus_sha256 != self.solidity_retrieval_corpus_sha256
+            ):
+                raise ValueError(
+                    "context-package retrieval transcript differs from its policy or corpus"
+                )
+            require_solidity_retrieval_transcript_within_policy(policy, transcript)
         return self
+
+    def delivered_source_bytes(self) -> int:
+        """Count pushed and retrieved source text against the same source ceiling."""
+
+        retrieved = self.solidity_retrieval_transcript
+        return sum(len(excerpt.content.encode("utf-8")) for excerpt in self.excerpts) + sum(
+            len(record.content.encode("utf-8"))
+            for exchange in (() if retrieved is None else retrieved.exchanges)
+            for record in exchange.result.records
+            if record.content is not None
+        )
 
     def model_copy(
         self,
@@ -14596,7 +15558,46 @@ class MinimumAnalysisFloor(StrictModel):
 
 
 class AuditReport(StrictModel):
-    schema_version: Literal["1.0", "1.1", "1.2"]
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"schema_version": {"enum": ["1.3", "1.4"]}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "required": [
+                            "actor_model_baseline",
+                            "actor_model_evaluation",
+                            "judge_decisions",
+                        ]
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.4"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {"required": ["taxonomy_coverage"]},
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"enum": ["1.0", "1.1"]}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": _legacy_actor_model_finding_inventory_schema_properties(
+                            ("findings", "rejected_findings", "filtered_findings")
+                        )
+                    },
+                },
+            ]
+        },
+    )
+
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"]
     run_id: str
     generated_at: datetime
     completed: bool
@@ -14642,6 +15643,15 @@ class AuditReport(StrictModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    actor_model_baseline: ActorModelBaselineArtifact | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    actor_model_evaluation: ActorModelEvaluation | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    judge_decisions: list[JudgeDecision] = Field(default_factory=list, max_length=100_000)
     verification_decisions: list[VerificationDecision] = Field(default_factory=list)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
         default_factory=list
@@ -14659,8 +15669,193 @@ class AuditReport(StrictModel):
     formal_runs: list[FormalToolRun] = Field(default_factory=list)
     solidity_coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
+    taxonomy_coverage: KnownIssueTaxonomyCoverage | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     report_quality_review: ReportQualityReview | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def current_actor_custody_is_explicit(cls, value: object) -> object:
+        """Require the public judge inventory to be explicit on schema 1.3 reports."""
+
+        if isinstance(value, Mapping):
+            schema_version = value.get("schema_version")
+            if schema_version in {"1.3", "1.4"} and "judge_decisions" not in value:
+                raise ValueError("report schema 1.3+ requires an explicit judge-decision inventory")
+            if schema_version == "1.4" and "taxonomy_coverage" not in value:
+                raise ValueError("report schema 1.4 requires explicit taxonomy coverage")
+            if schema_version in {"1.0", "1.1", "1.2", "1.3"} and ("taxonomy_coverage" in value):
+                raise ValueError("pre-taxonomy reports cannot carry taxonomy coverage")
+            if schema_version in {"1.0", "1.1"} and (
+                _finding_inventories_have_actor_model_evidence(
+                    value,
+                    ("findings", "rejected_findings", "filtered_findings"),
+                )
+            ):
+                raise ValueError("legacy report cannot carry nested actor-model finding evidence")
+        return value
+
+    @model_validator(mode="after")
+    def actor_model_evaluation_matches_findings(self) -> AuditReport:
+        """Require exact actor calibration custody on successor reports."""
+
+        if self.schema_version in {"1.0", "1.1"}:
+            if (
+                self.actor_model_evaluation is not None
+                or self.actor_model_baseline is not None
+                or self.judge_decisions
+            ):
+                raise ValueError("typed actor-model evidence requires report schema 1.2+")
+            return self
+        evaluation = self.actor_model_evaluation
+        baseline = self.actor_model_baseline
+        if self.schema_version in {"1.3", "1.4"} and (evaluation is None or baseline is None):
+            raise ValueError(
+                "report schema 1.3+ requires typed actor-model baseline and evaluation"
+            )
+        if evaluation is None:
+            if baseline is not None:
+                raise ValueError("actor-model baseline requires its evaluation")
+            if self.judge_decisions:
+                raise ValueError("actor judge decisions require their typed evaluation")
+            return self
+        if baseline is None:
+            raise ValueError("actor-model evaluation requires its retained baseline")
+        if evaluation.evaluated_at > self.generated_at:
+            raise ValueError("actor-model evaluation occurs after report generation")
+        all_findings = (*self.findings, *self.rejected_findings, *self.filtered_findings)
+        if any(finding.actor_assessment is None for finding in all_findings):
+            raise ValueError("report schema 1.3 requires actor assessment on every finding")
+        expected = tuple(
+            sorted(
+                (
+                    finding.id,
+                    finding.actor_assessment.baseline_finding_sha256,
+                    finding.actor_assessment.assessment_sha256,
+                )
+                for finding in all_findings
+                if finding.actor_assessment is not None
+            )
+        )
+        observed = tuple(
+            (
+                binding.finding_id,
+                binding.baseline_finding_sha256,
+                binding.assessment_sha256,
+            )
+            for binding in evaluation.finding_assessments
+        )
+        if observed != expected:
+            raise ValueError("actor-model evaluation differs from report finding assessments")
+        input_evidence = evaluation.input_evidence
+        source = input_evidence.source_evidence
+        expected_model_sha256 = source.actor_model.artifact_sha256 if source is not None else None
+        expected_source_sha256 = source.source_sha256 if source is not None else None
+        governance_by_id = {
+            finding.conflict_id: finding for finding in evaluation.governance_findings
+        }
+        repository_files = {item.path: item for item in self.repository.files}
+        for governance in evaluation.governance_findings:
+            for code_evidence in governance.code_evidence:
+                repository_file = repository_files.get(code_evidence.path)
+                if (
+                    repository_file is None
+                    or repository_file.sha256 != code_evidence.source_sha256
+                    or code_evidence.end_line > repository_file.lines
+                ):
+                    raise ValueError(
+                        "actor governance code evidence differs from report source custody"
+                    )
+        for finding in all_findings:
+            assessment = finding.actor_assessment
+            if assessment is None:
+                raise ValueError("report actor assessment is unavailable")
+            if (
+                assessment.input_state is not input_evidence.state
+                or assessment.actor_model_sha256 != expected_model_sha256
+                or assessment.actor_model_source_sha256 != expected_source_sha256
+            ):
+                raise ValueError("finding actor assessment differs from report input evidence")
+            if assessment.calibrated_severity is not ActorSeverity(finding.severity.value):
+                raise ValueError("finding severity differs from its actor calibration")
+            context = finding.actor_context
+            if context is None:
+                if assessment.role_id is not None:
+                    raise ValueError("actor assessment invents context absent from its finding")
+                if (
+                    input_evidence.state is ActorModelInputState.CURRENT
+                    and finding.actor_model_applicability
+                    is ActorModelApplicability.NO_PRIVILEGED_ACTOR_REQUIRED
+                    and assessment.disposition
+                    is not ActorAssessmentDisposition.NOT_APPLICABLE_NONPRIVILEGED
+                ):
+                    raise ValueError(
+                        "nonprivileged finding differs from its actor applicability assessment"
+                    )
+            elif (
+                assessment.role_id != context.role_id
+                or assessment.severity_basis != context.severity_basis
+                or assessment.harmed_party_disposition != context.harmed_party_disposition
+                or assessment.harmed_party_id != context.harmed_party_id
+                or assessment.privileged_action_required is not context.privileged_action_required
+                or assessment.permission != context.permission
+                or assessment.misconduct_required is not context.misconduct_required
+                or assessment.ordinary_legitimate_behavior
+                is not context.ordinary_legitimate_behavior
+                or assessment.action_against_stated_interest
+                is not context.action_against_stated_interest
+                or assessment.stated_interest != context.stated_interest
+                or assessment.applied_constraint_ids != context.relevant_constraint_ids
+                or assessment.required_concentrated_role_ids
+                != context.required_concentrated_role_ids
+                or assessment.relevant_economic_exposures != context.relevant_economic_exposures
+                or assessment.plausibility_rationale != context.plausibility_rationale
+                or assessment.plausibility_evidence_reference_ids
+                != context.plausibility_evidence_reference_ids
+            ):
+                raise ValueError("finding actor assessment differs from its typed context")
+            if assessment.governance_conflict_id is not None:
+                linked_governance = governance_by_id.get(assessment.governance_conflict_id)
+                if (
+                    linked_governance is None
+                    or finding.id not in linked_governance.source_finding_ids
+                ):
+                    raise ValueError("finding actor governance conflict lacks report custody")
+            if (
+                source is not None
+                and context is not None
+                and input_evidence.state is ActorModelInputState.CURRENT
+            ):
+                role = source.actor_model.role(context.role_id)
+                if role is not None and (
+                    assessment.role_occupancy is not role.occupancy
+                    or assessment.holder_party_id != role.holder_party_id
+                    or assessment.concentrated_with_role_ids != role.concentrated_with_role_ids
+                ):
+                    raise ValueError("finding actor role facts differ from operator evidence")
+                holder = (
+                    source.actor_model.party(role.holder_party_id)
+                    if role is not None and role.holder_party_id is not None
+                    else None
+                )
+                if assessment.holder_fee_revenue_exposure != (
+                    holder.fee_revenue_exposure.state if holder is not None else None
+                ) or assessment.holder_protocol_failure_loss != (
+                    holder.protocol_failure_loss.state if holder is not None else None
+                ):
+                    raise ValueError("finding actor exposure facts differ from operator evidence")
+        from mmaudit.orchestration.actor_model import validate_actor_model_evaluation
+
+        validate_actor_model_evaluation(
+            findings=all_findings,
+            evaluation=evaluation,
+            baseline_artifact=baseline,
+            judge_decisions=self.judge_decisions,
+        )
+        return self
 
     @model_validator(mode="after")
     def consensus_review_matches_report(self) -> AuditReport:
@@ -14668,8 +15863,8 @@ class AuditReport(StrictModel):
 
         if self.consensus_review is None:
             return self
-        if self.schema_version != "1.2":
-            raise ValueError("typed consensus review requires report schema 1.2")
+        if self.schema_version not in {"1.2", "1.3", "1.4"}:
+            raise ValueError("typed consensus review requires report schema 1.2+")
         artifact = self.consensus_review
         contributing_candidate_ids = {
             candidate_id
@@ -14694,13 +15889,13 @@ class AuditReport(StrictModel):
     def audit_model_selection_matches_usage(self) -> AuditReport:
         """Retain exact paid-audit routing custody without granting runtime authority."""
 
-        if self.schema_version != "1.2" and (
+        if self.schema_version not in {"1.2", "1.3", "1.4"} and (
             self.audit_model_selection is not None
             or self.audit_model_refresh_evidence is not None
             or self.audit_model_refresh_pricing_evidence is not None
         ):
             raise ValueError(
-                "typed audit selection, refresh, and pricing evidence requires report schema 1.2"
+                "typed audit selection, refresh, and pricing evidence requires report schema 1.2+"
             )
         validate_audit_model_selection_usage_custody(
             audit_model_selection=self.audit_model_selection,
@@ -14720,6 +15915,71 @@ class AuditReport(StrictModel):
         return self
 
     @model_validator(mode="after")
+    def taxonomy_custody_blocks_forged_maximum_completion(self) -> AuditReport:
+        """Bind current taxonomy evidence to its quality and maximum-assurance clauses."""
+
+        if self.schema_version != "1.4":
+            if self.taxonomy_coverage is not None:
+                raise ValueError("pre-taxonomy reports cannot retain taxonomy coverage")
+            return self
+        coverage = self.taxonomy_coverage
+        if coverage is None:
+            raise ValueError("report schema 1.4 requires taxonomy coverage")
+        # Delayed import avoids a schemas/taxonomy module cycle while still making the report's
+        # retained deterministic and model-review evidence authoritative for this projection.
+        from mmaudit.solidity.taxonomy import (
+            validate_known_issue_taxonomy_coverage_provenance,
+        )
+
+        validate_known_issue_taxonomy_coverage_provenance(
+            coverage,
+            invariants=self.invariants,
+            model_review_coverage=self.model_review_coverage,
+        )
+        gates = [
+            gate
+            for gate in self.quality_gates
+            if gate.gate == "known_issue_taxonomy_critical_disposition"
+        ]
+        if len(gates) != 1:
+            raise ValueError("report schema 1.4 requires exactly one taxonomy quality gate")
+        gate = gates[0]
+        maximum_required = self.audit_profile is AuditProfile.MAXIMUM_ASSURANCE or bool(
+            self.maximum_assurance is not None and self.maximum_assurance.required
+        )
+        if (
+            gate.required is not maximum_required
+            or gate.passed is not coverage.critical_gate_passed
+        ):
+            raise ValueError("taxonomy quality gate differs from retained coverage")
+        if gate.artifacts != ["known-issue-taxonomy-coverage.json", "known-issue-taxonomy.json"]:
+            raise ValueError("taxonomy quality gate artifact custody is incomplete")
+        if maximum_required:
+            if self.maximum_assurance is None:
+                raise ValueError("maximum taxonomy gate requires an assurance assessment")
+            if self.maximum_assurance.contract_version != "1.1":
+                raise ValueError("report schema 1.4 maximum assurance requires contract 1.1")
+            clauses = [
+                requirement
+                for requirement in self.maximum_assurance.requirements
+                if requirement.engine == "known_issue_taxonomy_critical_disposition"
+            ]
+            if len(clauses) != 1:
+                raise ValueError("maximum assurance requires exactly one taxonomy clause")
+            clause = clauses[0]
+            if (
+                not clause.required
+                or clause.passed is not coverage.critical_gate_passed
+                or clause.blocking is not (not coverage.critical_gate_passed)
+                or clause.artifacts
+                != ["known-issue-taxonomy-coverage.json", "known-issue-taxonomy.json"]
+            ):
+                raise ValueError("maximum-assurance taxonomy clause differs from coverage")
+            if self.run_status is AuditRunStatus.COMPLETE and not coverage.critical_gate_passed:
+                raise ValueError("critical taxonomy GAP cannot produce a COMPLETE maximum audit")
+        return self
+
+    @model_validator(mode="after")
     def run_status_matches_minimum_analysis_floor(self) -> AuditReport:
         exact_cost = (
             Decimal(self.accounted_cost_usd_exact)
@@ -14730,14 +15990,14 @@ class AuditReport(StrictModel):
             raise ValueError("report exact cost differs from presentation cost")
         self._validate_current_finding_inventories()
         self._validate_execution_origin_bindings()
-        if self.schema_version != "1.2":
+        if self.schema_version not in {"1.2", "1.3", "1.4"}:
             if self.run_status is not None or self.minimum_analysis_floor is not None:
-                raise ValueError("typed minimum-floor evidence requires report schema 1.2")
+                raise ValueError("typed minimum-floor evidence requires report schema 1.2+")
             return self
         if self.run_status is None or self.minimum_analysis_floor is None:
-            raise ValueError("report schema 1.2 requires typed minimum-floor evidence")
+            raise ValueError("report schema 1.2+ requires typed minimum-floor evidence")
         if self.language_capability is None:
-            raise ValueError("report schema 1.2 requires typed language capability evidence")
+            raise ValueError("report schema 1.2+ requires typed language capability evidence")
         self._validate_current_repository_language_census()
         if self.run_status is not self.minimum_analysis_floor.run_status:
             raise ValueError("report run status conflicts with minimum analysis floor")
@@ -14939,9 +16199,9 @@ class AuditReport(StrictModel):
     def _validate_current_finding_inventories(self) -> None:
         """Keep current active, rejected, and reporting-filtered inventories disjoint."""
 
-        if self.schema_version != "1.2":
+        if self.schema_version not in {"1.2", "1.3", "1.4"}:
             if self.filtered_findings:
-                raise ValueError("reporting-filtered findings require report schema 1.2")
+                raise ValueError("reporting-filtered findings require report schema 1.2+")
             return
         if any(finding.status is FindingStatus.REJECTED for finding in self.findings):
             raise ValueError("current report findings inventory cannot contain rejected findings")
@@ -15019,9 +16279,9 @@ class AuditReport(StrictModel):
         ]
         if len(execution_keys) != len(set(execution_keys)):
             raise ValueError("report invariant execution identities must be unique")
-        if self.schema_version != "1.2":
+        if self.schema_version not in {"1.2", "1.3", "1.4"}:
             if execution_findings or self.execution_origin_dispositions:
-                raise ValueError("execution-origin evidence requires report schema 1.2")
+                raise ValueError("execution-origin evidence requires report schema 1.2+")
             return
 
         counterexamples_by_index = {
@@ -15173,7 +16433,7 @@ class AuditReport(StrictModel):
 
         solidity = self.metadata.get("solidity")
         if not isinstance(solidity, dict):
-            raise ValueError("report schema 1.2 requires typed Solidity runtime metadata")
+            raise ValueError("report schema 1.2+ requires typed Solidity runtime metadata")
         raw_projects = solidity.get("projects")
         raw_compilations = solidity.get("compilation")
         if not isinstance(raw_projects, list) or not isinstance(raw_compilations, list):

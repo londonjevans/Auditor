@@ -61,20 +61,76 @@ controls or quote inputs. `max_model_retries` remains transient-only. Current qu
 budget, usage, and manifest-v1.3 evidence bind the exact split-policy hash; manifest/smoke v1.2 is
 legacy retry-off replay and cannot substitute for current split-retry custody.
 
+### Provider-free actor-model input
+
+An actor model requires no provider access. An operator authors repository-relative JSON from
+reviewed governance and economic evidence against `schemas/actor_model.schema.json`; model output
+must not invent holders, admitted roles, constraints, or incentives. Start from the non-production
+shape in `tests/fixtures/actor_model/synthetic_orchard_actor_model.json`, replacing every synthetic
+assertion and evidence reference for the audited subject.
+
+The file's `artifact_sha256` is the SHA-256 of compact, key-sorted UTF-8 JSON for the validated typed
+payload excluding that hash field. Configure `[actor_model]` with its path plus matching
+`expected_subject_id` and `expected_model_sha256`; add `expected_source_sha256` to pin the exact
+source bytes. At run start,
+only `valid_from <= run_started_at < valid_until` is current. Future, stale, invalid, or mismatched
+evidence never calibrates findings. Set `required = true` when a non-current input must keep the
+audit incomplete. Current input makes unresolved actor assessments a required quality gate even
+when `required = false`.
+
 ### Current campaign-admission boundary
 
-The `2026-08-28T07:56Z` operator-supplied record is 148,339 bytes / 2,648 lines at SHA-256
-`d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089`. It is nonauthorizing,
-uncommitted, and not independently authenticated by Codex. Its newest provider-free entry reports
-that the one correct candidate tombstone rejects the revoked DeepSeek/`parasail/fp8` assignment but
-also blocks every unrevoked alternative because plan eligibility evaluates the whole pinned route
-set. The ledger remains 57 entries / `0.68118684` USD and completed real audits remain zero.
-`V3-REVOKERECON-001` is queued and unselected.
-The tombstone reason is `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`; pinned plan
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f` still lists that route.
-MiniMax/Coreweave, Gemma/DeepInfra, and Tencent/Novita alternatives were all refused by plan-route
-eligibility, while the incumbent was correctly refused at assignment. No repository command emits
-a successor selection plan, so hand-editing the hash-pinned input is not an approved workaround.
+The `2026-09-01T04:49Z` operator-supplied record is 162,656 bytes / 2,902 lines at SHA-256
+`af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b`. It is committed at
+remote-resolved `4c553590fedd4d297442f0a73da703d993f5eec9`, is nonauthorizing, and was not independently
+authenticated by Codex. Its newest entry accepts both refusals. Candidate requests genuinely emit
+`effort=high` and reserve reasoning tokens, so reasoning-effort support remains required across every
+role and all four route purposes. Ordinary JSON numeric price custody remains inadmissible: once a
+price has transited a binary float, reserializing it cannot prove identity to the provider's original
+decimal lexeme. No constraint was relaxed.
+
+At the AF7 evidence boundary, the operator chose future lossless price-lexeme custody and queued
+`V3-PRICELEXEME-001`. The operator reports that `json.loads(..., parse_float=Decimal)` can retain the
+source decimal rather than reconstructing it from a float; Codex has not independently verified that
+operator-side experiment. A later direct operator directive now selects `V3-PRICELEXEME-001` as the
+sole `IN_PROGRESS` ticket after `V3-RETRIEVAL-001` reached `COMPLETE`. This is a selection-only
+boundary: `implementation_started=false`, and no decoder, pricing, retry, or configuration change
+has been made. Existing sealed evidence must remain byte-identical under any future work. The
+conditional
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` route is not currently admissible or selected. Under the
+current custody model there is no admissible candidate route, the active plan remains unchanged,
+and `V3-CANDROUTE-001` remains `PARTIAL`. AF7's queued, unselected, and unimplemented price-lexeme
+state remains historical evidence at that exact record boundary; the newer directive changes only
+the local ticket selection state. The operator reports zero new spend, the unchanged 57-entry /
+`0.68118684` USD ledger, and zero completed real audits. No provider action, operator command,
+campaign, run index, qualification, runtime, audit, or release authority follows.
+
+The historical `2026-08-30T19:00Z` credentialed metadata-only schema-v1.0 survey covered 12 models
+and 112 endpoints, found zero endpoint-level reasoning-effort inventories, and exposed that the
+diagnostic omitted model-level and admission-effective reasoning inventory. Local schema v1.1
+corrects that gap and has not been exercised live; no repeat external command is required. The prior
+15:18 plan-successor result is retained as historical evidence. The local emitter now has an
+explicit schema-v1.6
+`--refresh-endpoint-inventory` path that stages one previously unlisted endpoint as
+`OPERATOR_STAGED_UNVERIFIED`, binds its predecessor inventory, requires later constrained discovery,
+and grants no authority. Omission remains fail-closed. This local mechanism does not select or prove
+a current real route, and no external action or command is current. Fresh operator evidence for a
+current real route is required before `V3-CANDROUTE-001` can resume. Hand-editing the hash-pinned
+input is not an approved workaround.
+
+`V3-ENDPOINTLIST-001` schema v1.0 was exercised by the operator at `2026-08-30T19:00Z`: credentialed
+metadata GETs enumerated `112` endpoints across `12` models, found zero endpoint-level
+reasoning-effort inventories, issued no completion, and left the `57`-entry / `0.68118684` USD
+ledger unchanged. The survey exposed that v1.0 omitted the model-catalog fallback and exact
+effective reasoning value used by admission. The corrected v1.1 reference surface
+`mmaudit models list-endpoints --model EXACT_ID [--json]` now reports separate model, endpoint, and
+admission-effective reasoning inventories plus model/endpoint structured-output facts. Its shared
+endpoint-first resolver preserves explicit-empty veto and exposes unavailable or contradictory
+metadata. It remains metadata-only, self-hashed, ledger-free, and nonauthorizing. Codex validated
+the correction only with local synthetic metadata and did not perform or authenticate the live
+survey; the earlier v1.0 output does not validate v1.1. No repeat external command is required.
+The survey produced zero admissible candidates, `V3-CANDROUTE-001` stays `PARTIAL`, and the active
+plan remains unchanged.
 
 The immediately preceding entry reports fresh r23 discovery, paid smoke index 22 (`0.04395915` USD;
 bundle
@@ -87,9 +143,10 @@ entries reconciled, 57 entries / `0.68118684` USD total, and zero completed real
 
 The corrected provider-free mechanism remains `COMPLETE` under `V3-RUNTIMEADMIT-001`, but that one
 failed launch creates no reusable admission or future authority. Codex did not read the private
-registries, bundle, campaign, or ledger. The frozen DeepSeek/`parasail/fp8` candidate is non-runnable
-pending revocation/plan reconciliation, separate reselection, and empirical structured-output
-validation; no replacement is selected.
+registries, bundle, campaign, or ledger. The frozen DeepSeek/`parasail/fp8` candidate is non-runnable;
+the operator-reported successor sweep found zero admissible replacements, and its artifact is neither
+active nor independently inspected by Codex. `V3-CANDROUTE-001` remains `PARTIAL` after its local
+provider-free mechanism slice; no real replacement is selected.
 The historical launch did not retry schema-invalid output on the same route;
 `max_model_retries = 1` was and remains limited to transient network/status retry. The
 operator-selected schema retry is now implemented and explicitly selectable provider-free as

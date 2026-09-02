@@ -7,6 +7,7 @@ import html
 import json
 from collections.abc import Mapping, Sequence
 
+from mmaudit.models.actor_model import ActorRemediationFocus, actor_remediation_guidance
 from mmaudit.models.schemas import (
     AuditReport,
     AuditRunStatus,
@@ -14,6 +15,8 @@ from mmaudit.models.schemas import (
     CandidateReproductionResolution,
     Finding,
     FindingStatus,
+    KnownIssueDisposition,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     Location,
@@ -57,6 +60,59 @@ _SEVERITY_ORDER = {
     Severity.LOW: 1,
     Severity.INFORMATIONAL: 0,
 }
+
+
+def _client_taxonomy_coverage_lines(
+    coverage: KnownIssueTaxonomyCoverage | None,
+) -> list[str]:
+    """Summarize non-finding taxonomy coverage without expanding forensic evidence."""
+
+    if coverage is None:
+        return []
+    overall_percentage = (
+        "not applicable"
+        if coverage.overall.percentage is None
+        else f"{coverage.overall.percentage:g}%"
+    )
+    critical_percentage = (
+        "not applicable"
+        if coverage.critical.percentage is None
+        else f"{coverage.critical.percentage:g}%"
+    )
+    gap_count = sum(item.disposition is KnownIssueDisposition.GAP for item in coverage.dispositions)
+    lines = [
+        "## Known-issue taxonomy coverage",
+        "",
+        "This is defensive review coverage, not a finding inventory. A `GAP` records absent "
+        "review evidence and does not itself assert a vulnerability.",
+        "",
+        f"- Applicable or unresolved classes reviewed: {coverage.overall.numerator}/"
+        f"{coverage.overall.denominator} ({overall_percentage})",
+        f"- Critical applicable or unresolved classes reviewed: {coverage.critical.numerator}/"
+        f"{coverage.critical.denominator} ({critical_percentage})",
+        f"- GAP dispositions: {gap_count}",
+        f"- Critical taxonomy gate passed: {coverage.critical_gate_passed}",
+        "",
+    ]
+    if coverage.critical_gap_ids:
+        lines.extend(
+            [
+                "> **CRITICAL TAXONOMY GAP:** missing review evidence for "
+                + ", ".join(_inline(item_id) for item_id in coverage.critical_gap_ids)
+                + ". This blocks maximum-assurance completion but does not create a finding.",
+                "",
+            ]
+        )
+    elif not coverage.critical_gate_passed:
+        lines.extend(
+            [
+                "> **CRITICAL TAXONOMY GATE NOT PASSED:** complete critical-class review "
+                "coverage was not established. This blocks maximum-assurance completion but "
+                "does not create a finding.",
+                "",
+            ]
+        )
+    return lines
 
 
 def _repository_sources(report: AuditReport) -> dict[str, tuple[str, int]]:
@@ -439,6 +495,12 @@ def _affected_component(finding: Finding) -> str:
 
 
 def _host_derived_safety_property(finding: Finding) -> str:
+    if _ordinary_legitimate_behavior(finding):
+        return (
+            "Host-derived safety property: under the retained execution prerequisites, the "
+            "authorized legitimate state transition must preserve "
+            "declared safety invariants and user protections."
+        )
     preconditions = "; ".join(finding.preconditions)
     return (
         f"Host-derived safety property: under the recorded preconditions ({preconditions}), "
@@ -480,14 +542,61 @@ def _detail_items(label: str, items: Sequence[str]) -> list[str]:
     return [f"  - {label}:", *[f"    - {_text(item)}" for item in items]]
 
 
+def _ordinary_legitimate_behavior(finding: Finding) -> bool:
+    assessment = finding.actor_assessment
+    return bool(
+        assessment is not None
+        and assessment.remediation_focus is ActorRemediationFocus.LEGITIMATE_STATE_TRANSITION
+    )
+
+
+def _client_finding_title(finding: Finding) -> str:
+    return (
+        "Ordinary legitimate behavior finding"
+        if _ordinary_legitimate_behavior(finding)
+        else finding.title
+    )
+
+
+def _client_remediation(finding: Finding) -> str:
+    if finding.actor_assessment is None or not _ordinary_legitimate_behavior(finding):
+        return finding.recommendation
+    return actor_remediation_guidance(finding.actor_assessment.remediation_focus)
+
+
 def _finding_detail(record: ForensicFindingRecord) -> list[str]:
     finding = record.finding
+    ordinary_behavior = _ordinary_legitimate_behavior(finding)
+    effective_impact = (
+        "The defensive concern is whether this authorized legitimate transition preserves "
+        "the recorded safety invariants and affected-party protections."
+        if ordinary_behavior
+        else finding.impact
+    )
+    effective_path = (
+        (
+            "The modeled role exercises the recorded authorized permission as ordinary "
+            "legitimate behavior.",
+            "The implementation must preserve declared safety invariants throughout that "
+            "legitimate state transition.",
+        )
+        if ordinary_behavior
+        else tuple(finding.attack_path)
+    )
+    effective_preconditions = (
+        (
+            "The recorded authorized role and permission are available under the calibrated "
+            "actor context.",
+        )
+        if ordinary_behavior
+        else tuple(finding.preconditions)
+    )
     excerpt = record.source_excerpt
     if excerpt is None:
         raise ValueError(f"client finding lacks a validated source excerpt: {finding.id}")
     property_statement, property_basis = _violated_property(finding)
     lines = [
-        f"### {_text(finding.title)} ({_inline(finding.id)})",
+        f"### {_text(_client_finding_title(finding))} ({_inline(finding.id)})",
         "",
         f"> **{_record_label(record)}** · Severity **{finding.severity.value.upper()}** · "
         f"Confidence **{finding.confidence:.2f}** · Evidence tier "
@@ -502,16 +611,58 @@ def _finding_detail(record: ForensicFindingRecord) -> list[str]:
         "",
         f"Property basis: {_text(property_basis)}.",
         "",
+        *(
+            [
+                "Actor-model basis: "
+                f"{_text(finding.actor_assessment.disposition.value)}; "
+                f"likelihood {_text(finding.actor_assessment.likelihood_adjustment.value)}; "
+                f"severity {_text(finding.actor_assessment.original_severity.value)} → "
+                f"{_text(finding.actor_assessment.calibrated_severity.value)}; "
+                f"input {_text(finding.actor_assessment.input_state.value)}.",
+                "Actor-aware remediation: "
+                f"{_text(actor_remediation_guidance(finding.actor_assessment.remediation_focus))}",
+                *(
+                    [
+                        "Required co-held roles: "
+                        + ", ".join(
+                            _inline(value)
+                            for value in finding.actor_assessment.required_concentrated_role_ids
+                        )
+                    ]
+                    if finding.actor_assessment.required_concentrated_role_ids
+                    else []
+                ),
+                *(
+                    [
+                        "Relevant economic exposures: "
+                        + ", ".join(
+                            _inline(value.value)
+                            for value in finding.actor_assessment.relevant_economic_exposures
+                        )
+                    ]
+                    if finding.actor_assessment.relevant_economic_exposures
+                    else []
+                ),
+                *(
+                    [f"Actor-model limitation: {_text(finding.actor_assessment.limitation)}"]
+                    if finding.actor_assessment.limitation is not None
+                    else []
+                ),
+                "",
+            ]
+            if finding.actor_assessment is not None
+            else []
+        ),
         *_render_excerpt(excerpt),
-        f"Impact: {_text(finding.impact)}",
+        f"Impact: {_text(effective_impact)}",
         "",
         "Preconditions:",
         "",
-        *[f"- {_text(item)}" for item in finding.preconditions],
+        *[f"- {_text(item)}" for item in effective_preconditions],
         "",
-        "Reachable path:",
+        ("Legitimate behavior path:" if ordinary_behavior else "Reachable path:"),
         "",
-        *[f"{index}. {_text(item)}" for index, item in enumerate(finding.attack_path, start=1)],
+        *[f"{index}. {_text(item)}" for index, item in enumerate(effective_path, start=1)],
         "",
         "Supporting evidence:",
         "",
@@ -609,7 +760,16 @@ def _finding_detail(record: ForensicFindingRecord) -> list[str]:
     lines.extend(
         [
             "",
-            f"Remediation: {_text(finding.recommendation)}",
+            f"Remediation: {_text(_client_remediation(finding))}",
+            *(
+                [
+                    "Submitted model title (superseded): " + _text(finding.title),
+                    "Submitted model recommendation (retained as evidence): "
+                    + _text(finding.recommendation),
+                ]
+                if ordinary_behavior
+                else []
+            ),
             "",
             "Safe verification test: "
             + _text(
@@ -623,6 +783,23 @@ def _finding_detail(record: ForensicFindingRecord) -> list[str]:
             *[f"- {_text(item)}" for item in finding.false_positive_conditions],
         ]
     )
+    if ordinary_behavior:
+        lines.extend(
+            [
+                "Submitted model narrative (superseded, retained as evidence):",
+                f"- Summary: {_text(finding.summary)}",
+                f"- Impact: {_text(finding.impact)}",
+                *[
+                    f"- Submitted path step {index}: {_text(item)}"
+                    for index, item in enumerate(finding.attack_path, start=1)
+                ],
+                *[
+                    f"- Submitted precondition {index}: {_text(item)}"
+                    for index, item in enumerate(finding.preconditions, start=1)
+                ],
+                "",
+            ]
+        )
     if finding.disagreement:
         lines.append(f"- {_text(finding.disagreement)}")
     lines.append("")
@@ -835,10 +1012,41 @@ def _render_client_markdown_from_artifact(
             *_completed_analysis_summary(report),
             "",
             *_audit_model_selection_report_lines(report),
-            "## Finding summary",
-            "",
         ]
     )
+    lines.extend(_client_taxonomy_coverage_lines(report.taxonomy_coverage))
+    if report.actor_model_evaluation is not None:
+        evaluation = report.actor_model_evaluation
+        lines.extend(
+            [
+                "## Actor-model evidence and governance",
+                "",
+                f"- Input state: {_inline(evaluation.input_evidence.state.value)}",
+                f"- Assessed findings: {len(evaluation.finding_assessments)}",
+                f"- Governance observations: {len(evaluation.governance_findings)}",
+                *[
+                    f"- Limitation: {_text(limitation)}"
+                    for limitation in evaluation.input_evidence.limitations
+                ],
+                "",
+            ]
+        )
+        for governance in evaluation.governance_findings:
+            locations = ", ".join(
+                f"{item.path}:{item.start_line}-{item.end_line}"
+                for item in governance.code_evidence
+            )
+            lines.extend(
+                [
+                    f"- {_inline(governance.conflict_id)} — "
+                    f"{_text(governance.kind.value)} for role "
+                    f"{_inline(governance.role_id)}: {_text(governance.detail)}"
+                    + (f" ({_text(locations)})" if locations else ""),
+                ]
+            )
+        if evaluation.governance_findings:
+            lines.append("")
+    lines.extend(["## Finding summary", ""])
     if ordered_records:
         lines.extend(
             [
@@ -859,7 +1067,8 @@ def _render_client_markdown_from_artifact(
     if ordered_records:
         lines.extend(
             f"{index}. **{record.finding.severity.value.upper()} — "
-            f"{_text(record.finding.title)}:** {_text(record.finding.recommendation)}"
+            f"{_text(_client_finding_title(record.finding))}:** "
+            f"{_text(_client_remediation(record.finding))}"
             for index, record in enumerate(ordered_records, start=1)
         )
     else:
@@ -920,6 +1129,14 @@ def _render_client_markdown_from_artifact(
             "- `findings.json`",
             "- `audit-results.sarif`",
             "- `coverage.json`",
+            *(
+                [
+                    "- `known-issue-taxonomy.json`",
+                    "- `known-issue-taxonomy-coverage.json`",
+                ]
+                if report.taxonomy_coverage is not None
+                else []
+            ),
             "- `model-execution.json`",
             *(
                 ["- `audit-model-selection-evidence.json`"]

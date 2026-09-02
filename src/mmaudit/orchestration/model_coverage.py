@@ -11,7 +11,12 @@ from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
-from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
+from mmaudit.config import (
+    AuditConfig,
+    ModelLineageConfig,
+    configured_model_ids,
+    model_lineage_index,
+)
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.coverage_planning import (
     MAX_COVERAGE_ASSIGNMENTS,
@@ -33,6 +38,7 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     InvariantSpec,
     InvariantSuite,
+    KnownIssueTaxonomy,
     Location,
     ModelReviewCoverage,
     ModelReviewEvidenceReference,
@@ -43,6 +49,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    ProtocolProfileStatus,
     QualityGateResult,
     SolidityEntity,
     SolidityEntityKind,
@@ -55,14 +62,23 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.truncation_closure import TruncationSurfaceOriginKind
 from mmaudit.models.usage import (
+    has_exact_nonfallback_model_identity,
     is_accountable_usage_record,
     is_creditable_usage_record,
     is_recovery_accountable_usage_record,
     is_recovery_creditable_usage_record,
 )
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchAuthorization,
+    ModelReviewPreDispatchBinding,
+)
 from mmaudit.orchestration.model_review_evidence import (
     model_review_context_sha256,
+    model_surface_context_evidence_custody_failures,
+    model_surface_retained_context_custody_failures,
+    model_surface_review_context_custody_failures,
     model_surface_review_excerpt_validation_failures,
+    model_surface_review_identity_lineage_custody_failures,
     model_surface_review_record_validation_failures,
 )
 from mmaudit.repository.chunking import line_range_hash
@@ -75,6 +91,7 @@ from mmaudit.solidity.coverage import (
 )
 
 if TYPE_CHECKING:
+    from mmaudit.orchestration.scheduler import SchedulerJournal
     from mmaudit.orchestration.truncation_recovery_evidence import (
         VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
         VerifiedPromotedTruncationRecoverySurfaceCoverage,
@@ -103,6 +120,7 @@ _STATE_KINDS = frozenset(
         SolidityEntityKind.CONSTANT,
     }
 )
+_MAX_MODEL_REVIEW_REFERENCE_REASON_LENGTH = 1_000
 _CONTRACT_KINDS = frozenset(
     {
         SolidityEntityKind.CONTRACT,
@@ -140,6 +158,7 @@ _CREDITABLE_REVIEW_STATUSES = frozenset(
     }
 )
 _RECOVERY_REQUEST_ID_RE = re.compile(r"^scheduler-recovery-request-[0-9a-f]{64}$")
+_RECOVERY_TASK_ID_RE = re.compile(r"^scheduler-recovery-task-[0-9a-f]{64}$")
 _RECOVERY_REQUEST_LIMIT_SCOPE_RE = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
 _WHOLE_PROTOCOL_REQUEST_ROLE_RE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _MAX_RECOVERY_USAGE_COORDINATES = 32
@@ -151,6 +170,108 @@ _FORENSIC_LIMITATION_LABELS = {
     "unregistered_model": "model-review requests used an unregistered model",
     "unapproved_lineage": "model-review requests used an unapproved lineage",
 }
+
+
+def build_model_review_pre_dispatch_authorizations(
+    journal: SchedulerJournal,
+) -> tuple[ModelReviewPreDispatchAuthorization, ...]:
+    """Return capabilities already issued by this live journal before dispatch."""
+
+    from mmaudit.orchestration.scheduler import SchedulerJournal as RuntimeSchedulerJournal
+
+    if type(journal) is not RuntimeSchedulerJournal:
+        raise ValueError("model-review authority requires the live scheduler journal")
+    return journal.model_review_pre_dispatch_authorizations
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedRecoveryRawAuthorization:
+    artifact_sha256: str
+    rendered_context_sha256: str
+
+
+def _model_review_authorization_map(
+    values: Sequence[ModelReviewPreDispatchAuthorization],
+) -> dict[str, ModelReviewPreDispatchBinding]:
+    from mmaudit.orchestration.scheduler import (
+        require_model_review_pre_dispatch_authorization,
+    )
+
+    materialized = tuple(values)
+    bindings = tuple(require_model_review_pre_dispatch_authorization(item) for item in materialized)
+    if any(
+        _RECOVERY_REQUEST_ID_RE.fullmatch(item.request_id) is not None
+        or _RECOVERY_TASK_ID_RE.fullmatch(item.task_id) is not None
+        for item in bindings
+    ):
+        raise ValueError(
+            "ordinary model-review authorizations cannot include recovery-child dispatches"
+        )
+    if len({item.request_id for item in bindings}) != len(bindings):
+        raise ValueError("model-review pre-dispatch authorizations must be unique")
+    return {item.request_id: item for item in sorted(bindings, key=lambda item: item.request_id)}
+
+
+def _verified_recovery_raw_authorization_map(
+    direct_capabilities: Sequence[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    recursive_capabilities: Sequence[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+) -> dict[str, _VerifiedRecoveryRawAuthorization]:
+    """Derive raw-child authority only from freshly verified durable promotions."""
+
+    from mmaudit.orchestration.scheduler import (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
+
+    authorities: dict[str, _VerifiedRecoveryRawAuthorization] = {}
+
+    def retain(
+        *,
+        request_id: str,
+        artifact_sha256: str,
+        context: ContextPackage,
+    ) -> None:
+        authority = _VerifiedRecoveryRawAuthorization(
+            artifact_sha256=artifact_sha256,
+            rendered_context_sha256=model_review_context_sha256(context),
+        )
+        if request_id in authorities:
+            raise ValueError("promoted recovery repeats a raw model-review request identity")
+        authorities[request_id] = authority
+
+    for direct_capability in direct_capabilities:
+        direct_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+            direct_capability
+        )
+        for child, usage, context in zip(
+            direct_projection.artifact.children,
+            direct_projection.child_usage_records,
+            direct_projection.child_contexts,
+            strict=True,
+        ):
+            retain(
+                request_id=usage.request_id,
+                artifact_sha256=child.surface_artifact.artifact_sha256,
+                context=context,
+            )
+    for recursive_capability in recursive_capabilities:
+        recursive_projection = (
+            require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+                recursive_capability
+            )
+        )
+        for child, usage, context in zip(
+            recursive_projection.artifact.children,
+            recursive_projection.leaf_usage_records,
+            recursive_projection.leaf_contexts,
+            strict=True,
+        ):
+            retain(
+                request_id=usage.request_id,
+                artifact_sha256=child.surface_artifact.artifact_sha256,
+                context=context,
+            )
+    return authorities
 
 
 def _record_forensic_limitation(
@@ -199,6 +320,7 @@ def build_model_review_coverage(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    known_issue_taxonomy: KnownIssueTaxonomy | None = None,
     minimum_critical_root_lineages: int = 3,
     audited_suite_coverage: AuditedSuiteCoverage | None = None,
     source_contents_by_path: dict[str, str] | None = None,
@@ -209,6 +331,7 @@ def build_model_review_coverage(
     promoted_recursive_recovery_surface_coverages: Sequence[
         VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
     ] = (),
+    ordinary_review_authorizations: Sequence[ModelReviewPreDispatchAuthorization] = (),
 ) -> ModelReviewCoverage:
     """Credit only explicit, validated per-surface response records."""
 
@@ -219,6 +342,7 @@ def build_model_review_coverage(
         invariants=invariants,
         economic_simulations=economic_simulations,
     )
+    known_issue_taxonomy = _reconstruct_known_issue_taxonomy(known_issue_taxonomy)
     audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
     limitations: set[str] = set()
     if index is None:
@@ -268,6 +392,7 @@ def build_model_review_coverage(
             graphs=graphs,
             invariants=invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=known_issue_taxonomy,
             source_contents_by_path=source_contents_by_path,
         )
         if (
@@ -295,6 +420,11 @@ def build_model_review_coverage(
             else {}
         ),
     )
+    authorization_by_request = _model_review_authorization_map(ordinary_review_authorizations)
+    recovery_authorization_by_request = _verified_recovery_raw_authorization_map(
+        promoted_recovery_surface_coverages,
+        promoted_recursive_recovery_surface_coverages,
+    )
     references = _review_evidence_references(
         config,
         requests=requests,
@@ -305,6 +435,8 @@ def build_model_review_coverage(
         graphs=graphs,
         limitations=limitations,
         recovery_usage_coordinates=recovery_usage_coordinates,
+        authorization_by_request=authorization_by_request,
+        recovery_authorization_by_request=recovery_authorization_by_request,
     )
     promoted_references = _promoted_recovery_evidence_references(
         config,
@@ -422,6 +554,7 @@ def build_model_surface_requests(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    known_issue_taxonomy: KnownIssueTaxonomy | None = None,
     audited_suite_coverage: AuditedSuiteCoverage | None = None,
     source_contents_by_path: dict[str, str] | None = None,
 ) -> list[ModelSurfaceReviewRequest]:
@@ -434,6 +567,7 @@ def build_model_surface_requests(
         invariants=invariants,
         economic_simulations=economic_simulations,
     )
+    known_issue_taxonomy = _reconstruct_known_issue_taxonomy(known_issue_taxonomy)
     audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
     if index is None:
         if audited_suite_coverage is not None and audited_suite_coverage.gaps:
@@ -454,6 +588,7 @@ def build_model_surface_requests(
         graphs=graphs,
         invariants=invariants,
         economic_simulations=economic_simulations,
+        known_issue_taxonomy=known_issue_taxonomy,
         source_contents_by_path=source_contents_by_path,
     )
     seeds = _with_audited_suite_criticality(seeds, audited_suite_coverage)
@@ -582,6 +717,7 @@ def plan_model_surface_review_assignments(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    known_issue_taxonomy: KnownIssueTaxonomy | None = None,
     audited_suite_coverage: AuditedSuiteCoverage | None = None,
     minimum_critical_root_lineages: int = 3,
     source_contents_by_path: dict[str, str] | None = None,
@@ -601,6 +737,7 @@ def plan_model_surface_review_assignments(
         graphs=graphs,
         invariants=invariants,
         economic_simulations=economic_simulations,
+        known_issue_taxonomy=known_issue_taxonomy,
         audited_suite_coverage=audited_suite_coverage,
         source_contents_by_path=source_contents_by_path,
     )
@@ -676,6 +813,7 @@ def model_surface_assignment_feasibility_gate(
     requests: list[ModelSurfaceReviewRequest],
     assignments: dict[str, list[ModelSurfaceReviewRequest]],
     required: bool,
+    known_issue_taxonomy: KnownIssueTaxonomy | None = None,
     minimum_critical_root_lineages: int = 3,
     source_contents_by_path: dict[str, str] | None = None,
 ) -> QualityGateResult:
@@ -706,6 +844,7 @@ def model_surface_assignment_feasibility_gate(
             economic_simulations=economic_simulations,
         )
         audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
+        known_issue_taxonomy = _reconstruct_known_issue_taxonomy(known_issue_taxonomy)
     except ValueError as exc:
         return QualityGateResult(
             gate=gate,
@@ -754,6 +893,7 @@ def model_surface_assignment_feasibility_gate(
             graphs=graphs,
             invariants=invariants,
             economic_simulations=economic_simulations,
+            known_issue_taxonomy=known_issue_taxonomy,
             audited_suite_coverage=audited_suite_coverage,
             source_contents_by_path=source_contents_by_path,
         )
@@ -1274,6 +1414,37 @@ def _with_audited_suite_criticality(
     ]
 
 
+def _render_model_review_reference_failure_reason(reasons: Sequence[str]) -> str:
+    """Render a stable bounded reason without dropping the complete failure-set identity."""
+
+    canonical_reasons = tuple(sorted({reason for reason in reasons if reason}))
+    if not canonical_reasons:
+        return "uncredited: no substantive model-review validation evidence"
+    rendered = "; ".join(canonical_reasons)
+    if len(rendered) <= _MAX_MODEL_REVIEW_REFERENCE_REASON_LENGTH:
+        return rendered
+
+    failure_set_sha256 = hashlib.sha256(
+        json.dumps(
+            canonical_reasons,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    summary = (
+        f"failure_count={len(canonical_reasons)}; full_failure_set_sha256={failure_set_sha256}"
+    )
+    detail_budget = _MAX_MODEL_REVIEW_REFERENCE_REASON_LENGTH - len(summary) - 2
+    retained: list[str] = []
+    for reason in canonical_reasons:
+        candidate = "; ".join((*retained, reason))
+        if len(candidate) <= detail_budget:
+            retained.append(reason)
+    return "; ".join((*retained, summary))
+
+
 def _promoted_recovery_evidence_references(
     config: AuditConfig,
     *,
@@ -1288,10 +1459,12 @@ def _promoted_recovery_evidence_references(
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
     """Credit only parent-retained records behind live journal promotion custody."""
 
+    from mmaudit.orchestration.scheduler import (
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
     from mmaudit.orchestration.truncation_recovery_evidence import (
         TruncationRecoveryEvidenceError,
         model_surface_analysis_context_sha256,
-        require_verified_promoted_truncation_recovery_surface_coverage,
     )
 
     materialized = tuple(itertools.islice(capabilities, _MAX_RECOVERY_USAGE_COORDINATES + 1))
@@ -1445,8 +1618,48 @@ def _promoted_recovery_evidence_references(
             reasons.append(
                 "promoted recovery parent context graphs were not an exact inventory subset"
             )
+        reasons.extend(
+            model_surface_context_evidence_custody_failures(
+                usage=evidence_usage,
+                request_id=artifact.parent_logical_request_id,
+                review_role=artifact.invariant_binding.review_role,
+                rendered_context_sha256=(
+                    model_review_context_sha256(validated_context)
+                    if validated_context is not None
+                    else evidence_usage.user_prompt_sha256 or ""
+                ),
+                requested_surface_manifest_sha256=(artifact.requested_surface_manifest_sha256),
+                context_role=artifact.invariant_binding.context_role,
+            )
+        )
+        if validated_context is not None:
+            reasons.extend(
+                model_surface_retained_context_custody_failures(
+                    context=validated_context,
+                    usage=evidence_usage,
+                    requests=artifact.requests,
+                    request_id=artifact.parent_logical_request_id,
+                    review_role=artifact.invariant_binding.review_role,
+                    context_role=artifact.invariant_binding.context_role,
+                    rendered_context_sha256=model_review_context_sha256(validated_context),
+                    requested_surface_manifest_sha256=(artifact.requested_surface_manifest_sha256),
+                    index=index,
+                    graphs=graphs,
+                )
+            )
         if not is_accountable_usage_record(evidence_usage, require_real=True):
             reasons.append("promoted recovery parent usage lacked live REAL accountability")
+        if not has_exact_nonfallback_model_identity(evidence_usage):
+            reasons.append(
+                "promoted recovery parent used model substitution, fallback, or identity drift"
+            )
+        reasons.extend(
+            model_surface_review_identity_lineage_custody_failures(
+                config,
+                usage=evidence_usage,
+                review_role=artifact.invariant_binding.review_role,
+            )
+        )
         if config.profile is AuditProfile.MAXIMUM_ASSURANCE and (
             evidence_usage.routing.get("certification_request") is not True
         ):
@@ -1532,7 +1745,7 @@ def _promoted_recovery_evidence_references(
                     reason=(
                         "credited: promoted parent-retained surface passed live closure replay"
                         if credited
-                        else "; ".join(sorted(set(record_reasons)))
+                        else _render_model_review_reference_failure_reason(record_reasons)
                     ),
                 )
             )
@@ -1553,10 +1766,12 @@ def _promoted_recursive_recovery_evidence_references(
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
     """Credit only root-parent records behind one live promoted recursive tree."""
 
+    from mmaudit.orchestration.scheduler import (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    )
     from mmaudit.orchestration.truncation_recovery_evidence import (
         TruncationRecoveryEvidenceError,
         model_surface_analysis_context_sha256,
-        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
     )
 
     materialized = tuple(itertools.islice(capabilities, _MAX_RECOVERY_USAGE_COORDINATES + 1))
@@ -1765,8 +1980,48 @@ def _promoted_recursive_recovery_evidence_references(
             reasons.append(
                 "promoted recursive parent context graphs were not an exact inventory subset"
             )
+        reasons.extend(
+            model_surface_context_evidence_custody_failures(
+                usage=evidence_usage,
+                request_id=artifact.parent_logical_request_id,
+                review_role=artifact.invariant_binding.review_role,
+                rendered_context_sha256=(
+                    model_review_context_sha256(validated_context)
+                    if validated_context is not None
+                    else evidence_usage.user_prompt_sha256 or ""
+                ),
+                requested_surface_manifest_sha256=(artifact.requested_surface_manifest_sha256),
+                context_role=artifact.invariant_binding.context_role,
+            )
+        )
+        if validated_context is not None:
+            reasons.extend(
+                model_surface_retained_context_custody_failures(
+                    context=validated_context,
+                    usage=evidence_usage,
+                    requests=artifact.requests,
+                    request_id=artifact.parent_logical_request_id,
+                    review_role=artifact.invariant_binding.review_role,
+                    context_role=artifact.invariant_binding.context_role,
+                    rendered_context_sha256=model_review_context_sha256(validated_context),
+                    requested_surface_manifest_sha256=(artifact.requested_surface_manifest_sha256),
+                    index=index,
+                    graphs=graphs,
+                )
+            )
         if not is_accountable_usage_record(evidence_usage, require_real=True):
             reasons.append("promoted recursive parent usage lacked live REAL accountability")
+        if not has_exact_nonfallback_model_identity(evidence_usage):
+            reasons.append(
+                "promoted recursive parent used model substitution, fallback, or identity drift"
+            )
+        reasons.extend(
+            model_surface_review_identity_lineage_custody_failures(
+                config,
+                usage=evidence_usage,
+                review_role=artifact.invariant_binding.review_role,
+            )
+        )
         if config.profile is AuditProfile.MAXIMUM_ASSURANCE and (
             evidence_usage.routing.get("certification_request") is not True
         ):
@@ -1858,7 +2113,7 @@ def _promoted_recursive_recovery_evidence_references(
                         "credited: promoted recursive parent-retained surface passed live tree "
                         "replay"
                         if credited
-                        else "; ".join(sorted(set(record_reasons)))
+                        else _render_model_review_reference_failure_reason(record_reasons)
                     ),
                 )
             )
@@ -1876,6 +2131,8 @@ def _review_evidence_references(
     graphs: SolidityGraphSet | None,
     limitations: set[str],
     recovery_usage_coordinates: Sequence[ModelCoverageRecoveryUsageCoordinate],
+    authorization_by_request: dict[str, ModelReviewPreDispatchBinding],
+    recovery_authorization_by_request: dict[str, _VerifiedRecoveryRawAuthorization],
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
     requests_by_id = {request.surface_id: request for request in requests}
     usage_by_request: dict[str, list[UsageRecord]] = {}
@@ -1908,6 +2165,30 @@ def _review_evidence_references(
         reasons: list[str] = []
         if duplicate_artifact:
             reasons.append("duplicate model-review artifact")
+
+        authorization = authorization_by_request.get(artifact.request_id)
+        recovery_authorization = recovery_authorization_by_request.get(artifact.request_id)
+        if authorization is None and recovery_authorization is None:
+            reasons.append("model review lacked exact journal-derived pre-dispatch authorization")
+        elif authorization is not None and (
+            authorization.request_id != artifact.request_id
+            or authorization.review_role != artifact.review_role
+            or authorization.requested_surface_manifest_sha256
+            != artifact.requested_surface_manifest_sha256
+            or authorization.rendered_context_sha256 != artifact.rendered_context_sha256
+            or authorization.provider_prompt_sha256 != artifact.prompt_sha256
+            or authorization.response_schema_sha256 != artifact.response_schema_sha256
+        ):
+            reasons.append(
+                "model review differed from exact journal-derived pre-dispatch authorization"
+            )
+        elif recovery_authorization is not None and (
+            recovery_authorization.artifact_sha256 != artifact.artifact_sha256
+            or recovery_authorization.rendered_context_sha256 != artifact.rendered_context_sha256
+        ):
+            reasons.append(
+                "recovery model review differed from exact durable promotion authorization"
+            )
 
         usages = usage_by_request.get(artifact.request_id, [])
         usage = usages[0] if len(usages) == 1 else None
@@ -1967,8 +2248,6 @@ def _review_evidence_references(
                 reasons.append(
                     "source review context hash differed from the rendered provider request"
                 )
-            if context.role != artifact.review_role:
-                reasons.append("source review context role differed from the artifact role")
             if tuple(context.requested_model_surfaces) != tuple(artifact_requests):
                 reasons.append("source review context surfaces differed from the artifact manifest")
             if not _context_symbol_index_is_subset(context.solidity_index, index):
@@ -1983,7 +2262,10 @@ def _review_evidence_references(
         )
         if expected_artifact_hash != artifact.artifact_sha256:
             reasons.append("artifact hash was inconsistent")
-        if artifact.review_role not in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES:
+        if not (
+            artifact.review_role in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES
+            or _WHOLE_PROTOCOL_REQUEST_ROLE_RE.fullmatch(artifact.review_role) is not None
+        ):
             reasons.append("artifact role was not an allowed investigator role")
 
         requested_model: str | None = None
@@ -1992,6 +2274,49 @@ def _review_evidence_references(
         if usage is not None:
             requested_model = usage.requested_model
             actual_model = usage.actual_model
+            if authorization is not None and (
+                authorization.requested_model != usage.requested_model
+                or authorization.root_lineage
+                != (
+                    lineage_by_model[usage.requested_model.lower()].root_lineage
+                    if usage.requested_model.lower() in lineage_by_model
+                    else None
+                )
+            ):
+                reasons.append(
+                    "model usage identity differed from journal-derived pre-dispatch authorization"
+                )
+            reasons.extend(
+                model_surface_review_context_custody_failures(
+                    artifact=artifact,
+                    usage=usage,
+                    context_role=context.role if context is not None else None,
+                )
+            )
+            if context is not None:
+                reasons.extend(
+                    model_surface_retained_context_custody_failures(
+                        context=context,
+                        usage=usage,
+                        requests=tuple(artifact_requests),
+                        request_id=artifact.request_id,
+                        review_role=artifact.review_role,
+                        context_role=context.role,
+                        rendered_context_sha256=artifact.rendered_context_sha256,
+                        requested_surface_manifest_sha256=(
+                            artifact.requested_surface_manifest_sha256
+                        ),
+                        index=index,
+                        graphs=graphs,
+                    )
+                )
+            reasons.extend(
+                model_surface_review_identity_lineage_custody_failures(
+                    config,
+                    usage=usage,
+                    review_role=artifact.review_role,
+                )
+            )
             if artifact.review_role != usage.role:
                 reasons.append("artifact role differed from its usage record")
             if artifact.prompt_sha256 != usage.prompt_sha256:
@@ -2092,7 +2417,7 @@ def _review_evidence_references(
                 reason=(
                     "credited: explicit per-surface response passed independent validation"
                     if credited
-                    else "; ".join(sorted(set(record_reasons)))
+                    else _render_model_review_reference_failure_reason(record_reasons)
                 ),
             )
             references.setdefault(record.surface_id, []).append(reference)
@@ -2166,6 +2491,8 @@ def _configured_models_for_role(config: AuditConfig, role: str) -> frozenset[str
     if role in _BASE_REVIEW_ROLES:
         role_config = config.models.role(role)
         return frozenset((role_config.primary, *role_config.fallbacks))
+    if _WHOLE_PROTOCOL_REQUEST_ROLE_RE.fullmatch(role) is not None:
+        return frozenset(configured_model_ids(config, include_fallbacks=True))
     if not role.startswith("specialist:"):
         return frozenset()
     specialist_config = config.models.specialists.get(role.removeprefix("specialist:"))
@@ -2244,6 +2571,16 @@ def _reconstruct_audited_suite_coverage(
     return AuditedSuiteCoverage.model_validate(coverage.model_dump(mode="python"))
 
 
+def _reconstruct_known_issue_taxonomy(
+    taxonomy: KnownIssueTaxonomy | None,
+) -> KnownIssueTaxonomy | None:
+    """Revalidate the pinned host-owned taxonomy before deriving paid review work."""
+
+    if taxonomy is None:
+        return None
+    return KnownIssueTaxonomy.model_validate(taxonomy.model_dump(mode="python"))
+
+
 def _copy_source_contents(
     source_contents_by_path: dict[str, str] | None,
 ) -> dict[str, str] | None:
@@ -2303,6 +2640,7 @@ def _require_authoritative_request_inventory(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    known_issue_taxonomy: KnownIssueTaxonomy | None,
     audited_suite_coverage: AuditedSuiteCoverage | None,
     source_contents_by_path: dict[str, str] | None,
 ) -> list[ModelSurfaceReviewRequest]:
@@ -2317,6 +2655,7 @@ def _require_authoritative_request_inventory(
         graphs=graphs,
         invariants=invariants,
         economic_simulations=economic_simulations,
+        known_issue_taxonomy=known_issue_taxonomy,
         audited_suite_coverage=audited_suite_coverage,
         source_contents_by_path=source_contents_by_path,
     )
@@ -2521,6 +2860,7 @@ def _surface_inventory(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    known_issue_taxonomy: KnownIssueTaxonomy | None,
     source_contents_by_path: dict[str, str] | None,
 ) -> list[_SurfaceSeed]:
     entities_by_id = {entity.id: entity for entity in index.entities}
@@ -2891,6 +3231,96 @@ def _surface_inventory(
                 invariant_considered=(
                     f"Assess applicability and preservation of economic template {template}."
                 ),
+            )
+        )
+    seeds.extend(
+        _known_issue_surface_seeds(
+            taxonomy=known_issue_taxonomy,
+            invariants=invariants,
+            entities_by_id=entities_by_id,
+            audited_entity_ids=audited_entity_ids,
+        )
+    )
+    return seeds
+
+
+def _known_issue_surface_seeds(
+    *,
+    taxonomy: KnownIssueTaxonomy | None,
+    invariants: InvariantSuite | None,
+    entities_by_id: dict[str, SolidityEntity],
+    audited_entity_ids: set[str],
+) -> list[_SurfaceSeed]:
+    """Create one hash-bound review surface for each deterministically applicable class."""
+
+    if taxonomy is None or invariants is None or invariants.protocol_profile_assessment is None:
+        return []
+    assessment = invariants.protocol_profile_assessment
+    classifications = {item.profile: item for item in assessment.classifications}
+    seeds: list[_SurfaceSeed] = []
+    for item in taxonomy.items:
+        matched = [
+            classifications[profile]
+            for profile in item.applicable_protocol_profiles
+            if classifications[profile].status is ProtocolProfileStatus.DETECTED
+        ]
+        if not matched:
+            # NOT_APPLICABLE and UNKNOWN items are dispositions, not paid review surfaces.
+            continue
+        matched_entity_ids = sorted(
+            {
+                entity_id
+                for classification in matched
+                for entity_id in classification.entity_ids
+                if entity_id in audited_entity_ids and entity_id in entities_by_id
+            }
+        )
+        matched_entities = [entities_by_id[entity_id] for entity_id in matched_entity_ids]
+        locations = _sorted_locations(
+            [_entity_location(entity) for entity in matched_entities]
+            + [
+                location
+                for classification in matched
+                for location in classification.locations
+                if any(
+                    location.path == entity.path
+                    and entity.start_line <= location.start_line
+                    and location.end_line <= entity.end_line
+                    for entity in matched_entities
+                )
+            ]
+        )
+        if not locations:
+            # Applicability remains a GAP downstream when no exact audited review anchor exists.
+            continue
+        contracts = sorted(
+            {
+                entity.contract_name
+                or (entity.name if entity.kind in _CONTRACT_KINDS else "protocol")
+                for entity in matched_entities
+            }
+        )
+        symbols = sorted(
+            {
+                value
+                for entity in matched_entities
+                for value in (entity.id, entity.name, entity.signature)
+                if value is not None
+            }
+        )
+        seeds.append(
+            _SurfaceSeed(
+                kind=ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS,
+                subject_id=item.review_surface_subject_id,
+                label=f"Known issue class {item.item_id}: {item.title}",
+                # Every applicable taxonomy item is mandatory consideration evidence.  The
+                # corpus criticality remains the separate maximum-assurance GAP gate; surface
+                # planning must keep all known-issue review requests in the frozen T0 tier.
+                critical=True,
+                locations=tuple(locations[:100]),
+                contract=contracts[0] if len(contracts) == 1 else "protocol",
+                allowed_symbols=tuple(symbols[:100]),
+                invariant_considered=item.defensive_question,
             )
         )
     return seeds

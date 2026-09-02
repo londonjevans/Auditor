@@ -479,6 +479,7 @@ def _install_live_route_client_factory(
             usage=kwargs["usage"],
             candidate=models_by_endpoint[endpoint],
             provider_policy=provider_policy,
+            candidate_revocation_route_constraint=kwargs["candidate_revocation_route_constraint"],
             reasoning_policy=kwargs["reasoning_policy"],
             token_budgets=kwargs["token_budgets"],
         )

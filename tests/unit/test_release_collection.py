@@ -1,197 +1,112 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+import os
+import subprocess
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock
 
 import pytest
 
-import mmaudit.release_collection as collection_module
-from mmaudit.orchestration.manifest import ManifestFileBinding
-from mmaudit.release import ReleaseGateId, ReleaseStatus
-from mmaudit.release_collection import RELEASE_REPORT_PATH, collect_release_report
-from mmaudit.release_report import ReleaseReportInputRole
+import mmaudit.release_io as release_io_module
+import mmaudit.release_runtime as release_runtime_module
+from mmaudit.release_collection import (
+    RELEASE_COLLECTION_BLOCKER,
+    ReleaseCollectionUnavailableError,
+    collect_release_report,
+)
 from scripts import generate_release_report
 
 
-def _roots(tmp_path: Path) -> dict[str, Path]:
-    values = {
+def _collection_arguments(tmp_path: Path) -> dict[str, Path | str]:
+    return {
+        "release_id": "candidate-1",
         "release_repository_root": tmp_path / "release",
         "target_repository_root": tmp_path / "target",
+        "configuration_root": tmp_path / "configuration",
         "emitted_run_dir": tmp_path / "run",
-        "evidence_root": tmp_path / "evidence",
-        "report_root": tmp_path / "report",
+        "artifact_evidence_path": tmp_path / "artifact-evidence.json",
+        "run_verification_path": tmp_path / "verification.json",
+        "publication_root": tmp_path / "published-release",
     }
-    for path in values.values():
-        path.mkdir()
-    values["evidence_root"].chmod(0o700)
-    values["report_root"].chmod(0o700)
-    return values
 
 
-def _binding(path: str) -> ManifestFileBinding:
-    content = path.encode()
-    return ManifestFileBinding(
-        path=path,
-        sha256=hashlib.sha256(content).hexdigest(),
-        size=len(content),
-    )
-
-
-def test_collection_executes_the_fixed_portfolio_and_authoritatively_validates(
+def test_collection_fails_before_top_directory_adoption_or_any_execution(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    roots = _roots(tmp_path)
-    candidate = SimpleNamespace(observation_sha256="a" * 64)
-    run = SimpleNamespace(binding_sha256="b" * 64)
-    verification = SimpleNamespace(binding_sha256="c" * 64)
-    static = SimpleNamespace(evidence_sha256="d" * 64)
-    gate_bundle = SimpleNamespace(
-        bundle_sha256="e" * 64,
-        receipts=tuple(SimpleNamespace(artifact_bindings=()) for _ in ReleaseGateId),
-    )
-    report = SimpleNamespace(
-        status=ReleaseStatus.BLOCKED_TECHNICAL,
-        passed_gates=7,
-        total_gates=12,
-    )
-    write = Mock(side_effect=lambda **kwargs: _binding(str(kwargs["relative_path"])))
-    local = Mock(side_effect=lambda **kwargs: f"local:{kwargs['gate_id'].value}")
-    bound_input_lengths: list[int] = []
+    victim = tmp_path / "top-victim"
+    victim.mkdir()
+    keep = victim / "keep"
+    keep.write_text("must survive\n", encoding="utf-8")
+    mkdir_calls: list[tuple[object, ...]] = []
+    gate = Mock()
+    write = Mock()
+    forbidden_io = Mock(side_effect=AssertionError("collection attempted a side effect"))
 
-    def collect_bound(**kwargs: object) -> str:
-        bindings = kwargs["input_bindings"]
-        assert isinstance(bindings, list)
-        bound_input_lengths.append(len(bindings))
-        gate_id = kwargs["gate_id"]
-        assert isinstance(gate_id, ReleaseGateId)
-        return f"bound:{gate_id.value}"
+    def adopt_top_victim(*args: object, **kwargs: object) -> None:
+        mkdir_calls.append((*args, kwargs))
+        victim.rename(tmp_path / "adopted-top-victim")
 
-    bound = Mock(side_effect=collect_bound)
-    build_bundle = Mock(return_value=gate_bundle)
-    assemble = Mock(return_value=report)
-    validate = Mock(return_value=report)
+    with monkeypatch.context() as guard:
+        guard.setattr(os, "mkdir", adopt_top_victim)
+        guard.setattr(os, "open", forbidden_io)
+        guard.setattr(os, "rename", forbidden_io)
+        guard.setattr(os, "replace", forbidden_io)
+        guard.setattr(os, "unlink", forbidden_io)
+        guard.setattr(Path, "open", forbidden_io)
+        guard.setattr(Path, "write_bytes", forbidden_io)
+        guard.setattr(Path, "write_text", forbidden_io)
+        guard.setattr(Path, "rename", forbidden_io)
+        guard.setattr(Path, "replace", forbidden_io)
+        guard.setattr(Path, "unlink", forbidden_io)
+        guard.setattr(subprocess, "run", forbidden_io)
+        guard.setattr(subprocess, "Popen", forbidden_io)
+        guard.setattr(release_runtime_module, "execute_local_release_gate", gate)
+        guard.setattr(release_io_module, "write_json_evidence", write)
 
-    with (
-        patch.object(collection_module, "observe_release_candidate", return_value=candidate),
-        patch.object(collection_module, "observe_release_run_binding", return_value=run),
-        patch.object(
-            collection_module,
-            "observe_release_run_verification",
-            return_value=verification,
-        ),
-        patch.object(collection_module, "collect_static_release_evidence", return_value=static),
-        patch.object(collection_module, "write_json_evidence", write),
-        patch.object(collection_module, "execute_local_release_gate", local),
-        patch.object(collection_module, "collect_bound_release_gate_receipt", bound),
-        patch.object(collection_module, "build_release_gate_evidence_bundle", build_bundle),
-        patch.object(collection_module, "_assemble_release_gate_report", assemble),
-        patch.object(collection_module, "validate_release_report_integrity", validate),
-        patch.object(collection_module, "_require_exact_flat_file_inventory"),
-    ):
-        observed = collect_release_report(
-            release_id="candidate-1",
-            artifact_evidence_path=tmp_path / "artifact-evidence.json",
-            run_verification_path=tmp_path / "verification.json",
-            **roots,
-        )
+        with pytest.raises(ReleaseCollectionUnavailableError, match="same-EUID name adoption"):
+            collect_release_report(**_collection_arguments(tmp_path))
 
-    assert observed is report
-    local_ids = {item.kwargs["gate_id"] for item in local.call_args_list}
-    assert local_ids == {
-        ReleaseGateId.MYPY,
-        ReleaseGateId.PYTEST,
-        ReleaseGateId.RUFF_CHECK,
-        ReleaseGateId.RUFF_FORMAT,
-    }
-    bound_ids = {item.kwargs["gate_id"] for item in bound.call_args_list}
-    assert bound_ids == set(ReleaseGateId) - local_ids
-    assert all(
-        item.kwargs["candidate"] is candidate and item.kwargs["run"] is run
-        for item in bound.call_args_list
-    )
-    assert bound_input_lengths == [4] * len(bound_ids)
-    bundle_receipts = build_bundle.call_args.kwargs["receipts"]
-    assert len(bundle_receipts) == len(ReleaseGateId)
-    report_inputs = assemble.call_args.kwargs["input_files"]
-    assert {item.role for item in report_inputs} == set(ReleaseReportInputRole)
-    assert write.call_args_list[-1] == call(
-        evidence_root=roots["report_root"].resolve(),
-        relative_path=RELEASE_REPORT_PATH,
-        value=report,
-    )
-    assert validate.call_args.kwargs["report_relative_path"] == RELEASE_REPORT_PATH
+    assert mkdir_calls == []
+    forbidden_io.assert_not_called()
+    gate.assert_not_called()
+    write.assert_not_called()
+    assert keep.read_text(encoding="utf-8") == "must survive\n"
+    assert not (tmp_path / "published-release").exists()
 
 
-@pytest.mark.parametrize("output_key", ("evidence_root", "report_root"))
-def test_collection_rejects_nonempty_output_roots_before_observation(
+def test_collection_fails_before_child_directory_adoption(
     tmp_path: Path,
-    output_key: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    roots = _roots(tmp_path)
-    (roots[output_key] / "preexisting.json").write_text("{}\n", encoding="utf-8")
-    observer = Mock()
+    victim = tmp_path / "child-victim"
+    victim.mkdir()
+    keep = victim / "keep"
+    keep.write_text("must survive\n", encoding="utf-8")
+    mkdir_calls: list[tuple[object, ...]] = []
 
-    with (
-        patch.object(collection_module, "observe_release_candidate", observer),
-        pytest.raises(ValueError, match="root must be empty"),
-    ):
-        collect_release_report(
-            release_id="candidate-1",
-            artifact_evidence_path=tmp_path / "artifact-evidence.json",
-            run_verification_path=tmp_path / "verification.json",
-            **roots,
-        )
+    def adopt_child_victim(*args: object, **kwargs: object) -> None:
+        mkdir_calls.append((*args, kwargs))
+        victim.rename(tmp_path / "adopted-child-victim")
 
-    observer.assert_not_called()
+    monkeypatch.setattr(os, "mkdir", adopt_child_victim)
 
+    with pytest.raises(ReleaseCollectionUnavailableError, match="same-EUID name adoption"):
+        collect_release_report(**_collection_arguments(tmp_path))
 
-def test_collection_rejects_output_root_inside_the_untrusted_target(
-    tmp_path: Path,
-) -> None:
-    roots = _roots(tmp_path)
-    roots["evidence_root"].rmdir()
-    roots["evidence_root"] = roots["target_repository_root"] / "evidence"
-    roots["evidence_root"].mkdir()
-    roots["evidence_root"].chmod(0o700)
-
-    with pytest.raises(ValueError, match="must be disjoint"):
-        collect_release_report(
-            release_id="candidate-1",
-            artifact_evidence_path=tmp_path / "artifact-evidence.json",
-            run_verification_path=tmp_path / "verification.json",
-            **roots,
-        )
+    assert mkdir_calls == []
+    assert keep.read_text(encoding="utf-8") == "must survive\n"
+    assert not (tmp_path / "published-release").exists()
+    assert not (tmp_path / "evidence").exists()
+    assert not (tmp_path / "report").exists()
 
 
-def test_collection_inventory_rejects_an_unbound_file(tmp_path: Path) -> None:
-    root = tmp_path / "evidence"
-    root.mkdir()
-    (root / "expected.json").write_text("{}\n", encoding="utf-8")
-    (root / "undeclared.json").write_text("{}\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="missing or undeclared"):
-        collection_module._require_exact_flat_file_inventory(
-            root,
-            expected_paths={"expected.json"},
-            label="release evidence",
-        )
-
-
-def test_generator_cli_requires_explicit_paths_and_reports_honest_status(
+def test_generator_cli_reports_collection_technical_blocker(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    report = SimpleNamespace(
-        status=ReleaseStatus.BLOCKED_TECHNICAL,
-        passed_gates=7,
-        total_gates=12,
-    )
-    with patch.object(
-        generate_release_report, "collect_release_report", return_value=report
-    ) as run:
+    with pytest.raises(SystemExit, match="2"):
         generate_release_report.main(
             [
                 "--release-id",
@@ -200,21 +115,62 @@ def test_generator_cli_requires_explicit_paths_and_reports_honest_status(
                 str(tmp_path / "release"),
                 "--target-repository",
                 str(tmp_path / "target"),
+                "--configuration-root",
+                str(tmp_path / "configuration"),
                 "--run-dir",
                 str(tmp_path / "run"),
                 "--artifact-evidence-file",
                 str(tmp_path / "artifact.json"),
                 "--run-verification-file",
                 str(tmp_path / "verification.json"),
-                "--evidence-root",
-                str(tmp_path / "evidence"),
-                "--report-root",
-                str(tmp_path / "report"),
+                "--publication-root",
+                str(tmp_path / "published-release"),
             ]
         )
 
-    assert run.call_count == 1
-    assert "release_status=blocked_technical" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert RELEASE_COLLECTION_BLOCKER in captured.err
+    assert "published" not in captured.out
+
+
+def test_generator_success_projection_does_not_claim_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    snapshot = Mock(
+        snapshot_sha256="a" * 64,
+        report=Mock(status=Mock(value="blocked"), passed_gates=0, total_gates=12),
+    )
+    monkeypatch.setattr(
+        generate_release_report, "collect_release_report", Mock(return_value=snapshot)
+    )
+
+    generate_release_report.main(
+        [
+            "--release-id",
+            "candidate-1",
+            "--release-repository",
+            str(tmp_path / "release"),
+            "--target-repository",
+            str(tmp_path / "target"),
+            "--configuration-root",
+            str(tmp_path / "configuration"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--artifact-evidence-file",
+            str(tmp_path / "artifact.json"),
+            "--run-verification-file",
+            str(tmp_path / "verification.json"),
+            "--publication-root",
+            str(tmp_path / "published-release"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert "release snapshot validated:" in captured.out
+    assert "atomically published" not in captured.out
+    assert "published" not in captured.out
 
 
 @pytest.mark.parametrize("value", ("", "../release", "not valid", "é"))

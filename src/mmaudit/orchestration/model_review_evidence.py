@@ -9,11 +9,14 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from mmaudit.config import AuditConfig, configured_model_ids, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.openrouter import StructuredCompletion, strict_json_schema
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextPackage,
+    ContextRequestEvidence,
+    ContextRequestRelationship,
     EconomicSimulationKind,
     InvariantTemplate,
     Location,
@@ -29,6 +32,7 @@ from mmaudit.models.schemas import (
     SolidityGraphNode,
     SolidityGraphSet,
     SoliditySymbolIndex,
+    UsageRecord,
 )
 from mmaudit.models.truncation import (
     CandidateReviewNormalizationEvidence,
@@ -38,6 +42,7 @@ from mmaudit.models.truncation import (
 from mmaudit.models.usage import (
     is_creditable_usage_record,
     is_recovery_creditable_usage_record,
+    source_backed_whole_protocol_context,
 )
 from mmaudit.repository.chunking import excerpt_proves_location
 
@@ -47,6 +52,9 @@ _WHOLE_PROTOCOL_CONTEXT_ROLE = "whole_protocol_review"
 _WHOLE_PROTOCOL_REQUEST_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CANONICAL_INVARIANT_ID = re.compile(r"^inv-[0-9a-f]{20}$")
+_CANONICAL_KNOWN_ISSUE_SUBJECT_ID = re.compile(
+    r"^known-issue:KI-[A-Z0-9]+(?:-[A-Z0-9]+)*:[0-9a-f]{64}$"
+)
 _CANONICAL_TEMPLATE_SUBJECT_IDS = frozenset(
     {
         *(f"invariant-template:{template.value}" for template in InvariantTemplate),
@@ -177,6 +185,406 @@ def _review_role_matches_context(*, request_role: str, context_role: str) -> boo
             and _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(request_role)
         )
     )
+
+
+def model_surface_review_context_custody_failures(
+    *,
+    artifact: ModelSurfaceReviewArtifact,
+    usage: UsageRecord,
+    context_role: str | None = None,
+) -> tuple[str, ...]:
+    """Replay the exact request, base-context, and artifact relationship for review credit."""
+
+    failures: list[str] = []
+    if artifact.request_id != usage.request_id:
+        failures.append("model-review artifact request differed from its usage record")
+    failures.extend(
+        model_surface_context_evidence_custody_failures(
+            usage=usage,
+            request_id=artifact.request_id,
+            review_role=artifact.review_role,
+            rendered_context_sha256=artifact.rendered_context_sha256,
+            requested_surface_manifest_sha256=(artifact.requested_surface_manifest_sha256),
+            context_role=context_role,
+        )
+    )
+    return tuple(dict.fromkeys(failures))
+
+
+def model_surface_context_evidence_custody_failures(
+    *,
+    usage: UsageRecord,
+    request_id: str,
+    review_role: str,
+    rendered_context_sha256: str,
+    requested_surface_manifest_sha256: str,
+    context_role: str | None = None,
+) -> tuple[str, ...]:
+    """Validate one exact provider-visible request/context/surface custody relationship."""
+
+    failures: list[str] = []
+    whole_protocol_request = _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(review_role) is not None
+    expected_context_role = _WHOLE_PROTOCOL_CONTEXT_ROLE if whole_protocol_request else review_role
+    expected_relationship = (
+        ContextRequestRelationship.WHOLE_PROTOCOL_INDEXED
+        if whole_protocol_request
+        else ContextRequestRelationship.EXACT
+    )
+    if not _is_investigator_review_role(review_role):
+        failures.append("model-review request role was not an investigator role")
+    if usage.request_id != request_id or usage.role != review_role:
+        failures.append("model-review request identity differed from its usage record")
+    if context_role is not None and context_role != expected_context_role:
+        failures.append("model-review request role differed from its exact base context")
+    if usage.user_prompt_sha256 is None or usage.user_prompt_sha256 != rendered_context_sha256:
+        failures.append("model-review rendered context differed from its usage record")
+
+    raw_context_evidence = usage.routing.get("context_request_evidence")
+    try:
+        context_evidence = ContextRequestEvidence.model_validate(raw_context_evidence)
+    except (TypeError, ValueError):
+        context_evidence = None
+    if context_evidence is None:
+        failures.append("model-review usage lacked exact typed context-request evidence")
+        return tuple(dict.fromkeys(failures))
+
+    if (
+        context_evidence.request_id != request_id
+        or context_evidence.request_role != review_role
+        or context_evidence.context_role != expected_context_role
+        or context_evidence.relationship is not expected_relationship
+        or context_evidence.rendered_sha256 != rendered_context_sha256
+        or context_evidence.source_bytes <= 0
+        or context_evidence.requested_surface_manifest_sha256 != requested_surface_manifest_sha256
+        or not context_evidence.source_location_proof_sha256s
+        or usage.routing.get("context_request_evidence_sha256") != context_evidence.evidence_sha256
+    ):
+        failures.append("model-review context-request evidence differed from exact custody")
+
+    if whole_protocol_request and source_backed_whole_protocol_context(usage) != context_evidence:
+        failures.append(
+            "whole-protocol model review lacked exact source-backed indexed context custody"
+        )
+    return tuple(dict.fromkeys(failures))
+
+
+def model_surface_review_identity_lineage_custody_failures(
+    config: AuditConfig,
+    *,
+    usage: UsageRecord,
+    review_role: str,
+) -> tuple[str, ...]:
+    """Reject model-review credit unless every visible model identity has one approved root."""
+
+    failures: list[str] = []
+    if review_role != usage.role:
+        failures.append("model-review usage role differed from its credit role")
+
+    configured_models: frozenset[str]
+    if review_role in _BASE_REVIEW_ROLES:
+        role_config = config.models.role(review_role)
+        configured_models = frozenset((role_config.primary, *role_config.fallbacks))
+    elif _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(review_role) is not None:
+        configured_models = frozenset(configured_model_ids(config, include_fallbacks=True))
+    elif review_role in _SPECIALIST_REVIEW_ROLES:
+        specialist = config.models.specialists.get(review_role.removeprefix("specialist:"))
+        configured_models = (
+            frozenset((specialist.primary, *specialist.fallbacks))
+            if specialist is not None
+            else frozenset()
+        )
+    else:
+        configured_models = frozenset()
+    if usage.requested_model not in configured_models:
+        failures.append("requested model was not configured for the model-review role")
+
+    visible_identities: list[tuple[str, object]] = [
+        ("requested", usage.requested_model),
+        ("returned", usage.returned_model),
+        ("actual", usage.actual_model),
+        ("selected", usage.routing.get("selected_model")),
+    ]
+    if "canonical_model" in usage.routing:
+        visible_identities.append(("canonical", usage.routing.get("canonical_model")))
+    raw_aliases = usage.routing.get("accepted_model_aliases")
+    if raw_aliases is not None:
+        if not isinstance(raw_aliases, list) or len(raw_aliases) > 100:
+            failures.append("model-review accepted aliases were invalid or unbounded")
+        else:
+            visible_identities.extend(
+                (f"accepted alias {index}", alias) for index, alias in enumerate(raw_aliases)
+            )
+
+    lineage_by_model = model_lineage_index(config)
+    resolved_roots: list[tuple[str, str]] = []
+    for label, identity in visible_identities:
+        if not isinstance(identity, str) or not identity:
+            failures.append(f"model-review {label} model identity was absent or invalid")
+            continue
+        lineage = lineage_by_model.get(identity.lower())
+        if lineage is None:
+            failures.append(f"model-review {label} model identity was not registered")
+            continue
+        resolved_roots.append((label, lineage.root_lineage))
+
+    requested_lineage = lineage_by_model.get(usage.requested_model.lower())
+    if requested_lineage is None:
+        failures.append("requested model had no registered immutable lineage")
+    else:
+        approved_lineages = set(config.privacy.approved_model_lineages)
+        if requested_lineage.root_lineage not in approved_lineages:
+            failures.append("requested model lineage lacked operator approval")
+        for label, root_lineage in resolved_roots:
+            if root_lineage != requested_lineage.root_lineage:
+                failures.append(
+                    f"model-review {label} model identity crossed the requested root lineage"
+                )
+            if root_lineage not in approved_lineages:
+                failures.append(f"model-review {label} model lineage lacked operator approval")
+        routed_lineage = usage.routing.get("qualified_root_lineage")
+        if routed_lineage is not None and routed_lineage != requested_lineage.root_lineage:
+            failures.append("model-review routed lineage differed from the requested root lineage")
+    return tuple(dict.fromkeys(failures))
+
+
+def model_surface_source_location_proof_sha256(location: Location) -> str:
+    """Hash one exact source range that provider-visible context bytes proved."""
+
+    if location.content_hash is None or _SHA256.fullmatch(location.content_hash) is None:
+        raise ValueError("model-surface source proof requires an exact content hash")
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.model-surface-context-source-location.v1",
+            "path": location.path,
+            "start_line": location.start_line,
+            "end_line": location.end_line,
+            "content_hash": location.content_hash,
+        }
+    )
+
+
+def model_surface_context_source_custody(
+    context: ContextPackage,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Project the surface manifest and exact source ranges proven by one live context."""
+
+    requests = tuple(context.requested_model_surfaces)
+    if not requests:
+        return None, ()
+    candidates: dict[tuple[str, int, int, str], Location] = {}
+
+    def add_location(location: Location) -> None:
+        if location.content_hash is not None:
+            candidates[_source_location_key(location)] = location
+
+    for request in requests:
+        for location in request.allowed_locations:
+            add_location(location)
+    if context.solidity_index is not None:
+        for entity in context.solidity_index.entities:
+            add_location(_entity_location(entity))
+    if context.solidity_graphs is not None:
+        for node in context.solidity_graphs.nodes:
+            add_location(_node_location(node))
+        for edge in context.solidity_graphs.edges:
+            add_location(_edge_location(edge))
+
+    proof_sha256s = tuple(
+        sorted(
+            model_surface_source_location_proof_sha256(location)
+            for location in candidates.values()
+            if any(excerpt_proves_location(excerpt, location) for excerpt in context.excerpts)
+        )
+    )
+    return (
+        ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(requests),
+        proof_sha256s,
+    )
+
+
+def model_surface_retained_context_custody_failures(
+    *,
+    context: ContextPackage,
+    usage: UsageRecord,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    request_id: str,
+    review_role: str,
+    context_role: str,
+    rendered_context_sha256: str,
+    requested_surface_manifest_sha256: str,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+) -> tuple[str, ...]:
+    """Replay one exact retained provider context against its request and usage custody."""
+
+    # Imported lazily because context construction imports this module.
+    from mmaudit.orchestration.context import (
+        ContextBudgetError,
+        revalidate_context_package,
+    )
+
+    failures: list[str] = []
+    if context.solidity_index is None or index is None:
+        failures.append(
+            "retained model-review context symbol index was not an exact inventory subset"
+        )
+    if context.solidity_graphs is None or graphs is None:
+        failures.append("retained model-review context graphs were not an exact inventory subset")
+    try:
+        sealed = revalidate_context_package(context)
+    except (ContextBudgetError, ValueError):
+        failures.append("retained model-review context failed exact boundary validation")
+        return tuple(dict.fromkeys(failures))
+
+    if sealed.role != context_role:
+        failures.append("retained model-review context role differed from exact custody")
+    if tuple(sealed.requested_model_surfaces) != requests:
+        failures.append("retained model-review context surfaces differed from exact custody")
+
+    try:
+        retained_manifest_sha256, retained_source_proofs = model_surface_context_source_custody(
+            sealed
+        )
+        retained_rendered_sha256 = model_review_context_sha256(sealed)
+    except (ContextBudgetError, ValueError):
+        failures.append("retained model-review context projection failed exact validation")
+        return tuple(dict.fromkeys(failures))
+    if retained_manifest_sha256 != requested_surface_manifest_sha256:
+        failures.append("retained model-review context manifest differed from exact custody")
+    if retained_rendered_sha256 != rendered_context_sha256:
+        failures.append("retained model-review context hash differed from exact custody")
+
+    try:
+        context_evidence = ContextRequestEvidence.model_validate(
+            usage.routing.get("context_request_evidence")
+        )
+    except (TypeError, ValueError):
+        context_evidence = None
+    if context_evidence is None:
+        failures.append("retained model-review context lacked typed request evidence")
+    else:
+        try:
+            expected_context_evidence = ContextRequestEvidence.build(
+                request_id=request_id,
+                request_role=review_role,
+                context_role=context_role,
+                byte_budget=sealed.byte_budget,
+                declared_bytes_used=sealed.bytes_used,
+                rendered_bytes=sealed.bytes_used,
+                source_bytes=sealed.delivered_source_bytes(),
+                configured_maximum_source_tokens_per_request=(
+                    sealed.configured_maximum_source_tokens_per_request
+                ),
+                effective_source_byte_ceiling=sealed.effective_source_byte_ceiling,
+                rendered_sha256=retained_rendered_sha256,
+                requested_surface_manifest_sha256=retained_manifest_sha256,
+                source_location_proof_sha256s=retained_source_proofs,
+                retrieval_policy=sealed.solidity_retrieval_policy,
+                retrieval_corpus_sha256=sealed.solidity_retrieval_corpus_sha256,
+                retrieval_transcript=sealed.solidity_retrieval_transcript,
+            )
+        except ValueError:
+            expected_context_evidence = None
+        if (
+            expected_context_evidence is None
+            or context_evidence != expected_context_evidence
+            or usage.routing.get("context_request_evidence_sha256")
+            != context_evidence.evidence_sha256
+        ):
+            failures.append("retained model-review request evidence differed from exact context")
+
+    failures.extend(
+        model_surface_context_evidence_custody_failures(
+            usage=usage,
+            request_id=request_id,
+            review_role=review_role,
+            rendered_context_sha256=rendered_context_sha256,
+            requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+            context_role=sealed.role,
+        )
+    )
+    if (
+        sealed.solidity_index is None
+        or index is None
+        or not all(entity in index.entities for entity in sealed.solidity_index.entities)
+    ):
+        failures.append(
+            "retained model-review context symbol index was not an exact inventory subset"
+        )
+    if (
+        sealed.solidity_graphs is None
+        or graphs is None
+        or not all(node in graphs.nodes for node in sealed.solidity_graphs.nodes)
+        or not all(edge in graphs.edges for edge in sealed.solidity_graphs.edges)
+    ):
+        failures.append("retained model-review context graphs were not an exact inventory subset")
+    return tuple(dict.fromkeys(failures))
+
+
+def model_surface_review_detached_validation_failures(
+    *,
+    context_evidence: ContextRequestEvidence,
+    request: ModelSurfaceReviewRequest,
+    record: ModelSurfaceReviewRecord,
+    expected_role: str,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+) -> tuple[str, ...]:
+    """Replay semantic and provider-visible source validation without raw prompt retention."""
+
+    failures = list(
+        model_surface_review_record_validation_failures(
+            request,
+            record,
+            expected_role,
+            index=index,
+            graphs=graphs,
+        )
+    )
+    if record.status not in {
+        ModelSurfaceReviewStatus.CANDIDATE,
+        ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+    }:
+        return tuple(dict.fromkeys(failures))
+
+    proofs = frozenset(context_evidence.source_location_proof_sha256s)
+    if request.kind is ModelReviewSurfaceKind.SOURCE_FILE:
+        locations = request.allowed_locations
+        if (
+            len(locations) != 1
+            or model_surface_source_location_proof_sha256(locations[0]) not in proofs
+        ):
+            failures.append(
+                f"model surface {request.surface_id} whole-file bytes were not proven by context"
+            )
+        return tuple(dict.fromkeys(failures))
+    if index is None:
+        return tuple(dict.fromkeys(failures))
+
+    graph = _build_deterministic_review_graph(index=index, graphs=graphs)
+    citations: list[tuple[str, ModelSurfaceReviewCitation]] = [
+        ("review citation", record.citation),
+        *(
+            (f"observation {position} citation", observation.citation)
+            for position, observation in enumerate(record.evidence_observations)
+        ),
+    ]
+    if record.reachability is not None:
+        citations.append(("reachability entry point", record.reachability.entry_point))
+        citations.extend(
+            (f"reachability path node {position}", citation)
+            for position, citation in enumerate(record.reachability.path)
+        )
+    for label, citation in citations:
+        locations = _resolved_citation_locations(citation, graph=graph)
+        if len(locations) != 1:
+            continue
+        if model_surface_source_location_proof_sha256(locations[0]) not in proofs:
+            failures.append(
+                f"model surface {request.surface_id} {label} source range was not "
+                "proven by retained context custody"
+            )
+    return tuple(dict.fromkeys(failures))
 
 
 def seal_model_surface_review_artifact(
@@ -364,6 +772,21 @@ def seal_model_surface_review_artifact(
         artifact.require_exact_requested_surface_manifest(requests)
     except ValueError as exc:
         raise ModelReviewEvidenceError("model surface evidence artifact binding failed") from exc
+    if any(
+        record.status
+        in {
+            ModelSurfaceReviewStatus.CANDIDATE,
+            ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+        }
+        for record in records
+    ):
+        context_custody_failures = model_surface_review_context_custody_failures(
+            artifact=artifact,
+            usage=usage,
+            context_role=context.role,
+        )
+        if context_custody_failures:
+            raise ModelReviewEvidenceError(context_custody_failures[0])
     return artifact
 
 
@@ -1079,7 +1502,11 @@ def _expected_surface_tokens(
         request.kind is ModelReviewSurfaceKind.TEMPLATE
         and request.subject_id in _CANONICAL_TEMPLATE_SUBJECT_IDS
     )
-    if is_canonical_invariant or is_canonical_template:
+    is_canonical_known_issue = bool(
+        request.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+        and _CANONICAL_KNOWN_ISSUE_SUBJECT_ID.fullmatch(request.subject_id)
+    )
+    if is_canonical_invariant or is_canonical_template or is_canonical_known_issue:
         allowed_location_keys = {_location_key(location) for location in request.allowed_locations}
         return frozenset(
             _identity_token(entity.id)
@@ -1246,8 +1673,15 @@ def _canonical_sha256(value: Any) -> str:
 __all__ = [
     "ModelReviewEvidenceError",
     "model_review_context_sha256",
+    "model_surface_context_evidence_custody_failures",
+    "model_surface_context_source_custody",
+    "model_surface_retained_context_custody_failures",
+    "model_surface_review_context_custody_failures",
+    "model_surface_review_detached_validation_failures",
     "model_surface_review_excerpt_validation_failures",
+    "model_surface_review_identity_lineage_custody_failures",
     "model_surface_review_record_validation_failures",
+    "model_surface_source_location_proof_sha256",
     "seal_model_surface_review_artifact",
     "validate_model_surface_review_record",
 ]

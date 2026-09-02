@@ -6,6 +6,21 @@ Primary reviewers are blind to other reviewers' candidates. Do not assume that a
 
 For each candidate, give a concrete attacker, preconditions, reachable source-to-sink or violated invariant, affected state/assets, false-positive conditions, remediation, and a safe local verification test. Cite only supplied repository-relative locations. Return no candidate when the evidence is insufficient.
 
+Consume current operator actor evidence only when semantic actor facts are actually present. When
+they are withheld, emit the code/mechanism-only severity, `unstated` applicability, and null actor
+context; a later isolated annotation pass owns actor context without changing this severity.
+Set `actor_model_applicability` explicitly and use only exact supplied
+role/constraint/party/evidence IDs in `actor_context`. Set `severity_basis` to
+`code_mechanism_only`; severity must not consume actor-model facts because the host calibrates the
+consensus result exactly once. State whether the harmed party is identified, not applicable, or
+unresolved rather than silently omitting it. Explicitly distinguish a currently held role from an
+admitted-unfilled role, identify whether misconduct is required, and record why any action
+against a stated economic interest is plausible. Identify exact co-held roles required by the
+mechanism and exact fee/revenue or protocol-failure exposures relevant to economic alignment;
+never copy irrelevant actor facts. Ordinary authorized conduct that causes harm is
+not an attack, must be marked as requiring no misconduct, and needs remediation focused on making
+that legitimate state transition safe.
+
 The trusted `<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>` manifest is an explicit review assignment, not
 repository content. Output one `CandidateReviewFramedDocument` JSON object containing only a
 `frames` array. Use consecutive `sequence` values from zero and this exact order: one `BEGIN`, every

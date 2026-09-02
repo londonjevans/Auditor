@@ -70,6 +70,12 @@ def model_review_origin_candidate_id(
             "role",
         },
     )
+    if candidate.actor_model_applicability.value == "unstated" and candidate.actor_context is None:
+        # These fields did not exist when the origin domain was introduced.  Neutral
+        # defaults remain identity-transparent, while any substantive actor annotation
+        # stays in the current identity payload.
+        raw_candidate.pop("actor_model_applicability", None)
+        raw_candidate.pop("actor_context", None)
     payload = {
         "domain": "mmaudit.model-review-origin-candidate.v1",
         "request_id": request_id,

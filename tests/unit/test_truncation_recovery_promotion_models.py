@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,11 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryPromotionBinding,
     validate_truncation_recovery_entry_chain,
 )
+from mmaudit.orchestration import scheduler as scheduler_module
 from tests.unit.test_truncation import _candidate
 from tests.unit.test_truncation_recovery_journal import (
     _journal_with_truncated_parent,
@@ -395,16 +398,77 @@ def test_truncated_child_frame_origin_is_distinct_and_stamps_output_v11(
     assert recursive_output.candidate_origins == (origin,)
 
 
-def test_v10_direct_promotion_serialization_is_byte_compatible(tmp_path: Path) -> None:
-    promotion, output = _promotion_fixture(tmp_path / "v10-byte-compatibility")
-    binding = SchedulerTruncationRecoveryPromotionBinding.from_promotion(promotion)
-
-    assert hashlib.sha256(output.model_dump_json().encode()).hexdigest() == (
-        "2ed8a6e7572e9fd83ad14b46af1741b042a3c256b26cbda6dd17eea624aef9c2"
+def test_retained_v1_direct_promotion_chain_replays_exact_pre_actor_bytes(
+    tmp_path: Path,
+) -> None:
+    fixture_root = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "scheduler"
+        / "retained_v1_direct_promotion_chain"
     )
-    assert hashlib.sha256(promotion.model_dump_json().encode()).hexdigest() == (
-        "5994263f174015b0992b2b293e599a23b000169299d4a41f499679b0a734a6cd"
+    fixture_paths = tuple(sorted(fixture_root.glob("entry-*.json")))
+    assert tuple(path.name for path in fixture_paths) == (
+        "entry-00000000-family-root-"
+        "c35e1ec5c2144827de46e7117ba8567b7655689762b3ca83e24e71fb3a80f31a.json",
+        "entry-00000001-family-closed-"
+        "c29fac1f4750690778c70ba922ce1d480e80a11f957b4c489e60203e2844f2cd.json",
+        "entry-00000002-family-promoted-"
+        "71f7604f1cf4794bd548c92e52a3bc32a164e53916fd2380316ede33ab65fa91.json",
     )
-    assert hashlib.sha256(binding.model_dump_json().encode()).hexdigest() == (
-        "f4a03c64b88cb589b190049b611800537a64e5196b0a7fe7831772af0e8d239c"
+    fixture_bytes = tuple(path.read_bytes() for path in fixture_paths)
+    assert tuple(hashlib.sha256(item).hexdigest() for item in fixture_bytes) == (
+        "e248577e185ed42c67e25d41ec565a2a755dbd7feb2bc2effc03ddcf0c44092d",
+        "47206d08ba54bc9001e6fa10b85dc19563d5b5683dbf58956fa735f57b313397",
+        "e23b31744826276d8f667354882478d35f66e4cd9e7118366df7be522677aa73",
+    )
+    encoded_entries = tuple(
+        json.dumps(
+            json.loads(item),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for item in fixture_bytes
+    )
+    assert tuple(hashlib.sha256(item.encode()).hexdigest() for item in encoded_entries) == (
+        "f3f16b9501f5faf764953189db5a0f1688c2a6d57700d5f95bb5d381f56c0df4",
+        "3e0d48cfa4f9bedffb1d798c2837294a0b211f03f631cb71cf71504a3622a96a",
+        "8cd6abe345901b106a204f04ccd5e0fe18f9bde41b55e883af44a87eb67b8f79",
+    )
+    assert b"actor_model_applicability" not in b"".join(fixture_bytes)
+    assert b"actor_context" not in b"".join(fixture_bytes)
+    replayed = (
+        SchedulerTruncationRecoveryFamilyRoot.model_validate_json(fixture_bytes[0], strict=True),
+        SchedulerTruncationRecoveryFamilyClosure.model_validate_json(fixture_bytes[1], strict=True),
+        SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+            fixture_bytes[2], strict=True
+        ),
+    )
+    assert validate_truncation_recovery_entry_chain(replayed) == replayed
+    retained_root = tmp_path / "retained-v1-disk-reopen"
+    retained_root.mkdir(mode=0o700)
+    retained_root.chmod(0o700)
+    recovery_directory = retained_root / scheduler_module._TRUNCATION_RECOVERY_DIRECTORY
+    recovery_directory.mkdir(mode=0o700)
+    recovery_directory.chmod(0o700)
+    for entry, raw_fixture in zip(replayed, fixture_bytes, strict=True):
+        relative = scheduler_module._truncation_recovery_entry_path(entry)
+        path = retained_root / relative
+        path.write_bytes(raw_fixture)
+        path.chmod(0o600)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    root_descriptor = os.open(retained_root, directory_flags)
+    recovery_descriptor = os.open(recovery_directory, directory_flags)
+    try:
+        loaded = scheduler_module._load_truncation_recovery_entries(
+            root_descriptor,
+            {scheduler_module._TRUNCATION_RECOVERY_DIRECTORY: recovery_descriptor},
+        )
+    finally:
+        os.close(recovery_descriptor)
+        os.close(root_descriptor)
+    assert loaded == replayed
+    binding = SchedulerTruncationRecoveryPromotionBinding.from_promotion(replayed[2])
+    assert binding.recovered_output_artifact_sha256 == (
+        replayed[2].recovered_output.output_artifact_sha256
     )

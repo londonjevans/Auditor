@@ -1,551 +1,518 @@
 from __future__ import annotations
 
-import hashlib
-import inspect
-import os
+import shutil
 import stat
 import subprocess
-import sys
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
+import mmaudit.release_candidate as candidate_module
 import mmaudit.release_runtime as runtime_module
+from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release import ReleaseGateId, ReleaseGateStatus
-from mmaudit.release_gates import get_release_gate_fixed_plan
-from mmaudit.release_io import read_json_evidence
+from mmaudit.release_candidate import ReleaseCandidateObservation
+from mmaudit.release_gates import (
+    ReleaseGatePrerequisiteBlocker,
+    ReleaseGateReceipt,
+    build_release_gate_evidence_bundle,
+    build_release_gate_receipt,
+    get_release_gate_fixed_plan,
+)
+from mmaudit.release_io import write_json_evidence
 from mmaudit.release_runtime import (
-    JUnitValidationStatus,
-    LocalReleaseGateResult,
     execute_local_release_gate,
+    validate_local_release_gate_receipts,
     validate_local_release_gate_result_artifact,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
 START = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
 END = datetime(2026, 7, 28, 12, 1, tzinfo=UTC)
-CANDIDATE_SHA256 = "a" * 64
 RUN_BINDING_SHA256 = "b" * 64
-PYTHON_SHA256 = "c" * 64
-DISTRIBUTION_SHA256 = "d" * 64
-VALID_JUNIT = (
-    b'<?xml version="1.0"?>'
-    b'<testsuites><testsuite tests="5" failures="0" errors="0" skipped="2"/>'
-    b"</testsuites>"
-)
 
 
-class _FakeProcess:
-    def __init__(self, *, argv: list[str], returncode: int, timed_out: bool) -> None:
-        self.argv = argv
-        self.returncode = returncode
-        self.timed_out = timed_out
-        self.pid = 424_242
-        self.wait_calls = 0
-
-    def wait(self, timeout: float | None = None) -> int:
-        del timeout
-        self.wait_calls += 1
-        if self.timed_out and self.wait_calls == 1:
-            raise subprocess.TimeoutExpired(self.argv, 1)
-        return -9 if self.timed_out else self.returncode
-
-    def kill(self) -> None:
-        self.returncode = -9
-
-
-class _FakePopenFactory:
-    def __init__(
-        self,
-        *,
-        returncode: int = 0,
-        timed_out: bool = False,
-        stdout: bytes = b"synthetic stdout",
-        stderr: bytes = b"",
-        junit: bytes | None = VALID_JUNIT,
-    ) -> None:
-        self.returncode = returncode
-        self.timed_out = timed_out
-        self.stdout = stdout
-        self.stderr = stderr
-        self.junit = junit
-        self.calls: list[tuple[list[str], dict[str, Any]]] = []
-        self.guard_sha256: str | None = None
-        self.guard_mode: int | None = None
-
-    def __call__(self, argv: list[str], **kwargs: Any) -> _FakeProcess:
-        self.calls.append((list(argv), dict(kwargs)))
-        stdout = kwargs["stdout"]
-        stderr = kwargs["stderr"]
-        stdout.write(self.stdout)
-        stderr.write(self.stderr)
-        if "--junitxml" in argv and self.junit is not None:
-            Path(argv[-1]).write_bytes(self.junit)
-        environment = kwargs["env"]
-        guard = Path(environment["PYTHONPATH"]) / "sitecustomize.py"
-        self.guard_sha256 = hashlib.sha256(guard.read_bytes()).hexdigest()
-        self.guard_mode = stat.S_IMODE(guard.stat().st_mode)
-        return _FakeProcess(
-            argv=argv,
-            returncode=self.returncode,
-            timed_out=self.timed_out,
-        )
-
-
-def _fake_executable() -> runtime_module._ExecutableObservation:
-    return runtime_module._ExecutableObservation(
-        declared_path=sys.executable,
-        resolved_path=sys.executable,
-        sha256=PYTHON_SHA256,
-        identity=(1, 2, 3, 4, 5, 6, 7),
-        declared_identity=(1, 2, 3, 4, 5, 6, 7),
+def _candidate() -> ReleaseCandidateObservation:
+    payload = {
+        "schema_version": "1.0",
+        "generated_by": "mmaudit",
+        "candidate_commit": "1" * 40,
+        "git_object_format": "sha1",
+        "candidate_tree_object": "2" * 40,
+        "tracked_source_inventory_sha256": "3" * 64,
+        "tracked_file_count": 1,
+        "tracked_file_bytes": 12,
+        "worktree_clean": True,
+        "worktree_status_sha256": canonical_sha256([]),
+        "observed_at": START.isoformat().replace("+00:00", "Z"),
+    }
+    return ReleaseCandidateObservation.model_validate(
+        {
+            **payload,
+            "observation_sha256": canonical_sha256(payload),
+        }
     )
 
 
-def _fake_distribution(name: str) -> runtime_module._DistributionObservation:
-    return runtime_module._DistributionObservation(
-        name=name,
-        version="1.2.3",
-        inventory_sha256=DISTRIBUTION_SHA256,
-    )
-
-
-def _install_fake_process(
-    monkeypatch: pytest.MonkeyPatch,
-    factory: _FakePopenFactory,
-) -> None:
-    timestamps = iter((START, END))
-    monkeypatch.setattr(runtime_module, "_utc_now", lambda: next(timestamps))
-    monkeypatch.setattr(runtime_module, "_observe_executing_python", _fake_executable)
-    monkeypatch.setattr(runtime_module, "_observe_tool_distribution", _fake_distribution)
-    monkeypatch.setattr(runtime_module.subprocess, "Popen", factory)
-    monkeypatch.setattr(runtime_module, "_stop_process", lambda _process: None)
-    monkeypatch.setattr(
-        runtime_module,
-        "_terminate_release_process_group",
-        lambda _process_group_id: None,
-    )
-
-
-def _result_for_receipt(
+def _self_authored_executed_receipt(
     evidence_root: Path,
-    gate_id: ReleaseGateId,
-) -> tuple[LocalReleaseGateResult, Any]:
+    *,
+    status: ReleaseGateStatus,
+) -> ReleaseGateReceipt:
+    gate_id = ReleaseGateId.RUFF_CHECK
     plan = get_release_gate_fixed_plan(gate_id)
-    observation = read_json_evidence(
+    binding = write_json_evidence(
         evidence_root=evidence_root,
         relative_path=plan.result_artifact_path,
+        value={"self_authored": status.value},
     )
-    return LocalReleaseGateResult.model_validate(observation.value), observation.binding
+    passed = status is ReleaseGateStatus.PASSED
+    return build_release_gate_receipt(
+        gate_id=gate_id,
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        fixed_plan_sha256=plan.fixed_plan_sha256,
+        started_at=START,
+        ended_at=END,
+        argv=("python", "-P", "-m", "ruff", "check", "."),
+        tool_name="ruff",
+        tool_version="1.2.3",
+        tool_executable_sha256="c" * 64,
+        tool_distribution_sha256="d" * 64,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        exit_code=0 if passed else 7,
+        timed_out=False,
+        stdout=b"self-authored output",
+        stderr=b"",
+        summary="self-authored local result",
+        prerequisite_blocker=None,
+        artifact_bindings=(binding,),
+    )
+
+
+def _blocked_receipt(
+    gate_id: ReleaseGateId,
+    *,
+    artifact_bindings: tuple[Any, ...] = (),
+    ended_at: datetime = START,
+    result_summary: str = (
+        "local execution is blocked until the runner provides OS network confinement and "
+        "descriptor-rooted candidate and evidence I/O"
+    ),
+    blocker_summary: str = (
+        "No local runner currently proves pre-startup import isolation, subprocess network "
+        "denial, and descriptor-rooted evidence writes."
+    ),
+    stdout: bytes = b"",
+    tool_name: str | None = None,
+) -> ReleaseGateReceipt:
+    plan = get_release_gate_fixed_plan(gate_id)
+    return build_release_gate_receipt(
+        gate_id=gate_id,
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        fixed_plan_sha256=plan.fixed_plan_sha256,
+        started_at=START,
+        ended_at=ended_at,
+        argv=("mmaudit-release", "blocked-local-gate", gate_id.value),
+        tool_name=tool_name or plan.module or "mmaudit-release",
+        tool_version=None,
+        tool_executable_sha256=None,
+        tool_distribution_sha256=None,
+        execution_evidence=ExecutionEvidenceKind.UNVERIFIED,
+        exit_code=None,
+        timed_out=False,
+        stdout=stdout,
+        stderr=b"",
+        summary=result_summary,
+        prerequisite_blocker=ReleaseGatePrerequisiteBlocker(
+            code="secure_local_gate_runner_unavailable",
+            summary=blocker_summary,
+        ),
+        artifact_bindings=artifact_bindings,
+    )
 
 
 @pytest.mark.parametrize(
-    ("gate_id", "suffix"),
+    "gate_id",
     (
-        (ReleaseGateId.RUFF_FORMAT, ("ruff", "format", "--check", ".")),
-        (ReleaseGateId.RUFF_CHECK, ("ruff", "check", ".")),
-        (ReleaseGateId.MYPY, ("mypy",)),
-        (
-            ReleaseGateId.PYTEST,
-            ("pytest", "-q", "--junitxml", "release-gate-pytest-junit.xml"),
-        ),
+        ReleaseGateId.RUFF_FORMAT,
+        ReleaseGateId.RUFF_CHECK,
+        ReleaseGateId.MYPY,
+        ReleaseGateId.PYTEST,
     ),
 )
-def test_fixed_local_executor_uses_only_canonical_safe_path_plans(
+def test_local_gate_returns_typed_blocker_before_filesystem_or_process_access(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     gate_id: ReleaseGateId,
-    suffix: tuple[str, ...],
 ) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-canary-must-not-propagate")
-    monkeypatch.setenv("MMAUDIT_SECRETS_ENV_FILE", "synthetic-control-path")
-    factory = _FakePopenFactory()
-    _install_fake_process(monkeypatch, factory)
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("blocked local gate attempted filesystem or process access")
+
+    monkeypatch.setattr(runtime_module, "_require_executing_repository_root", forbidden)
+    monkeypatch.setattr(runtime_module, "_require_unlinked_directory", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    missing_repository = tmp_path / "missing-candidate"
+    missing_evidence = tmp_path / "missing-evidence"
 
     receipt = execute_local_release_gate(
         gate_id=gate_id,
-        repository_root=ROOT,
-        evidence_root=tmp_path,
-        candidate_observation_sha256=CANDIDATE_SHA256,
+        repository_root=missing_repository,
+        evidence_root=missing_evidence,
+        candidate=_candidate(),
         run_binding_sha256=RUN_BINDING_SHA256,
     )
 
-    assert len(factory.calls) == 1
-    argv, invocation = factory.calls[0]
-    assert argv[:3] == [sys.executable, "-P", "-m"]
-    if gate_id is ReleaseGateId.PYTEST:
-        assert tuple(argv[3:-1]) == suffix[:-1]
-        assert Path(argv[-1]) == tmp_path / suffix[-1]
-    else:
-        assert tuple(argv[3:]) == suffix
-    assert invocation["cwd"] == ROOT
-    assert invocation["shell"] is False
-    assert invocation["close_fds"] is True
-    assert invocation["start_new_session"] is True
-    environment = invocation["env"]
-    assert "OPENROUTER_API_KEY" not in environment
-    assert "MMAUDIT_SECRETS_ENV_FILE" not in environment
-    assert environment["PYTHONSAFEPATH"] == "1"
-    assert set(environment) == set(
-        runtime_module.get_release_gate_child_environment_contract(gate_id)
+    assert receipt.status is ReleaseGateStatus.BLOCKED_TECHNICAL
+    assert receipt.execution_evidence.value == "unverified"
+    assert receipt.prerequisite_blocker is not None
+    assert receipt.prerequisite_blocker.code == "secure_local_gate_runner_unavailable"
+    assert receipt.tool_version is None
+    assert receipt.tool_executable_sha256 is None
+    assert receipt.tool_distribution_sha256 is None
+    assert receipt.artifact_bindings == []
+    assert receipt.argv == ("mmaudit-release", "blocked-local-gate", gate_id.value)
+    assert not missing_repository.exists()
+    assert not missing_evidence.exists()
+
+
+def test_local_gate_rejects_candidate_proxy_before_property_access(tmp_path: Path) -> None:
+    property_accessed = False
+
+    class SideEffectingCandidateProxy:
+        @property
+        def observation_sha256(self) -> str:
+            nonlocal property_accessed
+            property_accessed = True
+            raise AssertionError("candidate proxy property executed")
+
+    with pytest.raises(TypeError, match="exact observation"):
+        execute_local_release_gate(
+            gate_id=ReleaseGateId.RUFF_CHECK,
+            repository_root=tmp_path / "candidate",
+            evidence_root=tmp_path / "evidence",
+            candidate=SideEffectingCandidateProxy(),  # type: ignore[arg-type]
+            run_binding_sha256=RUN_BINDING_SHA256,
+        )
+
+    assert property_accessed is False
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_local_gate_rejects_invalid_binding_before_filesystem_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        runtime_module,
+        "_require_executing_repository_root",
+        lambda _path: pytest.fail("invalid binding reached filesystem access"),
     )
 
-    plan = get_release_gate_fixed_plan(gate_id)
-    assert plan.python_safe_path is True
-    assert factory.guard_sha256 == plan.network_guard_sha256
-    assert factory.guard_mode == 0o600
-    assert receipt.status is ReleaseGateStatus.PASSED
-    assert receipt.candidate_observation_sha256 == CANDIDATE_SHA256
-    assert receipt.run_binding_sha256 == RUN_BINDING_SHA256
-    assert receipt.fixed_plan_sha256 == plan.fixed_plan_sha256
-    assert receipt.tool_executable_sha256 == PYTHON_SHA256
-    assert receipt.tool_distribution_sha256 == DISTRIBUTION_SHA256
+    with pytest.raises(ValueError, match="run binding"):
+        execute_local_release_gate(
+            gate_id=ReleaseGateId.RUFF_CHECK,
+            repository_root=tmp_path / "candidate",
+            evidence_root=tmp_path / "evidence",
+            candidate=_candidate(),
+            run_binding_sha256="not-a-digest",
+        )
 
-    result, _binding = _result_for_receipt(tmp_path, gate_id)
-    assert result.schema_version == "1.0"
-    assert result.generated_by == "mmaudit"
-    assert result.python_executable_sha256 == PYTHON_SHA256
-    assert result.tool_distribution_sha256 == DISTRIBUTION_SHA256
-    assert result.child_environment_contract_sha256 == canonical_sha256(
-        result.child_environment_contract
-    )
-    assert result.network_guard_sha256 == plan.network_guard_sha256
-    serialized = result.model_dump_json()
-    assert ".mmaudit-release-runtime-" not in serialized
-    assert "synthetic-canary-must-not-propagate" not in serialized
-    if gate_id is ReleaseGateId.PYTEST:
-        assert result.junit_status is JUnitValidationStatus.VALID
-        assert result.junit_counts is not None
-        assert result.junit_counts.tests == 5
-        assert result.junit_counts.passed == 3
-    else:
-        assert result.junit_status is JUnitValidationStatus.NOT_APPLICABLE
+    assert tuple(tmp_path.iterdir()) == ()
 
 
 @pytest.mark.parametrize(
-    ("returncode", "timed_out", "expected_process_exit"),
-    ((7, False, 7), (0, True, -9)),
+    "status",
+    (ReleaseGateStatus.PASSED, ReleaseGateStatus.FAILED),
 )
-def test_nonzero_and_timed_out_local_execution_emit_failed_real_evidence(
+def test_current_plan_rejects_self_authored_executed_result_artifact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    returncode: int,
-    timed_out: bool,
-    expected_process_exit: int,
+    status: ReleaseGateStatus,
 ) -> None:
-    factory = _FakePopenFactory(returncode=returncode, timed_out=timed_out)
-    _install_fake_process(monkeypatch, factory)
+    receipt = _self_authored_executed_receipt(tmp_path, status=status)
+    binding = receipt.artifact_bindings[0]
 
-    receipt = execute_local_release_gate(
-        gate_id=ReleaseGateId.RUFF_CHECK,
-        repository_root=ROOT,
-        evidence_root=tmp_path,
-        candidate_observation_sha256=CANDIDATE_SHA256,
-        run_binding_sha256=RUN_BINDING_SHA256,
-    )
-    result, _binding = _result_for_receipt(tmp_path, ReleaseGateId.RUFF_CHECK)
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("current-plan rejection attempted to read self-authored evidence")
 
-    assert receipt.status is ReleaseGateStatus.FAILED
-    assert receipt.timed_out is timed_out
-    assert receipt.exit_code is (None if timed_out else expected_process_exit)
-    assert receipt.result_summary.checks_total == 1
-    assert receipt.result_summary.checks_failed == 1
-    assert result.status is ReleaseGateStatus.FAILED
-    assert result.process_exit_code == expected_process_exit
-    assert result.timed_out is timed_out
+    monkeypatch.setattr(runtime_module, "revalidate_evidence_file_binding", forbidden)
 
-
-@pytest.mark.parametrize("junit", (None, b"<not-xml>", b"<testsuites/>"))
-def test_successful_pytest_without_valid_nonempty_junit_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    junit: bytes | None,
-) -> None:
-    factory = _FakePopenFactory(junit=junit)
-    _install_fake_process(monkeypatch, factory)
-
-    with pytest.raises(ValueError, match="valid nonempty JUnit"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.PYTEST,
-            repository_root=ROOT,
-            evidence_root=tmp_path,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-    assert not (
-        tmp_path / get_release_gate_fixed_plan(ReleaseGateId.PYTEST).result_artifact_path
-    ).exists()
-
-
-def test_local_executor_rejects_output_overflow_without_a_result(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    factory = _FakePopenFactory(stdout=b"x" * (4 * 1024 * 1024 + 1))
-    _install_fake_process(monkeypatch, factory)
-
-    with pytest.raises(ValueError, match="output exceeds"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.RUFF_CHECK,
-            repository_root=ROOT,
-            evidence_root=tmp_path,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-    assert not (
-        tmp_path / get_release_gate_fixed_plan(ReleaseGateId.RUFF_CHECK).result_artifact_path
-    ).exists()
-
-
-def test_local_executor_exposes_no_arbitrary_command_surface_and_rejects_unsafe_roots(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    assert "argv" not in inspect.signature(execute_local_release_gate).parameters
-    monkeypatch.setattr(
-        runtime_module.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: pytest.fail("unsafe input reached process execution"),
-    )
-
-    with pytest.raises(ValueError, match="only fixed local release gates"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.DOCTOR,
-            repository_root=ROOT,
-            evidence_root=tmp_path,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-    with pytest.raises(ValueError, match="release repository package"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.RUFF_CHECK,
-            repository_root=tmp_path,
-            evidence_root=tmp_path,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-
-    result_path = (
-        tmp_path / get_release_gate_fixed_plan(ReleaseGateId.RUFF_CHECK).result_artifact_path
-    )
-    result_path.write_text("preexisting", encoding="utf-8")
-    with pytest.raises(ValueError, match="must be fresh"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.RUFF_CHECK,
-            repository_root=ROOT,
-            evidence_root=tmp_path,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-
-    real_evidence = tmp_path / "real-evidence"
-    real_evidence.mkdir()
-    linked_evidence = tmp_path / "linked-evidence"
-    linked_evidence.symlink_to(real_evidence, target_is_directory=True)
-    with pytest.raises(ValueError, match="may not traverse a link"):
-        execute_local_release_gate(
-            gate_id=ReleaseGateId.RUFF_CHECK,
-            repository_root=ROOT,
-            evidence_root=linked_evidence,
-            candidate_observation_sha256=CANDIDATE_SHA256,
-            run_binding_sha256=RUN_BINDING_SHA256,
-        )
-
-
-def test_result_validation_rejects_candidate_and_fresh_tool_rebinding(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    factory = _FakePopenFactory()
-    _install_fake_process(monkeypatch, factory)
-    receipt = execute_local_release_gate(
-        gate_id=ReleaseGateId.RUFF_CHECK,
-        repository_root=ROOT,
-        evidence_root=tmp_path,
-        candidate_observation_sha256=CANDIDATE_SHA256,
-        run_binding_sha256=RUN_BINDING_SHA256,
-    )
-    _result, binding = _result_for_receipt(tmp_path, ReleaseGateId.RUFF_CHECK)
-
-    with pytest.raises(ValueError, match="receipt projection"):
+    with pytest.raises(ValueError, match="current local release plan rejects executed"):
         validate_local_release_gate_result_artifact(
             evidence_root=tmp_path,
             binding=binding,
-            expected_candidate_observation_sha256="e" * 64,
-            expected_run_binding_sha256=RUN_BINDING_SHA256,
-            expected_receipt=receipt,
-        )
-
-    monkeypatch.setattr(
-        runtime_module,
-        "_observe_tool_distribution",
-        lambda name: runtime_module._DistributionObservation(
-            name=name,
-            version="1.2.3",
-            inventory_sha256="f" * 64,
-        ),
-    )
-    with pytest.raises(ValueError, match="receipt projection"):
-        validate_local_release_gate_result_artifact(
-            evidence_root=tmp_path,
-            binding=binding,
-            expected_candidate_observation_sha256=CANDIDATE_SHA256,
+            expected_candidate_observation_sha256=_candidate().observation_sha256,
             expected_run_binding_sha256=RUN_BINDING_SHA256,
             expected_receipt=receipt,
         )
 
 
-def test_result_schema_rejects_missing_generator_and_rehashed_guard_tampering(
+def test_blocked_local_receipt_set_rejects_claimed_result_artifact(tmp_path: Path) -> None:
+    clean_receipts = tuple(_blocked_receipt(gate_id) for gate_id in ReleaseGateId)
+    clean_bundle = build_release_gate_evidence_bundle(
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        receipts=clean_receipts,
+    )
+    assert (
+        validate_local_release_gate_receipts(
+            bundle=clean_bundle,
+            evidence_root=tmp_path,
+        )
+        == ()
+    )
+
+    binding = write_json_evidence(
+        evidence_root=tmp_path,
+        relative_path=get_release_gate_fixed_plan(ReleaseGateId.RUFF_CHECK).result_artifact_path,
+        value={"synthetic": True},
+    )
+    receipts_with_claim = tuple(
+        _blocked_receipt(
+            gate_id,
+            artifact_bindings=(binding,) if gate_id is ReleaseGateId.RUFF_CHECK else (),
+        )
+        for gate_id in ReleaseGateId
+    )
+    bundle_with_claim = build_release_gate_evidence_bundle(
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        receipts=receipts_with_claim,
+    )
+
+    with pytest.raises(ValueError, match="canonical current-plan blocker"):
+        validate_local_release_gate_receipts(
+            bundle=bundle_with_claim,
+            evidence_root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "receipt_overrides",
+    (
+        {"ended_at": END},
+        {"result_summary": "noncanonical blocker summary"},
+        {"blocker_summary": "Noncanonical prerequisite blocker."},
+        {"stdout": b"unexpected output"},
+        {"tool_name": "not-ruff"},
+    ),
+)
+def test_local_receipt_set_rejects_noncanonical_blocker_fields(
+    tmp_path: Path,
+    receipt_overrides: dict[str, Any],
+) -> None:
+    receipts = tuple(
+        (
+            _blocked_receipt(gate_id, **receipt_overrides)
+            if gate_id is ReleaseGateId.RUFF_CHECK
+            else _blocked_receipt(gate_id)
+        )
+        for gate_id in ReleaseGateId
+    )
+    bundle = build_release_gate_evidence_bundle(
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        receipts=receipts,
+    )
+
+    with pytest.raises(ValueError, match="canonical current-plan blocker"):
+        validate_local_release_gate_receipts(bundle=bundle, evidence_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "status",
+    (ReleaseGateStatus.PASSED, ReleaseGateStatus.FAILED),
+)
+def test_local_receipt_set_rejects_self_authored_executed_receipt(
+    tmp_path: Path,
+    status: ReleaseGateStatus,
+) -> None:
+    evidence = tmp_path / "self-authored"
+    evidence.mkdir()
+    forged = _self_authored_executed_receipt(evidence, status=status)
+    receipts = tuple(
+        forged if gate_id is ReleaseGateId.RUFF_CHECK else _blocked_receipt(gate_id)
+        for gate_id in ReleaseGateId
+    )
+    bundle = build_release_gate_evidence_bundle(
+        candidate_observation_sha256=_candidate().observation_sha256,
+        run_binding_sha256=RUN_BINDING_SHA256,
+        receipts=receipts,
+    )
+
+    with pytest.raises(ValueError, match="canonical current-plan blocker"):
+        validate_local_release_gate_receipts(bundle=bundle, evidence_root=evidence)
+
+
+def test_release_candidate_custody_rejects_ancestor_twin_use_and_restore(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    factory = _FakePopenFactory()
-    _install_fake_process(monkeypatch, factory)
-    execute_local_release_gate(
-        gate_id=ReleaseGateId.RUFF_CHECK,
-        repository_root=ROOT,
-        evidence_root=tmp_path,
-        candidate_observation_sha256=CANDIDATE_SHA256,
+    authority = tmp_path / "authority"
+    repository = authority / "candidate"
+    repository.mkdir(parents=True)
+    git = candidate_module._trusted_git_executable()
+    git_environment = candidate_module._git_environment()
+
+    def run_git(*arguments: str) -> None:
+        subprocess.run(
+            [str(git), "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            env=git_environment,
+            shell=False,
+        )
+
+    run_git("init", "-q")
+    run_git("config", "user.name", "Synthetic Release Test")
+    run_git("config", "user.email", "release-test@example.invalid")
+    source = repository / "src/mmaudit/example.py"
+    source.parent.mkdir(parents=True)
+    (source.parent / "__init__.py").write_bytes(b"\n")
+    source.write_bytes(b"VALUE = 1\n")
+    run_git("add", "--all")
+    run_git("commit", "-q", "-m", "Synthetic release candidate")
+    twin_authority = tmp_path / "twin-authority"
+    shutil.copytree(authority, twin_authority)
+    resolved_repository = repository.resolve(strict=True)
+    monkeypatch.setattr(
+        candidate_module,
+        "_require_executing_repository_root",
+        lambda _root: resolved_repository,
+    )
+    candidate = candidate_module.observe_release_candidate(resolved_repository)
+    custody = candidate_module.observe_release_candidate_custody(
+        resolved_repository,
+        expected_candidate=candidate,
+    )
+
+    parked_authority = tmp_path / "parked-authority"
+    original_mode = stat.S_IMODE(authority.stat().st_mode)
+    authority.rename(parked_authority)
+    twin_authority.rename(authority)
+    assert (authority / "candidate/src/mmaudit/example.py").read_bytes() == b"VALUE = 1\n"
+    authority.rename(twin_authority)
+    parked_authority.rename(authority)
+    authority.chmod(original_mode ^ 0o004)
+    authority.chmod(original_mode)
+
+    with pytest.raises(ValueError, match="release candidate custody"):
+        candidate_module.require_unchanged_release_candidate_custody(custody)
+
+
+def test_local_gate_blocks_ignored_pytest_configuration_without_consuming_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "candidate"
+    evidence = tmp_path / "evidence"
+    ignored_config = repository / "pytest.ini"
+    ignored_conftest = repository / "tests/conftest.py"
+    ignored_conftest.parent.mkdir(parents=True)
+    evidence.mkdir()
+    ignored_config.write_bytes(b"[pytest]\n")
+    ignored_conftest.write_bytes(b"raise AssertionError('must not load')\n")
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("blocked local gate attempted to inspect or execute ignored input")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+    receipt = execute_local_release_gate(
+        gate_id=ReleaseGateId.PYTEST,
+        repository_root=repository,
+        evidence_root=evidence,
+        candidate=_candidate(),
         run_binding_sha256=RUN_BINDING_SHA256,
     )
-    result, _binding = _result_for_receipt(tmp_path, ReleaseGateId.RUFF_CHECK)
 
-    payload = result.model_dump(mode="json")
-    del payload["generated_by"]
-    with pytest.raises(ValidationError, match="generated_by"):
-        LocalReleaseGateResult.model_validate(payload)
-
-    payload = result.model_dump(mode="json", exclude={"result_sha256"})
-    payload["network_guard_sha256"] = "0" * 64
-    payload["result_sha256"] = canonical_sha256(payload)
-    with pytest.raises(ValidationError, match="network guard"):
-        LocalReleaseGateResult.model_validate(payload)
+    assert receipt.status is ReleaseGateStatus.BLOCKED_TECHNICAL
+    assert ignored_config.read_bytes() == b"[pytest]\n"
+    assert ignored_conftest.read_bytes() == b"raise AssertionError('must not load')\n"
+    assert tuple(evidence.iterdir()) == ()
 
 
-def test_safe_path_guard_loads_and_denies_direct_network_apis(tmp_path: Path) -> None:
-    runtime_root = tmp_path / "runtime"
-    runtime_root.mkdir()
-    gate_id = ReleaseGateId.RUFF_CHECK
-    guard_root = runtime_module._install_network_guard(runtime_root, gate_id=gate_id)
-    environment = runtime_module._fixed_child_environment(
-        runtime_root,
-        network_guard_root=guard_root,
-        gate_id=gate_id,
-    )
-    script = """
-import _socket
-import socket
-
-actions = (
-    lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("127.0.0.1", 9)),
-    lambda: socket.socket(socket.AF_INET6, socket.SOCK_STREAM).connect(("::1", 9)),
-    lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).connect("/tmp/absent"),
-    lambda: socket.create_connection(("127.0.0.1", 9)),
-    lambda: socket.getaddrinfo("localhost", 9),
-    lambda: _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM).connect(("127.0.0.1", 9)),
-)
-denied = 0
-for action in actions:
-    try:
-        action()
-    except PermissionError:
-        denied += 1
-print("denied" if denied == len(actions) else "unsafe")
-"""
-
-    completed = subprocess.run(
-        [sys.executable, "-P", "-c", script],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        timeout=10,
-    )
-
-    assert completed.returncode == 0
-    assert completed.stdout == b"denied\n"
-    assert completed.stderr == b""
-
-
-def test_safe_path_rejects_repository_local_tool_shadow(tmp_path: Path) -> None:
-    runtime_root = tmp_path / "runtime"
-    repository = tmp_path / "shadow-repository"
-    runtime_root.mkdir()
-    repository.mkdir()
-    (repository / "ruff.py").write_text(
-        'raise RuntimeError("repository-local shadow was imported")\n',
-        encoding="utf-8",
-    )
-    gate_id = ReleaseGateId.RUFF_CHECK
-    guard_root = runtime_module._install_network_guard(runtime_root, gate_id=gate_id)
-    environment = runtime_module._fixed_child_environment(
-        runtime_root,
-        network_guard_root=guard_root,
-        gate_id=gate_id,
-    )
-
-    outcome = runtime_module._execute_fixed_process(
-        argv=(sys.executable, "-P", "-m", "ruff", "--version"),
-        repository_root=repository,
-        runtime_root=runtime_root,
-        environment=environment,
-        timeout_seconds=10,
-    )
-
-    assert outcome.returncode == 0
-    assert outcome.stdout.startswith(b"ruff ")
-    assert b"shadow" not in outcome.stderr
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group containment")
-def test_successful_process_cleans_up_surviving_descendant_group(
+def test_local_gate_blocks_before_real_directory_adoption_or_victim_write(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    runtime_root = tmp_path / "runtime"
-    repository = tmp_path / "repository"
-    runtime_root.mkdir()
+    repository = tmp_path / "candidate"
+    evidence = tmp_path / "evidence"
+    parked_evidence = tmp_path / "parked-evidence"
+    victim = tmp_path / "victim"
     repository.mkdir()
-    gate_id = ReleaseGateId.RUFF_CHECK
-    guard_root = runtime_module._install_network_guard(runtime_root, gate_id=gate_id)
-    environment = runtime_module._fixed_child_environment(
-        runtime_root,
-        network_guard_root=guard_root,
-        gate_id=gate_id,
-    )
-    real_popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen
-    process_groups: list[int] = []
+    evidence.mkdir()
+    victim.mkdir()
+    sentinel = victim / "sentinel"
+    sentinel.write_bytes(b"unchanged")
+    evidence.rename(parked_evidence)
+    victim.rename(evidence)
 
-    def recording_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
-        process = real_popen(*args, **kwargs)
-        process_groups.append(process.pid)
-        return process
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("blocked local gate attempted an adopted-root side effect")
 
-    monkeypatch.setattr(runtime_module.subprocess, "Popen", recording_popen)
-    script = (
-        "import subprocess, sys; "
-        "child = subprocess.Popen("
-        "[sys.executable, '-P', '-c', 'import time; time.sleep(60)']); "
-        "print(child.pid, flush=True)"
-    )
-    outcome = runtime_module._execute_fixed_process(
-        argv=(sys.executable, "-P", "-c", script),
+    monkeypatch.setattr(runtime_module, "_require_unlinked_directory", forbidden)
+    monkeypatch.setattr(runtime_module, "_create_fresh_private_file", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+    receipt = execute_local_release_gate(
+        gate_id=ReleaseGateId.RUFF_CHECK,
         repository_root=repository,
-        runtime_root=runtime_root,
-        environment=environment,
-        timeout_seconds=10,
+        evidence_root=evidence,
+        candidate=_candidate(),
+        run_binding_sha256=RUN_BINDING_SHA256,
     )
 
-    assert outcome.returncode == 0
-    assert outcome.stdout.strip().isdigit()
-    assert len(process_groups) == 1
-    with pytest.raises(ProcessLookupError):
-        os.killpg(process_groups[0], 0)
+    assert receipt.status is ReleaseGateStatus.BLOCKED_TECHNICAL
+    moved_sentinel = evidence / sentinel.name
+    assert moved_sentinel.read_bytes() == b"unchanged"
+    assert tuple(evidence.iterdir()) == (moved_sentinel,)
+    assert tuple(parked_evidence.iterdir()) == ()
+
+
+def test_local_gate_blocks_before_tracked_tool_and_stdlib_shadow_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "candidate"
+    evidence = tmp_path / "evidence"
+    package = repository / "src/mmaudit"
+    package.mkdir(parents=True)
+    evidence.mkdir()
+    (package / "__init__.py").write_bytes(b'CANDIDATE_MARKER = "exact"\n')
+    shadow_paths = tuple(
+        repository / "src" / f"{module_name}.py"
+        for module_name in ("ruff", "mypy", "pytest", "socket")
+    )
+    for shadow in shadow_paths:
+        shadow.write_bytes(b"raise AssertionError('shadow imported')\n")
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("blocked local gate attempted tool or candidate import")
+
+    monkeypatch.setattr(runtime_module, "_materialize_argv", forbidden)
+    monkeypatch.setattr(runtime_module, "_observe_tool_distribution", forbidden)
+    monkeypatch.setattr(runtime_module, "_observe_executing_python", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+    receipt = execute_local_release_gate(
+        gate_id=ReleaseGateId.RUFF_CHECK,
+        repository_root=repository,
+        evidence_root=evidence,
+        candidate=_candidate(),
+        run_binding_sha256=RUN_BINDING_SHA256,
+    )
+
+    assert receipt.status is ReleaseGateStatus.BLOCKED_TECHNICAL
+    assert all(
+        shadow.read_bytes() == b"raise AssertionError('shadow imported')\n"
+        for shadow in shadow_paths
+    )
+    assert tuple(evidence.iterdir()) == ()
 
 
 def test_real_distribution_inventory_is_nonempty_and_deterministic() -> None:

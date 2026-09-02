@@ -37,7 +37,7 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
 )
 from mmaudit.benchmark.model_portfolio import CandidateBenchmarkCampaignJournal
 from mmaudit.benchmark.models import ModelBenchmarkReport, ModelBenchmarkSuite
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, TokenBudgetConfig
 from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageRunnerError,
     AuthenticatedCrossLineageRunnerEvidence,
@@ -94,6 +94,7 @@ from mmaudit.models.ground_truth_authority import (
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterProviderPolicy
 from mmaudit.models.public_lineage_authority import VerifiedPublicModelLineage
 from mmaudit.models.qualification import CandidateModel, CandidateRegistry, QualificationPolicy
+from mmaudit.models.reasoning import ReasoningPolicyArtifact
 from mmaudit.models.route_admission import (
     require_authenticated_runner_route_admission,
     require_authenticated_runner_three_route_admission,
@@ -388,6 +389,7 @@ class _OpenRouterExecutionAdapter:
             usage=usage,
             operator_api_key=self._required_api_key(),
             explicitly_allow_synthetic_egress=launch.explicitly_allow_synthetic_egress,
+            client_factory=self._new_candidate_campaign_client,
             evidence_sink=evidence_sink,
             qualification_policy=qualification_policy,
             pre_dispatch_rejection_observer=_raise_candidate_pre_dispatch_rejection,
@@ -401,6 +403,61 @@ class _OpenRouterExecutionAdapter:
             )
         self._candidate_reports[run_kind] = result.reports[0]
         return result
+
+    def _new_candidate_campaign_client(
+        self,
+        *,
+        api_key: str,
+        config: AuditConfig,
+        budget: BudgetManager,
+        usage: UsageLedger,
+        candidate: CandidateModel,
+        provider_policy: OpenRouterProviderPolicy,
+        candidate_revocation_route_constraint: ExactRouteConstraint | None,
+        reasoning_policy: ReasoningPolicyArtifact,
+        token_budgets: TokenBudgetConfig | None,
+    ) -> OpenRouterClient:
+        """Construct the concrete candidate transport with exact frozen role custody."""
+
+        launch = self._launch
+        expected_candidate = launch.candidate_registry.candidates[0]
+        route_constraint = launch.candidate_discovery_evidence[
+            0
+        ].endpoint_snapshot.exact_route_constraint
+        expected_provider_policy = OpenRouterProviderPolicy(
+            certification=True,
+            only=(expected_candidate.approved_provider_endpoint,),
+            allow_fallbacks=False,
+        )
+        if (
+            api_key != self._required_api_key()
+            or config != launch.config
+            or budget is not launch.budget
+            or usage is not launch.usage
+            or candidate != expected_candidate
+            or provider_policy != expected_provider_policy
+            or reasoning_policy != build_reasoning_policy(launch.config)
+            or token_budgets != launch.config.token_budgets
+            or type(route_constraint) is not ExactRouteConstraint
+            or candidate_revocation_route_constraint != route_constraint
+            or route_constraint.role is not ExactRouteRole.CANDIDATE
+            or route_constraint.exact_model_id != candidate.exact_model_id
+            or route_constraint.provider_endpoint != candidate.approved_provider_endpoint
+        ):
+            raise AuthenticatedRunnerOpenRouterError(
+                "candidate client inputs differ from the exact constrained launch route"
+            )
+        return OpenRouterClient(
+            api_key=api_key,
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=budget,
+            usage=usage,
+            provider_policy=provider_policy,
+            candidate_revocation_route_constraint=route_constraint,
+            reasoning_policy=reasoning_policy,
+            token_budgets=token_budgets,
+        )
 
     async def prepare_judge_routes(
         self,
@@ -453,6 +510,9 @@ class _OpenRouterExecutionAdapter:
                     source_kind=AuthenticatedRunnerGenerationSubject.JUDGE,
                     prepared=prepared,
                     candidate_report=candidate_report,
+                    route_constraint=(
+                        plan.judge_discovery_evidence[0].endpoint_snapshot.exact_route_constraint
+                    ),
                 )
                 clients[prepared.run_kind] = client
                 await _refresh_and_register_judge_discovery(
@@ -562,6 +622,11 @@ class _OpenRouterExecutionAdapter:
                 source_kind=subject,
                 prepared=None,
                 candidate_report=None,
+                route_constraint=(
+                    self._launch.candidate_discovery_evidence[
+                        0
+                    ].endpoint_snapshot.exact_route_constraint
+                ),
             )
             evidence = self._launch.candidate_discovery_evidence[0]
             manifest = self._launch.candidate_discovery_manifest
@@ -615,6 +680,7 @@ class _OpenRouterExecutionAdapter:
         source_kind: AuthenticatedRunnerGenerationSubject,
         prepared: CrossLineageAdjudicationPreparedRun | None,
         candidate_report: ModelBenchmarkReport | None,
+        route_constraint: ExactRouteConstraint | None,
     ) -> OpenRouterClient:
         launch = self._launch
         observed_at = datetime.now(UTC).replace(microsecond=0)
@@ -640,6 +706,25 @@ class _OpenRouterExecutionAdapter:
                 now=observed_at,
             )
             source_sha256 = cross_lineage_adjudication_source_sha256(prepared)
+        candidate_revocation_role = (
+            ExactRouteRole.CANDIDATE
+            if source_kind is AuthenticatedRunnerGenerationSubject.CANDIDATE
+            else (
+                ExactRouteRole.PRIMARY_JUDGE
+                if prepared is not None
+                and prepared.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
+                else ExactRouteRole.REPLAY_JUDGE
+            )
+        )
+        if (
+            type(route_constraint) is not ExactRouteConstraint
+            or route_constraint.role is not candidate_revocation_role
+            or route_constraint.exact_model_id != model.exact_model_id
+            or route_constraint.provider_endpoint != model.approved_provider_endpoint
+        ):
+            raise AuthenticatedRunnerOpenRouterError(
+                "OpenRouter client revocation custody differs from constrained route"
+            )
         policy = resolve_effective_privacy_policy(
             profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
             require_zdr=True,
@@ -664,6 +749,7 @@ class _OpenRouterExecutionAdapter:
                 only=(model.approved_provider_endpoint,),
                 allow_fallbacks=False,
             ),
+            candidate_revocation_route_constraint=route_constraint,
             reasoning_policy=build_reasoning_policy(launch.config),
             effective_privacy_policy=policy,
             source_provenance_observation=source_observation,

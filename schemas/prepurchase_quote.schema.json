@@ -817,6 +817,7 @@
       "description": "Closed paid-work classes that a whole-run quote must bound explicitly.",
       "enum": [
         "orientation",
+        "retrieval_planning",
         "compact_coverage",
         "source_audit",
         "whole_protocol",
@@ -962,8 +963,8 @@
       "items": {
         "$ref": "#/$defs/PrepurchaseQuoteTaskClass"
       },
-      "maxItems": 11,
-      "minItems": 11,
+      "maxItems": 12,
+      "minItems": 12,
       "title": "Covered Task Classes",
       "type": "array",
       "uniqueItems": true
@@ -1054,7 +1055,7 @@
         "$ref": "#/$defs/PrepurchaseQuoteTaskCeiling"
       },
       "maxItems": 10000,
-      "minItems": 11,
+      "minItems": 12,
       "title": "Task Ceilings",
       "type": "array",
       "uniqueItems": true

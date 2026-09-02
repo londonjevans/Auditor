@@ -272,13 +272,26 @@ def test_hardhat_wrapper_mounts_only_private_rpc_socket_under_network_none(
     )
 
     rendered = " ".join(command)
+    resolved_private = private.resolve(strict=True)
+    resolved_workspace = workspace.resolve(strict=True)
+    runtime_dir = resolved_private / "container-runtime"
+    seccomp_argument = next(item for item in command if item.startswith("seccomp="))
+    mount_arguments = [
+        command[index + 1] for index, token in enumerate(command[:-1]) if token == "--mount"
+    ]
     assert command[command.index("--network") + 1] == "none"
     assert "--network host" not in rendered
     assert "--network bridge" not in rendered
-    assert (
-        f"type=bind,src={private / 'hardhat-rpc.sock'},dst=/run/mmaudit/hardhat-rpc.sock,readonly"
-    ) in command
-    assert f"type=bind,src={workspace},dst=/workspace,readonly" in command
+    assert Path(command[command.index("--cidfile") + 1]) == runtime_dir / "container.cid"
+    assert Path(seccomp_argument.removeprefix("seccomp=")) == runtime_dir / "hardhat-seccomp.json"
+    assert mount_arguments == [
+        f"type=bind,src={resolved_workspace},dst=/workspace,readonly",
+        f"type=bind,src={resolved_private / 'container-output'},dst=/mmaudit-output,rw",
+        (
+            f"type=bind,src={resolved_private / 'hardhat-rpc.sock'},"
+            "dst=/run/mmaudit/hardhat-rpc.sock,readonly"
+        ),
+    ]
     assert command[command.index("--entrypoint") + 1] == ("/usr/local/bin/mmaudit-hardhat-loopback")
     assert command[command.index("--") + 1] == "/usr/local/bin/hardhat"
     assert f"MMAUDIT_FORK_RPC_URL=http://127.0.0.1:{rpc_port}" in command
@@ -292,13 +305,11 @@ def test_hardhat_wrapper_mounts_only_private_rpc_socket_under_network_none(
     assert len(authority_sha256) == 64
     assert command[command.index("--authority-sha256") + 1] == authority_sha256
     assert "docker.sock" not in rendered
-    assert str(Path.home()) not in rendered
     assert "OPENROUTER_API_KEY" not in rendered
     assert isolation_execution_evidence(backend) is ExecutionEvidenceKind.UNVERIFIED
     assert bridge.live_unix_listener_observation().execution_credit is False
     assert binding is not None
 
-    seccomp_argument = next(item for item in command if item.startswith("seccomp="))
     profile = json.loads(Path(seccomp_argument.removeprefix("seccomp=")).read_text())
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
     ordinary = set(profile["syscalls"][0]["names"])

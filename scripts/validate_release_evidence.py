@@ -110,6 +110,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Full-mode audited target repository root.",
     )
     parser.add_argument(
+        "--configuration-root",
+        type=_explicit_path,
+        help="Full-mode directory against which relative configuration paths resolve.",
+    )
+    parser.add_argument(
         "--artifact-evidence-file",
         "--artifact-evidence-path",
         dest="artifact_evidence_file",
@@ -152,6 +157,7 @@ def _run_artifact_only(
         "--target-repository": arguments.target_repository,
         "--artifact-evidence-file": arguments.artifact_evidence_file,
         "--run-verification-file": arguments.run_verification_file,
+        "--configuration-root": arguments.configuration_root,
         "--require-complete": arguments.require_complete,
     }
     supplied = [flag for flag, value in full_only.items() if value not in {None, False}]
@@ -198,6 +204,7 @@ def _run_full_validation(
         "--target-repository": arguments.target_repository,
         "--artifact-evidence-file": arguments.artifact_evidence_file,
         "--run-verification-file": arguments.run_verification_file,
+        "--configuration-root": arguments.configuration_root,
     }
     missing = [flag for flag, value in required.items() if value is None]
     if missing:
@@ -210,6 +217,7 @@ def _run_full_validation(
         release_repository_root=arguments.release_repository,
         emitted_run_dir=arguments.run_dir,
         target_repository_root=arguments.target_repository,
+        configuration_root=arguments.configuration_root,
         artifact_evidence_path=arguments.artifact_evidence_file,
         run_verification_path=arguments.run_verification_file,
         require_complete=arguments.require_complete,

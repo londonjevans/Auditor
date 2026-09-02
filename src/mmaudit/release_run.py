@@ -34,6 +34,7 @@ from mmaudit.release_artifacts import (
     _require_unlinked_directory,
     observe_release_artifacts,
 )
+from mmaudit.repository.directory_custody import require_unchanged_unlinked_directory
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
 _MANIFEST_NAME = "run-evidence-manifest.json"
@@ -157,12 +158,14 @@ def observe_release_run_binding(
 ) -> ReleaseRunBinding:
     """Bind one explicit emitted run to one exact pre-existing evidence file."""
 
-    run_root = _require_unlinked_directory(run_dir, label="release run")
+    run_root_observation = _require_unlinked_directory(run_dir, label="release run")
+    run_root = run_root_observation.path
     evidence, evidence_bytes = _read_artifact_evidence_exact(artifact_evidence_path)
-    evidence_parent = _require_unlinked_directory(
+    evidence_parent_observation = _require_unlinked_directory(
         artifact_evidence_path.parent,
         label="release-evidence parent",
     )
+    evidence_parent = evidence_parent_observation.path
     if _directory_is_within(evidence_parent, run_root):
         raise ValueError("release artifact evidence must be outside the emitted run")
 
@@ -179,8 +182,10 @@ def observe_release_run_binding(
     manifest = RunEvidenceManifest.model_validate(
         _decode_json_object(manifest_bytes, label="run evidence manifest")
     )
-    if manifest.schema_version != "1.2" or manifest.run_configuration is None:
-        raise ValueError("release run binding requires report-bundle manifest schema 1.2")
+    if manifest.schema_version not in {"1.2", "1.3", "1.4"} or manifest.run_configuration is None:
+        raise ValueError(
+            "release run binding requires report-bundle manifest schema 1.2, 1.3, or 1.4"
+        )
     _require_manifest_evidence_equality(
         manifest=manifest,
         manifest_bytes=manifest_bytes,
@@ -270,6 +275,11 @@ def observe_release_run_binding(
         manifest_bytes=manifest_bytes_after,
         evidence=evidence_after,
     )
+    require_unchanged_unlinked_directory(run_root_observation, label="release run")
+    require_unchanged_unlinked_directory(
+        evidence_parent_observation,
+        label="release-evidence parent",
+    )
 
     serialized = payload.model_dump(mode="json")
     return ReleaseRunBinding.model_validate(
@@ -287,14 +297,21 @@ def _read_artifact_evidence_exact(
 
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing to read a sensitive release-evidence filename")
-    parent = _require_unlinked_directory(path.parent, label="release-evidence parent")
+    parent_observation = _require_unlinked_directory(
+        path.parent,
+        label="release-evidence parent",
+    )
     data = _read_unique_regular_file(
-        parent / path.name,
+        parent_observation.path / path.name,
         max_bytes=_MAX_EVIDENCE_BYTES,
         label="release artifact evidence",
     )
     evidence = ReleaseArtifactEvidence.model_validate(
         _decode_json_object(data, label="release artifact evidence")
+    )
+    require_unchanged_unlinked_directory(
+        parent_observation,
+        label="release-evidence parent",
     )
     return evidence, data
 
@@ -308,7 +325,7 @@ def _require_manifest_evidence_equality(
     """Cross-reconcile every manifest identity copied into artifact evidence."""
 
     if (
-        manifest.schema_version != "1.2"
+        manifest.schema_version not in {"1.2", "1.3", "1.4"}
         or manifest.run_configuration is None
         or evidence.run_id != manifest.run_id
         or evidence.manifest_path != _MANIFEST_NAME

@@ -7,6 +7,7 @@ import json
 import pickle
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskResult,
     SchedulerTerminalStatus,
     SchedulerTruncationRecoveryPromotionDisposition,
+    scheduler_candidate_payload_sha256,
 )
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
@@ -32,10 +34,12 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.truncation import (
+    CandidateReviewFramePhase,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
     candidate_review_frame_wire_schema_sha256,
     frame_candidate_review_batch,
+    normalize_candidate_review_document,
     seal_candidate_review_truncated_envelope_evidence,
 )
 from mmaudit.models.truncation_closure import (
@@ -43,19 +47,36 @@ from mmaudit.models.truncation_closure import (
     TruncationSurfaceOriginKind,
 )
 from mmaudit.models.truncation_recovery import (
+    TruncationRecoveryChildPlan,
     TruncationRecoveryParentBinding,
+    TruncationRecoveryPlan,
     plan_truncation_recovery,
 )
 from mmaudit.models.truncation_recovery_journal import (
+    SchedulerRecoveredCandidateOrigin,
+    SchedulerRecoveredCandidateOriginKind,
+    SchedulerRecoveredCandidateReviewOutput,
+    SchedulerTruncationRecoveryChildActivation,
+    SchedulerTruncationRecoveryChildDispatch,
     SchedulerTruncationRecoveryChildResult,
     SchedulerTruncationRecoveryClosureStatus,
     SchedulerTruncationRecoveryEntryKind,
     SchedulerTruncationRecoveryFamilyClosure,
+    SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
     rebuild_truncation_recovery_parent_from_projection,
 )
 from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.model_review_authority import ModelReviewPreDispatchBinding
+from mmaudit.orchestration.scheduler import (
+    SchedulerJournal,
+    require_model_review_pre_dispatch_authorization,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    require_verified_promoted_truncation_recovery_surface_coverage,
+)
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.orchestration.truncation_recovery_evidence import (
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
@@ -63,8 +84,6 @@ from mmaudit.orchestration.truncation_recovery_evidence import (
     VerifiedRecursiveTruncationRecoveryTree,
     VerifiedTruncationRecoveryClosure,
     build_truncation_recovery_child_context,
-    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
-    require_verified_promoted_truncation_recovery_surface_coverage,
     verify_recursive_truncation_recovery_tree,
     verify_truncation_recovery_closure,
 )
@@ -99,6 +118,7 @@ from tests.unit.test_truncation_closure import (
     _requests,
 )
 from tests.unit.test_truncation_recovery_journal import (
+    _candidate,
     _nested_plan_for_typed_truncated_child,
     _placeholder_channels,
     _projection,
@@ -110,6 +130,908 @@ from tests.unit.test_truncation_recovery_journal import (
 
 def _digest(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
+
+
+def _live_model_review_pre_dispatch_bindings(
+    journal: object,
+) -> tuple[ModelReviewPreDispatchBinding, ...]:
+    from mmaudit.orchestration.scheduler import SchedulerJournal
+
+    assert type(journal) is SchedulerJournal
+    return tuple(
+        require_model_review_pre_dispatch_authorization(capability)
+        for capability in journal.model_review_pre_dispatch_authorizations
+    )
+
+
+def _legacy_request_id(label: str) -> str:
+    return "scheduler-recovery-request-" + _digest(label)
+
+
+def _legacy_recovery_usage(label: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        request_id=_legacy_request_id(label),
+        role="source_audit",
+        routing={"context_request_evidence_sha256": _digest(f"context:{label}")},
+    )
+
+
+def _detached_accepted_candidate(label: str):  # type: ignore[no-untyped-def]
+    return _candidate(label).model_copy(
+        update={"candidate_id": "cand-" + _digest(f"candidate:{label}")[:24]}
+    )
+
+
+class _DetachedFamilyEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedClosureEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedPromotionEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedActivationEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedDispatchEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedResultEntry(SimpleNamespace):
+    pass
+
+
+class _DetachedPreflightEntry(SimpleNamespace):
+    pass
+
+
+def _install_detached_recovery_entry_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        scheduler_module,
+        "validate_truncation_recovery_entry_chain",
+        lambda entries: tuple(entries),
+    )
+    monkeypatch.setattr(
+        scheduler_module, "SchedulerTruncationRecoveryFamilyRoot", _DetachedFamilyEntry
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryFamilyClosure",
+        _DetachedClosureEntry,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryFamilyPromotion",
+        _DetachedPromotionEntry,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryChildActivation",
+        _DetachedActivationEntry,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryChildDispatch",
+        _DetachedDispatchEntry,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryChildPreflightResult",
+        _DetachedPreflightEntry,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerTruncationRecoveryChildResult",
+        _DetachedResultEntry,
+    )
+    monkeypatch.setattr(scheduler_module, "_validate_root_scheduler_parent", lambda **_values: None)
+    monkeypatch.setattr(
+        scheduler_module, "_validate_nested_recovery_parent", lambda **_values: None
+    )
+    monkeypatch.setattr(
+        scheduler_module, "_typed_recovery_usage_coordinate", lambda **_values: None
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "_expected_recovery_family_closure",
+        lambda *, family, indexes: family.expected_closure,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "stamp_candidate_review_findings",
+        lambda **values: tuple(values["raw_findings"]),
+    )
+
+
+def _detached_entry_base(*, campaign_id: str, family_id: str) -> dict[str, object]:
+    return {
+        "campaign_id": campaign_id,
+        "family_id": family_id,
+        "request_limit_binding_sha256": _digest("detached-request-limit-binding"),
+    }
+
+
+def _detached_leaf(
+    *,
+    campaign_id: str,
+    family_id: str,
+    family_index: int,
+    family_root_sha256: str,
+    ordinal: int,
+    global_request_ordinal: int,
+    label: str,
+) -> tuple[
+    SimpleNamespace,
+    _DetachedActivationEntry,
+    _DetachedDispatchEntry,
+    _DetachedResultEntry,
+    SchedulerRecoveredCandidateOrigin,
+]:
+    child_task_id = "scheduler-recovery-task-" + _digest(f"task:{label}")
+    request_id = _legacy_request_id(label)
+    child = SimpleNamespace(
+        child_task_id=child_task_id,
+        child_logical_request_id=request_id,
+        child_plan_sha256=_digest(f"plan:{label}"),
+        surface_ids=(),
+        ordinal=ordinal,
+        reserved_provider_attempts=1,
+        reserved_completion_tokens=10,
+        reserved_usd_exact="0.01",
+    )
+    activation = _DetachedActivationEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        family_index=family_index,
+        family_root_sha256=family_root_sha256,
+        child_task_id=child_task_id,
+        child_logical_request_id=request_id,
+        child_plan_sha256=child.child_plan_sha256,
+        child_surface_ids=(),
+        global_request_ordinal=global_request_ordinal,
+        activation_id="scheduler-recovery-activation-" + _digest(f"activation-id:{label}"),
+        entry_sha256=_digest(f"activation:{label}"),
+    )
+    dispatch = _DetachedDispatchEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        child_task_id=child_task_id,
+        child_logical_request_id=request_id,
+        child_plan_sha256=child.child_plan_sha256,
+        global_request_ordinal=global_request_ordinal,
+        activation_id=activation.activation_id,
+        activation_sha256=activation.entry_sha256,
+        dispatch_id="scheduler-recovery-dispatch-" + _digest(f"dispatch-id:{label}"),
+        entry_sha256=_digest(f"dispatch:{label}"),
+    )
+    candidate = _detached_accepted_candidate(f"detached-v1-{label}")
+    batch, normalization = normalize_candidate_review_document(
+        frame_candidate_review_batch(
+            CandidateReviewBatch(findings=(candidate,), surface_reviews=())
+        ),
+        request_id=request_id,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    usage = _legacy_recovery_usage(label)
+    result = _DetachedResultEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        schema_version="1.1",
+        result_origin=SchedulerTruncationRecoveryResultOrigin.RUNTIME,
+        terminal_status=SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED,
+        child_task_id=child_task_id,
+        child_logical_request_id=request_id,
+        child_plan_sha256=child.child_plan_sha256,
+        child_surface_ids=(),
+        global_request_ordinal=global_request_ordinal,
+        activation_id=activation.activation_id,
+        activation_sha256=activation.entry_sha256,
+        dispatch_id=dispatch.dispatch_id,
+        dispatch_sha256=dispatch.entry_sha256,
+        reserved_provider_attempts=1,
+        reserved_completion_tokens=10,
+        reserved_usd_exact="0.01",
+        runtime_usage_record=usage,
+        runtime_usage_record_sha256=_digest(f"usage:{label}"),
+        runtime_normalization_evidence=normalization,
+        runtime_normalized_batch=batch,
+        runtime_output_artifact=SimpleNamespace(
+            records=(),
+            artifact_sha256=_digest(f"artifact:{label}"),
+        ),
+        completed_surface_ids=(),
+        retained_surface_ids=(),
+        entry_sha256=_digest(f"result:{label}"),
+    )
+    origin = SchedulerRecoveredCandidateOrigin.build(
+        origin_kind=SchedulerRecoveredCandidateOriginKind.CHILD_BATCH,
+        accepted_candidate_id=candidate.candidate_id,
+        accepted_candidate_sha256=scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        ),
+        raw_candidate_id=candidate.candidate_id,
+        raw_candidate_sha256=scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        ),
+        request_id=request_id,
+        request_role=usage.role,
+        usage_record_sha256=result.runtime_usage_record_sha256,
+        context_request_evidence_sha256=usage.routing["context_request_evidence_sha256"],
+        child_task_id=child_task_id,
+        child_result_sha256=result.entry_sha256,
+        normalization_evidence_sha256=normalization.evidence_sha256,
+        surface_artifact_sha256=result.runtime_output_artifact.artifact_sha256,
+    )
+    return child, activation, dispatch, result, origin
+
+
+def _detached_parent_origin(
+    *,
+    candidate: object,
+    projection: CandidateReviewTruncationProjection,
+    usage: SimpleNamespace,
+    usage_record_sha256: str,
+) -> SchedulerRecoveredCandidateOrigin:
+    finding = next(item for item in projection.findings if item == candidate)
+    frame = next(
+        item
+        for item in projection.accepted_frames
+        if item.phase is CandidateReviewFramePhase.FINDING
+        and item.record_id == finding.candidate_id
+    )
+    payload_sha256 = scheduler_candidate_payload_sha256(
+        finding,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    return SchedulerRecoveredCandidateOrigin.build(
+        origin_kind=SchedulerRecoveredCandidateOriginKind.PARENT_FRAME,
+        accepted_candidate_id=finding.candidate_id,
+        accepted_candidate_sha256=payload_sha256,
+        raw_candidate_id=finding.candidate_id,
+        raw_candidate_sha256=payload_sha256,
+        request_id=usage.request_id,
+        request_role=usage.role,
+        usage_record_sha256=usage_record_sha256,
+        context_request_evidence_sha256=usage.routing["context_request_evidence_sha256"],
+        parent_projection_sha256=projection.evidence_sha256,
+        accepted_frame_sequence=frame.sequence,
+        accepted_frame_sha256=frame.frame_sha256,
+    )
+
+
+def _detached_bridge_origin(
+    *,
+    candidate: object,
+    projection: CandidateReviewTruncationProjection,
+    result: _DetachedResultEntry,
+) -> SchedulerRecoveredCandidateOrigin:
+    finding = next(item for item in projection.findings if item == candidate)
+    frame = next(
+        item
+        for item in projection.accepted_frames
+        if item.phase is CandidateReviewFramePhase.FINDING
+        and item.record_id == finding.candidate_id
+    )
+    payload_sha256 = scheduler_candidate_payload_sha256(
+        finding,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    return SchedulerRecoveredCandidateOrigin.build(
+        origin_kind=SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME,
+        accepted_candidate_id=finding.candidate_id,
+        accepted_candidate_sha256=payload_sha256,
+        raw_candidate_id=finding.candidate_id,
+        raw_candidate_sha256=payload_sha256,
+        request_id=result.runtime_usage_record.request_id,
+        request_role=result.runtime_usage_record.role,
+        usage_record_sha256=result.runtime_usage_record_sha256,
+        context_request_evidence_sha256=result.runtime_usage_record.routing[
+            "context_request_evidence_sha256"
+        ],
+        truncation_projection_sha256=projection.evidence_sha256,
+        accepted_frame_sequence=frame.sequence,
+        accepted_frame_sha256=frame.frame_sha256,
+        child_task_id=result.child_task_id,
+        child_result_sha256=result.entry_sha256,
+    )
+
+
+def test_detached_v1_direct_recovery_indexes_replay_parent_and_child_candidate_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_detached_recovery_entry_types(monkeypatch)
+    campaign_id = "scheduler-campaign-" + _digest("detached-v1-direct-campaign")
+    family_id = "scheduler-recovery-family-" + _digest("detached-v1-direct-family")
+    parent_task_id = "scheduler-task-" + _digest("detached-v1-direct-parent")
+    pass_plan_id = "scheduler-plan-" + _digest("detached-v1-direct-pass")
+    parent_candidate = _detached_accepted_candidate("detached-v1-direct-parent")
+    projection = _projection(
+        (),
+        retained_count=0,
+        findings=(parent_candidate,),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    parent_usage = _legacy_recovery_usage("detached-v1-direct-parent")
+    parent_usage_sha256 = _digest("detached-v1-direct-parent-usage")
+    parent_attempt = SimpleNamespace(
+        schema_version="1.1",
+        truncation_projection=projection,
+        usage_record=parent_usage,
+        usage_record_sha256=parent_usage_sha256,
+        context_request_evidence_sha256=parent_usage.routing["context_request_evidence_sha256"],
+        truncated_envelope_evidence=object(),
+        attempt_evidence_sha256=_digest("detached-v1-direct-parent-attempt"),
+    )
+    leaves = tuple(
+        _detached_leaf(
+            campaign_id=campaign_id,
+            family_id=family_id,
+            family_index=0,
+            family_root_sha256=_digest("detached-v1-direct-family-root"),
+            ordinal=index,
+            global_request_ordinal=index + 1,
+            label=f"detached-v1-direct-leaf-{index}",
+        )
+        for index in range(2)
+    )
+    children = tuple(item[0] for item in leaves)
+    results = tuple(item[3] for item in leaves)
+    family_root_sha256 = _digest("detached-v1-direct-family-root")
+    for activation, result in ((item[1], item[3]) for item in leaves):
+        activation.family_root_sha256 = family_root_sha256
+        result.family_root_sha256 = family_root_sha256
+    request_limit_binding = SimpleNamespace(
+        manifest_sha256=_digest("detached-v1-direct-manifest"),
+        parent_request_limit_count_after=0,
+        request_limit_maximum=10,
+    )
+    family = _DetachedFamilyEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        family_index=0,
+        entry_sha256=family_root_sha256,
+        parent_kind=SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK,
+        parent_family_id=None,
+        request_limit_id=parent_usage.request_id,
+        request_limit_binding=request_limit_binding,
+        request_count_before_family=0,
+        request_count_after_family=2,
+        request_limit_count_before_family=0,
+        request_limit_count_after_family=2,
+        request_limit_attempts_reserved_for_family=2,
+        recovery_plan=SimpleNamespace(
+            parent=SimpleNamespace(parent_task_id=parent_task_id),
+            children=children,
+            plan_sha256=_digest("detached-v1-direct-recovery-plan"),
+        ),
+        truncation_projection=projection,
+    )
+    closure = _DetachedClosureEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        schema_version="1.1",
+        family_index=0,
+        family_root_sha256=family_root_sha256,
+        recovery_plan_sha256=family.recovery_plan.plan_sha256,
+        closure_id="scheduler-recovery-closure-" + _digest("detached-v1-direct-closure-id"),
+        entry_sha256=_digest("detached-v1-direct-closure"),
+        closure_status=SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED,
+        child_result_sha256s=tuple(item.entry_sha256 for item in results),
+        nested_family_closure_sha256s=(),
+        covered_unfinished_surface_ids=(),
+    )
+    family.expected_closure = (
+        closure.closure_status,
+        closure.child_result_sha256s,
+        (),
+        (),
+    )
+    parent_origin = _detached_parent_origin(
+        candidate=parent_candidate,
+        projection=projection,
+        usage=parent_usage,
+        usage_record_sha256=parent_usage_sha256,
+    )
+    candidates = tuple(
+        sorted(
+            (parent_candidate, *(item.runtime_normalized_batch.findings[0] for item in results)),
+            key=lambda item: item.candidate_id,
+        )
+    )
+    origins = tuple(
+        sorted(
+            (parent_origin, *(item[4] for item in leaves)),
+            key=lambda item: item.accepted_candidate_id,
+        )
+    )
+    scanner_fingerprints = tuple(
+        sorted(
+            (
+                (parent_usage.request_id, ()),
+                *((item.runtime_usage_record.request_id, ()) for item in results),
+            )
+        )
+    )
+    output = SchedulerRecoveredCandidateReviewOutput.build(
+        campaign_id=campaign_id,
+        pass_plan_id=pass_plan_id,
+        parent_task_id=parent_task_id,
+        parent_logical_request_id=parent_usage.request_id.replace(
+            "scheduler-recovery-request-", "scheduler-request-"
+        ),
+        parent_activation_sha256=_digest("detached-v1-direct-parent-activation"),
+        original_truncated_result_sha256=_digest("detached-v1-direct-parent-result"),
+        parent_provider_attempt_sha256=parent_attempt.attempt_evidence_sha256,
+        recovery_family_id=family_id,
+        family_root_sha256=family_root_sha256,
+        family_closure_sha256=closure.entry_sha256,
+        structural_surface_artifact_sha256=_digest("detached-v1-direct-structural"),
+        recovered_batch=CandidateReviewBatch(findings=candidates, surface_reviews=()),
+        candidate_origins=origins,
+        scanner_fingerprints_by_request=scanner_fingerprints,
+        delivered_source_descriptor_sha256s=(),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    capability_payload = {
+        "domain": "mmaudit.scheduler.truncation-recovery-promotion-capability.v1",
+        "family_id": family_id,
+        "family_root_sha256": family_root_sha256,
+        "family_closure_id": closure.closure_id,
+        "family_closure_sha256": closure.entry_sha256,
+        "structural_surface_artifact_sha256": output.structural_surface_artifact_sha256,
+        "scanner_fingerprints_by_request": scanner_fingerprints,
+        "recovered_output_sha256": output.output_artifact_sha256,
+    }
+    promotion = _DetachedPromotionEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=family_id),
+        schema_version="1.0",
+        family_index=0,
+        family_root_sha256=family_root_sha256,
+        recovery_plan_sha256=family.recovery_plan.plan_sha256,
+        family_closure_id=closure.closure_id,
+        family_closure_sha256=closure.entry_sha256,
+        previous_entry_sha256=closure.entry_sha256,
+        parent_task_id=parent_task_id,
+        original_truncated_result_sha256=output.original_truncated_result_sha256,
+        direct_child_result_sha256s=closure.child_result_sha256s,
+        recovered_output=output,
+        capability_binding_sha256=scheduler_module.scheduler_canonical_sha256(capability_payload),
+    )
+    scheduler = SimpleNamespace(
+        provider_attempts={parent_task_id: parent_attempt},
+        activations={
+            parent_task_id: SimpleNamespace(
+                activation_sha256=output.parent_activation_sha256,
+                delivered_source_descriptor_sha256s=(),
+            )
+        },
+        tasks={
+            parent_task_id: (
+                SimpleNamespace(
+                    task_id=parent_task_id,
+                    task_kind=scheduler_module.SchedulerTaskKind.MODEL_REQUEST,
+                    response_schema_sha256=projection.wire_schema_sha256,
+                    logical_request_id=output.parent_logical_request_id,
+                ),
+                SimpleNamespace(
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    pass_plan_id=pass_plan_id,
+                    manifest=SimpleNamespace(algorithm_version="mmaudit.seven-pass-scheduler.v1"),
+                ),
+            )
+        },
+        credited_results={
+            parent_task_id: SimpleNamespace(
+                terminal_status=SchedulerTerminalStatus.TRUNCATED,
+                result_sha256=output.original_truncated_result_sha256,
+            )
+        },
+    )
+    entries = [family]
+    for _child, activation, dispatch, result, _origin in leaves:
+        entries.extend((activation, dispatch, result))
+    entries.extend((closure, promotion))
+    derived = scheduler_module._derive_truncation_recovery_indexes(
+        entries=entries,
+        scheduler=scheduler,
+        manifest=SimpleNamespace(
+            campaign_id=campaign_id,
+            manifest_sha256=request_limit_binding.manifest_sha256,
+        ),
+    )
+
+    assert derived.promotions[family_id].recovered_output == output
+    for origin, candidate in zip(output.candidate_origins, candidates, strict=True):
+        assert origin.accepted_candidate_sha256 == scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        )
+        assert origin.accepted_candidate_sha256 != scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v2",
+        )
+
+
+def test_detached_v1_recursive_recovery_indexes_replay_root_bridge_and_leaf_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_detached_recovery_entry_types(monkeypatch)
+    campaign_id = "scheduler-campaign-" + _digest("detached-v1-recursive-campaign")
+    root_family_id = "scheduler-recovery-family-" + _digest("detached-v1-recursive-root")
+    nested_family_id = "scheduler-recovery-family-" + _digest("detached-v1-recursive-nested")
+    parent_task_id = "scheduler-task-" + _digest("detached-v1-recursive-parent")
+    pass_plan_id = "scheduler-plan-" + _digest("detached-v1-recursive-pass")
+    root_sha256 = _digest("detached-v1-recursive-root-sha")
+    nested_sha256 = _digest("detached-v1-recursive-nested-sha")
+    root_candidate = _detached_accepted_candidate("detached-v1-recursive-root")
+    bridge_candidate = _detached_accepted_candidate("detached-v1-recursive-bridge")
+    root_projection = _projection(
+        (),
+        retained_count=0,
+        findings=(root_candidate,),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    bridge_projection = _projection(
+        (),
+        retained_count=0,
+        findings=(bridge_candidate,),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    parent_usage = _legacy_recovery_usage("detached-v1-recursive-parent")
+    parent_usage_sha256 = _digest("detached-v1-recursive-parent-usage")
+    parent_attempt = SimpleNamespace(
+        schema_version="1.1",
+        truncation_projection=root_projection,
+        usage_record=parent_usage,
+        usage_record_sha256=parent_usage_sha256,
+        context_request_evidence_sha256=parent_usage.routing["context_request_evidence_sha256"],
+        truncated_envelope_evidence=object(),
+        attempt_evidence_sha256=_digest("detached-v1-recursive-parent-attempt"),
+    )
+    bridge_child = SimpleNamespace(
+        child_task_id="scheduler-recovery-task-" + _digest("detached-v1-bridge-task"),
+        child_logical_request_id=_legacy_request_id("detached-v1-recursive-bridge"),
+        child_plan_sha256=_digest("detached-v1-bridge-plan"),
+        surface_ids=(),
+        ordinal=0,
+        reserved_provider_attempts=1,
+        reserved_completion_tokens=10,
+        reserved_usd_exact="0.01",
+    )
+    bridge_activation = _DetachedActivationEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        family_index=0,
+        family_root_sha256=root_sha256,
+        child_task_id=bridge_child.child_task_id,
+        child_logical_request_id=bridge_child.child_logical_request_id,
+        child_plan_sha256=bridge_child.child_plan_sha256,
+        child_surface_ids=(),
+        global_request_ordinal=1,
+        activation_id="scheduler-recovery-activation-" + _digest("detached-v1-bridge-act-id"),
+        entry_sha256=_digest("detached-v1-bridge-activation"),
+    )
+    bridge_dispatch = _DetachedDispatchEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        child_task_id=bridge_child.child_task_id,
+        child_logical_request_id=bridge_child.child_logical_request_id,
+        child_plan_sha256=bridge_child.child_plan_sha256,
+        global_request_ordinal=1,
+        activation_id=bridge_activation.activation_id,
+        activation_sha256=bridge_activation.entry_sha256,
+        dispatch_id="scheduler-recovery-dispatch-" + _digest("detached-v1-bridge-dispatch-id"),
+        entry_sha256=_digest("detached-v1-bridge-dispatch"),
+    )
+    bridge_usage = _legacy_recovery_usage("detached-v1-recursive-bridge")
+    bridge_result = _DetachedResultEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        schema_version="1.1",
+        result_origin=SchedulerTruncationRecoveryResultOrigin.RUNTIME,
+        terminal_status=SchedulerTruncationRecoveryTerminalStatus.TRUNCATED,
+        child_task_id=bridge_child.child_task_id,
+        child_logical_request_id=bridge_child.child_logical_request_id,
+        child_plan_sha256=bridge_child.child_plan_sha256,
+        child_surface_ids=(),
+        global_request_ordinal=1,
+        activation_id=bridge_activation.activation_id,
+        activation_sha256=bridge_activation.entry_sha256,
+        dispatch_id=bridge_dispatch.dispatch_id,
+        dispatch_sha256=bridge_dispatch.entry_sha256,
+        reserved_provider_attempts=1,
+        reserved_completion_tokens=10,
+        reserved_usd_exact="0.01",
+        runtime_usage_record=bridge_usage,
+        runtime_usage_record_sha256=_digest("detached-v1-bridge-usage"),
+        runtime_normalization_evidence=None,
+        runtime_normalized_batch=None,
+        runtime_output_artifact=None,
+        runtime_specialist_accepted_outcome=None,
+        runtime_specialist_accepted_outcome_sha256=None,
+        truncation_projection=bridge_projection,
+        completed_surface_ids=(),
+        retained_surface_ids=(),
+        entry_sha256=_digest("detached-v1-bridge-result"),
+    )
+    direct_leaf = _detached_leaf(
+        campaign_id=campaign_id,
+        family_id=root_family_id,
+        family_index=0,
+        family_root_sha256=root_sha256,
+        ordinal=1,
+        global_request_ordinal=2,
+        label="detached-v1-recursive-direct-leaf",
+    )
+    nested_leaves = tuple(
+        _detached_leaf(
+            campaign_id=campaign_id,
+            family_id=nested_family_id,
+            family_index=1,
+            family_root_sha256=nested_sha256,
+            ordinal=index,
+            global_request_ordinal=index + 3,
+            label=f"detached-v1-recursive-nested-leaf-{index}",
+        )
+        for index in range(2)
+    )
+    request_limit_binding = SimpleNamespace(
+        manifest_sha256=_digest("detached-v1-recursive-manifest"),
+        parent_request_limit_count_after=0,
+        request_limit_maximum=10,
+    )
+    root_family = _DetachedFamilyEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        family_index=0,
+        entry_sha256=root_sha256,
+        parent_kind=SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK,
+        parent_family_id=None,
+        request_limit_id=parent_usage.request_id,
+        request_limit_binding=request_limit_binding,
+        request_count_before_family=0,
+        request_count_after_family=2,
+        request_limit_count_before_family=0,
+        request_limit_count_after_family=2,
+        request_limit_attempts_reserved_for_family=2,
+        recovery_plan=SimpleNamespace(
+            parent=SimpleNamespace(parent_task_id=parent_task_id),
+            children=(bridge_child, direct_leaf[0]),
+            plan_sha256=_digest("detached-v1-recursive-root-plan"),
+        ),
+        truncation_projection=root_projection,
+    )
+    nested_family = _DetachedFamilyEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=nested_family_id),
+        family_index=1,
+        entry_sha256=nested_sha256,
+        parent_kind=SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD,
+        parent_family_id=root_family_id,
+        request_limit_id=parent_usage.request_id,
+        request_limit_binding=request_limit_binding,
+        request_count_before_family=2,
+        request_count_after_family=4,
+        request_limit_count_before_family=2,
+        request_limit_count_after_family=4,
+        request_limit_attempts_reserved_for_family=2,
+        recovery_plan=SimpleNamespace(
+            parent=SimpleNamespace(parent_task_id=bridge_child.child_task_id),
+            children=tuple(item[0] for item in nested_leaves),
+            plan_sha256=_digest("detached-v1-recursive-nested-plan"),
+        ),
+        truncation_projection=bridge_projection,
+    )
+    nested_results = tuple(item[3] for item in nested_leaves)
+    nested_closure = _DetachedClosureEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=nested_family_id),
+        schema_version="1.1",
+        family_index=1,
+        family_root_sha256=nested_sha256,
+        recovery_plan_sha256=nested_family.recovery_plan.plan_sha256,
+        closure_id="scheduler-recovery-closure-" + _digest("detached-v1-nested-close-id"),
+        entry_sha256=_digest("detached-v1-nested-closure"),
+        closure_status=SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED,
+        child_result_sha256s=tuple(item.entry_sha256 for item in nested_results),
+        nested_family_closure_sha256s=(),
+        covered_unfinished_surface_ids=(),
+    )
+    nested_family.expected_closure = (
+        nested_closure.closure_status,
+        nested_closure.child_result_sha256s,
+        (),
+        (),
+    )
+    direct_result = direct_leaf[3]
+    root_closure = _DetachedClosureEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        schema_version="1.2",
+        family_index=0,
+        family_root_sha256=root_sha256,
+        recovery_plan_sha256=root_family.recovery_plan.plan_sha256,
+        closure_id="scheduler-recovery-closure-" + _digest("detached-v1-root-close-id"),
+        entry_sha256=_digest("detached-v1-root-closure"),
+        closure_status=(
+            SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+        ),
+        child_result_sha256s=(bridge_result.entry_sha256, direct_result.entry_sha256),
+        nested_family_closure_sha256s=(nested_closure.entry_sha256,),
+        covered_unfinished_surface_ids=(),
+    )
+    root_family.expected_closure = (
+        root_closure.closure_status,
+        root_closure.child_result_sha256s,
+        root_closure.nested_family_closure_sha256s,
+        (),
+    )
+    tree = SimpleNamespace(
+        bridge_child=bridge_child,
+        bridge_result=bridge_result,
+        direct_leaf_child=direct_leaf[0],
+        direct_leaf_result=direct_result,
+        direct_child_result_sha256s=root_closure.child_result_sha256s,
+        nested_family=nested_family,
+        nested_closure=nested_closure,
+        nested_child_result_sha256s=nested_closure.child_result_sha256s,
+        nested_leaf_results=nested_results,
+        superseded_bridge_result_sha256=bridge_result.entry_sha256,
+        promoted_leaf_results=(direct_result, *nested_results),
+        promoted_leaf_result_sha256s=(
+            direct_result.entry_sha256,
+            *(item.entry_sha256 for item in nested_results),
+        ),
+        tree_results=(bridge_result, direct_result, *nested_results),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "_recursive_recovery_tree_inventory",
+        lambda **_values: tree,
+    )
+    root_origin = _detached_parent_origin(
+        candidate=root_candidate,
+        projection=root_projection,
+        usage=parent_usage,
+        usage_record_sha256=parent_usage_sha256,
+    )
+    bridge_origin = _detached_bridge_origin(
+        candidate=bridge_candidate,
+        projection=bridge_projection,
+        result=bridge_result,
+    )
+    leaf_results = (direct_result, *nested_results)
+    candidates = tuple(
+        sorted(
+            (
+                root_candidate,
+                bridge_candidate,
+                *(item.runtime_normalized_batch.findings[0] for item in leaf_results),
+            ),
+            key=lambda item: item.candidate_id,
+        )
+    )
+    origins = tuple(
+        sorted(
+            (root_origin, bridge_origin, direct_leaf[4], *(item[4] for item in nested_leaves)),
+            key=lambda item: item.accepted_candidate_id,
+        )
+    )
+    all_usages = (parent_usage, bridge_usage, *(item.runtime_usage_record for item in leaf_results))
+    scanner_fingerprints = tuple(sorted((item.request_id, ()) for item in all_usages))
+    output = SchedulerRecoveredCandidateReviewOutput.build(
+        campaign_id=campaign_id,
+        pass_plan_id=pass_plan_id,
+        parent_task_id=parent_task_id,
+        parent_logical_request_id=parent_usage.request_id.replace(
+            "scheduler-recovery-request-", "scheduler-request-"
+        ),
+        parent_activation_sha256=_digest("detached-v1-recursive-parent-activation"),
+        original_truncated_result_sha256=_digest("detached-v1-recursive-parent-result"),
+        parent_provider_attempt_sha256=parent_attempt.attempt_evidence_sha256,
+        recovery_family_id=root_family_id,
+        family_root_sha256=root_sha256,
+        family_closure_sha256=root_closure.entry_sha256,
+        structural_surface_artifact_sha256=_digest("detached-v1-recursive-structural"),
+        recovered_batch=CandidateReviewBatch(findings=candidates, surface_reviews=()),
+        candidate_origins=origins,
+        scanner_fingerprints_by_request=scanner_fingerprints,
+        delivered_source_descriptor_sha256s=(),
+        recursive_tree=True,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    capability_payload = {
+        "domain": "mmaudit.scheduler.recursive-truncation-recovery-promotion-capability.v1",
+        "family_id": root_family_id,
+        "family_root_sha256": root_sha256,
+        "family_closure_id": root_closure.closure_id,
+        "family_closure_sha256": root_closure.entry_sha256,
+        "structural_surface_artifact_sha256": output.structural_surface_artifact_sha256,
+        "scanner_fingerprints_by_request": scanner_fingerprints,
+        "recovered_output_sha256": output.output_artifact_sha256,
+        "nested_family_id": nested_family_id,
+        "nested_family_root_sha256": nested_sha256,
+        "nested_family_closure_id": nested_closure.closure_id,
+        "nested_family_closure_sha256": nested_closure.entry_sha256,
+        "direct_child_result_sha256s": tree.direct_child_result_sha256s,
+        "nested_child_result_sha256s": tree.nested_child_result_sha256s,
+        "superseded_bridge_result_sha256": bridge_result.entry_sha256,
+        "promoted_leaf_result_sha256s": tree.promoted_leaf_result_sha256s,
+    }
+    promotion = _DetachedPromotionEntry(
+        **_detached_entry_base(campaign_id=campaign_id, family_id=root_family_id),
+        schema_version="1.1",
+        family_index=0,
+        family_root_sha256=root_sha256,
+        recovery_plan_sha256=root_family.recovery_plan.plan_sha256,
+        family_closure_id=root_closure.closure_id,
+        family_closure_sha256=root_closure.entry_sha256,
+        previous_entry_sha256=root_closure.entry_sha256,
+        parent_task_id=parent_task_id,
+        original_truncated_result_sha256=output.original_truncated_result_sha256,
+        direct_child_result_sha256s=tree.direct_child_result_sha256s,
+        nested_family_id=nested_family_id,
+        nested_family_root_sha256=nested_sha256,
+        nested_recovery_plan_sha256=nested_family.recovery_plan.plan_sha256,
+        nested_family_closure_id=nested_closure.closure_id,
+        nested_family_closure_sha256=nested_closure.entry_sha256,
+        nested_child_result_sha256s=tree.nested_child_result_sha256s,
+        superseded_bridge_result_sha256=bridge_result.entry_sha256,
+        promoted_leaf_result_sha256s=tree.promoted_leaf_result_sha256s,
+        recovered_output=output,
+        capability_binding_sha256=scheduler_module.scheduler_canonical_sha256(capability_payload),
+    )
+    scheduler = SimpleNamespace(
+        provider_attempts={parent_task_id: parent_attempt},
+        activations={
+            parent_task_id: SimpleNamespace(
+                activation_sha256=output.parent_activation_sha256,
+                delivered_source_descriptor_sha256s=(),
+            )
+        },
+        tasks={
+            parent_task_id: (
+                SimpleNamespace(
+                    task_id=parent_task_id,
+                    task_kind=scheduler_module.SchedulerTaskKind.MODEL_REQUEST,
+                    response_schema_sha256=root_projection.wire_schema_sha256,
+                    logical_request_id=output.parent_logical_request_id,
+                ),
+                SimpleNamespace(
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    pass_plan_id=pass_plan_id,
+                    manifest=SimpleNamespace(algorithm_version="mmaudit.seven-pass-scheduler.v1"),
+                ),
+            )
+        },
+        credited_results={
+            parent_task_id: SimpleNamespace(
+                terminal_status=SchedulerTerminalStatus.TRUNCATED,
+                result_sha256=output.original_truncated_result_sha256,
+            )
+        },
+    )
+    entries = [root_family, bridge_activation, bridge_dispatch, bridge_result]
+    entries.extend(direct_leaf[1:4])
+    entries.append(nested_family)
+    for _child, activation, dispatch, result, _origin in nested_leaves:
+        entries.extend((activation, dispatch, result))
+    entries.extend((nested_closure, root_closure, promotion))
+    derived = scheduler_module._derive_truncation_recovery_indexes(
+        entries=entries,
+        scheduler=scheduler,
+        manifest=SimpleNamespace(
+            campaign_id=campaign_id,
+            manifest_sha256=request_limit_binding.manifest_sha256,
+        ),
+    )
+
+    assert derived.promotions[root_family_id].recovered_output == output
+    assert len(output.recovered_batch.findings) == 5
+    for origin, candidate in zip(output.candidate_origins, candidates, strict=True):
+        assert origin.accepted_candidate_sha256 == scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        )
+        assert origin.accepted_candidate_sha256 != scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version="mmaudit.seven-pass-scheduler.v2",
+        )
 
 
 def _one_shard_bindings() -> SchedulerBindings:
@@ -388,14 +1310,13 @@ def _recovery_plan(
     projection: CandidateReviewTruncationProjection,
     manifest: SchedulerTruncationRecoveryRequestedSurfaceManifest,
     parent_usage: UsageRecord,
-) -> object:
+) -> TruncationRecoveryPlan:
     from mmaudit.models.scheduler import (
         SchedulerPassPlan,
         SchedulerProviderAttemptEvidence,
         SchedulerTaskActivation,
         SchedulerTaskPlan,
     )
-    from mmaudit.models.truncation_recovery import TruncationRecoveryPlan
     from mmaudit.orchestration.scheduler import SchedulerJournal
 
     assert isinstance(journal, SchedulerJournal)
@@ -446,6 +1367,47 @@ def _recovery_plan(
     return plan
 
 
+def _assert_recovery_system_prompt_drift_rejected(
+    *,
+    journal: SchedulerJournal,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    child: TruncationRecoveryChildPlan,
+    activation: SchedulerTruncationRecoveryChildActivation,
+) -> None:
+    """A coherent prospective dispatch cannot replace the ordinary root instructions."""
+
+    drifted_system_prompt_sha256 = (
+        "f" * 64 if activation.system_prompt_sha256 != "f" * 64 else "e" * 64
+    )
+    drifted_activation = SchedulerTruncationRecoveryChildActivation.build(
+        family=family,
+        child=child,
+        actual_input_sha256=activation.actual_input_sha256,
+        system_prompt_sha256=drifted_system_prompt_sha256,
+        user_prompt_sha256=activation.user_prompt_sha256,
+        provider_prompt_sha256=activation.provider_prompt_sha256,
+        response_schema_sha256=activation.response_schema_sha256,
+        entry_index=activation.entry_index,
+        previous_entry_sha256=activation.previous_entry_sha256,
+    )
+    drifted_dispatch = SchedulerTruncationRecoveryChildDispatch.build(
+        activation=drifted_activation,
+        entry_index=drifted_activation.entry_index + 1,
+        previous_entry_sha256=drifted_activation.entry_sha256,
+    )
+    with pytest.raises(
+        ValueError,
+        match="recovery model-review authorization binding is incomplete or changed",
+    ):
+        scheduler_module._recovery_model_review_pre_dispatch_binding(
+            journal=journal,
+            family=family,
+            child=child,
+            activation=drifted_activation,
+            dispatch=drifted_dispatch,
+        )
+
+
 def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -482,12 +1444,16 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         root_lineage=audit_selection.route_for(model_id).root_lineage,
         system_prompt_sha256="a" * 64,
         response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        model_surface_review_request_manifest_sha256=(
+            surface_manifest.requested_surface_manifest_sha256
+        ),
     )
+    assert blind_task.system_prompt_sha256 is not None
     blind_plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, (blind_task,))
     parent_context_sha256 = hashlib.sha256(render_context(parent_context).encode()).hexdigest()
     parent_activation = journal.activate_task(
         blind_task.task_id,
-        actual_input_sha256=blind_task.input_sha256,
+        actual_input_sha256=parent_context_sha256,
         system_prompt_sha256=blind_task.system_prompt_sha256,
         user_prompt_sha256=parent_context_sha256,
         provider_prompt_sha256="2" * 64,
@@ -496,7 +1462,7 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
             scheduler_test_delivered_source_descriptor_sha256s(blind_plan, blind_task)
         ),
     )
-    journal.mark_dispatched(blind_task.task_id)
+    parent_dispatch = journal.mark_dispatched(blind_task.task_id)
     full_batch = CandidateReviewBatch(findings=(), surface_reviews=records)
     envelope, parent_usage = _typed_parent_truncation(
         journal=journal,
@@ -557,13 +1523,20 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
             child=child,
         )
         child_contexts.append(child_context)
+        child_prompt_sha256 = hashlib.sha256(render_context(child_context).encode()).hexdigest()
         child_activation = journal.activate_truncation_recovery_child(
             child.child_task_id,
-            actual_input_sha256=_digest(f"input:{child.child_task_id}"),
-            system_prompt_sha256=_digest(f"system:{child.child_task_id}"),
-            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            actual_input_sha256=child_prompt_sha256,
+            system_prompt_sha256=blind_task.system_prompt_sha256,
+            user_prompt_sha256=child_prompt_sha256,
             provider_prompt_sha256=_digest(f"provider:{child.child_task_id}"),
             response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        _assert_recovery_system_prompt_drift_rejected(
+            journal=journal,
+            family=family,
+            child=child,
+            activation=child_activation,
         )
         journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
         usage, normalization, batch, child_requests, artifact = _success_custody(
@@ -589,6 +1562,24 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         )
         assert child_result.runtime_usage_record is usage
         child_results.append(child_result)
+
+    root_lineage = audit_selection.route_for(model_id).root_lineage
+    live_pre_dispatch_bindings = _live_model_review_pre_dispatch_bindings(journal)
+    expected_root_binding = ModelReviewPreDispatchBinding(
+        request_id=blind_task.logical_request_id,
+        task_id=blind_task.task_id,
+        review_role=blind_task.role,
+        requested_model=model_id,
+        root_lineage=root_lineage,
+        requested_surface_manifest_sha256=(surface_manifest.requested_surface_manifest_sha256),
+        rendered_context_sha256=parent_context_sha256,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        task_plan_sha256=blind_task.task_plan_sha256,
+        activation_sha256=parent_activation.activation_sha256,
+        dispatched_event_sha256=parent_dispatch.event_sha256,
+    )
+    assert live_pre_dispatch_bindings == (expected_root_binding,)
 
     unpromoted_requests = journal.recovery_model_requests
     assert len(unpromoted_requests) == 2
@@ -666,6 +1657,15 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     assert fresh_surface_projection.artifact.records == records
     blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
     assert blind_result.status is SchedulerPassStatus.COMPLETE
+    with pytest.raises(ValueError):
+        journal.issue_promoted_truncation_recovery_surface_coverage(
+            family.family_id,
+            capability,
+        )
+    assert (
+        require_verified_promoted_truncation_recovery_surface_coverage(surface_coverage)
+        == fresh_surface_projection
+    )
     assert blind_result.task_results == (original_result,)
     assert blind_result.task_results[0].terminal_status is SchedulerTerminalStatus.TRUNCATED
     assert all(output.task_id != blind_task.task_id for output in journal.outputs)
@@ -773,15 +1773,13 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
         requests=requests,
     )
     assert resumed_structural_artifact == structural_artifact
-    resumed_surface_coverage = resumed.issue_promoted_truncation_recovery_surface_coverage(
-        resumed_family.family_id,
-        resumed_closure_capability,
-    )
-    assert type(resumed_surface_coverage) is VerifiedPromotedTruncationRecoverySurfaceCoverage
-    resumed_surface_projection = require_verified_promoted_truncation_recovery_surface_coverage(
-        resumed_surface_coverage
-    )
-    assert resumed_surface_projection == fresh_surface_projection
+    assert resumed.model_review_pre_dispatch_authorizations == ()
+    assert resumed.promoted_truncation_recovery_surface_coverages == ()
+    with pytest.raises(ValueError, match="pre-dispatch authority"):
+        resumed.issue_promoted_truncation_recovery_surface_coverage(
+            resumed_family.family_id,
+            resumed_closure_capability,
+        )
 
     later_plan = resumed.seal_pass_plan(_plan(resumed, SchedulerPassKind.FINDING_REDUCTION))
     later_task = later_plan.tasks[0]
@@ -795,13 +1793,14 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
     assert later_activation.task_id == later_task.task_id
     assert resumed.truncation_recovery_entries[-1] == promotion
     assert resumed.pass_results[-1].status is SchedulerPassStatus.COMPLETE
-    # Terminal authority freezes every append, but downstream coverage/report
-    # construction must still be able to replay the already-issued live token.
+    # Terminal authority freezes every append and cannot recreate process-local
+    # pre-dispatch authority from the retained promotion.
     monkeypatch.setattr(resumed, "_terminal_report_authority", object())
-    assert (
-        require_verified_promoted_truncation_recovery_surface_coverage(resumed_surface_coverage)
-        == fresh_surface_projection
-    )
+    with pytest.raises(ValueError):
+        resumed.issue_promoted_truncation_recovery_surface_coverage(
+            resumed_family.family_id,
+            resumed_closure_capability,
+        )
     with pytest.raises(ValueError, match="frozen by its terminal report authority"):
         resumed.open_truncation_recovery_family(
             recovery_plan=resumed_family.recovery_plan,
@@ -846,20 +1845,25 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
         root_lineage=audit_selection.route_for(model_id).root_lineage,
         system_prompt_sha256="a" * 64,
         response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        model_surface_review_request_manifest_sha256=(
+            surface_manifest.requested_surface_manifest_sha256
+        ),
     )
+    assert blind_task.system_prompt_sha256 is not None
     blind_plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, (blind_task,))
+    parent_context_sha256 = hashlib.sha256(render_context(parent_context).encode()).hexdigest()
     parent_activation = journal.activate_task(
         blind_task.task_id,
-        actual_input_sha256=blind_task.input_sha256,
+        actual_input_sha256=parent_context_sha256,
         system_prompt_sha256=blind_task.system_prompt_sha256,
-        user_prompt_sha256=hashlib.sha256(render_context(parent_context).encode()).hexdigest(),
+        user_prompt_sha256=parent_context_sha256,
         provider_prompt_sha256="2" * 64,
         response_schema_sha256=blind_task.response_schema_sha256,
         delivered_source_descriptor_sha256s=(
             scheduler_test_delivered_source_descriptor_sha256s(blind_plan, blind_task)
         ),
     )
-    journal.mark_dispatched(blind_task.task_id)
+    parent_dispatch = journal.mark_dispatched(blind_task.task_id)
     envelope, parent_usage = _typed_parent_truncation(
         journal=journal,
         task=blind_task,
@@ -913,13 +1917,20 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
             child=child,
         )
         root_contexts_by_child[child.child_task_id] = child_context
+        child_prompt_sha256 = hashlib.sha256(render_context(child_context).encode()).hexdigest()
         activation = journal.activate_truncation_recovery_child(
             child.child_task_id,
-            actual_input_sha256=_digest(f"input:{child.child_task_id}"),
-            system_prompt_sha256=_digest(f"system:{child.child_task_id}"),
-            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            actual_input_sha256=child_prompt_sha256,
+            system_prompt_sha256=blind_task.system_prompt_sha256,
+            user_prompt_sha256=child_prompt_sha256,
             provider_prompt_sha256=_digest(f"provider:{child.child_task_id}"),
             response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        _assert_recovery_system_prompt_drift_rejected(
+            journal=journal,
+            family=root_family,
+            child=child,
+            activation=activation,
         )
         journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
         if child == bridge_child:
@@ -996,13 +2007,20 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
             child=child,
         )
         nested_contexts.append(child_context)
+        child_prompt_sha256 = hashlib.sha256(render_context(child_context).encode()).hexdigest()
         activation = journal.activate_truncation_recovery_child(
             child.child_task_id,
-            actual_input_sha256=_digest(f"input:{child.child_task_id}"),
-            system_prompt_sha256=_digest(f"system:{child.child_task_id}"),
-            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            actual_input_sha256=child_prompt_sha256,
+            system_prompt_sha256=blind_task.system_prompt_sha256,
+            user_prompt_sha256=child_prompt_sha256,
             provider_prompt_sha256=_digest(f"provider:{child.child_task_id}"),
             response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        _assert_recovery_system_prompt_drift_rejected(
+            journal=journal,
+            family=nested_family,
+            child=child,
+            activation=activation,
         )
         journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
         usage, normalization, batch, child_requests, artifact = _success_custody(
@@ -1028,6 +2046,24 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
                 output_artifact=artifact,
             )
         )
+
+    root_lineage = audit_selection.route_for(model_id).root_lineage
+    live_pre_dispatch_bindings = _live_model_review_pre_dispatch_bindings(journal)
+    expected_root_binding = ModelReviewPreDispatchBinding(
+        request_id=blind_task.logical_request_id,
+        task_id=blind_task.task_id,
+        review_role=blind_task.role,
+        requested_model=model_id,
+        root_lineage=root_lineage,
+        requested_surface_manifest_sha256=(surface_manifest.requested_surface_manifest_sha256),
+        rendered_context_sha256=parent_context_sha256,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        task_plan_sha256=blind_task.task_plan_sha256,
+        activation_sha256=parent_activation.activation_sha256,
+        dispatched_event_sha256=parent_dispatch.event_sha256,
+    )
+    assert live_pre_dispatch_bindings == (expected_root_binding,)
 
     nested_closure = journal.seal_truncation_recovery_family(nested_family.family_id)
     root_closure = journal.seal_truncation_recovery_family(root_family.family_id)
@@ -1126,6 +2162,15 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
 
     blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
     assert blind_result.status is SchedulerPassStatus.COMPLETE
+    with pytest.raises(ValueError):
+        journal.issue_promoted_recursive_truncation_recovery_surface_coverage(
+            root_family.family_id,
+            capability,
+        )
+    assert (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage(surface_coverage)
+        == fresh_projection
+    )
     assert len(blind_result.recovery_promotion_bindings) == 1
     assert blind_result.recovery_promotion_bindings[0].promotion_entry_sha256 == (
         promotion.entry_sha256
@@ -1208,16 +2253,11 @@ def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
         requests=requests,
     )
     assert resumed_artifact == structural_artifact
-    resumed_surface_coverage = (
+    assert resumed.model_review_pre_dispatch_authorizations == ()
+    assert resumed.promoted_recursive_truncation_recovery_surface_coverages == ()
+    with pytest.raises(ValueError, match="pre-dispatch authority"):
         resumed.issue_promoted_recursive_truncation_recovery_surface_coverage(
             resumed_root.family_id,
             resumed_tree_capability,
         )
-    )
-    assert (
-        require_verified_promoted_recursive_truncation_recovery_surface_coverage(
-            resumed_surface_coverage
-        )
-        == fresh_projection
-    )
     resumed.close()

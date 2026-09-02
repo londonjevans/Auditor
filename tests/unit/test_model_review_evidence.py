@@ -62,6 +62,7 @@ from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
     build_source_file_review_request,
+    model_surface_context_source_custody,
     validate_model_surface_review_record,
 )
 from mmaudit.orchestration.model_review_evidence import (
@@ -110,11 +111,43 @@ def seal_model_surface_review_artifact(
     recovery_request_limit_count_before: int | None = None,
 ) -> ModelSurfaceReviewArtifact | None:
     rendered_user_context = render_context(context)
+    rendered_sha256 = hashlib.sha256(rendered_user_context.encode()).hexdigest()
+    routing = dict(completion.usage_record.routing)
+    try:
+        requested_surface_manifest_sha256, source_location_proof_sha256s = (
+            model_surface_context_source_custody(context)
+        )
+        context_evidence = ContextRequestEvidence.build(
+            request_id=completion.usage_record.request_id,
+            request_role=completion.usage_record.role,
+            context_role=context.role,
+            byte_budget=context.byte_budget,
+            declared_bytes_used=context.bytes_used,
+            rendered_bytes=len(rendered_user_context.encode()),
+            source_bytes=sum(len(excerpt.content.encode()) for excerpt in context.excerpts),
+            configured_maximum_source_tokens_per_request=(
+                context.configured_maximum_source_tokens_per_request
+            ),
+            effective_source_byte_ceiling=context.effective_source_byte_ceiling,
+            rendered_sha256=rendered_sha256,
+            requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+            source_location_proof_sha256s=source_location_proof_sha256s,
+        )
+    except (ModelReviewEvidenceError, ValueError):
+        pass
+    else:
+        routing.update(
+            {
+                "context_request_evidence": context_evidence.model_dump(mode="json"),
+                "context_request_evidence_sha256": context_evidence.evidence_sha256,
+            }
+        )
     bound_completion = StructuredCompletion(
         value=completion.value,
         usage_record=completion.usage_record.model_copy(
             update={
-                "user_prompt_sha256": hashlib.sha256(rendered_user_context.encode()).hexdigest()
+                "user_prompt_sha256": rendered_sha256,
+                "routing": routing,
             }
         ),
     )
@@ -902,6 +935,9 @@ def test_pipeline_rejects_equal_count_different_surface_artifact_splice(
     assert artifact is not None
     second_rendered = render_context(second_context).encode("utf-8")
     second_rendered_sha256 = hashlib.sha256(second_rendered).hexdigest()
+    second_surface_manifest_sha256, second_source_proof_sha256s = (
+        model_surface_context_source_custody(second_context)
+    )
     artifact_payload = artifact.model_dump(mode="json")
     artifact_payload["rendered_context_sha256"] = second_rendered_sha256
     artifact_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
@@ -923,6 +959,8 @@ def test_pipeline_rejects_equal_count_different_surface_artifact_splice(
         ),
         effective_source_byte_ceiling=second_context.effective_source_byte_ceiling,
         rendered_sha256=second_rendered_sha256,
+        requested_surface_manifest_sha256=second_surface_manifest_sha256,
+        source_location_proof_sha256s=second_source_proof_sha256s,
     )
     usage = completion.usage_record.model_copy(
         update={
@@ -1130,6 +1168,7 @@ def test_canonical_invariant_reachability_uses_exact_request_bound_entities() ->
         )
 
     edges = [
+        state_write(fee_entry, fee_entry),
         state_write(safe_entry, safe_state),
         state_write(fee_entry, fee_state),
     ]
@@ -1255,7 +1294,10 @@ def test_canonical_invariant_reachability_uses_exact_request_bound_entities() ->
     assert fake_path is not None
     fake_terminal, fake_nodes = fake_path
     assert fake_terminal == {"location": None, "symbol": fee_state_id}
-    assert fake_nodes[0] == {"location": None, "symbol": fee_entry_id}
+    assert fake_nodes == [
+        {"location": None, "symbol": fee_entry_id},
+        {"location": None, "symbol": fee_state_id},
+    ]
 
 
 def test_source_file_review_requires_exact_whole_file_without_ast_claims() -> None:

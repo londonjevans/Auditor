@@ -184,12 +184,12 @@
       "type": "string"
     },
     "audit_config_leaf_locator_count": {
-      "const": 507,
+      "const": 513,
       "title": "Audit Config Leaf Locator Count",
       "type": "integer"
     },
     "audit_config_leaf_occurrence_count": {
-      "const": 510,
+      "const": 516,
       "title": "Audit Config Leaf Occurrence Count",
       "type": "integer"
     },
@@ -199,7 +199,7 @@
       "type": "integer"
     },
     "audit_override_path_count": {
-      "const": 46,
+      "const": 51,
       "title": "Audit Override Path Count",
       "type": "integer"
     },
@@ -214,7 +214,7 @@
       "type": "integer"
     },
     "completion_entrypoint_parameter_count": {
-      "const": 323,
+      "const": 336,
       "title": "Completion Entrypoint Parameter Count",
       "type": "integer"
     },

@@ -7,6 +7,7 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -14,10 +15,17 @@ import pytest
 
 import mmaudit.orchestration.manifest as manifest_module
 import mmaudit.orchestration.pipeline as pipeline_module
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, model_lineage_index
+from mmaudit.models.actor_model import ActorModelInputState
+from mmaudit.models.retrieval import (
+    SolidityRetrievalIntent,
+    SolidityRetrievalOperation,
+    SolidityRetrievalRequestBatch,
+)
 from mmaudit.models.scheduler import (
     SCHEDULER_PASS_ORDER,
     SchedulerAbsenceReason,
+    SchedulerActivationStatus,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
     SchedulerBindings,
@@ -31,6 +39,8 @@ from mmaudit.models.scheduler import (
     SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskOutput,
+    SchedulerTaskPlan,
+    SchedulerTaskPurpose,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
 )
@@ -45,6 +55,9 @@ from mmaudit.models.schemas import (
     FormalToolStatus,
     Location,
     LocationValidation,
+    ModelReviewEvidenceReference,
+    ModelReviewSurface,
+    ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewCitation,
     ModelSurfaceReviewEvidenceObservation,
@@ -114,7 +127,12 @@ from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.sharding import build_solidity_shard_inventory
 from tests.conftest import FIXTURES, model_registry_entry
-from tests.fake_openrouter import FakeOpenRouter, _candidate_review_wire, _surface_review_path
+from tests.fake_openrouter import (
+    FakeOpenRouter,
+    _candidate_review_wire,
+    _request_schema_name,
+    _surface_review_path,
+)
 from tests.integration.test_pipeline import StaticScannerRunner, _maximum_specialists, _run
 from tests.qualification_support import synthetic_production_qualification
 from tests.unit.test_semantic_sharding import _inventory, _shard_inputs
@@ -211,6 +229,80 @@ class _AllInvalidCandidateLocationsOpenRouter(FakeOpenRouter):
             if finding.get("sink") is not None:
                 finding["sink"]["path"] = "missing.py"
         payload["choices"][0]["message"]["content"] = _candidate_review_wire(content)
+        return httpx.Response(200, headers=dict(response.headers), json=payload)
+
+
+class _InvalidSourcePrimaryOpenRouter(FakeOpenRouter):
+    """Return invalid JSON only for the source primary, after retrieval planning succeeds."""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        body: dict[str, Any] | None = None
+        if request.url.path.endswith("/chat/completions"):
+            body = json.loads(request.content)
+            metadata = body.get("metadata") or {}
+            if (
+                _request_schema_name(body) != "mmaudit_solidity_retrieval_request_batch"
+                and metadata.get("mmaudit_role") == "source_audit"
+            ):
+                self.chat_calls += 1
+                self.requests.append(body)
+                return self._completion(body, "not valid json")
+        response = super().handler(request)
+        if (
+            body is None
+            or response.status_code != 200
+            or _request_schema_name(body) != "mmaudit_solidity_retrieval_request_batch"
+        ):
+            return response
+        user_prompt = body["messages"][1]["content"]
+        policy_payload = json.loads(
+            user_prompt.split("<VALIDATED_SOLIDITY_RETRIEVAL_POLICY_JSON>", 1)[1].split(
+                "</VALIDATED_SOLIDITY_RETRIEVAL_POLICY_JSON>",
+                1,
+            )[0]
+        )
+        subjects = policy_payload["subjects"]
+        assert subjects
+        batch = SolidityRetrievalRequestBatch(
+            requests=(
+                SolidityRetrievalIntent(
+                    operation=SolidityRetrievalOperation.RESOLVE_ENTITY,
+                    subject_id=subjects[0]["subject_id"],
+                ),
+            )
+        )
+        payload = response.json()
+        payload["choices"][0]["message"]["content"] = batch.model_dump_json()
+        return httpx.Response(200, headers=dict(response.headers), json=payload)
+
+
+class _CurrentActorJudgmentOpenRouter(FakeOpenRouter):
+    """Return actor-aware judgment whose classification must remain non-authoritative."""
+
+    def __init__(self, *, actor_context: dict[str, Any], extra_model_ids: list[str]) -> None:
+        super().__init__(extra_model_ids=extra_model_ids)
+        self.actor_context = actor_context
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        response = super().handler(request)
+        if not request.url.path.endswith("/chat/completions") or response.status_code != 200:
+            return response
+        body = json.loads(request.content)
+        if _request_schema_name(body) != "mmaudit_judgment":
+            return response
+        payload = response.json()
+        content = json.loads(payload["choices"][0]["message"]["content"])
+        for decision in content["decisions"]:
+            decision.update(
+                {
+                    "status": "rejected",
+                    "severity": "critical",
+                    "confidence": 0.01,
+                    "actor_model_applicability": "privileged_actor_required",
+                    "actor_context": self.actor_context,
+                }
+            )
+        payload["choices"][0]["message"]["content"] = json.dumps(content, sort_keys=True)
         return httpx.Response(200, headers=dict(response.headers), json=payload)
 
 
@@ -411,6 +503,52 @@ def _scheduler_outputs(run_dir: Path) -> dict[str, SchedulerTaskOutput]:
         for path in sorted(output_dir.glob("*.json"))
     )
     return {output.task_id: output for output in outputs}
+
+
+def _source_retrieval_task_pairs(
+    pass_result: SchedulerPassResult,
+) -> tuple[tuple[SchedulerTaskPlan, SchedulerTaskPlan], ...]:
+    """Require one exact retrieval-planning child for every source-audit primary."""
+
+    assert pass_result.plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+    source_primaries = tuple(
+        task
+        for task in pass_result.plan.tasks
+        if task.purpose is SchedulerTaskPurpose.PRIMARY and task.role == "source_audit"
+    )
+    retrieval_children = tuple(
+        task
+        for task in pass_result.plan.tasks
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+    )
+    assert source_primaries
+    assert len(retrieval_children) == len(source_primaries)
+    primary_by_id = {task.task_id: task for task in source_primaries}
+    assert {task.parent_task_id for task in retrieval_children} == set(primary_by_id)
+    pairs: list[tuple[SchedulerTaskPlan, SchedulerTaskPlan]] = []
+    for child in retrieval_children:
+        assert child.parent_task_id is not None
+        primary = primary_by_id[child.parent_task_id]
+        assert child.task_key == f"retrieval-{primary.task_key}"
+        assert child.scope == primary.scope
+        assert child.role == primary.role
+        assert child.requested_model == primary.requested_model
+        assert child.root_lineage == primary.root_lineage
+        assert child.candidate_ids == primary.candidate_ids
+        assert child.model_surface_review_request_manifest_sha256 == (
+            primary.model_surface_review_request_manifest_sha256
+        )
+        pairs.append((primary, child))
+    return tuple(pairs)
+
+
+def _scheduler_activations(run_dir: Path) -> dict[str, SchedulerTaskActivation]:
+    activation_dir = run_dir / "private" / "scheduler-journal" / "activations"
+    activations = tuple(
+        SchedulerTaskActivation.model_validate_json(path.read_text(encoding="utf-8"))
+        for path in sorted(activation_dir.glob("*.json"))
+    )
+    return {activation.task_id: activation for activation in activations}
 
 
 def _rewrite_public_report_bundle(run_dir: Path, report: AuditReport) -> None:
@@ -759,14 +897,31 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     )
     assert artifact.summary.status is SchedulerCampaignStatus.COMPLETE
     private_outputs = _scheduler_outputs(result.run_dir)
+    blind_pass = next(
+        pass_result
+        for pass_result in artifact.summary.pass_results
+        if pass_result.plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+    )
+    retrieval_pairs = _source_retrieval_task_pairs(blind_pass)
+    blind_results_by_task_id = {item.task_id: item for item in blind_pass.task_results}
+    for _primary, child in retrieval_pairs:
+        child_result = blind_results_by_task_id[child.task_id]
+        if child_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            SolidityRetrievalRequestBatch.model_validate_json(
+                json.dumps(private_outputs[child.task_id].payload),
+                strict=True,
+            )
     candidate_review_tasks = tuple(
         task
         for pass_result in artifact.summary.pass_results
         for task in pass_result.plan.tasks
-        if task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
-        or (
-            task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
-            and task.role == "business_logic"
+        if task.purpose is SchedulerTaskPurpose.PRIMARY
+        and (
+            task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            or (
+                task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+                and task.role == "business_logic"
+            )
         )
     )
     assert candidate_review_tasks
@@ -793,6 +948,9 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         assert output.model_surface_review_artifact is not None
         assert output.model_surface_review_artifact.normalization_evidence == (
             completion.normalization_evidence
+        )
+        assert task.model_surface_review_request_manifest_sha256 == (
+            output.model_surface_review_artifact.requested_surface_manifest_sha256
         )
     assert tuple(item.plan.pass_kind for item in artifact.summary.pass_results) == (
         SCHEDULER_PASS_ORDER
@@ -843,7 +1001,19 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     emitted_request_ids = {
         str(request["metadata"]["mmaudit_request_id"]) for request in fake.requests
     }
-    assert emitted_request_ids == scheduled_request_ids
+    activated_request_ids = {
+        request.logical_request_id
+        for request in artifact.model_requests
+        if request.activation_status is SchedulerActivationStatus.ACTIVATED
+    }
+    local_retrieval_failure_ids = {
+        request.logical_request_id
+        for request in artifact.model_requests
+        if request.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        and request.activation_status is SchedulerActivationStatus.PREFLIGHT_FAILED
+    }
+    assert emitted_request_ids == activated_request_ids
+    assert scheduled_request_ids == emitted_request_ids | local_retrieval_failure_ids
     assert all(request_id.startswith("scheduler-request-") for request_id in emitted_request_ids)
     assert result.report.metadata["scheduler"]["scheduler_artifact_sha256"] == (
         artifact.artifact_sha256
@@ -890,6 +1060,160 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         "mock model usage was excluded from substantive model-review coverage"
         in result.report.model_review_coverage.limitations
     )
+    private_review_path = result.run_dir / "private" / "model-review-artifacts.json"
+    private_review_bytes = private_review_path.read_bytes()
+    private_review_payload = json.loads(private_review_bytes)
+    assert private_review_payload["schema_version"] == "1.1"
+    private_review_inventory = manifest_module._ModelReviewArtifactInventory.model_validate_json(
+        private_review_bytes
+    )
+    snapshot = manifest_module._SchedulerReportAuthoritySnapshot(
+        journal=SimpleNamespace(truncation_recovery_entries=()),
+        outputs_by_task_id=private_outputs,
+        pass_results_by_kind={
+            pass_result.plan.pass_kind: pass_result for pass_result in artifact.summary.pass_results
+        },
+        tasks_by_task_id={
+            task.task_id: task
+            for pass_result in artifact.summary.pass_results
+            for task in pass_result.plan.tasks
+        },
+        activations_by_task_id=_scheduler_activations(result.run_dir),
+    )
+    credited_artifact = private_review_inventory.artifacts[0]
+    credited_output = next(
+        output
+        for output in private_outputs.values()
+        if output.model_surface_review_artifact == credited_artifact
+    )
+    assert credited_output.model_completion_evidence is not None
+    credited_usage = credited_output.model_completion_evidence.usage_record
+    credited_record = credited_artifact.records[0]
+    credited_lineage = model_lineage_index(config)[credited_usage.requested_model.lower()]
+    retained_authority = next(
+        authority
+        for authority in manifest_module._retained_model_surface_review_authorities(snapshot)
+        if authority.artifact == credited_artifact
+    )
+    assert (
+        retained_authority.pre_dispatch_requested_surface_manifest_sha256
+        == credited_artifact.requested_surface_manifest_sha256
+    )
+    retained_tasks = dict(snapshot.tasks_by_task_id or {})
+    retained_task = retained_tasks[credited_output.task_id]
+    retained_tasks[credited_output.task_id] = SimpleNamespace(
+        logical_request_id=retained_task.logical_request_id,
+        role=retained_task.role,
+        model_surface_review_request_manifest_sha256="f" * 64,
+    )
+    substituted_snapshot = manifest_module._SchedulerReportAuthoritySnapshot(
+        journal=snapshot.journal,
+        outputs_by_task_id=snapshot.outputs_by_task_id,
+        pass_results_by_kind=snapshot.pass_results_by_kind,
+        tasks_by_task_id=retained_tasks,
+        activations_by_task_id=snapshot.activations_by_task_id,
+    )
+    substituted_authority = next(
+        authority
+        for authority in manifest_module._retained_model_surface_review_authorities(
+            substituted_snapshot
+        )
+        if authority.artifact == credited_artifact
+    )
+    assert (
+        "ordinary model review surfaces differed from pre-dispatch scheduler authority"
+        in manifest_module._retained_ordinary_model_review_context_failures(
+            substituted_authority,
+            index=None,
+            graphs=None,
+        )
+    )
+
+    hash_tampered_payload = credited_artifact.model_dump(mode="json")
+    hash_tampered_payload["prompt_sha256"] = "f" * 64
+    hash_tampered_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
+        hash_tampered_payload
+    )
+    hash_tampered_artifact = ModelSurfaceReviewArtifact.model_validate(hash_tampered_payload)
+    hash_tampered_inventory = manifest_module._ModelReviewArtifactInventory(
+        schema_version="1.0",
+        artifacts=tuple(
+            hash_tampered_artifact if item == credited_artifact else item
+            for item in private_review_inventory.artifacts
+        ),
+    )
+    hash_tampered_outputs = dict(private_outputs)
+    hash_tampered_outputs[credited_output.task_id] = credited_output.model_copy(
+        update={"model_surface_review_artifact": hash_tampered_artifact}
+    )
+    hash_tampered_snapshot = manifest_module._SchedulerReportAuthoritySnapshot(
+        journal=SimpleNamespace(truncation_recovery_entries=()),
+        outputs_by_task_id=hash_tampered_outputs,
+        pass_results_by_kind=snapshot.pass_results_by_kind,
+    )
+    with pytest.raises(
+        ValueError,
+        match="scheduler model-review artifact differs from its exact retained completion",
+    ):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=result.report,
+            inventory=hash_tampered_inventory,
+            snapshot=hash_tampered_snapshot,
+            config=config,
+        )
+
+    flipped_reference = ModelReviewEvidenceReference(
+        surface_id=credited_record.surface_id,
+        request_id=credited_artifact.request_id,
+        artifact_sha256=credited_artifact.artifact_sha256,
+        requested_model=credited_usage.requested_model,
+        model=credited_usage.actual_model,
+        review_role=credited_record.review_role,
+        status=credited_record.status,
+        root_lineage=credited_lineage.root_lineage,
+        credited=True,
+        reason="Synthetic tamper flips retained MOCK evidence to credited.",
+    )
+    flipped_surface = ModelReviewSurface(
+        surface_id=credited_record.surface_id,
+        kind=ModelReviewSurfaceKind.SOURCE_FILE,
+        subject_id="synthetic-mock-credit-flip",
+        label="Synthetic MOCK credit flip",
+        critical=False,
+        locations=[],
+        evidence_references=[flipped_reference],
+    )
+    assert not result.report.model_review_coverage.surfaces
+    flipped_coverage = result.report.model_review_coverage.model_copy(
+        update={"surfaces": [flipped_surface]}
+    )
+    flipped_report = result.report.model_copy(update={"model_review_coverage": flipped_coverage})
+    with pytest.raises(
+        ValueError,
+        match="credited model-review evidence contradicts exact scheduler artifact custody",
+    ):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=flipped_report,
+            inventory=private_review_inventory,
+            snapshot=snapshot,
+            config=config,
+        )
+
+    assert private_review_payload["artifacts"]
+    write_json(
+        private_review_path,
+        {
+            **private_review_payload,
+            "artifacts": private_review_payload["artifacts"][1:],
+        },
+    )
+    inventory_tampered_manifest = _reseal_scheduler_run(result.run_dir, manifest)
+    with pytest.raises(
+        ValueError,
+        match="private model-review artifact inventory differs from exact scheduler custody",
+    ):
+        validate_manifest_artifacts(inventory_tampered_manifest, result.run_dir)
+    private_review_path.write_bytes(private_review_bytes)
     model_execution_path = result.run_dir / "model-execution.json"
     model_execution = ModelExecutionArtifact.model_validate_json(
         model_execution_path.read_text(encoding="utf-8")
@@ -988,6 +1312,88 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         validate_manifest_artifacts(tampered_manifest, result.run_dir)
     assert output_snapshot_reads == reads_before_cost_tamper + 1
     assert pass_result_snapshot_reads == pass_reads_before_cost_tamper + 1
+
+
+@pytest.mark.asyncio
+async def test_current_actor_scheduler_uses_judge_context_without_judge_classification(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    actor_source = FIXTURES / "actor_model" / "synthetic_orchard_actor_model.json"
+    actor_path = vulnerable_repo / ".mmaudit" / "operator-actor-model.json"
+    raw_actor_model = actor_source.read_bytes()
+    actor_path.parent.mkdir(mode=0o700)
+    actor_path.write_bytes(raw_actor_model)
+    actor_model = json.loads(raw_actor_model)
+    scenario_payload = json.loads(
+        (FIXTURES / "actor_model" / "synthetic_correction_scenarios.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    scenario = next(
+        item
+        for item in scenario_payload["scenarios"]
+        if item["scenario_id"] == "request-cooldown-severity"
+    )
+
+    config_payload = _deep_scheduler_config(config_factory).model_dump(mode="python")
+    config_payload["actor_model"] = {
+        "path": ".mmaudit/operator-actor-model.json",
+        "required": True,
+        "max_bytes": 1_000_000,
+        "expected_subject_id": actor_model["subject_id"],
+        "expected_model_sha256": actor_model["artifact_sha256"],
+        "expected_source_sha256": hashlib.sha256(raw_actor_model).hexdigest(),
+    }
+    config = AuditConfig.model_validate(config_payload)
+    fake = _CurrentActorJudgmentOpenRouter(
+        actor_context=scenario["actor_context"],
+        extra_model_ids=["golf/gale-secure"],
+    )
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    report = result.report
+    evaluation = report.actor_model_evaluation
+    baseline = report.actor_model_baseline
+    assert report.schema_version == "1.4"
+    assert evaluation is not None
+    assert baseline is not None
+    assert evaluation.input_evidence.state is ActorModelInputState.CURRENT
+    assert report.judge_decisions
+    decisions_by_group = {decision.group_id: decision for decision in report.judge_decisions}
+    assert all(decision.status.value == "rejected" for decision in decisions_by_group.values())
+    assert all(decision.severity.value == "critical" for decision in decisions_by_group.values())
+    assert all(decision.confidence == 0.01 for decision in decisions_by_group.values())
+
+    terminal_findings = (
+        *report.findings,
+        *report.rejected_findings,
+        *report.filtered_findings,
+    )
+    judged_findings = tuple(
+        finding for finding in terminal_findings if finding.group_id in decisions_by_group
+    )
+    assert judged_findings
+    assert {finding.group_id for finding in judged_findings} == set(decisions_by_group)
+    baseline_by_id = {record.finding.id: record.finding for record in baseline.findings}
+    for finding in judged_findings:
+        assert finding.group_id is not None
+        decision = decisions_by_group[finding.group_id]
+        assessment = finding.actor_assessment
+        assert assessment is not None
+        assert baseline_by_id[finding.id].severity.value == "high"
+        assert assessment.original_severity.value == "high"
+        assert finding.severity.value == "medium"
+        assert finding.status.value != "rejected"
+        assert finding.confidence > decision.confidence
+        assert finding.actor_context == decision.actor_context
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
 
 
 @pytest.mark.asyncio
@@ -1575,6 +1981,12 @@ async def test_pipeline_resumes_exact_completed_campaign_without_provider_replay
     first_scheduler = SchedulerArtifact.model_validate_json(
         first_artifact_bytes["scheduler-state.json"]
     )
+    first_blind_pass = next(
+        pass_result
+        for pass_result in first_scheduler.summary.pass_results
+        if pass_result.plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+    )
+    _source_retrieval_task_pairs(first_blind_pass)
 
     descriptor_mismatches: list[tuple[str, ...]] = []
     original_resume = PipelineScheduler.resume.__func__
@@ -1612,6 +2024,10 @@ async def test_pipeline_resumes_exact_completed_campaign_without_provider_replay
 
     assert descriptor_mismatches == [()]
     assert resumed_fake.chat_calls == 0
+    assert not any(
+        _request_schema_name(request) == "mmaudit_solidity_retrieval_request_batch"
+        for request in resumed_fake.requests
+    )
     assert ledger.snapshot() == ledger_before_resume
     assert resumed.report.findings == first.report.findings
     assert resumed.report.usage == first.report.usage
@@ -2193,6 +2609,51 @@ async def test_maximum_scheduler_executes_four_blind_whole_protocol_reviews(
         (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
     )
     blind_pass = scheduler.summary.pass_results[1]
+    retrieval_pairs = _source_retrieval_task_pairs(blind_pass)
+    retrieval_children = tuple(child for _primary, child in retrieval_pairs)
+    retrieval_requests = tuple(
+        request
+        for request in fake.requests
+        if _request_schema_name(request) == "mmaudit_solidity_retrieval_request_batch"
+    )
+    private_outputs = _scheduler_outputs(result.run_dir)
+    results_by_task_id = {item.task_id: item for item in blind_pass.task_results}
+    successful_children = {
+        child.task_id
+        for child in retrieval_children
+        if results_by_task_id[child.task_id].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    }
+    assert {str(request["metadata"]["mmaudit_request_id"]) for request in retrieval_requests} == {
+        child.logical_request_id
+        for child in retrieval_children
+        if child.task_id in successful_children
+    }
+    role_budget = blind_pass.plan.retrieval_role_budget_plans[0]
+    assert role_budget.role == "source_audit"
+    assert {allocation.primary_task_id for allocation in role_budget.allocations} == {
+        primary.task_id for primary, _child in retrieval_pairs
+    }
+    assert role_budget.allocated_maximum_requests == 4
+    assert role_budget.allocated_maximum_total_result_utf8_bytes == 16_384
+    assert role_budget.allocated_maximum_total_result_tokens == 5_462
+    for child in retrieval_children:
+        child_result = results_by_task_id[child.task_id]
+        if child.task_id not in successful_children:
+            assert child_result.terminal_status is SchedulerTerminalStatus.FAILED
+            assert child_result.result_origin.value == "LOCAL_PREFLIGHT"
+            assert child.task_id not in private_outputs
+            continue
+        output = private_outputs[child.task_id]
+        assert SolidityRetrievalRequestBatch.model_validate_json(
+            json.dumps(output.payload),
+            strict=True,
+        ) == SolidityRetrievalRequestBatch(requests=())
+        assert output.model_surface_review_requests == ()
+        assert output.model_surface_review_artifact is None
+        assert output.reviewed_source_descriptor_sha256s == ()
+        assert output.reviewed_candidate_ids == ()
+        assert output.accepted_candidates == ()
+        assert output.normalization_evidence is None
     whole_tasks = tuple(
         task for task in blind_pass.plan.tasks if task.role.startswith("whole_protocol_review:")
     )
@@ -2251,6 +2712,79 @@ async def test_maximum_scheduler_executes_four_blind_whole_protocol_reviews(
         and artifact.records[0].citation.location.content_hash == source_sha256
         for artifact in whole_artifacts
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_retrieval_primary_keeps_private_transcript_and_public_hashes(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "failed-retrieval-primary"
+    shutil.copytree(FIXTURES / "solidity" / "provider_smoke", repository)
+    config_payload = _semantic_scheduler_config(config_factory).model_dump(mode="python")
+    config_payload["repository"]["max_total_context_bytes"] = 5_000_000
+    config = AuditConfig.model_validate(config_payload).effective()
+    monkeypatch.setattr(
+        pipeline_module,
+        "solidity_retrieval_context_reserve_bytes",
+        lambda _policy: 0,
+    )
+    fake = _InvalidSourcePrimaryOpenRouter(
+        extra_model_ids=["golf/gale-secure"],
+    )
+    result = await _run(
+        config,
+        repository,
+        tmp_path,
+        fake,
+    )
+
+    scheduler = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    blind_pass = next(
+        item
+        for item in scheduler.summary.pass_results
+        if item.plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+    )
+    primary, planner = _source_retrieval_task_pairs(blind_pass)[0]
+    results = {item.task_id: item for item in blind_pass.task_results}
+    failed = results[primary.task_id]
+    public_request = next(
+        item for item in scheduler.model_requests if item.task_id == primary.task_id
+    )
+    private_binding_path = next(
+        (result.run_dir / "private" / "scheduler-journal" / "retrieval-bindings").glob(
+            f"{primary.task_id}-*.json"
+        )
+    )
+    private_binding = json.loads(private_binding_path.read_text(encoding="utf-8"))
+
+    assert results[planner.task_id].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    assert failed.terminal_status in {
+        SchedulerTerminalStatus.INVALID,
+        SchedulerTerminalStatus.FAILED,
+    }
+    assert failed.output_artifact_sha256 is None
+    assert failed.retrieval_custody is not None
+    assert public_request.retrieval_custody == failed.retrieval_custody
+    assert (
+        private_binding["transcript"]["transcript_sha256"]
+        == failed.retrieval_custody.transcript_sha256
+    )
+    assert len(private_binding["transcript"]["exchanges"]) == 1
+    assert len(failed.retrieval_custody.request_sha256s) == 1
+    assert len(failed.retrieval_custody.result_sha256s) == 1
+    assert len(failed.retrieval_custody.exchange_sha256s) == 1
+    primary_requests = tuple(
+        request
+        for request in fake.requests
+        if (request.get("metadata") or {}).get("mmaudit_request_id") == primary.logical_request_id
+    )
+    assert len(primary_requests) == 1
+    assert primary.task_id not in _scheduler_outputs(result.run_dir)
+    assert '"exchanges"' not in json.dumps(public_request.model_dump(mode="json"))
 
 
 @pytest.mark.asyncio

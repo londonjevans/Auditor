@@ -452,7 +452,9 @@ def _legacy_public_request(schema_version: str) -> SchedulerTruncationRecoveryMo
         "system_prompt_sha256": "a" * 64,
         "user_prompt_sha256": "b" * 64,
         "provider_prompt_sha256": "c" * 64,
-        "response_schema_sha256": candidate_review_frame_wire_schema_sha256(),
+        "response_schema_sha256": candidate_review_frame_wire_schema_sha256(
+            algorithm_version="mmaudit.seven-pass-scheduler.v1"
+        ),
         "delivered_source_inventory_sha256": "d" * 64,
         "request_limit_scope": f"scheduler-request-{'e' * 64}",
         "request_limit_count_before": 1,

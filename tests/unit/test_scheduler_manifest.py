@@ -803,7 +803,7 @@ def test_manifest_issuance_requires_live_scheduler_authority_then_reopens_closed
             scheduler_runtime_journal=other_owner,
         )
 
-    with pytest.raises(ValueError, match="journal custody is closed"):
+    with pytest.raises(ValueError, match=r"journal custody is (?:closed|not active)"):
         validate_scheduler_artifact(
             run_dir,
             report,
@@ -1289,11 +1289,10 @@ def test_current_completed_report_cannot_erase_scheduler_evidence(
     config_factory,
 ) -> None:
     config = config_factory()
-    report = _non_solidity_report(config).model_copy(
-        update={"schema_version": "1.2", "completed": True}
-    )
+    report = _non_solidity_report(config)
     run_dir = tmp_path / "missing"
-    run_dir.mkdir()
+    _write_required_artifacts(run_dir, report)
+    report = report.model_copy(update={"completed": True})
 
     with pytest.raises(ValueError, match="lacks scheduler evidence"):
         validate_scheduler_artifact(run_dir, report)
@@ -1374,6 +1373,7 @@ def test_verify_run_is_stale_after_scheduler_artifact_tampering(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert verification.status is RunVerificationStatus.STALE

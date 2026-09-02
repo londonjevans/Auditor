@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, canonical_audit_config_json
 from mmaudit.models.calibration import (
     ModelCalibrationArtifact,
     verify_calibrated_qualification_policy_structure,
@@ -93,7 +93,7 @@ def effective_config_sha256_with_qualification_policy(
     if not _is_sha256(policy_sha256):
         raise ValueError("config transition policy hash is malformed")
     validated = AuditConfig.model_validate(config.model_dump(mode="python", by_alias=True))
-    payload = validated.model_dump(mode="json", by_alias=True)
+    payload = json.loads(canonical_audit_config_json(validated))
     _replace_qualification_policy(payload, policy_sha256)
     return _canonical_audit_config_payload_sha256(payload)
 
@@ -104,7 +104,7 @@ def qualification_policy_independent_config_sha256(config: AuditConfig) -> str:
     if type(config) is not AuditConfig:
         raise ValueError("config projection requires an exact typed AuditConfig")
     validated = AuditConfig.model_validate(config.model_dump(mode="python", by_alias=True))
-    payload = validated.model_dump(mode="json", by_alias=True)
+    payload = json.loads(canonical_audit_config_json(validated))
     _replace_qualification_policy(payload, _POLICY_INDEPENDENT_SENTINEL)
     return _canonical_audit_config_payload_sha256(payload)
 

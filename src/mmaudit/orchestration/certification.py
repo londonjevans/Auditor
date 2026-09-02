@@ -35,7 +35,14 @@ from mmaudit.orchestration.verification import (
     load_manifest_bound_report,
     verify_run_evidence,
 )
+from mmaudit.orchestration.verification import (
+    _safe_directory as _safe_verification_directory,
+)
 from mmaudit.reporting.json_report import stable_json
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
 _MAX_CERTIFICATION_BYTES = 100_000_000
@@ -83,11 +90,24 @@ def certify_maximum_assurance_run(
     run_dir: Path,
     repository_root: Path,
     replay_path: Path,
+    configuration_root: Path | None = None,
     config: AuditConfig | None = None,
     file_config: AuditConfig | None = None,
 ) -> MaximumAssuranceCertification:
     """Re-verify a sealed run, bind replay evidence, and recompute only replay clauses."""
 
+    run_root_observation = _safe_verification_directory(run_dir, "run")
+    repository_root_observation = _safe_verification_directory(repository_root, "repository")
+    configuration_root_observation = (
+        None
+        if configuration_root is None
+        else _safe_verification_directory(configuration_root, "configuration")
+    )
+    trusted_run_root = run_root_observation.path
+    trusted_repository_root = repository_root_observation.path
+    trusted_configuration_root = (
+        None if configuration_root_observation is None else configuration_root_observation.path
+    )
     manifest = load_run_evidence_manifest(manifest_path)
     run_configuration = getattr(manifest, "run_configuration", None)
     verification_file_config: AuditConfig | None = None
@@ -115,16 +135,22 @@ def certify_maximum_assurance_run(
         effective_config = resolve_run_evidence_config(manifest)
     verification = verify_run_evidence(
         manifest_path=manifest_path,
-        run_dir=run_dir,
-        repository_root=repository_root,
+        run_dir=trusted_run_root,
+        repository_root=trusted_repository_root,
+        configuration_root=trusted_configuration_root,
         config=effective_config,
         file_config=verification_file_config,
     )
     if verification.status is not RunVerificationStatus.CURRENT:
         raise ValueError("maximum-assurance certification refused stale run evidence")
+    _require_certification_root_custody(
+        run_root_observation,
+        repository_root_observation,
+        configuration_root_observation,
+    )
     if verification.manifest_sha256 != manifest.manifest_sha256:
         raise ValueError("maximum-assurance certification observed a changed run manifest")
-    report = _load_report(run_dir, manifest)
+    report = _load_report(trusted_run_root, manifest)
     replay = load_offline_replay(replay_path)
     if report.audit_profile is not AuditProfile.MAXIMUM_ASSURANCE:
         raise ValueError("post-run certification requires the maximum-assurance profile")
@@ -139,8 +165,8 @@ def certify_maximum_assurance_run(
         expected_run_id=manifest.run_id,
         expected_manifest_sha256=manifest.manifest_sha256,
         expected_verification_sha256=verification.verification_sha256,
-        expected_applicable_kinds=expected_replay_kinds_for_run(run_dir),
-        expected_components=expected_replay_components_for_run(run_dir),
+        expected_applicable_kinds=expected_replay_kinds_for_run(trusted_run_root),
+        expected_components=expected_replay_components_for_run(trusted_run_root),
     )
     failed_before = {
         requirement.engine
@@ -188,6 +214,11 @@ def certify_maximum_assurance_run(
         base_assessment_sha256=canonical_sha256(base.model_dump(mode="json")),
         assessment=assessment,
     )
+    _require_certification_root_custody(
+        run_root_observation,
+        repository_root_observation,
+        configuration_root_observation,
+    )
     serialized = payload.model_dump(mode="json")
     return MaximumAssuranceCertification.model_validate(
         {
@@ -195,6 +226,22 @@ def certify_maximum_assurance_run(
             "certification_sha256": canonical_sha256(serialized),
         }
     )
+
+
+def _require_certification_root_custody(
+    run_root: DirectoryCustodyObservation,
+    repository_root: DirectoryCustodyObservation,
+    configuration_root: DirectoryCustodyObservation | None,
+) -> None:
+    """Require initial trusted-root identities at a certification boundary."""
+
+    require_unchanged_unlinked_directory(repository_root, label="certification repository")
+    if configuration_root is not None:
+        require_unchanged_unlinked_directory(
+            configuration_root,
+            label="certification configuration",
+        )
+    require_unchanged_unlinked_directory(run_root, label="certification run")
 
 
 def write_maximum_assurance_certification(

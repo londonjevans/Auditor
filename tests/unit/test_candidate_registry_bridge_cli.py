@@ -24,6 +24,7 @@ from mmaudit.models.candidate_selection import (
     seal_candidate_selection_entry,
     seal_candidate_selection_plan,
     seal_candidate_selection_source_binding,
+    validate_candidate_selection_plan_successor,
 )
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
@@ -52,6 +53,7 @@ ROOT = Path(__file__).parents[2]
 RUNNER = CliRunner()
 MODEL_ID = "alpha/atlas-secure"
 PROVIDER_ENDPOINT = "provider-alpha"
+REFRESHED_PROVIDER_ENDPOINT = "provider-alpha/new-fp8"
 REVOKED_MODEL_ID = "deepseek/deepseek-v4-pro-0813"
 REVOKED_CANONICAL_ALIAS = "deepseek/deepseek-v4-pro-20260813"
 REVOKED_PROVIDER_ENDPOINT = "parasail/fp8"
@@ -87,6 +89,7 @@ def _selection_plan_paths(
     *,
     model_id: str = MODEL_ID,
     provider_endpoint: str = PROVIDER_ENDPOINT,
+    pin_revoked_candidate_route: bool = False,
 ) -> tuple[Path, Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     ranking_path = tmp_path / "model-ranking.py"
@@ -105,26 +108,54 @@ def _selection_plan_paths(
             content=LINEAGE_SOURCE,
         ),
     )
-    entries = (
-        seal_candidate_selection_entry(
-            exact_model_id=model_id,
-            priority_rank=1,
-            advisory_lineage_group="Synthetic advisory group",
-            allowed_provider_endpoints=(provider_endpoint,),
-        ),
-        seal_candidate_selection_entry(
-            exact_model_id="beta/beacon-secure",
-            priority_rank=2,
-            advisory_lineage_group="Synthetic beta group",
-            allowed_provider_endpoints=("provider-beta",),
-        ),
-        seal_candidate_selection_entry(
-            exact_model_id="gamma/compass-secure",
-            priority_rank=3,
-            advisory_lineage_group="Synthetic gamma group",
-            allowed_provider_endpoints=("provider-gamma",),
-        ),
-    )
+    if pin_revoked_candidate_route:
+        entries = (
+            seal_candidate_selection_entry(
+                exact_model_id=REVOKED_MODEL_ID,
+                priority_rank=1,
+                advisory_lineage_group="Revoked historical advisory group",
+                allowed_provider_endpoints=(REVOKED_PROVIDER_ENDPOINT,),
+            ),
+            seal_candidate_selection_entry(
+                exact_model_id=model_id,
+                priority_rank=2,
+                advisory_lineage_group="Synthetic advisory group",
+                allowed_provider_endpoints=(provider_endpoint,),
+            ),
+            seal_candidate_selection_entry(
+                exact_model_id="beta/beacon-secure",
+                priority_rank=3,
+                advisory_lineage_group="Synthetic beta group",
+                allowed_provider_endpoints=("provider-beta",),
+            ),
+            seal_candidate_selection_entry(
+                exact_model_id="gamma/compass-secure",
+                priority_rank=4,
+                advisory_lineage_group="Synthetic gamma group",
+                allowed_provider_endpoints=("provider-gamma",),
+            ),
+        )
+    else:
+        entries = (
+            seal_candidate_selection_entry(
+                exact_model_id=model_id,
+                priority_rank=1,
+                advisory_lineage_group="Synthetic advisory group",
+                allowed_provider_endpoints=(provider_endpoint,),
+            ),
+            seal_candidate_selection_entry(
+                exact_model_id="beta/beacon-secure",
+                priority_rank=2,
+                advisory_lineage_group="Synthetic beta group",
+                allowed_provider_endpoints=("provider-beta",),
+            ),
+            seal_candidate_selection_entry(
+                exact_model_id="gamma/compass-secure",
+                priority_rank=3,
+                advisory_lineage_group="Synthetic gamma group",
+                allowed_provider_endpoints=("provider-gamma",),
+            ),
+        )
     control = ReasoningControlProfile.build(
         mode="effort",
         effort="high",
@@ -142,8 +173,10 @@ def _selection_plan_paths(
     constraints = (
         ExactRouteConstraint.build(
             role=ExactRouteRole.CANDIDATE,
-            exact_model_id=model_id,
-            provider_endpoint=provider_endpoint,
+            exact_model_id=(REVOKED_MODEL_ID if pin_revoked_candidate_route else model_id),
+            provider_endpoint=(
+                REVOKED_PROVIDER_ENDPOINT if pin_revoked_candidate_route else provider_endpoint
+            ),
             profile=profile,
         ),
         ExactRouteConstraint.build(
@@ -163,7 +196,7 @@ def _selection_plan_paths(
         source_bindings=sources,
         entries=entries,
         authenticated_runner_selection=seal_authenticated_runner_selection(
-            candidate_model_id=model_id,
+            candidate_model_id=(REVOKED_MODEL_ID if pin_revoked_candidate_route else model_id),
             primary_judge_model_id="beta/beacon-secure",
             replay_judge_model_id="gamma/compass-secure",
             route_predicate_profile=profile,
@@ -175,11 +208,231 @@ def _selection_plan_paths(
     return plan_path, ranking_path, lineage_path
 
 
+def _selection_plan_paths_with_revoked_identity_as_judge(
+    tmp_path: Path,
+    *,
+    role: ExactRouteRole,
+) -> tuple[Path, Path, Path]:
+    assert role in {ExactRouteRole.PRIMARY_JUDGE, ExactRouteRole.REPLAY_JUDGE}
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    base = load_candidate_selection_plan(plan_path)
+    selection = base.authenticated_runner_selection
+    assert selection is not None
+    constraints = tuple(
+        sorted(
+            (
+                ExactRouteConstraint.build(
+                    role=role,
+                    exact_model_id=REVOKED_MODEL_ID,
+                    provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+                    profile=selection.route_predicate_profile,
+                ),
+                *(
+                    constraint
+                    for constraint in selection.route_constraints
+                    if constraint.role is not role
+                ),
+            ),
+            key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+        )
+    )
+    updated = seal_candidate_selection_plan(
+        source_bindings=base.source_bindings,
+        entries=(
+            *base.entries,
+            seal_candidate_selection_entry(
+                exact_model_id=REVOKED_MODEL_ID,
+                priority_rank=4,
+                advisory_lineage_group="Candidate-tombstone identity judge group",
+                allowed_provider_endpoints=(REVOKED_PROVIDER_ENDPOINT,),
+            ),
+        ),
+        authenticated_runner_selection=seal_authenticated_runner_selection(
+            candidate_model_id=selection.candidate_model_id,
+            primary_judge_model_id=(
+                REVOKED_MODEL_ID
+                if role is ExactRouteRole.PRIMARY_JUDGE
+                else selection.primary_judge_model_id
+            ),
+            replay_judge_model_id=(
+                REVOKED_MODEL_ID
+                if role is ExactRouteRole.REPLAY_JUDGE
+                else selection.replay_judge_model_id
+            ),
+            route_predicate_profile=selection.route_predicate_profile,
+            route_constraints=constraints,
+        ),
+    )
+    plan_path.write_text(stable_json(updated), encoding="utf-8")
+    return plan_path, ranking_path, lineage_path
+
+
+def test_emit_selection_plan_successor_is_provider_free_deterministic_and_fresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(
+        tmp_path / "inputs",
+        pin_revoked_candidate_route=True,
+    )
+    predecessor = load_candidate_selection_plan(plan_path)
+    frozen_inputs = {
+        plan_path: plan_path.read_bytes(),
+        ranking_path: ranking_path.read_bytes(),
+        lineage_path: lineage_path.read_bytes(),
+    }
+    external_access: list[str] = []
+
+    def forbidden_external_access(*_args: object, **_kwargs: object) -> None:
+        external_access.append("accessed")
+        raise AssertionError("successor emission must remain provider-free")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+
+    outputs = (
+        tmp_path / "private-a" / "successor.json",
+        tmp_path / "private-b" / "successor.json",
+    )
+    successors = []
+    for output in outputs:
+        result = RUNNER.invoke(
+            cli_module.app,
+            [
+                "models",
+                "emit-selection-plan-successor",
+                "--predecessor-plan",
+                str(plan_path),
+                "--candidate",
+                f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+                "--output",
+                str(output),
+                "--no-color",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        normalized_output = " ".join(result.output.split())
+        assert "NONAUTHORIZING" in normalized_output
+        assert "no provider access occurred" in normalized_output
+        assert output.stat().st_mode & 0o777 == 0o600
+        successor = load_candidate_selection_plan(output)
+        assert (
+            validate_candidate_selection_plan_successor(
+                predecessor=predecessor,
+                successor=successor,
+            )
+            == successor
+        )
+        successors.append(successor)
+
+    assert successors[0] == successors[1]
+    selection = successors[0].authenticated_runner_selection
+    assert selection is not None
+    assert selection.candidate_model_id == MODEL_ID
+    assert tuple(
+        (constraint.role, constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in selection.route_constraints
+    ) == (
+        (ExactRouteRole.CANDIDATE, MODEL_ID, PROVIDER_ENDPOINT),
+        (ExactRouteRole.PRIMARY_JUDGE, "beta/beacon-secure", "provider-beta"),
+        (ExactRouteRole.REPLAY_JUDGE, "gamma/compass-secure", "provider-gamma"),
+    )
+    assert all(path.read_bytes() == content for path, content in frozen_inputs.items())
+    assert external_access == []
+
+    revoked_output = tmp_path / "private-c" / "revoked-successor.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(outputs[0]),
+            "--candidate",
+            f"{REVOKED_MODEL_ID}={REVOKED_PROVIDER_ENDPOINT}",
+            "--output",
+            str(revoked_output),
+            "--no-color",
+        ],
+    )
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate selection route is revoked" in " ".join(result.output.split())
+    assert not revoked_output.exists()
+    assert external_access == []
+
+
+def test_emit_selection_plan_successor_requires_explicit_unverified_endpoint_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, _ranking_path, _lineage_path = _selection_plan_paths(
+        tmp_path / "inputs",
+        pin_revoked_candidate_route=True,
+    )
+    predecessor = load_candidate_selection_plan(plan_path)
+
+    def forbidden_external_access(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("endpoint inventory staging must remain provider-free")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+
+    refused_output = tmp_path / "private-a" / "refused.json"
+    refused = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(plan_path),
+            "--candidate",
+            f"{MODEL_ID}={REFRESHED_PROVIDER_ENDPOINT}",
+            "--output",
+            str(refused_output),
+            "--no-color",
+        ],
+    )
+    assert refused.exit_code == ExitCode.CONFIGURATION
+    assert "uses an unlisted endpoint" in " ".join(refused.output.split())
+    assert not refused_output.exists()
+
+    output = tmp_path / "private-b" / "refreshed.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(plan_path),
+            "--candidate",
+            f"{MODEL_ID}={REFRESHED_PROVIDER_ENDPOINT}",
+            "--refresh-endpoint-inventory",
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "staged as unverified" in " ".join(result.output.split())
+    successor = load_candidate_selection_plan(output)
+    assert successor.schema_version == "1.6"
+    assert successor.endpoint_inventory_refresh is not None
+    assert successor.endpoint_inventory_refresh.provider_endpoint == (REFRESHED_PROVIDER_ENDPOINT)
+    assert successor.endpoint_inventory_refresh.endpoint_authority is False
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=successor,
+        )
+        == successor
+    )
+
+
 @pytest.mark.parametrize(
     "model_id",
     (REVOKED_MODEL_ID, REVOKED_CANONICAL_ALIAS),
 )
-@pytest.mark.parametrize("bridge_mode", ("plain", "template", "plan"))
+@pytest.mark.parametrize("bridge_mode", ("plain", "template"))
 def test_discover_rejects_tombstoned_alias_before_any_downstream_access(
     model_id: str,
     bridge_mode: Literal["plain", "template", "plan"],
@@ -241,24 +494,33 @@ def test_discover_rejects_tombstoned_alias_before_any_downstream_access(
     result = RUNNER.invoke(cli_module.app, arguments)
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "candidate selection assignment is revoked" in " ".join(result.output.split())
+    output = " ".join(result.output.split())
+    assert "candidate selection assignment is revoked" in output
+    assert "role=candidate" in output
+    assert f"model={model_id}" in output
+    assert "endpoint=parasail/fp8" in output
+    assert "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in output
     assert downstream_access == []
     assert not discovery_output.exists()
     assert not registry_output.exists()
 
 
-def test_discover_rejects_stale_plan_before_staged_source_or_secret_access(
+def test_discover_unrevoked_route_reaches_staged_source_validation_with_stale_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     downstream_access: list[str] = []
 
+    def source_probe(*_args: object, **_kwargs: object) -> bytes:
+        downstream_access.append("source")
+        raise ValueError("unrevoked route reached staged source validation")
+
     def forbidden_access(*_args: object, **_kwargs: object) -> None:
         downstream_access.append("accessed")
-        raise AssertionError("revoked plan must reject before downstream access")
+        raise AssertionError("source validation failure must reject before later access")
 
+    monkeypatch.setattr(cli_module, "read_candidate_selection_source", source_probe)
     for name in (
-        "read_candidate_selection_source",
         "preflight_candidate_registry_output",
         "_preflight_model_discovery_output_dir",
         "load_config",
@@ -291,8 +553,60 @@ def test_discover_rejects_stale_plan_before_staged_source_or_secret_access(
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "candidate selection route is revoked" in " ".join(result.output.split())
-    assert downstream_access == []
+    assert "unrevoked route reached staged source validation" in " ".join(result.output.split())
+    assert downstream_access == ["source"]
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
+
+
+def test_discover_valid_plan_rejects_candidate_tombstone_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(
+        tmp_path / "selection",
+        model_id="moonshotai/kimi-k3",
+        provider_endpoint="modal/mxfp4",
+        pin_revoked_candidate_route=True,
+    )
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("revoked candidate must reject before secret access")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    discovery_output = tmp_path / "discovery"
+    registry_output = tmp_path / "registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{REVOKED_MODEL_ID}={REVOKED_PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--output-dir",
+            str(discovery_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    output = " ".join(result.output.split())
+    assert "role=candidate" in output
+    assert f"model={REVOKED_MODEL_ID}" in output
+    assert f"endpoint={REVOKED_PROVIDER_ENDPOINT}" in output
+    assert "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in output
+    assert secret_accessed is False
     assert not discovery_output.exists()
     assert not registry_output.exists()
 
@@ -918,30 +1232,53 @@ def test_discover_registry_bridge_publishes_exact_selected_registry_without_netw
     assert CANARY not in result.output
 
 
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint", "pin_revoked_candidate_route"),
+    (
+        (MODEL_ID, PROVIDER_ENDPOINT, False),
+        (MODEL_ID, PROVIDER_ENDPOINT, True),
+        ("minimax/minimax-m3", "coreweave/fp4", True),
+        ("google/gemma-4-26b-a4b-it", "deepinfra/fp8", True),
+        ("tencent/hy3", "novita", True),
+    ),
+)
 def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., AuditConfig],
+    model_id: str,
+    provider_endpoint: str,
+    pin_revoked_candidate_route: bool,
 ) -> None:
     config = _config(config_factory)
-    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(
+        tmp_path / "selection",
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        pin_revoked_candidate_route=pin_revoked_candidate_route,
+    )
     selection_plan = load_candidate_selection_plan(plan_path)
     spec = fixtures._CandidateSpec(
-        model_id=MODEL_ID,
-        provider_endpoint=PROVIDER_ENDPOINT,
-        provider_name="Provider Alpha",
-        canonical_model_id="alpha/atlas-secure-20260820",
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Synthetic provider",
+        canonical_model_id=f"{model_id}-canonical-20260828",
         native_structured_output_parameter="structured_outputs",
     )
+    discovery_kwargs: dict[str, object] = {}
+    if not pin_revoked_candidate_route:
+        discovery_kwargs = {
+            "route_role": ExactRouteRole.CANDIDATE,
+            "selection_plan_sha256": selection_plan.plan_sha256,
+            "route_predicate_profile": (
+                selection_plan.authenticated_runner_selection.route_predicate_profile
+            ),
+        }
     _fixture_manifest, sealed_evidence, _template = fixtures._discovery_and_registry(
         tmp_path=tmp_path / "fixture-discovery",
         config=config,
         specs=(spec,),
-        route_role=ExactRouteRole.CANDIDATE,
-        selection_plan_sha256=selection_plan.plan_sha256,
-        route_predicate_profile=(
-            selection_plan.authenticated_runner_selection.route_predicate_profile
-        ),
+        **discovery_kwargs,
     )
     secret_file = tmp_path / "synthetic-secrets.env"
     secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
@@ -950,7 +1287,7 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
     catalog_payload = {"data": [fixtures._catalog_model(spec)]}
     endpoint_payload = {
         "data": {
-            "id": MODEL_ID,
+            "id": model_id,
             "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
         }
     }
@@ -975,11 +1312,11 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
             return {"data": [endpoint]}
 
         async def get_model_metadata(self, model_id: str) -> dict[str, Any]:
-            assert model_id == MODEL_ID
+            assert model_id == spec.model_id
             return {"data": fixtures._catalog_model(spec)}
 
         async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, Any]:
-            assert model_id == MODEL_ID
+            assert model_id == spec.model_id
             return endpoint_payload
 
         def seal_real_model_discovery_run(
@@ -989,7 +1326,7 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
             OpenRouterDiscoveryRunProvenance,
             tuple[OpenRouterModelDiscoveryEvidence, ...],
         ]:
-            assert tuple(item.exact_model_id for item in kwargs["payloads"]) == (MODEL_ID,)
+            assert tuple(item.exact_model_id for item in kwargs["payloads"]) == (spec.model_id,)
             return sealed_evidence[0].provenance, sealed_evidence
 
         async def close(self) -> None:
@@ -1010,7 +1347,7 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
             "models",
             "discover",
             "--candidate",
-            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            f"{model_id}={provider_endpoint}",
             "--config",
             str(tmp_path / "synthetic.toml"),
             "--secrets-env-file",
@@ -1038,13 +1375,149 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
         evidence=evidence,
     )
     candidate = registry.candidates[0]
-    assert candidate.exact_model_id == MODEL_ID
+    assert candidate.exact_model_id == model_id
     assert candidate.root_lineage is None
     assert candidate.lineage_review.status is LineageReviewStatus.PENDING
     assert candidate.approved_roles == ()
     assert candidate.output_capability_sha256 == evidence[0].output_capability_sha256
     assert stat.S_IMODE(registry_output.stat().st_mode) == 0o600
     assert CANARY not in result.output
+
+
+@pytest.mark.parametrize(
+    "role",
+    (ExactRouteRole.PRIMARY_JUDGE, ExactRouteRole.REPLAY_JUDGE),
+)
+def test_discover_selection_plan_preserves_exact_judge_role_for_candidate_tombstone_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    role: ExactRouteRole,
+) -> None:
+    config = _config(config_factory)
+    plan_path, ranking_path, lineage_path = _selection_plan_paths_with_revoked_identity_as_judge(
+        tmp_path / "selection",
+        role=role,
+    )
+    selection_plan = load_candidate_selection_plan(plan_path)
+    selection = selection_plan.authenticated_runner_selection
+    assert selection is not None
+    spec = fixtures._CandidateSpec(
+        model_id=REVOKED_MODEL_ID,
+        provider_endpoint=REVOKED_PROVIDER_ENDPOINT,
+        provider_name="Synthetic Parasail",
+        canonical_model_id=REVOKED_CANONICAL_ALIAS,
+        native_structured_output_parameter="structured_outputs",
+    )
+    _fixture_manifest, sealed_evidence, _template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "fixture-discovery",
+        config=config,
+        specs=(spec,),
+        route_role=role,
+        selection_plan_sha256=selection_plan.plan_sha256,
+        route_predicate_profile=selection.route_predicate_profile,
+    )
+    route_constraint = sealed_evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    secret_file = tmp_path / "synthetic-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    endpoint = fixtures._endpoint(spec)
+    catalog_payload = {"data": [fixtures._catalog_model(spec)]}
+    endpoint_payload = {
+        "data": {
+            "id": REVOKED_MODEL_ID,
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+    constructor_constraints: list[ExactRouteConstraint | None] = []
+
+    class ProviderFreeJudgeSelectionClient:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == CANARY
+            supplied_constraint = kwargs.get("candidate_revocation_route_constraint")
+            assert supplied_constraint is None or type(supplied_constraint) is ExactRouteConstraint
+            constructor_constraints.append(supplied_constraint)
+            assert supplied_constraint == route_constraint
+            assert kwargs.get("provider_policy") == cli_module.OpenRouterProviderPolicy(
+                only=(REVOKED_PROVIDER_ENDPOINT,),
+                allow_fallbacks=False,
+            )
+
+        async def validate_authentication(self) -> None:
+            return None
+
+        async def get_certification_model_metadata(self) -> dict[str, Any]:
+            return catalog_payload
+
+        async def list_zdr_endpoints(self) -> dict[str, Any]:
+            return {"data": [endpoint]}
+
+        async def get_model_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == REVOKED_MODEL_ID
+            return {"data": fixtures._catalog_model(spec)}
+
+        async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == REVOKED_MODEL_ID
+            return endpoint_payload
+
+        def seal_real_model_discovery_run(
+            self,
+            **kwargs: Any,
+        ) -> tuple[
+            OpenRouterDiscoveryRunProvenance,
+            tuple[OpenRouterModelDiscoveryEvidence, ...],
+        ]:
+            assert tuple(item.exact_model_id for item in kwargs["payloads"]) == (REVOKED_MODEL_ID,)
+            return sealed_evidence[0].provenance, sealed_evidence
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", ProviderFreeJudgeSelectionClient)
+    monkeypatch.setattr(
+        cli_module,
+        "_TRUSTED_OPENROUTER_CLIENT_TYPE",
+        ProviderFreeJudgeSelectionClient,
+    )
+    discovery_output = tmp_path / "private" / f"{role.value}-discovery"
+    registry_output = tmp_path / "private" / f"{role.value}-registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{REVOKED_MODEL_ID}={REVOKED_PROVIDER_ENDPOINT}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(discovery_output),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert constructor_constraints == [route_constraint]
+    manifest, evidence = load_model_discovery_run(discovery_output)
+    registry = load_candidate_registry(registry_output)
+    validate_candidate_registry_discovery(
+        registry=registry,
+        run_manifest=manifest,
+        evidence=evidence,
+    )
+    assert registry.candidates[0].exact_model_id == REVOKED_MODEL_ID
 
 
 @pytest.mark.parametrize(

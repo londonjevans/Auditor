@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import unicodedata
 from collections import Counter
@@ -33,11 +34,13 @@ from mmaudit.config import (
     AuditRunOptions,
     ModelRetryPolicy,
     canonical_audit_config_json,
+    configured_model_ids,
     model_lineage_index,
     parse_canonical_audit_config,
 )
 from mmaudit.constants import ALL_MODEL_ROLES, SEVERITY_ORDER, VERSION
 from mmaudit.language_plugins import parse_language_capability_payload
+from mmaudit.models.actor_model import ActorModelEvaluation, ActorModelInputState
 from mmaudit.models.candidate_review_stamping import stamp_candidate_review_findings
 from mmaudit.models.scheduler import (
     ABSENT_QUALIFICATION_SHA256,
@@ -59,16 +62,26 @@ from mmaudit.models.scheduler import (
     SchedulerReproductionHostOutput,
     SchedulerRetainedJournalReference,
     SchedulerShardInventory,
+    SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskOutput,
+    SchedulerTaskPlan,
+    SchedulerTaskPurpose,
     SchedulerTaskResult,
     SchedulerTerminalFindingState,
     SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     SchedulerTruncationRecoveryModelRequestEvidence,
+    SchedulerTruncationRecoveryPromotionDisposition,
+    scheduler_auxiliary_response_schema_hashes_for_algorithm,
+    scheduler_candidate_payload_sha256,
     scheduler_canonical_sha256,
+    scheduler_response_schema_hashes_for_algorithm,
+    scheduler_response_schema_set_sha256_for_algorithm,
+    scheduler_typed_payload_projection,
 )
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AnalysisState,
     AuditProfile,
     AuditReport,
@@ -81,6 +94,7 @@ from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ConsensusReviewArtifact,
     ConsensusReviewerSlot,
+    ContextPackage,
     ExecutionEvidenceKind,
     ExecutionOriginDispositionKind,
     FalsificationBatch,
@@ -94,14 +108,21 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     JudgeDecision,
     JudgeDecisionBatch,
+    KnownIssueTaxonomy,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityArtifact,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     Location,
     LocationValidation,
     MaximumAssuranceStatus,
+    MinimumFloorRecoveryModelUsageBinding,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    ModelReviewCoverage,
+    ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewRecord,
+    ModelSurfaceReviewRequest,
     ModelVote,
     PropertyCorpus,
     ReportQualityReview,
@@ -136,7 +157,27 @@ from mmaudit.models.sharding import (
     SolidityShardsArtifact,
 )
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.truncation_closure import (
+    TruncationRecoveredRecursiveSurfaceReviewArtifact,
+    TruncationRecoveredSurfaceReviewArtifact,
+    TruncationSurfaceOriginKind,
+)
+from mmaudit.models.truncation_recovery_journal import (
+    SchedulerTruncationRecoveryChildActivation,
+    SchedulerTruncationRecoveryChildResult,
+    SchedulerTruncationRecoveryFamilyClosure,
+    SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryTerminalStatus,
+)
+from mmaudit.models.usage import (
+    has_exact_nonfallback_model_identity,
+    is_creditable_usage_record,
+    is_structurally_accountable_usage_record,
+    is_structurally_creditable_usage_record,
+    is_structurally_recovery_accountable_usage_record,
+    is_structurally_recovery_creditable_usage_record,
+)
 from mmaudit.orchestration.candidate_enrichment import (
     apply_reproduction_results,
     attach_consensus_review_votes,
@@ -165,6 +206,12 @@ from mmaudit.orchestration.context_manifest import (
 )
 from mmaudit.orchestration.execution_candidates import (
     validate_invariant_execution_candidate,
+)
+from mmaudit.orchestration.model_review_evidence import (
+    model_surface_retained_context_custody_failures,
+    model_surface_review_excerpt_validation_failures,
+    model_surface_review_identity_lineage_custody_failures,
+    model_surface_review_record_validation_failures,
 )
 from mmaudit.orchestration.reproduction_resolution import (
     build_candidate_reproduction_resolutions,
@@ -206,10 +253,15 @@ from mmaudit.scanners.base import ScannerWorkspaceTextRecord, observe_scanner_wo
 from mmaudit.scanners.normalization import validate_real_scanner_normalization_replay
 from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
+from mmaudit.solidity.invariants import validate_protocol_profile_replay
 from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.sharding import (
     verify_solidity_shard_projection,
     verify_solidity_shard_repository_projection,
+)
+from mmaudit.solidity.taxonomy import (
+    load_known_issue_taxonomy,
+    validate_known_issue_taxonomy_coverage_provenance,
 )
 
 if TYPE_CHECKING:
@@ -226,8 +278,10 @@ if TYPE_CHECKING:
     from mmaudit.models.registry import ProductionQualificationValidation
     from mmaudit.models.schemas import UsageRecord
     from mmaudit.orchestration.scheduler import SchedulerJournal
+    from mmaudit.repository.discovery import DiscoveryResult
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_WHOLE_PROTOCOL_REVIEW_ROLE_RE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
@@ -243,6 +297,28 @@ _MODEL_RETRY_ROUTING_KEYS = frozenset(
     }
 )
 LANGUAGE_CAPABILITY_ARTIFACT_PATH = "language-capability.json"
+ACTOR_MODEL_BASELINE_ARTIFACT_PATH = "actor-model-baseline.json"
+ACTOR_MODEL_EVALUATION_ARTIFACT_PATH = "actor-model-evaluation.json"
+KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH = "known-issue-taxonomy.json"
+KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH = "known-issue-taxonomy-coverage.json"
+MODEL_REVIEW_ARTIFACT_INVENTORY_PATH = "private/model-review-artifacts.json"
+PROMOTED_MODEL_REVIEW_ARTIFACT_INVENTORY_PATH = (
+    "private/truncation-recovered-surface-artifacts.json"
+)
+_KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATHS = frozenset(
+    {
+        KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+    }
+)
+_KNOWN_ISSUE_TAXONOMY_BINDING_IDS = frozenset(
+    {
+        "known-issue-taxonomy/corpus",
+        "known-issue-taxonomy/corpus-raw",
+        "known-issue-taxonomy/coverage",
+        "known-issue-taxonomy/profile-assessment",
+    }
+)
 AUDIT_MODEL_SELECTION_EVIDENCE_PATH = "audit-model-selection-evidence.json"
 AUDIT_MODEL_REFRESH_EVIDENCE_PATH = "audit-model-refresh-evidence.json"
 AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_PATH = "audit-model-refresh-pricing-evidence.json"
@@ -297,6 +373,384 @@ AUDIT_MODEL_REFRESH_PRICING_BINDING_IDS = frozenset(
         "audit-model-refresh-pricing/workflow-status",
     }
 )
+
+
+class _ModelReviewContextAuthority(StrictModel):
+    """One exact provider-visible context retained under its scheduler request identity."""
+
+    request_id: str = Field(min_length=1, max_length=512)
+    context: ContextPackage
+
+
+class _ModelReviewArtifactInventory(StrictModel):
+    """Canonical bounded envelope for raw scheduler model-surface evidence."""
+
+    schema_version: Literal["1.0", "1.1"]
+    artifacts: tuple[ModelSurfaceReviewArtifact, ...] = Field(max_length=10_000)
+    context_authorities: tuple[_ModelReviewContextAuthority, ...] = Field(
+        default=(),
+        max_length=30_000,
+        exclude_if=lambda value: not value,
+    )
+
+    @model_validator(mode="after")
+    def artifact_identities_are_canonical(self) -> _ModelReviewArtifactInventory:
+        identities = tuple(
+            (artifact.request_id, artifact.artifact_sha256) for artifact in self.artifacts
+        )
+        request_ids = tuple(identity[0] for identity in identities)
+        artifact_sha256s = tuple(identity[1] for identity in identities)
+        if identities != tuple(sorted(identities)):
+            raise ValueError("model-review artifact inventory must be canonically sorted")
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("model-review artifact inventory repeats a request identity")
+        if len(artifact_sha256s) != len(set(artifact_sha256s)):
+            raise ValueError("model-review artifact inventory repeats an artifact identity")
+        context_request_ids = tuple(authority.request_id for authority in self.context_authorities)
+        if context_request_ids != tuple(sorted(context_request_ids)):
+            raise ValueError("model-review context authorities must be canonically sorted")
+        if len(context_request_ids) != len(set(context_request_ids)):
+            raise ValueError("model-review context authorities repeat a request identity")
+        if self.schema_version == "1.0" and self.context_authorities:
+            raise ValueError("legacy model-review inventory cannot retain context authorities")
+        return self
+
+
+def build_model_review_artifact_inventory(
+    *,
+    artifacts: Iterable[ModelSurfaceReviewArtifact],
+    review_contexts_by_request: Mapping[str, list[ContextPackage]],
+) -> _ModelReviewArtifactInventory:
+    """Build the current private inventory from exact live scheduler-owned contexts."""
+
+    from mmaudit.orchestration.context import ContextBudgetError, revalidate_context_package
+
+    context_authorities: list[_ModelReviewContextAuthority] = []
+    for request_id in sorted(review_contexts_by_request):
+        contexts = review_contexts_by_request[request_id]
+        if len(contexts) != 1:
+            raise ValueError("model-review context authority did not join exactly one live context")
+        try:
+            context = revalidate_context_package(contexts[0])
+        except (ContextBudgetError, ValueError) as exc:
+            raise ValueError("model-review context authority failed boundary validation") from exc
+        context_authorities.append(
+            _ModelReviewContextAuthority(request_id=request_id, context=context)
+        )
+    return _ModelReviewArtifactInventory(
+        schema_version="1.1",
+        artifacts=tuple(
+            sorted(
+                artifacts,
+                key=lambda artifact: (artifact.request_id, artifact.artifact_sha256),
+            )
+        ),
+        context_authorities=tuple(context_authorities),
+    )
+
+
+class _DirectPromotedModelReviewArtifact(StrictModel):
+    """One direct aggregate artifact paired with its durable promotion identity."""
+
+    promotion_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    recovered_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    artifact: TruncationRecoveredSurfaceReviewArtifact
+
+
+class _RecursivePromotedModelReviewArtifact(StrictModel):
+    """One recursive aggregate artifact paired with its durable promotion identity."""
+
+    promotion_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    recovered_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    recursive_tree: Literal[True]
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
+
+
+type _PromotedModelReviewArtifact = (
+    _DirectPromotedModelReviewArtifact | _RecursivePromotedModelReviewArtifact
+)
+
+
+class _PromotedModelReviewArtifactInventory(StrictModel):
+    """Canonical bounded envelope for aggregate promoted surface evidence."""
+
+    schema_version: Literal["1.0", "1.1"]
+    promotions: tuple[_PromotedModelReviewArtifact, ...] = Field(max_length=10_000)
+
+    @model_validator(mode="after")
+    def promotion_identities_are_canonical(self) -> _PromotedModelReviewArtifactInventory:
+        identities = tuple(
+            (
+                promotion.promotion_entry_sha256,
+                promotion.recovered_output_artifact_sha256,
+                promotion.artifact.artifact_sha256,
+            )
+            for promotion in self.promotions
+        )
+        if identities != tuple(sorted(identities)):
+            raise ValueError("promoted model-review inventory must be canonically sorted")
+        for column in zip(*identities, strict=True) if identities else ():
+            if len(column) != len(set(column)):
+                raise ValueError("promoted model-review inventory repeats an identity")
+        contains_recursive = any(
+            isinstance(item, _RecursivePromotedModelReviewArtifact) for item in self.promotions
+        )
+        if (self.schema_version == "1.1") != contains_recursive:
+            raise ValueError("promoted model-review inventory schema does not match its trees")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class _LivePromotedRecoveryLeafAuthority:
+    """One exact recovery leaf retained by a scheduler-owned live capability."""
+
+    request_id: str
+    usage_record_sha256: str
+    promotion_entry_sha256: str
+    promotion_disposition: SchedulerTruncationRecoveryPromotionDisposition | None
+    role: str
+    requested_model: str
+    request_limit_scope: str
+    request_limit_count_before: int
+
+
+def _promoted_model_review_leaf_usage_inventory(
+    inventory: _PromotedModelReviewArtifactInventory | None,
+) -> dict[str, tuple[str, str]]:
+    """Return capability-derived leaf request IDs with promotion and usage hashes."""
+
+    if inventory is None:
+        return {}
+    rows: list[tuple[str, str, str]] = []
+    for promotion in inventory.promotions:
+        expected_leaf_count = (
+            3 if isinstance(promotion, _RecursivePromotedModelReviewArtifact) else 2
+        )
+        if len(promotion.artifact.children) != expected_leaf_count:
+            raise ValueError(
+                "promoted model-review inventory has an invalid direct or recursive leaf count"
+            )
+        rows.extend(
+            (
+                child.usage_record.request_id,
+                promotion.promotion_entry_sha256,
+                child.usage_record_sha256,
+            )
+            for child in promotion.artifact.children
+        )
+    leaf_inventory = {
+        request_id: (promotion_entry_sha256, usage_record_sha256)
+        for request_id, promotion_entry_sha256, usage_record_sha256 in rows
+    }
+    if len(leaf_inventory) != len(rows):
+        raise ValueError("promoted model-review inventory repeats a leaf request identity")
+    return leaf_inventory
+
+
+def _live_promoted_model_review_leaf_usage_inventory(
+    runtime_journal: SchedulerJournal,
+) -> dict[str, _LivePromotedRecoveryLeafAuthority]:
+    """Derive recovery-floor authority only from scheduler-owned live capabilities."""
+
+    from mmaudit.orchestration.scheduler import SchedulerJournal as LiveSchedulerJournal
+    from mmaudit.orchestration.scheduler import (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
+
+    if type(runtime_journal) is not LiveSchedulerJournal:
+        raise ValueError("minimum-floor recovery credit lacks exact live scheduler authority")
+    direct_capabilities = runtime_journal.promoted_truncation_recovery_surface_coverages
+    recursive_capabilities = (
+        runtime_journal.promoted_recursive_truncation_recovery_surface_coverages
+    )
+    if type(direct_capabilities) is not tuple or type(recursive_capabilities) is not tuple:
+        raise ValueError("live promoted recovery capability inventories must be immutable")
+
+    direct_projections = tuple(
+        require_verified_promoted_truncation_recovery_surface_coverage(capability)
+        for capability in direct_capabilities
+    )
+    recursive_projections = tuple(
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)
+        for capability in recursive_capabilities
+    )
+    direct_promotion_ids = tuple(
+        direct_projection.promotion_entry_sha256 for direct_projection in direct_projections
+    )
+    recursive_promotion_ids = tuple(
+        recursive_projection.promotion_entry_sha256
+        for recursive_projection in recursive_projections
+    )
+    promotion_ids = direct_promotion_ids + recursive_promotion_ids
+    if len(promotion_ids) != len(set(promotion_ids)):
+        raise ValueError("live promoted recovery capabilities repeat a promotion identity")
+
+    rows: list[_LivePromotedRecoveryLeafAuthority] = []
+    excluded_request_ids: set[str] = set()
+    for direct_projection in direct_projections:
+        children = direct_projection.artifact.children
+        usages = direct_projection.child_usage_records
+        if type(usages) is not tuple or len(usages) != 2 or len(children) != 2:
+            raise ValueError("direct promoted recovery must expose exactly two child leaves")
+        excluded_request_ids.add(direct_projection.parent_usage_record.request_id)
+        for usage, child in zip(usages, children, strict=True):
+            usage_sha256 = scheduler_canonical_sha256(usage.model_dump(mode="json"))
+            if child.usage_record != usage or child.usage_record_sha256 != usage_sha256:
+                raise ValueError("direct promoted recovery leaf differs from its live capability")
+            rows.append(
+                _LivePromotedRecoveryLeafAuthority(
+                    request_id=usage.request_id,
+                    usage_record_sha256=usage_sha256,
+                    promotion_entry_sha256=direct_projection.promotion_entry_sha256,
+                    promotion_disposition=None,
+                    role=usage.role,
+                    requested_model=usage.requested_model,
+                    request_limit_scope=child.request_limit_scope,
+                    request_limit_count_before=child.request_limit_count_before,
+                )
+            )
+
+    for recursive_projection in recursive_projections:
+        children = recursive_projection.artifact.children
+        usages = recursive_projection.leaf_usage_records
+        if type(usages) is not tuple or len(usages) != 3 or len(children) != 3:
+            raise ValueError("recursive promoted recovery must expose exactly three child leaves")
+        excluded_request_ids.update(
+            {
+                recursive_projection.parent_usage_record.request_id,
+                recursive_projection.bridge_usage_record.request_id,
+            }
+        )
+        for usage, child in zip(usages, children, strict=True):
+            usage_sha256 = scheduler_canonical_sha256(usage.model_dump(mode="json"))
+            if child.usage_record != usage or child.usage_record_sha256 != usage_sha256:
+                raise ValueError(
+                    "recursive promoted recovery leaf differs from its live capability"
+                )
+            rows.append(
+                _LivePromotedRecoveryLeafAuthority(
+                    request_id=usage.request_id,
+                    usage_record_sha256=usage_sha256,
+                    promotion_entry_sha256=recursive_projection.promotion_entry_sha256,
+                    promotion_disposition=(
+                        SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                    ),
+                    role=usage.role,
+                    requested_model=usage.requested_model,
+                    request_limit_scope=child.request_limit_scope,
+                    request_limit_count_before=child.request_limit_count_before,
+                )
+            )
+
+    request_ids = tuple(row.request_id for row in rows)
+    if len(request_ids) != len(set(request_ids)) or set(request_ids) & excluded_request_ids:
+        raise ValueError("live promoted recovery leaves overlap or include a parent or bridge")
+    return {row.request_id: row for row in sorted(rows, key=lambda item: item.request_id)}
+
+
+def _validate_minimum_floor_recovery_usage_bindings(
+    *,
+    bindings: tuple[MinimumFloorRecoveryModelUsageBinding, ...],
+    serialized_leaf_inventory: Mapping[str, tuple[str, str]],
+    recovery_model_requests: Mapping[
+        str,
+        SchedulerTruncationRecoveryModelRequestEvidence,
+    ],
+    runtime_journal: SchedulerJournal | None,
+) -> None:
+    """Require live promoted leaf authority for every recovery-backed floor claim."""
+
+    bindings_by_request = {binding.request_id: binding for binding in bindings}
+    if len(bindings_by_request) != len(bindings):
+        raise ValueError("minimum-floor recovery usage inventory repeats a request identity")
+    if set(bindings_by_request) != set(serialized_leaf_inventory):
+        raise ValueError(
+            "minimum-floor recovery usage inventory differs from capability-derived promoted leaves"
+        )
+    if not bindings_by_request:
+        return
+    if runtime_journal is None:
+        raise ValueError("minimum-floor recovery credit lacks exact live scheduler authority")
+
+    live_leaf_inventory = _live_promoted_model_review_leaf_usage_inventory(runtime_journal)
+    live_serialized_projection = {
+        request_id: (authority.promotion_entry_sha256, authority.usage_record_sha256)
+        for request_id, authority in live_leaf_inventory.items()
+    }
+    if live_serialized_projection != dict(serialized_leaf_inventory):
+        raise ValueError(
+            "minimum-floor recovery usage inventory differs from live promoted capabilities"
+        )
+
+    for request_id, binding in bindings_by_request.items():
+        authority = live_leaf_inventory[request_id]
+        request = recovery_model_requests.get(request_id)
+        if (
+            request is None
+            or request.logical_request_id != authority.request_id
+            or request.usage_record_sha256 != authority.usage_record_sha256
+            or request.promotion_entry_sha256 != authority.promotion_entry_sha256
+            or request.promotion_disposition is not authority.promotion_disposition
+            or request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            or request.role != authority.role
+            or request.requested_model != authority.requested_model
+            or request.request_limit_scope != authority.request_limit_scope
+            or request.request_limit_count_before != authority.request_limit_count_before
+            or binding.request_id != authority.request_id
+            or binding.role != authority.role
+            or binding.request_limit_scope != authority.request_limit_scope
+            or binding.request_limit_count_before != authority.request_limit_count_before
+            or binding.usage_record_sha256 != authority.usage_record_sha256
+            or binding.scheduler_request_evidence_sha256 != request.request_evidence_sha256
+        ):
+            raise ValueError(
+                "minimum-floor recovery usage differs from exact live promoted scheduler evidence"
+            )
+
+
+@dataclass(frozen=True)
+class _RetainedModelSurfaceReviewAuthority:
+    """One raw artifact joined to its exact scheduler request and completion."""
+
+    artifact: ModelSurfaceReviewArtifact
+    requests: tuple[ModelSurfaceReviewRequest, ...]
+    usage: UsageRecord
+    context: ContextPackage | None = None
+    recovery_request_limit_scope: str | None = None
+    recovery_request_limit_count_before: int | None = None
+    pre_dispatch_request_id: str | None = None
+    pre_dispatch_review_role: str | None = None
+    pre_dispatch_requested_surface_manifest_sha256: str | None = None
+    pre_dispatch_rendered_context_sha256: str | None = None
+    pre_dispatch_provider_prompt_sha256: str | None = None
+    pre_dispatch_response_schema_sha256: str | None = None
+    pre_dispatch_root_surface_authorized: bool = False
+
+
+@dataclass(frozen=True)
+class _RetainedPromotedModelReviewAuthority:
+    """One aggregate promotion joined to its parent and exact promoted leaves."""
+
+    promotion: SchedulerTruncationRecoveryFamilyPromotion
+    artifact: (
+        TruncationRecoveredSurfaceReviewArtifact | TruncationRecoveredRecursiveSurfaceReviewArtifact
+    )
+    parent_usage: UsageRecord
+    requests: tuple[ModelSurfaceReviewRequest, ...]
+    leaf_authorities: tuple[_RetainedModelSurfaceReviewAuthority, ...]
+    parent_context: ContextPackage | None = None
+    bridge_usage: UsageRecord | None = None
+    bridge_context: ContextPackage | None = None
+    pre_dispatch_request_id: str | None = None
+    pre_dispatch_review_role: str | None = None
+    pre_dispatch_requested_surface_manifest_sha256: str | None = None
+    pre_dispatch_rendered_context_sha256: str | None = None
+    pre_dispatch_provider_prompt_sha256: str | None = None
+    pre_dispatch_response_schema_sha256: str | None = None
+    bridge_pre_dispatch_rendered_context_sha256: str | None = None
+    bridge_pre_dispatch_provider_prompt_sha256: str | None = None
+    bridge_pre_dispatch_response_schema_sha256: str | None = None
 
 
 class ManifestFileBinding(StrictModel):
@@ -471,7 +925,7 @@ class RunConfigurationBinding(StrictModel):
 class RunEvidenceManifest(StrictModel):
     """Self-hashed manifest over source, run evidence projections, and artifacts."""
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.4"
     generated_by: Literal["mmaudit"] = "mmaudit"
     tool_version: str = Field(min_length=1, max_length=100)
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -486,7 +940,9 @@ class RunEvidenceManifest(StrictModel):
 
     @model_validator(mode="after")
     def hashes_and_paths_are_consistent(self) -> RunEvidenceManifest:
-        if (self.schema_version in {"1.1", "1.2", "1.3"}) != (self.run_configuration is not None):
+        if (self.schema_version in {"1.1", "1.2", "1.3", "1.4"}) != (
+            self.run_configuration is not None
+        ):
             raise ValueError(
                 f"manifest {self.schema_version} requires run configuration provenance"
             )
@@ -496,6 +952,25 @@ class RunEvidenceManifest(StrictModel):
         artifact_paths = [binding.path for binding in self.artifacts]
         if artifact_paths != sorted(set(artifact_paths)):
             raise ValueError("manifest artifact paths must be unique and sorted")
+        model_review_inventory_present = MODEL_REVIEW_ARTIFACT_INVENTORY_PATH in artifact_paths
+        if self.schema_version == "1.4":
+            if not model_review_inventory_present:
+                raise ValueError("manifest 1.4 requires model-review artifact inventory")
+        elif model_review_inventory_present:
+            raise ValueError("pre-1.4 manifests cannot retain model-review artifact inventory")
+        taxonomy_artifact_paths = set(artifact_paths) & _KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATHS
+        if self.schema_version == "1.4":
+            if taxonomy_artifact_paths != _KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATHS:
+                raise ValueError("manifest 1.4 requires complete known-issue taxonomy custody")
+        elif taxonomy_artifact_paths:
+            raise ValueError("pre-taxonomy manifests cannot retain known-issue taxonomy leaves")
+        coverage_binding_ids = {binding.identifier for binding in self.bindings.coverage}
+        taxonomy_binding_ids = coverage_binding_ids & _KNOWN_ISSUE_TAXONOMY_BINDING_IDS
+        if self.schema_version == "1.4":
+            if taxonomy_binding_ids != _KNOWN_ISSUE_TAXONOMY_BINDING_IDS:
+                raise ValueError("manifest 1.4 requires complete known-issue taxonomy bindings")
+        elif taxonomy_binding_ids:
+            raise ValueError("pre-taxonomy manifests cannot retain known-issue taxonomy bindings")
         model_binding_ids = {binding.identifier for binding in self.bindings.models}
         selection_binding_ids = model_binding_ids & AUDIT_MODEL_SELECTION_BINDING_IDS
         selection_artifact_present = AUDIT_MODEL_SELECTION_EVIDENCE_PATH in artifact_paths
@@ -527,7 +1002,7 @@ class RunEvidenceManifest(StrictModel):
             not refresh_artifact_present or not selection_artifact_present
         ):
             raise ValueError("manifest refresh-pricing custody lacks refresh or selection")
-        if self.schema_version in {"1.2", "1.3"}:
+        if self.schema_version in {"1.2", "1.3", "1.4"}:
             missing_report_artifacts = sorted(
                 (
                     MANIFEST_BOUND_REPORT_DELIVERABLES
@@ -650,13 +1125,15 @@ def seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
-    schema_version: Literal["1.1", "1.2", "1.3"] = "1.3",
+    schema_version: Literal["1.1", "1.2", "1.3", "1.4"] = "1.4",
     tool_version: str = VERSION,
 ) -> RunEvidenceManifest:
     """Issue a new complete report-bundle manifest using the current schema only."""
 
-    if schema_version != "1.3":
-        raise ValueError("new manifest issuance requires schema 1.3 and exact split retry custody")
+    if schema_version != "1.4":
+        raise ValueError(
+            "new manifest issuance requires schema 1.4 with exact retry and taxonomy custody"
+        )
     return _seal_run_evidence_manifest(
         run_id=run_id,
         repository_root_name=repository_root_name,
@@ -679,7 +1156,7 @@ def _seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
-    schema_version: Literal["1.1", "1.2", "1.3"],
+    schema_version: Literal["1.1", "1.2", "1.3", "1.4"],
     tool_version: str,
 ) -> RunEvidenceManifest:
     """Reconstruct a current or already-sealed legacy manifest deterministically."""
@@ -716,6 +1193,7 @@ def build_run_evidence_manifest(
     run_options: AuditRunOptions | None = None,
     production_qualification: VerifiedProductionQualification | None = None,
     scheduler_runtime_journal: SchedulerJournal | None = None,
+    protocol_profile_replay_discovery: DiscoveryResult | None = None,
 ) -> RunEvidenceManifest:
     """Build runtime MAN-001 projections, requiring opaque qualification authority."""
 
@@ -729,6 +1207,7 @@ def build_run_evidence_manifest(
         run_options=run_options,
         production_qualification=production_qualification,
         scheduler_runtime_journal=scheduler_runtime_journal,
+        protocol_profile_replay_discovery=protocol_profile_replay_discovery,
         sealed_verification_manifest=None,
     )
 
@@ -743,6 +1222,7 @@ def rebuild_run_evidence_manifest_for_verification(
     environment_overrides: AuditConfigOverrides | None = None,
     cli_overrides: AuditConfigOverrides | None = None,
     run_options: AuditRunOptions | None = None,
+    protocol_profile_replay_discovery: DiscoveryResult | None = None,
 ) -> RunEvidenceManifest:
     """Recalculate a sealed manifest without minting runtime qualification authority.
 
@@ -775,6 +1255,7 @@ def rebuild_run_evidence_manifest_for_verification(
             run_options=run_options,
             production_qualification=None,
             scheduler_runtime_journal=None,
+            protocol_profile_replay_discovery=protocol_profile_replay_discovery,
             sealed_verification_manifest=on_disk_manifest,
         )
 
@@ -790,11 +1271,19 @@ def _build_run_evidence_manifest(
     run_options: AuditRunOptions | None,
     production_qualification: VerifiedProductionQualification | None,
     scheduler_runtime_journal: SchedulerJournal | None,
+    protocol_profile_replay_discovery: DiscoveryResult | None,
     sealed_verification_manifest: RunEvidenceManifest | None,
 ) -> RunEvidenceManifest:
     """Build either runtime evidence or a read-only verification projection."""
 
     root = run_dir.resolve(strict=True)
+    current_taxonomy_required = sealed_verification_manifest is None or (
+        sealed_verification_manifest.schema_version == "1.4"
+    )
+    if current_taxonomy_required != (report.schema_version == "1.4"):
+        raise ValueError(
+            "manifest schema 1.4 and report schema 1.4 require the same taxonomy boundary"
+        )
     effective_config = config.effective()
     base_config = file_config or effective_config
     environment_layer = environment_overrides or AuditConfigOverrides()
@@ -826,10 +1315,10 @@ def _build_run_evidence_manifest(
         expected_source_classification=run_configuration.run_options.privacy_source_classification,
     )
     report_bundle_required = sealed_verification_manifest is None or (
-        sealed_verification_manifest.schema_version in {"1.2", "1.3"}
+        sealed_verification_manifest.schema_version in {"1.2", "1.3", "1.4"}
     )
     retry_evidence_required = sealed_verification_manifest is None or (
-        sealed_verification_manifest.schema_version == "1.3"
+        sealed_verification_manifest.schema_version in {"1.3", "1.4"}
     )
     if retry_evidence_required:
         _require_report_model_retry_policy(
@@ -849,6 +1338,17 @@ def _build_run_evidence_manifest(
         root,
         report,
         report_bundle_required=report_bundle_required,
+    )
+    _validate_protocol_profile_release_replay(
+        root=root,
+        report=report,
+        discovery=protocol_profile_replay_discovery,
+        required=current_taxonomy_required,
+    )
+    _validate_known_issue_taxonomy_artifacts(
+        root,
+        report,
+        required=current_taxonomy_required,
     )
     _validate_repository_differential_configuration(report, effective_config)
     for artifact_name, report_key in (
@@ -870,6 +1370,7 @@ def _build_run_evidence_manifest(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
+    _validate_model_review_coverage_artifact(report, model_coverage)
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
     language_artifact_present = (root / LANGUAGE_CAPABILITY_ARTIFACT_PATH).is_file()
     if report_bundle_required:
@@ -880,6 +1381,9 @@ def _build_run_evidence_manifest(
                 "legacy language capability evidence is only valid when report and artifact agree"
             )
         _validate_language_capability_artifact(root, report)
+    if report.schema_version in {"1.3", "1.4"}:
+        _validate_actor_model_baseline_artifact(root, report)
+        _validate_actor_model_evaluation_artifact(root, report)
     qualification_path = root / "model-qualification-runtime.json"
     if qualification_path.is_symlink() or qualification_path.is_junction():
         raise ValueError("run model qualification artifact may not be a link")
@@ -928,7 +1432,7 @@ def _build_run_evidence_manifest(
         scheduler_artifact=scheduler_artifact,
     )
     _validate_context_manifest_configuration(context_manifest, effective_config)
-    if report.schema_version == "1.2" or report_bundle_required:
+    if report.schema_version in {"1.2", "1.3", "1.4"} or report_bundle_required:
         _validate_model_execution_cost_ledger_custody(
             root,
             report,
@@ -1006,15 +1510,25 @@ def _build_run_evidence_manifest(
         ),
     )
     artifacts = _collect_artifacts(root)
-    manifest_schema: Literal["1.1", "1.2", "1.3"]
+    manifest_schema: Literal["1.1", "1.2", "1.3", "1.4"]
     if sealed_verification_manifest is None:
+        manifest_schema = "1.4"
+    elif sealed_verification_manifest.schema_version == "1.0":
+        # Schema 1.0 has no run-configuration field. Reconstruct its common
+        # bindings through the newest pre-taxonomy schema; verification ignores
+        # the synthetic run-configuration projection for an unconfigured legacy
+        # manifest and compares only the fields that 1.0 actually sealed.
         manifest_schema = "1.3"
     elif sealed_verification_manifest.schema_version == "1.1":
         manifest_schema = "1.1"
     elif sealed_verification_manifest.schema_version == "1.2":
         manifest_schema = "1.2"
-    else:
+    elif sealed_verification_manifest.schema_version == "1.3":
         manifest_schema = "1.3"
+    elif sealed_verification_manifest.schema_version == "1.4":
+        manifest_schema = "1.4"
+    else:
+        raise ValueError("unsupported manifest schema for verification reconstruction")
     return _seal_run_evidence_manifest(
         run_id=report.run_id,
         repository_root_name=report.repository.root_name,
@@ -1404,10 +1918,13 @@ def _validate_report_bundle_artifacts(
         raise ValueError("client/forensic report bundle is incomplete: " + ", ".join(missing))
 
     raw_findings = _read_json_artifact(root, "findings.json")
-    if current_model_execution_required and raw_findings.get("schema_version") != "1.2":
+    findings_schema_version = raw_findings.get("schema_version")
+    if report.schema_version in {"1.3", "1.4"} and findings_schema_version != "1.3":
+        raise ValueError("report schema 1.3+ requires actor-bound findings schema 1.3 custody")
+    if current_model_execution_required and findings_schema_version not in {"1.2", "1.3"}:
         raise ValueError("current manifest requires current typed findings custody")
     if (
-        raw_findings.get("schema_version") == "1.2"
+        findings_schema_version in {"1.2", "1.3"}
         and raw_findings.get("language_capability") is None
     ):
         raise ValueError("findings.json differs from the final report")
@@ -1479,7 +1996,7 @@ def _validate_report_bundle_artifacts(
         raise ValueError("current manifest requires current typed model-execution custody")
     if (
         current_model_execution_required
-        and report.schema_version == "1.2"
+        and report.schema_version in {"1.2", "1.3", "1.4"}
         and report.accounted_cost_usd_exact is None
     ):
         raise ValueError("current report lacks exact accounted-cost evidence")
@@ -1589,7 +2106,7 @@ def _validate_terminal_learning_capture(
         not run_options.scanner_only
         and run_options.privacy_source_classification
         is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
-        and report.schema_version == "1.2"
+        and report.schema_version in {"1.2", "1.3", "1.4"}
         and report.completed
         and report.run_status is AuditRunStatus.COMPLETE
         and bool(report.usage)
@@ -2196,21 +2713,1303 @@ def _open_scanner_stream_observation(
 def _validate_static_scanner_finding_projection(
     finding: Finding,
     scanner: ScannerFinding,
+    *,
+    pre_calibration_finding: Finding | None = None,
 ) -> None:
     """Require a report finding to preserve deterministic scanner semantics exactly."""
 
+    projection_finding = pre_calibration_finding or finding
     raw_validations = scanner.metadata.get("location_validation")
     if not isinstance(raw_validations, list) or len(raw_validations) != len(scanner.locations):
         raise ValueError("current scanner finding lacks exact host location validation")
     expected = project_scanner_finding(
         scanner,
         [LocationValidation.model_validate(item) for item in raw_validations],
-        validated_at=finding.location_validation.validated_at,
+        validated_at=projection_finding.location_validation.validated_at,
     )
-    if finding != expected:
+    if projection_finding != expected:
         raise ValueError(
             "static-analyzer finding differs from its authoritative scanner projection"
         )
+
+
+def _validate_model_review_coverage_artifact(
+    report: AuditReport,
+    artifact: dict[str, Any],
+) -> None:
+    """Join the retained review artifact to the report's exact typed projection."""
+
+    raw_coverage = artifact.get("coverage")
+    try:
+        coverage = (
+            ModelReviewCoverage.model_validate(raw_coverage) if raw_coverage is not None else None
+        )
+    except ValueError as exc:
+        raise ValueError("persisted model-review coverage is invalid") from exc
+    if coverage != report.model_review_coverage:
+        raise ValueError("persisted model-review coverage differs from the final report")
+
+
+def _validate_protocol_profile_release_replay(
+    *,
+    root: Path,
+    report: AuditReport,
+    discovery: DiscoveryResult | None,
+    required: bool,
+) -> None:
+    """Require current profile dispositions to replay from exact scoped source evidence."""
+
+    suite = report.invariants
+    if not required or suite is None or suite.protocol_profile_assessment is None:
+        return
+    if discovery is None:
+        raise ValueError("current protocol-profile assessment lacks scoped source replay authority")
+    try:
+        index_artifact = SolidityIndexArtifact.model_validate(
+            _read_json_artifact(root, "solidity-index.json")
+        )
+        with _open_json_artifact_observation(
+            root,
+            "solidity-graphs.json",
+            payload_max_bytes=_solidity_graph_payload_byte_limit,
+        ) as graphs_payload:
+            graphs_artifact = SolidityGraphsArtifact.model_validate(graphs_payload)
+        if index_artifact.index is None:
+            raise ValueError("Solidity index artifact is unavailable")
+        validate_protocol_profile_replay(
+            discovery,
+            index_artifact.index,
+            graphs_artifact.graphs,
+            suite,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "current protocol-profile assessment differs from exact source replay"
+        ) from exc
+
+
+def _load_model_review_artifact_inventory(
+    root: Path,
+    report: AuditReport,
+) -> _ModelReviewArtifactInventory | None:
+    """Load the current raw review inventory without burdening sealed legacy runs."""
+
+    if report.schema_version != "1.4":
+        return None
+    payload = _read_json_artifact(root, MODEL_REVIEW_ARTIFACT_INVENTORY_PATH)
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    try:
+        inventory = _ModelReviewArtifactInventory.model_validate_json(encoded, strict=True)
+    except ValueError as exc:
+        raise ValueError("private model-review artifact inventory is invalid") from exc
+    if payload != inventory.model_dump(mode="json"):
+        raise ValueError("private model-review artifact inventory is not canonical")
+    return inventory
+
+
+def _load_promoted_model_review_artifact_inventory(
+    root: Path,
+    report: AuditReport,
+) -> _PromotedModelReviewArtifactInventory | None:
+    """Load current aggregate promotion evidence while leaving legacy replay unchanged."""
+
+    if report.schema_version != "1.4":
+        return None
+    path = root / PROMOTED_MODEL_REVIEW_ARTIFACT_INVENTORY_PATH
+    if not (path.exists() or path.is_symlink() or path.is_junction()):
+        return None
+    payload = _read_json_artifact(root, PROMOTED_MODEL_REVIEW_ARTIFACT_INVENTORY_PATH)
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    try:
+        inventory = _PromotedModelReviewArtifactInventory.model_validate_json(
+            encoded,
+        )
+    except ValueError as exc:
+        raise ValueError("private promoted model-review artifact inventory is invalid") from exc
+    if payload != inventory.model_dump(mode="json"):
+        raise ValueError("private promoted model-review artifact inventory is not canonical")
+    return inventory
+
+
+def _load_model_review_semantic_authority(
+    root: Path,
+) -> tuple[SoliditySymbolIndex | None, SolidityGraphSet | None]:
+    """Load manifest-bound deterministic Solidity evidence for raw-review replay."""
+
+    index_path = root / "solidity-index.json"
+    graphs_path = root / "solidity-graphs.json"
+    index_present = index_path.exists() or index_path.is_symlink() or index_path.is_junction()
+    graphs_present = graphs_path.exists() or graphs_path.is_symlink() or graphs_path.is_junction()
+    if not index_present and not graphs_present:
+        return None, None
+    if not index_present or not graphs_present:
+        raise ValueError("model-review semantic replay lacks complete Solidity evidence")
+    index_artifact = SolidityIndexArtifact.model_validate(
+        _read_json_artifact(root, "solidity-index.json")
+    )
+    with _open_json_artifact_observation(
+        root,
+        "solidity-graphs.json",
+        payload_max_bytes=_solidity_graph_payload_byte_limit,
+    ) as graphs_payload:
+        graphs_artifact = SolidityGraphsArtifact.model_validate(graphs_payload)
+    return index_artifact.index, graphs_artifact.graphs
+
+
+def _retained_model_surface_review_authorities(
+    snapshot: _SchedulerReportAuthoritySnapshot,
+    *,
+    contexts_by_request_id: Mapping[str, ContextPackage] | None = None,
+) -> tuple[_RetainedModelSurfaceReviewAuthority, ...]:
+    """Project every raw model-surface artifact retained by the scheduler journal."""
+
+    authorities: list[_RetainedModelSurfaceReviewAuthority] = []
+    tasks_by_id = snapshot.tasks_by_task_id or {}
+    activations_by_task_id = snapshot.activations_by_task_id or {}
+    for task_id, output in snapshot.outputs_by_task_id.items():
+        artifact = output.model_surface_review_artifact
+        if artifact is None:
+            continue
+        completion = output.model_completion_evidence
+        if completion is None or not output.model_surface_review_requests:
+            raise ValueError("scheduler model-review artifact lacks exact completion custody")
+        try:
+            normalized_batch = CandidateReviewBatch.model_validate(output.payload)
+        except ValueError as exc:
+            raise ValueError("scheduler model-review artifact lacks a typed review batch") from exc
+        try:
+            artifact.require_exact_requested_surface_manifest(output.model_surface_review_requests)
+        except ValueError as exc:
+            raise ValueError(
+                "scheduler model-review artifact differs from its requested surface manifest"
+            ) from exc
+        _require_model_surface_artifact_exact_completion(
+            artifact=artifact,
+            usage=completion.usage_record,
+            normalized_batch=normalized_batch,
+        )
+        task = tasks_by_id.get(task_id)
+        activation = activations_by_task_id.get(task_id)
+        authorities.append(
+            _RetainedModelSurfaceReviewAuthority(
+                artifact=artifact,
+                requests=output.model_surface_review_requests,
+                usage=completion.usage_record,
+                context=(
+                    contexts_by_request_id.get(completion.usage_record.request_id)
+                    if contexts_by_request_id is not None
+                    else None
+                ),
+                pre_dispatch_request_id=(task.logical_request_id if task is not None else None),
+                pre_dispatch_review_role=task.role if task is not None else None,
+                pre_dispatch_requested_surface_manifest_sha256=(
+                    task.model_surface_review_request_manifest_sha256 if task is not None else None
+                ),
+                pre_dispatch_rendered_context_sha256=(
+                    activation.user_prompt_sha256 if activation is not None else None
+                ),
+                pre_dispatch_provider_prompt_sha256=(
+                    activation.provider_prompt_sha256 if activation is not None else None
+                ),
+                pre_dispatch_response_schema_sha256=(
+                    activation.response_schema_sha256 if activation is not None else None
+                ),
+                pre_dispatch_root_surface_authorized=(
+                    task is not None
+                    and task.model_surface_review_request_manifest_sha256 is not None
+                ),
+            )
+        )
+
+    recovery_entries = snapshot.journal.truncation_recovery_entries
+    families = tuple(
+        entry
+        for entry in recovery_entries
+        if isinstance(entry, SchedulerTruncationRecoveryFamilyRoot)
+    )
+    families_by_id = {family.family_id: family for family in families}
+    if len(families_by_id) != len(families):
+        raise ValueError("scheduler recovery family inventory repeats an identity")
+    child_plan_authority: dict[str, tuple[SchedulerTruncationRecoveryFamilyRoot, Any]] = {}
+    for family in families:
+        for child in family.recovery_plan.children:
+            if child.child_task_id in child_plan_authority:
+                raise ValueError("scheduler recovery child plan repeats a task identity")
+            child_plan_authority[child.child_task_id] = (family, child)
+
+    def root_family(
+        family: SchedulerTruncationRecoveryFamilyRoot,
+    ) -> SchedulerTruncationRecoveryFamilyRoot:
+        observed: set[str] = set()
+        current = family
+        while current.parent_family_id is not None:
+            if current.family_id in observed:
+                raise ValueError("scheduler recovery family ancestry contains a cycle")
+            observed.add(current.family_id)
+            parent = families_by_id.get(current.parent_family_id)
+            if parent is None:
+                raise ValueError("scheduler recovery family lacks its retained parent")
+            current = parent
+        return current
+
+    promoted_child_result_sha256s: set[str] = set()
+    for entry in recovery_entries:
+        if not isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion):
+            continue
+        leaf_sha256s = (
+            entry.promoted_leaf_result_sha256s
+            if entry.promoted_leaf_result_sha256s is not None
+            else entry.direct_child_result_sha256s
+        )
+        if promoted_child_result_sha256s.intersection(leaf_sha256s):
+            raise ValueError("scheduler recovery promotions repeat a child result identity")
+        promoted_child_result_sha256s.update(leaf_sha256s)
+
+    observed_promoted_child_sha256s: set[str] = set()
+    for entry in recovery_entries:
+        if (
+            not isinstance(entry, SchedulerTruncationRecoveryChildResult)
+            or entry.runtime_output_artifact is None
+            or entry.entry_sha256 not in promoted_child_result_sha256s
+        ):
+            continue
+        requests = entry.runtime_requested_surface_requests
+        usage = entry.runtime_usage_record
+        reservation = entry.runtime_request_limit_reservation
+        if requests is None or usage is None or reservation is None:
+            raise ValueError(
+                "scheduler recovery model-review artifact lacks exact completion custody"
+            )
+        try:
+            entry.runtime_output_artifact.require_exact_requested_surface_manifest(requests)
+        except ValueError as exc:
+            raise ValueError(
+                "scheduler recovery model-review artifact differs from its requested "
+                "surface manifest"
+            ) from exc
+        if entry.runtime_normalized_batch is None:
+            raise ValueError(
+                "scheduler recovery model-review artifact lacks its normalized review batch"
+            )
+        _require_model_surface_artifact_exact_completion(
+            artifact=entry.runtime_output_artifact,
+            usage=usage,
+            normalized_batch=entry.runtime_normalized_batch,
+        )
+        planned = child_plan_authority.get(entry.child_task_id)
+        planned_manifest_sha256: str | None = None
+        root_authorized = False
+        if planned is not None:
+            family, child = planned
+            requests_by_id = {
+                request.surface_id: request
+                for request in family.requested_surface_manifest.requests
+            }
+            try:
+                planned_requests = tuple(
+                    requests_by_id[surface_id] for surface_id in child.surface_ids
+                )
+            except KeyError:
+                planned_requests = ()
+            if planned_requests:
+                planned_manifest_sha256 = (
+                    ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                        planned_requests
+                    )
+                )
+            root = root_family(family)
+            root_task = tasks_by_id.get(root.recovery_plan.parent.parent_task_id)
+            root_authorized = bool(
+                root_task is not None
+                and root_task.model_surface_review_request_manifest_sha256
+                == root.requested_surface_manifest.requested_surface_manifest_sha256
+            )
+        recovery_activation = entry.runtime_activation
+        authorities.append(
+            _RetainedModelSurfaceReviewAuthority(
+                artifact=entry.runtime_output_artifact,
+                requests=requests,
+                usage=usage,
+                context=(
+                    contexts_by_request_id.get(usage.request_id)
+                    if contexts_by_request_id is not None
+                    else None
+                ),
+                recovery_request_limit_scope=reservation.request_limit_scope,
+                recovery_request_limit_count_before=reservation.request_limit_count_before,
+                pre_dispatch_request_id=(
+                    recovery_activation.child_logical_request_id
+                    if recovery_activation is not None
+                    else None
+                ),
+                pre_dispatch_review_role=(
+                    recovery_activation.request_role if recovery_activation is not None else None
+                ),
+                pre_dispatch_requested_surface_manifest_sha256=planned_manifest_sha256,
+                pre_dispatch_rendered_context_sha256=(
+                    recovery_activation.user_prompt_sha256
+                    if recovery_activation is not None
+                    else None
+                ),
+                pre_dispatch_provider_prompt_sha256=(
+                    recovery_activation.provider_prompt_sha256
+                    if recovery_activation is not None
+                    else None
+                ),
+                pre_dispatch_response_schema_sha256=(
+                    recovery_activation.response_schema_sha256
+                    if recovery_activation is not None
+                    else None
+                ),
+                pre_dispatch_root_surface_authorized=root_authorized,
+            )
+        )
+        observed_promoted_child_sha256s.add(entry.entry_sha256)
+
+    if observed_promoted_child_sha256s != promoted_child_result_sha256s:
+        raise ValueError(
+            "scheduler recovery promotion lacks exact retained model-review child artifacts"
+        )
+
+    ordered = tuple(
+        sorted(
+            authorities,
+            key=lambda item: (item.artifact.request_id, item.artifact.artifact_sha256),
+        )
+    )
+    request_ids = tuple(item.artifact.request_id for item in ordered)
+    artifact_sha256s = tuple(item.artifact.artifact_sha256 for item in ordered)
+    if len(request_ids) != len(set(request_ids)) or len(artifact_sha256s) != len(
+        set(artifact_sha256s)
+    ):
+        raise ValueError("scheduler model-review artifact authority repeats an identity")
+    return ordered
+
+
+def _usage_has_configured_approved_model_custody(
+    config: AuditConfig,
+    usage: UsageRecord,
+) -> bool:
+    """Replay the shared configured-role and provider-visible lineage predicate."""
+
+    return not model_surface_review_identity_lineage_custody_failures(
+        config,
+        usage=usage,
+        review_role=usage.role,
+    )
+
+
+def _ordinary_model_review_usage_is_creditable(
+    authority: _RetainedModelSurfaceReviewAuthority,
+    *,
+    detached: bool,
+    require_certification: bool,
+) -> bool:
+    """Use runtime authority only live and strict structural replay when detached."""
+
+    scope = authority.recovery_request_limit_scope
+    count_before = authority.recovery_request_limit_count_before
+    if (scope is None) != (count_before is None):
+        return False
+    if scope is not None and count_before is not None:
+        # Recovery results are schema-normalized before durable retention, so even
+        # an owner-held live journal intentionally retains structural, nonauthorizing
+        # usage evidence rather than a process-local provider capability.
+        return is_structurally_recovery_creditable_usage_record(
+            authority.usage,
+            request_limit_scope=scope,
+            request_limit_count_before=count_before,
+            require_real=True,
+            require_certification=require_certification,
+        )
+    if detached:
+        return is_structurally_creditable_usage_record(
+            authority.usage,
+            require_real=True,
+            require_certification=require_certification,
+        )
+    return is_creditable_usage_record(
+        authority.usage,
+        require_real=True,
+        require_certification=require_certification,
+    )
+
+
+def _promoted_parent_usage_is_accountable(
+    usage: UsageRecord,
+    *,
+    require_certification: bool,
+) -> bool:
+    """Structurally replay a durably retained truncated REAL parent."""
+
+    return bool(
+        is_structurally_accountable_usage_record(usage, require_real=True)
+        and has_exact_nonfallback_model_identity(usage)
+        and (not require_certification or usage.routing.get("certification_request") is True)
+    )
+
+
+def _promoted_bridge_usage_is_accountable(
+    usage: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    require_certification: bool,
+) -> bool:
+    """Structurally replay a durably retained bridge at its recovery coordinate."""
+
+    return bool(
+        is_structurally_recovery_accountable_usage_record(
+            usage,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=request_limit_count_before,
+            require_real=True,
+        )
+        and has_exact_nonfallback_model_identity(usage)
+        and (not require_certification or usage.routing.get("certification_request") is True)
+    )
+
+
+def _require_model_surface_artifact_exact_completion(
+    *,
+    artifact: ModelSurfaceReviewArtifact,
+    usage: UsageRecord,
+    normalized_batch: CandidateReviewBatch,
+) -> None:
+    """Replay raw artifact hashes and records against one retained completion."""
+
+    if (
+        artifact.request_id != usage.request_id
+        or artifact.review_role != usage.role
+        or artifact.rendered_context_sha256 != usage.user_prompt_sha256
+        or artifact.prompt_sha256 != usage.prompt_sha256
+        or artifact.response_sha256 != usage.response_sha256
+        or artifact.validated_response_sha256 != usage.validated_response_sha256
+        or artifact.response_schema_sha256 != usage.schema_sha256
+        or artifact.records != normalized_batch.surface_reviews
+        or (
+            artifact.normalized_response is not None
+            and artifact.normalized_response != normalized_batch
+        )
+    ):
+        raise ValueError(
+            "scheduler model-review artifact differs from its exact retained completion"
+        )
+
+
+def _retained_promoted_model_review_authorities(
+    *,
+    snapshot: _SchedulerReportAuthoritySnapshot,
+    inventory: _PromotedModelReviewArtifactInventory | None,
+    config: AuditConfig | None,
+    detached: bool,
+    contexts_by_request_id: Mapping[str, ContextPackage] | None = None,
+) -> tuple[_RetainedPromotedModelReviewAuthority, ...]:
+    """Join every aggregate artifact to its exact durable promotion and raw leaves."""
+
+    entries = snapshot.journal.truncation_recovery_entries
+    promotions = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
+    )
+    if not promotions:
+        if inventory is not None:
+            raise ValueError(
+                "private promoted model-review inventory exists without scheduler promotion"
+            )
+        return ()
+    if inventory is None:
+        raise ValueError("scheduler promotion lacks private aggregate model-review custody")
+    if config is None:
+        raise ValueError("scheduler promotion lacks effective configuration custody")
+
+    promotion_by_sha256 = {entry.entry_sha256: entry for entry in promotions}
+    if len(promotion_by_sha256) != len(promotions):
+        raise ValueError("scheduler recovery promotions repeat an entry identity")
+    inventory_by_sha256 = {item.promotion_entry_sha256: item for item in inventory.promotions}
+    if set(inventory_by_sha256) != set(promotion_by_sha256):
+        raise ValueError(
+            "private promoted model-review inventory differs from scheduler promotions"
+        )
+
+    families = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyRoot)
+    )
+    family_by_id = {entry.family_id: entry for entry in families}
+    closures = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+    )
+    closure_by_sha256 = {entry.entry_sha256: entry for entry in closures}
+    child_results = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryChildResult)
+    )
+    child_result_by_sha256 = {entry.entry_sha256: entry for entry in child_results}
+    provider_attempts = snapshot.journal.provider_attempts
+    provider_attempt_by_task_id = {entry.task_id: entry for entry in provider_attempts}
+    if (
+        len(family_by_id) != len(families)
+        or len(closure_by_sha256) != len(closures)
+        or len(child_result_by_sha256) != len(child_results)
+        or len(provider_attempt_by_task_id) != len(provider_attempts)
+    ):
+        raise ValueError("scheduler promotion custody repeats a durable identity")
+
+    ordinary_authorities = _retained_model_surface_review_authorities(
+        snapshot,
+        contexts_by_request_id=contexts_by_request_id,
+    )
+    ordinary_by_artifact_sha256 = {
+        authority.artifact.artifact_sha256: authority for authority in ordinary_authorities
+    }
+    require_certification = config.profile is AuditProfile.MAXIMUM_ASSURANCE
+    retained: list[_RetainedPromotedModelReviewAuthority] = []
+    for promotion_sha256 in sorted(promotion_by_sha256):
+        promotion = promotion_by_sha256[promotion_sha256]
+        private_promotion = inventory_by_sha256[promotion_sha256]
+        artifact = private_promotion.artifact
+        recursive = promotion.promoted_leaf_result_sha256s is not None
+        if recursive != isinstance(private_promotion, _RecursivePromotedModelReviewArtifact):
+            raise ValueError("promoted model-review tree kind differs from scheduler custody")
+
+        family = family_by_id.get(promotion.family_id)
+        closure = closure_by_sha256.get(promotion.family_closure_sha256)
+        parent_attempt = provider_attempt_by_task_id.get(promotion.parent_task_id)
+        output = promotion.recovered_output
+        if (
+            family is None
+            or closure is None
+            or parent_attempt is None
+            or private_promotion.recovered_output_artifact_sha256 != output.output_artifact_sha256
+            or promotion.family_root_sha256 != family.entry_sha256
+            or promotion.recovery_plan_sha256 != family.recovery_plan.plan_sha256
+            or promotion.family_closure_id != closure.closure_id
+            or closure.family_id != family.family_id
+            or closure.family_root_sha256 != family.entry_sha256
+            or closure.recovery_plan_sha256 != family.recovery_plan.plan_sha256
+            or promotion.original_truncated_result_sha256 != family.parent_terminal_result_sha256
+            or artifact.campaign_id != promotion.campaign_id
+            or artifact.campaign_id != output.campaign_id
+            or artifact.pass_plan_id != output.pass_plan_id
+            or artifact.parent_task_id != promotion.parent_task_id
+            or artifact.parent_task_id != parent_attempt.task_id
+            or artifact.parent_logical_request_id != parent_attempt.logical_request_id
+            or artifact.parent_logical_request_id != output.parent_logical_request_id
+            or artifact.recovery_plan != family.recovery_plan
+            or artifact.requests != family.requested_surface_manifest.requests
+            or artifact.requested_surface_manifest_sha256
+            != family.requested_surface_manifest.requested_surface_manifest_sha256
+            or artifact.artifact_sha256 != output.structural_surface_artifact_sha256
+            or artifact.records != output.recovered_batch.surface_reviews
+            or artifact.parent.parent_activation_sha256 != parent_attempt.activation_sha256
+            or artifact.parent.provider_attempt_evidence_sha256
+            != parent_attempt.attempt_evidence_sha256
+            or artifact.parent.usage_record != parent_attempt.usage_record
+            or artifact.parent.usage_record_sha256 != parent_attempt.usage_record_sha256
+            or artifact.parent.envelope != parent_attempt.truncated_envelope_evidence
+            or artifact.parent.projection != parent_attempt.truncation_projection
+            or artifact.parent.projection != family.truncation_projection
+        ):
+            raise ValueError(
+                "promoted model-review aggregate differs from parent promotion custody"
+            )
+        if not _promoted_parent_usage_is_accountable(
+            parent_attempt.usage_record,
+            require_certification=require_certification,
+        ) or not _usage_has_configured_approved_model_custody(
+            config,
+            artifact.parent.usage_record,
+        ):
+            raise ValueError("promoted model-review parent lacks exact REAL model custody")
+
+        leaf_result_sha256s: tuple[str, ...]
+        if recursive:
+            assert promotion.promoted_leaf_result_sha256s is not None
+            leaf_result_sha256s = promotion.promoted_leaf_result_sha256s
+        else:
+            leaf_result_sha256s = promotion.direct_child_result_sha256s
+        leaf_authorities: list[_RetainedModelSurfaceReviewAuthority] = []
+        for child, result_sha256 in zip(
+            artifact.children,
+            leaf_result_sha256s,
+            strict=True,
+        ):
+            result = child_result_by_sha256.get(result_sha256)
+            reservation = result.runtime_request_limit_reservation if result is not None else None
+            raw_artifact = result.runtime_output_artifact if result is not None else None
+            authority = (
+                ordinary_by_artifact_sha256.get(raw_artifact.artifact_sha256)
+                if raw_artifact is not None
+                else None
+            )
+            if (
+                result is None
+                or reservation is None
+                or raw_artifact is None
+                or authority is None
+                or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+                or result.child_plan_sha256 != child.child_plan.child_plan_sha256
+                or result.runtime_usage_record != child.usage_record
+                or result.runtime_usage_record_sha256 != child.usage_record_sha256
+                or result.runtime_normalization_evidence != child.normalization
+                or result.runtime_normalized_batch != child.normalized_batch
+                or result.runtime_requested_surface_requests != child.requests
+                or raw_artifact != child.surface_artifact
+                or result.runtime_output_artifact_sha256 != raw_artifact.artifact_sha256
+                or reservation.request_limit_scope != child.request_limit_scope
+                or reservation.request_limit_count_before != child.request_limit_count_before
+                or authority.artifact != raw_artifact
+                or authority.usage != child.usage_record
+                or authority.requests != child.requests
+                or authority.recovery_request_limit_scope != child.request_limit_scope
+                or authority.recovery_request_limit_count_before != child.request_limit_count_before
+            ):
+                raise ValueError(
+                    "promoted model-review aggregate differs from exact retained leaf custody"
+                )
+            if not _ordinary_model_review_usage_is_creditable(
+                authority,
+                detached=detached,
+                require_certification=require_certification,
+            ) or not _usage_has_configured_approved_model_custody(config, authority.usage):
+                raise ValueError("promoted model-review leaf lacks exact REAL model custody")
+            leaf_authorities.append(authority)
+
+        bridge_usage: UsageRecord | None = None
+        bridge_activation: SchedulerTruncationRecoveryChildActivation | None = None
+        if isinstance(artifact, TruncationRecoveredRecursiveSurfaceReviewArtifact):
+            nested_family = (
+                family_by_id.get(promotion.nested_family_id)
+                if promotion.nested_family_id is not None
+                else None
+            )
+            nested_closure = (
+                closure_by_sha256.get(promotion.nested_family_closure_sha256)
+                if promotion.nested_family_closure_sha256 is not None
+                else None
+            )
+            bridge_result = (
+                child_result_by_sha256.get(promotion.superseded_bridge_result_sha256)
+                if promotion.superseded_bridge_result_sha256 is not None
+                else None
+            )
+            bridge_reservation = (
+                bridge_result.runtime_request_limit_reservation
+                if bridge_result is not None
+                else None
+            )
+            if (
+                nested_family is None
+                or nested_closure is None
+                or bridge_result is None
+                or bridge_reservation is None
+                or bridge_result.runtime_activation is None
+                or promotion.nested_family_root_sha256 != nested_family.entry_sha256
+                or promotion.nested_recovery_plan_sha256 != nested_family.recovery_plan.plan_sha256
+                or promotion.nested_family_closure_id != nested_closure.closure_id
+                or nested_closure.entry_sha256 != promotion.nested_family_closure_sha256
+                or nested_closure.child_result_sha256s != promotion.nested_child_result_sha256s
+                or artifact.nested_recovery_plan != nested_family.recovery_plan
+                or bridge_result.terminal_status
+                is not SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+                or bridge_result.child_plan_sha256 != artifact.bridge.child_plan.child_plan_sha256
+                or bridge_result.runtime_usage_record != artifact.bridge.usage_record
+                or bridge_result.runtime_usage_record_sha256 != artifact.bridge.usage_record_sha256
+                or bridge_result.runtime_truncated_envelope_evidence != artifact.bridge.envelope
+                or bridge_result.truncation_projection != artifact.bridge.projection
+                or bridge_result.provider_attempt_evidence_sha256
+                != artifact.bridge.provider_attempt_evidence_sha256
+                or bridge_reservation.request_limit_scope != artifact.bridge.request_limit_scope
+                or bridge_reservation.request_limit_count_before
+                != artifact.bridge.request_limit_count_before
+            ):
+                raise ValueError(
+                    "recursive promoted model-review aggregate differs from bridge custody"
+                )
+            assert bridge_result.runtime_usage_record is not None
+            bridge_usage = bridge_result.runtime_usage_record
+            bridge_activation = bridge_result.runtime_activation
+            if not _promoted_bridge_usage_is_accountable(
+                bridge_usage,
+                request_limit_scope=artifact.bridge.request_limit_scope,
+                request_limit_count_before=artifact.bridge.request_limit_count_before,
+                require_certification=require_certification,
+            ) or not _usage_has_configured_approved_model_custody(config, bridge_usage):
+                raise ValueError("promoted model-review bridge lacks exact REAL model custody")
+
+        parent_task = (snapshot.tasks_by_task_id or {}).get(promotion.parent_task_id)
+        parent_activation = (snapshot.activations_by_task_id or {}).get(promotion.parent_task_id)
+        retained.append(
+            _RetainedPromotedModelReviewAuthority(
+                promotion=promotion,
+                artifact=artifact,
+                parent_usage=artifact.parent.usage_record,
+                requests=artifact.requests,
+                leaf_authorities=tuple(leaf_authorities),
+                parent_context=(
+                    contexts_by_request_id.get(artifact.parent.usage_record.request_id)
+                    if contexts_by_request_id is not None
+                    else None
+                ),
+                bridge_usage=bridge_usage,
+                bridge_context=(
+                    contexts_by_request_id.get(bridge_usage.request_id)
+                    if contexts_by_request_id is not None and bridge_usage is not None
+                    else None
+                ),
+                pre_dispatch_request_id=(
+                    parent_task.logical_request_id if parent_task is not None else None
+                ),
+                pre_dispatch_review_role=(parent_task.role if parent_task is not None else None),
+                pre_dispatch_requested_surface_manifest_sha256=(
+                    parent_task.model_surface_review_request_manifest_sha256
+                    if parent_task is not None
+                    else None
+                ),
+                pre_dispatch_rendered_context_sha256=(
+                    parent_activation.user_prompt_sha256 if parent_activation is not None else None
+                ),
+                pre_dispatch_provider_prompt_sha256=(
+                    parent_activation.provider_prompt_sha256
+                    if parent_activation is not None
+                    else None
+                ),
+                pre_dispatch_response_schema_sha256=(
+                    parent_activation.response_schema_sha256
+                    if parent_activation is not None
+                    else None
+                ),
+                bridge_pre_dispatch_rendered_context_sha256=(
+                    bridge_activation.user_prompt_sha256 if bridge_activation is not None else None
+                ),
+                bridge_pre_dispatch_provider_prompt_sha256=(
+                    bridge_activation.provider_prompt_sha256
+                    if bridge_activation is not None
+                    else None
+                ),
+                bridge_pre_dispatch_response_schema_sha256=(
+                    bridge_activation.response_schema_sha256
+                    if bridge_activation is not None
+                    else None
+                ),
+            )
+        )
+    return tuple(retained)
+
+
+def _configured_model_review_role_models(config: AuditConfig, role: str) -> frozenset[str]:
+    """Return the exact configured model set for a credit-eligible review role."""
+
+    if role in {"source_audit", "business_logic", "configuration"}:
+        role_config = config.models.role(role)
+        return frozenset((role_config.primary, *role_config.fallbacks))
+    if role.startswith("specialist:"):
+        specialist = config.models.specialists.get(role.removeprefix("specialist:"))
+        if specialist is not None:
+            return frozenset((specialist.primary, *specialist.fallbacks))
+    return frozenset()
+
+
+def _retained_ordinary_model_review_context_failures(
+    authority: _RetainedModelSurfaceReviewAuthority,
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+) -> tuple[str, ...]:
+    """Replay one ordinary raw artifact against its exact retained context package."""
+
+    failures: list[str] = []
+    if not authority.pre_dispatch_root_surface_authorized:
+        failures.append("ordinary model review lacked sealed pre-dispatch surface authority")
+    if (
+        authority.pre_dispatch_request_id != authority.artifact.request_id
+        or authority.pre_dispatch_review_role != authority.artifact.review_role
+    ):
+        failures.append(
+            "ordinary model review identity differed from pre-dispatch scheduler authority"
+        )
+    if (
+        authority.pre_dispatch_requested_surface_manifest_sha256
+        != authority.artifact.requested_surface_manifest_sha256
+    ):
+        failures.append(
+            "ordinary model review surfaces differed from pre-dispatch scheduler authority"
+        )
+    if authority.pre_dispatch_rendered_context_sha256 != authority.artifact.rendered_context_sha256:
+        failures.append(
+            "ordinary model review context differed from pre-dispatch scheduler activation"
+        )
+    if (
+        authority.pre_dispatch_provider_prompt_sha256 != authority.artifact.prompt_sha256
+        or authority.pre_dispatch_response_schema_sha256
+        != authority.artifact.response_schema_sha256
+    ):
+        failures.append(
+            "ordinary model review request differed from pre-dispatch scheduler activation"
+        )
+    if authority.context is None:
+        failures.append("ordinary model review lacked its exact retained context")
+    else:
+        failures.extend(
+            model_surface_retained_context_custody_failures(
+                context=authority.context,
+                usage=authority.usage,
+                requests=authority.requests,
+                request_id=authority.artifact.request_id,
+                review_role=authority.artifact.review_role,
+                context_role=authority.context.role,
+                rendered_context_sha256=authority.artifact.rendered_context_sha256,
+                requested_surface_manifest_sha256=(
+                    authority.artifact.requested_surface_manifest_sha256
+                ),
+                index=index,
+                graphs=graphs,
+            )
+        )
+    return tuple(dict.fromkeys(failures))
+
+
+def _retained_promoted_model_review_context_failures(
+    authority: _RetainedPromotedModelReviewAuthority,
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+) -> tuple[str, ...]:
+    """Replay exact parent, bridge, and leaf contexts supporting promoted credit."""
+
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        build_truncation_recovery_child_context,
+        model_surface_analysis_context_sha256,
+    )
+
+    failures: list[str] = []
+    expected_analysis_sha256 = authority.artifact.invariant_binding.analysis_context_sha256
+    if (
+        authority.pre_dispatch_request_id != authority.artifact.parent_logical_request_id
+        or authority.pre_dispatch_review_role != authority.artifact.invariant_binding.review_role
+    ):
+        failures.append(
+            "promoted model review identity differed from pre-dispatch scheduler authority"
+        )
+    if (
+        authority.pre_dispatch_requested_surface_manifest_sha256
+        != authority.artifact.requested_surface_manifest_sha256
+    ):
+        failures.append(
+            "promoted model review surfaces differed from pre-dispatch scheduler authority"
+        )
+    if authority.pre_dispatch_rendered_context_sha256 != authority.parent_usage.user_prompt_sha256:
+        failures.append(
+            "promoted model review context differed from pre-dispatch scheduler activation"
+        )
+    if (
+        authority.pre_dispatch_provider_prompt_sha256 != authority.parent_usage.prompt_sha256
+        or authority.pre_dispatch_response_schema_sha256 != authority.parent_usage.schema_sha256
+    ):
+        failures.append(
+            "promoted model review request differed from pre-dispatch scheduler activation"
+        )
+
+    def retain_analysis_context(context: ContextPackage | None, label: str) -> None:
+        if context is None:
+            failures.append(f"promoted model review lacked its exact retained {label} context")
+            return
+        try:
+            analysis_sha256 = model_surface_analysis_context_sha256(context)
+        except ValueError:
+            failures.append(f"promoted model review {label} context failed analysis replay")
+        else:
+            if analysis_sha256 != expected_analysis_sha256:
+                failures.append(
+                    f"promoted model review {label} context differed from its analysis invariant"
+                )
+
+    parent_context = authority.parent_context
+    retain_analysis_context(parent_context, "parent")
+    if parent_context is not None:
+        failures.extend(
+            model_surface_retained_context_custody_failures(
+                context=parent_context,
+                usage=authority.parent_usage,
+                requests=authority.requests,
+                request_id=authority.artifact.parent_logical_request_id,
+                review_role=authority.artifact.invariant_binding.review_role,
+                context_role=authority.artifact.invariant_binding.context_role,
+                rendered_context_sha256=authority.parent_usage.user_prompt_sha256 or "",
+                requested_surface_manifest_sha256=(
+                    authority.artifact.requested_surface_manifest_sha256
+                ),
+                index=index,
+                graphs=graphs,
+            )
+        )
+
+    for child, leaf in zip(
+        authority.artifact.children,
+        authority.leaf_authorities,
+        strict=True,
+    ):
+        retain_analysis_context(leaf.context, "leaf")
+        if parent_context is not None:
+            try:
+                expected_leaf_context = build_truncation_recovery_child_context(
+                    parent_context=parent_context,
+                    child=child.child_plan,
+                )
+            except ValueError:
+                failures.append("promoted model review leaf context failed child-plan replay")
+            else:
+                if leaf.context != expected_leaf_context:
+                    failures.append(
+                        "promoted model review leaf context differed from its child plan"
+                    )
+        failures.extend(
+            _retained_ordinary_model_review_context_failures(
+                leaf,
+                index=index,
+                graphs=graphs,
+            )
+        )
+
+    if authority.bridge_usage is not None:
+        bridge_context = authority.bridge_context
+        retain_analysis_context(bridge_context, "bridge")
+        if (
+            authority.bridge_pre_dispatch_rendered_context_sha256
+            != authority.bridge_usage.user_prompt_sha256
+            or authority.bridge_pre_dispatch_provider_prompt_sha256
+            != authority.bridge_usage.prompt_sha256
+            or authority.bridge_pre_dispatch_response_schema_sha256
+            != authority.bridge_usage.schema_sha256
+        ):
+            failures.append(
+                "promoted model review bridge request differed from pre-dispatch activation"
+            )
+        if bridge_context is not None:
+            if not isinstance(
+                authority.artifact,
+                TruncationRecoveredRecursiveSurfaceReviewArtifact,
+            ):
+                failures.append("direct promoted model review retained a bridge usage")
+            elif parent_context is not None:
+                try:
+                    expected_bridge_context = build_truncation_recovery_child_context(
+                        parent_context=parent_context,
+                        child=authority.artifact.bridge.child_plan,
+                    )
+                except ValueError:
+                    failures.append("promoted model review bridge context failed child-plan replay")
+                else:
+                    if bridge_context != expected_bridge_context:
+                        failures.append(
+                            "promoted model review bridge context differed from its child plan"
+                        )
+            bridge_requests = tuple(bridge_context.requested_model_surfaces)
+            failures.extend(
+                model_surface_retained_context_custody_failures(
+                    context=bridge_context,
+                    usage=authority.bridge_usage,
+                    requests=bridge_requests,
+                    request_id=authority.bridge_usage.request_id,
+                    review_role=authority.bridge_usage.role,
+                    context_role=bridge_context.role,
+                    rendered_context_sha256=authority.bridge_usage.user_prompt_sha256 or "",
+                    requested_surface_manifest_sha256=(
+                        ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                            bridge_requests
+                        )
+                    ),
+                    index=index,
+                    graphs=graphs,
+                )
+            )
+    elif authority.bridge_context is not None:
+        failures.append("direct promoted model review unexpectedly retained a bridge context")
+    return tuple(dict.fromkeys(failures))
+
+
+def _validate_model_review_artifact_inventory_against_scheduler(
+    *,
+    report: AuditReport,
+    inventory: _ModelReviewArtifactInventory | None,
+    snapshot: _SchedulerReportAuthoritySnapshot | None,
+    config: AuditConfig | None,
+    promoted_inventory: _PromotedModelReviewArtifactInventory | None = None,
+    detached: bool = False,
+    index: SoliditySymbolIndex | None = None,
+    graphs: SolidityGraphSet | None = None,
+    runtime_journal: SchedulerJournal | None = None,
+) -> None:
+    """Join raw inventory, scheduler completion custody, and credited report evidence."""
+
+    context_by_request_id = (
+        {authority.request_id: authority.context for authority in inventory.context_authorities}
+        if inventory is not None
+        else {}
+    )
+    authorities = (
+        _retained_model_surface_review_authorities(
+            snapshot,
+            contexts_by_request_id=context_by_request_id,
+        )
+        if snapshot is not None
+        else ()
+    )
+    promoted_authorities = (
+        _retained_promoted_model_review_authorities(
+            snapshot=snapshot,
+            inventory=promoted_inventory,
+            config=config,
+            detached=detached,
+            contexts_by_request_id=context_by_request_id,
+        )
+        if snapshot is not None
+        else ()
+    )
+    if snapshot is None and promoted_inventory is not None:
+        raise ValueError(
+            "a run without scheduler custody cannot retain promoted model-review evidence"
+        )
+    if inventory is None:
+        raise ValueError("current model-review replay lacks its private raw inventory")
+    expected_artifacts = tuple(authority.artifact for authority in authorities)
+    if inventory.artifacts != expected_artifacts:
+        raise ValueError(
+            "private model-review artifact inventory differs from exact scheduler custody"
+        )
+
+    coverage = report.model_review_coverage
+    credited_references = (
+        tuple(
+            reference
+            for surface in coverage.surfaces
+            for reference in surface.evidence_references
+            if reference.credited
+        )
+        if coverage is not None
+        else ()
+    )
+    if snapshot is None and credited_references:
+        raise ValueError("a run without scheduler custody cannot claim model-review credit")
+    if not credited_references:
+        return
+    if config is None:
+        raise ValueError("credited model-review evidence lacks effective configuration custody")
+
+    authority_by_record: dict[
+        tuple[str, str],
+        tuple[_RetainedModelSurfaceReviewAuthority, ModelSurfaceReviewRecord],
+    ] = {}
+    for authority in authorities:
+        for record in authority.artifact.records:
+            key = (authority.artifact.artifact_sha256, record.surface_id)
+            if key in authority_by_record:
+                raise ValueError("scheduler model-review record authority is ambiguous")
+            authority_by_record[key] = (authority, record)
+
+    promoted_authority_by_record: dict[
+        tuple[str, str],
+        tuple[_RetainedPromotedModelReviewAuthority, ModelSurfaceReviewRecord],
+    ] = {}
+    for promoted_authority in promoted_authorities:
+        records_by_surface = {
+            record.surface_id: record for record in promoted_authority.artifact.records
+        }
+        for origin in promoted_authority.artifact.origins:
+            if origin.origin_kind is not TruncationSurfaceOriginKind.PARENT_PROVISIONAL:
+                continue
+            promoted_record = records_by_surface.get(origin.surface_id)
+            if promoted_record is None:
+                raise ValueError("promoted model-review parent origin lacks its exact record")
+            key = (promoted_authority.artifact.artifact_sha256, promoted_record.surface_id)
+            if key in authority_by_record or key in promoted_authority_by_record:
+                raise ValueError("scheduler promoted model-review authority is ambiguous")
+            promoted_authority_by_record[key] = (promoted_authority, promoted_record)
+
+    configured_lineages = model_lineage_index(config)
+    require_certification = config.profile is AuditProfile.MAXIMUM_ASSURANCE
+    for reference in credited_references:
+        match = authority_by_record.get((reference.artifact_sha256, reference.surface_id))
+        promoted_match = promoted_authority_by_record.get(
+            (reference.artifact_sha256, reference.surface_id)
+        )
+        if match is None and promoted_match is None:
+            raise ValueError(
+                "credited model-review evidence lacks an exact retained artifact record"
+            )
+        if match is not None:
+            authority, raw_record = match
+            artifact_request_id = authority.artifact.request_id
+            artifact_review_role = authority.artifact.review_role
+            usage = authority.usage
+            context_custody_failures = _retained_ordinary_model_review_context_failures(
+                authority,
+                index=index,
+                graphs=graphs,
+            )
+            requests_by_surface = {request.surface_id: request for request in authority.requests}
+            raw_request = requests_by_surface.get(raw_record.surface_id)
+            semantic_custody_failures: tuple[str, ...]
+            if raw_request is None:
+                semantic_custody_failures = (
+                    "credited model-review record lacked its exact retained request",
+                )
+            elif authority.context is None:
+                semantic_custody_failures = (
+                    "credited model-review record lacked its exact retained context",
+                )
+            else:
+                semantic_custody_failures = (
+                    *model_surface_review_record_validation_failures(
+                        raw_request,
+                        raw_record,
+                        authority.artifact.review_role,
+                        index=index,
+                        graphs=graphs,
+                    ),
+                    *model_surface_review_excerpt_validation_failures(
+                        context=authority.context,
+                        request=raw_request,
+                        record=raw_record,
+                    ),
+                )
+            usage_is_creditable = _ordinary_model_review_usage_is_creditable(
+                authority,
+                detached=detached,
+                require_certification=require_certification,
+            )
+        else:
+            assert promoted_match is not None
+            promoted_authority, raw_record = promoted_match
+            artifact_request_id = promoted_authority.parent_usage.request_id
+            artifact_review_role = promoted_authority.artifact.invariant_binding.review_role
+            usage = promoted_authority.parent_usage
+            context_custody_failures = _retained_promoted_model_review_context_failures(
+                promoted_authority,
+                index=index,
+                graphs=graphs,
+            )
+            promoted_requests_by_surface = {
+                request.surface_id: request for request in promoted_authority.requests
+            }
+            promoted_request = promoted_requests_by_surface.get(raw_record.surface_id)
+            if promoted_request is None:
+                semantic_custody_failures = (
+                    "credited promoted model-review record lacked its exact retained request",
+                )
+            elif promoted_authority.parent_context is None:
+                semantic_custody_failures = (
+                    "credited promoted model-review record lacked its exact retained context",
+                )
+            else:
+                semantic_custody_failures = (
+                    *model_surface_review_record_validation_failures(
+                        promoted_request,
+                        raw_record,
+                        artifact_review_role,
+                        index=index,
+                        graphs=graphs,
+                    ),
+                    *model_surface_review_excerpt_validation_failures(
+                        context=promoted_authority.parent_context,
+                        request=promoted_request,
+                        record=raw_record,
+                    ),
+                )
+            # Exact REAL parent/leaf/bridge structure was already replayed above.  The
+            # aggregate parent remains noncreditable as an ordinary completion.
+            usage_is_creditable = True
+        lineage = configured_lineages.get(usage.requested_model.lower())
+        routed_lineage = usage.routing.get("qualified_root_lineage")
+        if (
+            not usage_is_creditable
+            or context_custody_failures
+            or semantic_custody_failures
+            or not _usage_has_configured_approved_model_custody(config, usage)
+            or lineage is None
+            or (routed_lineage is not None and routed_lineage != lineage.root_lineage)
+            or reference.request_id != artifact_request_id
+            or reference.request_id != usage.request_id
+            or reference.review_role != artifact_review_role
+            or reference.review_role != usage.role
+            or reference.review_role != raw_record.review_role
+            or reference.status is not raw_record.status
+            or reference.requested_model != usage.requested_model
+            or reference.model != usage.actual_model
+            or reference.root_lineage != lineage.root_lineage
+        ):
+            raise ValueError(
+                "credited model-review evidence contradicts exact scheduler artifact custody"
+            )
+
+    if detached or runtime_journal is None:
+        raise ValueError("credited model-review evidence lacks live pre-dispatch runtime authority")
+
+    from mmaudit.orchestration.scheduler import (
+        require_model_review_pre_dispatch_authorization,
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+        require_verified_promoted_truncation_recovery_surface_coverage,
+    )
+
+    live_capabilities = runtime_journal.model_review_pre_dispatch_authorizations
+    live_bindings = {
+        binding.request_id: binding
+        for binding in (
+            require_model_review_pre_dispatch_authorization(capability)
+            for capability in live_capabilities
+        )
+    }
+    if len(live_bindings) != len(live_capabilities):
+        raise ValueError("live model-review authorization repeats a request identity")
+    live_authorized_artifact_sha256s: set[str] = set()
+    for authority in authorities:
+        binding = live_bindings.get(authority.artifact.request_id)
+        if binding is not None and (
+            binding.review_role == authority.artifact.review_role
+            and binding.requested_model == authority.usage.requested_model
+            and binding.requested_surface_manifest_sha256
+            == authority.artifact.requested_surface_manifest_sha256
+            and binding.rendered_context_sha256 == authority.artifact.rendered_context_sha256
+            and binding.provider_prompt_sha256 == authority.artifact.prompt_sha256
+            and binding.response_schema_sha256 == authority.artifact.response_schema_sha256
+        ):
+            live_authorized_artifact_sha256s.add(authority.artifact.artifact_sha256)
+    for direct_capability in runtime_journal.promoted_truncation_recovery_surface_coverages:
+        direct_projection = require_verified_promoted_truncation_recovery_surface_coverage(
+            direct_capability
+        )
+        live_authorized_artifact_sha256s.add(direct_projection.artifact.artifact_sha256)
+        live_authorized_artifact_sha256s.update(
+            child.surface_artifact.artifact_sha256 for child in direct_projection.artifact.children
+        )
+    for (
+        recursive_capability
+    ) in runtime_journal.promoted_recursive_truncation_recovery_surface_coverages:
+        recursive_projection = (
+            require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+                recursive_capability
+            )
+        )
+        live_authorized_artifact_sha256s.add(recursive_projection.artifact.artifact_sha256)
+        live_authorized_artifact_sha256s.update(
+            child.surface_artifact.artifact_sha256
+            for child in recursive_projection.artifact.children
+        )
+    if any(
+        reference.artifact_sha256 not in live_authorized_artifact_sha256s
+        for reference in credited_references
+    ):
+        raise ValueError("credited model-review evidence lacks live pre-dispatch runtime authority")
 
 
 def _validate_report_artifact_consistency(
@@ -2263,7 +4062,20 @@ def _validate_report_artifact_consistency(
     )
     if solidity_coverage.coverage != report.solidity_coverage:
         raise ValueError("persisted Solidity coverage differs from the final report")
-    if report.schema_version == "1.2":
+    model_review_path = root / "model-review-coverage.json"
+    model_review_present = (
+        model_review_path.exists()
+        or model_review_path.is_symlink()
+        or model_review_path.is_junction()
+    )
+    if model_review_present:
+        _validate_model_review_coverage_artifact(
+            report,
+            _read_json_artifact(root, "model-review-coverage.json"),
+        )
+    elif report.schema_version == "1.4" or report.model_review_coverage is not None:
+        raise ValueError("final report lacks its model-review coverage artifact")
+    if report.schema_version in {"1.2", "1.3", "1.4"}:
         solidity_metadata = report.metadata.get("solidity")
         if not isinstance(solidity_metadata, dict):
             raise ValueError("current report lacks typed Solidity runtime metadata")
@@ -2327,7 +4139,7 @@ def _validate_report_artifact_consistency(
     raw_reproduction_artifact = _read_json_artifact(root, "reproduction-results.json")
     reproduction_artifact = (
         _ManifestReproductionArtifact.model_validate(raw_reproduction_artifact)
-        if report.schema_version == "1.2"
+        if report.schema_version in {"1.2", "1.3", "1.4"}
         else None
     )
     if report_bundle_required:
@@ -2347,7 +4159,7 @@ def _validate_report_artifact_consistency(
     disposition_artifact_present = (
         disposition_path.exists() or disposition_path.is_symlink() or disposition_path.is_junction()
     )
-    if disposition_artifact_present != (report.schema_version == "1.2"):
+    if disposition_artifact_present != (report.schema_version in {"1.2", "1.3", "1.4"}):
         raise ValueError(
             "execution-origin disposition artifact presence differs from report schema"
         )
@@ -2402,7 +4214,7 @@ def _validate_report_artifact_consistency(
         for name in execution_runtime_names
     }
     if (
-        (report.schema_version == "1.2" or execution_candidate_ids)
+        (report.schema_version in {"1.2", "1.3", "1.4"} or execution_candidate_ids)
         and any(execution_runtime_presence.values())
         and not all(execution_runtime_presence.values())
     ):
@@ -2541,6 +4353,12 @@ def _validate_report_artifact_consistency(
     if report_bundle_required and len(scanner_findings_by_fingerprint) != len(scanner_findings):
         raise ValueError("current scanner finding fingerprints must be unique")
     scanner_fingerprints = set(scanner_findings_by_fingerprint)
+    actor_baselines_by_finding_id = {
+        item.finding.id: item.finding
+        for item in (
+            report.actor_model_baseline.findings if report.actor_model_baseline is not None else ()
+        )
+    }
     reported_execution_ids: set[str] = set()
     for finding in [
         *report.findings,
@@ -2572,6 +4390,7 @@ def _validate_report_artifact_consistency(
                 _validate_static_scanner_finding_projection(
                     finding,
                     scanner_findings_by_fingerprint[finding.contributing_candidate_ids[0]],
+                    pre_calibration_finding=actor_baselines_by_finding_id.get(finding.id),
                 )
             continue
         unknown_contributors = contributing - set(candidates_by_id)
@@ -2641,7 +4460,7 @@ def _validate_repository_differential_configuration(
     report_capability_allows_evm = (
         report.language_capability.evm_portfolio_applicable
         if report.language_capability is not None
-        else report.schema_version != "1.2"
+        else report.schema_version not in {"1.2", "1.3", "1.4"}
     )
     configured = bool(
         config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
@@ -3100,7 +4919,7 @@ def validate_solidity_shard_artifacts(
         isinstance(solidity_metadata, dict)
         and {"index_summary", "graph_summary", "shard_summary"} <= set(solidity_metadata)
     )
-    current_shards_required = report.schema_version == "1.2" and report.completed
+    current_shards_required = report.schema_version in {"1.2", "1.3", "1.4"} and report.completed
     report_has_solidity = False
     for source in report.repository.files:
         suffix_is_solidity = PurePosixPath(source.path).suffix.lower() == ".sol"
@@ -3113,6 +4932,7 @@ def validate_solidity_shard_artifacts(
             raise ValueError("Solidity shard report binding lacks persisted artifacts")
         if report_has_solidity and current_shards_required:
             raise ValueError("completed Solidity report lacks persisted shard evidence")
+        _validate_actor_graph_governance(report, None)
         return
     if not relevant <= artifact_names:
         raise ValueError("persisted Solidity shard evidence is incomplete")
@@ -3199,6 +5019,7 @@ def validate_solidity_shard_artifacts(
         index=index_artifact.index,
         graphs=graphs_artifact.graphs,
     )
+    _validate_actor_graph_governance(report, graphs_artifact.graphs)
     inventory = shards_artifact.inventory
     if inventory is None:
         if shard_summary is not None:
@@ -3230,6 +5051,21 @@ def validate_solidity_shard_artifacts(
         expected_policy=SolidityShardPolicy.build(),
         report_binding=report_binding,
     )
+
+
+def _validate_actor_graph_governance(
+    report: AuditReport,
+    graphs: SolidityGraphSet | None,
+) -> None:
+    evaluation = report.actor_model_evaluation
+    if evaluation is None:
+        return
+    from mmaudit.orchestration.actor_model import reconcile_actor_model_with_graphs
+
+    expected = reconcile_actor_model_with_graphs(evaluation.input_evidence, graphs)
+    observed = tuple(item for item in evaluation.governance_findings if not item.source_finding_ids)
+    if observed != expected:
+        raise ValueError("actor graph governance differs from retained graph evidence")
 
 
 def _solidity_graph_retained_occurrence_counts(
@@ -3273,7 +5109,7 @@ def _validate_solidity_graph_report_coverage(
 
     coverage = report.solidity_coverage
     if coverage is None:
-        if report.schema_version == "1.2" and graphs is not None:
+        if report.schema_version in {"1.2", "1.3", "1.4"} and graphs is not None:
             raise ValueError("current Solidity graph artifact lacks report coverage evidence")
         return
 
@@ -3417,16 +5253,19 @@ def validate_scheduler_artifact(
     from mmaudit.orchestration.scheduler_runtime import (
         build_scheduler_shard_inventory,
         scheduler_prompt_template_set_sha256,
-        scheduler_response_schema_hashes,
-        scheduler_response_schema_set_sha256,
         scheduler_tool_policy_sha256,
     )
 
     root = run_dir.resolve(strict=True)
+    model_review_inventory = _load_model_review_artifact_inventory(root, report)
+    promoted_model_review_inventory = _load_promoted_model_review_artifact_inventory(
+        root,
+        report,
+    )
     path = root / "scheduler-state.json"
     artifact_present = path.exists() or path.is_symlink() or path.is_junction()
     binding_payload = report.metadata.get("scheduler")
-    current_scheduler_required = report.schema_version == "1.2" and (
+    current_scheduler_required = report.schema_version in {"1.2", "1.3", "1.4"} and (
         report.completed or bool(report.usage)
     )
     if not artifact_present:
@@ -3436,6 +5275,15 @@ def validate_scheduler_artifact(
             raise ValueError("scheduler report binding lacks its persisted artifact")
         if current_scheduler_required:
             raise ValueError("current provider or completed report lacks scheduler evidence")
+        if report.schema_version == "1.4" or promoted_model_review_inventory is not None:
+            _validate_model_review_artifact_inventory_against_scheduler(
+                report=report,
+                inventory=model_review_inventory,
+                snapshot=None,
+                config=config,
+                promoted_inventory=promoted_model_review_inventory,
+                detached=True,
+            )
         return None
     if binding_payload is None:
         raise ValueError("scheduler artifact lacks its final-report binding")
@@ -3444,7 +5292,7 @@ def validate_scheduler_artifact(
     binding = SchedulerReportBinding.model_validate(binding_payload)
     binding.require_exact(artifact)
     if (
-        report.schema_version == "1.2"
+        report.schema_version in {"1.2", "1.3", "1.4"}
         and report.completed
         and artifact.summary.status is not SchedulerCampaignStatus.COMPLETE
     ):
@@ -3513,7 +5361,11 @@ def validate_scheduler_artifact(
         expected_tool_policy_sha256 = scheduler_tool_policy_sha256(config)
         if scheduler_bindings.prompt_set_sha256 != expected_prompt_set_sha256:
             raise ValueError("scheduler prompt-set binding differs from trusted templates")
-        if scheduler_bindings.schema_set_sha256 != scheduler_response_schema_set_sha256():
+        if scheduler_bindings.schema_set_sha256 != (
+            scheduler_response_schema_set_sha256_for_algorithm(
+                algorithm_version=scheduler_bindings.algorithm_version,
+            )
+        ):
             raise ValueError("scheduler schema-set binding differs from trusted response schemas")
         if scheduler_bindings.tool_policy_sha256 != expected_tool_policy_sha256:
             raise ValueError("scheduler tool-policy binding differs from run evidence")
@@ -3528,6 +5380,8 @@ def validate_scheduler_artifact(
         runtime_journal=scheduler_runtime_journal,
         reference_binding=scheduler_reference_binding,
         require_retained_usage_custody=require_retained_usage_custody,
+        model_review_inventory=model_review_inventory,
+        promoted_model_review_inventory=promoted_model_review_inventory,
     )
 
     model_task_records = {
@@ -3546,37 +5400,20 @@ def validate_scheduler_artifact(
         **model_requests,
         **recovery_model_requests,
     }
-    promoted_recovery_requests = {
-        request_id: request
-        for request_id, request in recovery_model_requests.items()
-        if request.promotion_entry_sha256 is not None
-    }
-    floor_recovery_bindings = {
-        binding.request_id: binding
-        for binding in (
-            report.minimum_analysis_floor.recovery_model_usage_bindings
-            if report.minimum_analysis_floor is not None
-            else ()
-        )
-    }
-    if set(floor_recovery_bindings) != set(promoted_recovery_requests):
-        raise ValueError(
-            "minimum-floor recovery usage inventory differs from promoted scheduler requests"
-        )
-    for request_id, floor_binding in floor_recovery_bindings.items():
-        promoted_request = promoted_recovery_requests[request_id]
-        if (
-            floor_binding.role != promoted_request.role
-            or floor_binding.request_limit_scope != promoted_request.request_limit_scope
-            or floor_binding.request_limit_count_before
-            != promoted_request.request_limit_count_before
-            or floor_binding.usage_record_sha256 != promoted_request.usage_record_sha256
-            or floor_binding.scheduler_request_evidence_sha256
-            != promoted_request.request_evidence_sha256
-        ):
-            raise ValueError(
-                "minimum-floor recovery usage differs from promoted scheduler evidence"
-            )
+    promoted_recovery_leaf_inventory = _promoted_model_review_leaf_usage_inventory(
+        promoted_model_review_inventory
+    )
+    floor_recovery_bindings = tuple(
+        report.minimum_analysis_floor.recovery_model_usage_bindings
+        if report.minimum_analysis_floor is not None
+        else ()
+    )
+    _validate_minimum_floor_recovery_usage_bindings(
+        bindings=floor_recovery_bindings,
+        serialized_leaf_inventory=promoted_recovery_leaf_inventory,
+        recovery_model_requests=recovery_model_requests,
+        runtime_journal=scheduler_runtime_journal,
+    )
     terminal_request_ids = set(model_task_records)
     request_ids = set(model_requests)
     if (
@@ -3591,13 +5428,31 @@ def validate_scheduler_artifact(
         )
     ):
         raise ValueError("scheduler public model-request inventory differs from durable tasks")
-    permitted_schema_hashes = scheduler_response_schema_hashes()
+    permitted_schema_hashes = scheduler_response_schema_hashes_for_algorithm(
+        algorithm_version=scheduler_bindings.algorithm_version,
+    )
+    auxiliary_schema_hashes = scheduler_auxiliary_response_schema_hashes_for_algorithm(
+        algorithm_version=scheduler_bindings.algorithm_version,
+    )
+
+    def task_schema_hashes(purpose: SchedulerTaskPurpose) -> frozenset[str]:
+        return (
+            auxiliary_schema_hashes
+            if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            else permitted_schema_hashes
+        )
+
     if any(
-        task.response_schema_sha256 not in permitted_schema_hashes
+        task.response_schema_sha256 not in task_schema_hashes(task.purpose)
         for _plan, task, _result in model_task_records.values()
     ):
         raise ValueError("scheduler model task uses an unregistered response schema")
     configured_lineages = model_lineage_index(config) if config is not None else {}
+    configured_models = (
+        frozenset(configured_model_ids(config, include_fallbacks=True))
+        if config is not None
+        else frozenset()
+    )
     known_source_descriptors = {
         source.source_descriptor_sha256
         for shard in expected_shard_inventory.shards
@@ -3612,13 +5467,13 @@ def validate_scheduler_artifact(
                 plan=plan,
                 task=task,
                 result=result,
-                permitted_schema_hashes=permitted_schema_hashes,
+                permitted_schema_hashes=task_schema_hashes(task.purpose),
             )
         elif request.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
             raise ValueError("successful scheduler request lacks its sealed pass result")
         if (
             request.response_schema_sha256 is not None
-            and request.response_schema_sha256 not in permitted_schema_hashes
+            and request.response_schema_sha256 not in task_schema_hashes(request.purpose)
         ):
             raise ValueError("scheduler model task uses an unregistered response schema")
         if not set(request.delivered_source_descriptor_sha256s) <= known_source_descriptors:
@@ -3626,7 +5481,8 @@ def validate_scheduler_artifact(
         if config is not None:
             lineage = configured_lineages.get(request.requested_model.lower())
             if (
-                lineage is None
+                request.requested_model not in configured_models
+                or lineage is None
                 or lineage.root_lineage != request.root_lineage
                 or request.root_lineage not in config.privacy.approved_model_lineages
             ):
@@ -3638,7 +5494,8 @@ def validate_scheduler_artifact(
         if config is not None:
             lineage = configured_lineages.get(recovery_request.requested_model.lower())
             if (
-                lineage is None
+                recovery_request.requested_model not in configured_models
+                or lineage is None
                 or lineage.root_lineage != recovery_request.root_lineage
                 or recovery_request.root_lineage not in config.privacy.approved_model_lineages
             ):
@@ -3726,6 +5583,8 @@ def _require_scheduler_journal_authority(
     runtime_journal: SchedulerJournal | None,
     reference_binding: ManifestFileBinding | None,
     require_retained_usage_custody: bool,
+    model_review_inventory: _ModelReviewArtifactInventory | None,
+    promoted_model_review_inventory: _PromotedModelReviewArtifactInventory | None,
 ) -> None:
     """Compare public state to owner-held runtime or descriptor-reopened private evidence."""
 
@@ -3755,6 +5614,9 @@ def _require_scheduler_journal_authority(
                 config=config,
                 run_options=run_options,
                 require_retained_usage_custody=require_retained_usage_custody,
+                model_review_inventory=model_review_inventory,
+                promoted_model_review_inventory=promoted_model_review_inventory,
+                detached=False,
             )
             if reconstructed != public_artifact:
                 raise ValueError("scheduler public artifact differs from live runtime authority")
@@ -3786,6 +5648,9 @@ def _require_scheduler_journal_authority(
                 config=config,
                 run_options=run_options,
                 require_retained_usage_custody=require_retained_usage_custody,
+                model_review_inventory=model_review_inventory,
+                promoted_model_review_inventory=promoted_model_review_inventory,
+                detached=True,
             )
         finally:
             journal.close()
@@ -3802,10 +5667,14 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     config: AuditConfig | None,
     run_options: AuditRunOptions | None,
     require_retained_usage_custody: bool,
+    model_review_inventory: _ModelReviewArtifactInventory | None,
+    promoted_model_review_inventory: _PromotedModelReviewArtifactInventory | None,
+    detached: bool,
 ) -> SchedulerArtifact:
     """Join exact privacy bytes to a descriptor-held scheduler manifest and report."""
 
     expected_custody = public_artifact.summary.manifest.privacy_evidence_custody
+    semantic_index, semantic_graphs = _load_model_review_semantic_authority(root)
     if expected_custody is None:
         reconstructed = journal.artifact()
         snapshot = _scheduler_report_authority_snapshot(journal)
@@ -3821,6 +5690,18 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
                 report=report,
                 public_artifact=public_artifact,
                 snapshot=snapshot,
+            )
+        if report.schema_version == "1.4" or promoted_model_review_inventory is not None:
+            _validate_model_review_artifact_inventory_against_scheduler(
+                report=report,
+                inventory=model_review_inventory,
+                snapshot=snapshot,
+                config=config,
+                promoted_inventory=promoted_model_review_inventory,
+                detached=detached,
+                index=semantic_index,
+                graphs=semantic_graphs,
+                runtime_journal=(journal if not detached else None),
             )
         return reconstructed
     with journal.open_privacy_evidence_custody() as observed_custody:
@@ -3845,6 +5726,18 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
                 report=report,
                 public_artifact=public_artifact,
                 snapshot=snapshot,
+            )
+        if report.schema_version == "1.4" or promoted_model_review_inventory is not None:
+            _validate_model_review_artifact_inventory_against_scheduler(
+                report=report,
+                inventory=model_review_inventory,
+                snapshot=snapshot,
+                config=config,
+                promoted_inventory=promoted_model_review_inventory,
+                detached=detached,
+                index=semantic_index,
+                graphs=semantic_graphs,
+                runtime_journal=(journal if not detached else None),
             )
         return reconstructed
 
@@ -3913,6 +5806,8 @@ class _SchedulerReportAuthoritySnapshot:
     journal: SchedulerJournal
     outputs_by_task_id: Mapping[str, SchedulerTaskOutput]
     pass_results_by_kind: Mapping[SchedulerPassKind, SchedulerPassResult]
+    tasks_by_task_id: Mapping[str, SchedulerTaskPlan] | None = None
+    activations_by_task_id: Mapping[str, SchedulerTaskActivation] | None = None
 
 
 def _scheduler_report_authority_snapshot(
@@ -3930,11 +5825,24 @@ def _scheduler_report_authority_snapshot(
     if len(pass_kinds) != len(set(pass_kinds)):
         raise ValueError("scheduler private journal repeats a sealed pass result")
 
+    tasks = tuple(task for plan in journal.plans for task in plan.tasks)
+    task_ids = tuple(task.task_id for task in tasks)
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("scheduler private journal repeats a sealed task plan")
+    activations = journal.activations
+    activation_task_ids = tuple(activation.task_id for activation in activations)
+    if len(activation_task_ids) != len(set(activation_task_ids)):
+        raise ValueError("scheduler private journal repeats a task activation")
+
     return _SchedulerReportAuthoritySnapshot(
         journal=journal,
         outputs_by_task_id=MappingProxyType({output.task_id: output for output in outputs}),
         pass_results_by_kind=MappingProxyType(
             {result.plan.pass_kind: result for result in pass_results}
+        ),
+        tasks_by_task_id=MappingProxyType({task.task_id: task for task in tasks}),
+        activations_by_task_id=MappingProxyType(
+            {activation.task_id: activation for activation in activations}
         ),
     )
 
@@ -4051,7 +5959,13 @@ def _scheduler_accepted_candidate_authority(
                 if candidate_id in accepted_hashes:
                     raise ValueError("scheduler accepted candidate authority repeats an identity")
                 candidate = output_candidates[candidate_id]
-                if scheduler_canonical_sha256(candidate.model_dump(mode="json")) != payload_sha256:
+                if (
+                    scheduler_candidate_payload_sha256(
+                        candidate,
+                        algorithm_version=pass_result.plan.manifest.algorithm_version,
+                    )
+                    != payload_sha256
+                ):
                     raise ValueError("scheduler accepted candidate object hash is inconsistent")
                 accepted_hashes[candidate_id] = payload_sha256
                 accepted_candidates[candidate_id] = candidate
@@ -4075,7 +5989,10 @@ def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
         task_id=task_id,
     )
     reconstructed = snapshot.journal.reconstruct_output(task_id, output_type)
-    serialized = reconstructed.model_dump(mode="json")
+    serialized = scheduler_typed_payload_projection(
+        reconstructed,
+        algorithm_version=pass_result.plan.manifest.algorithm_version,
+    )
     if (
         serialized != output.payload
         or scheduler_canonical_sha256(serialized) != output.output_sha256
@@ -4118,16 +6035,33 @@ def _scheduler_evidence_payload_bindings(
         "reproduction_resolution",
     ],
     records: Iterable[tuple[str, StrictModel]],
+    *,
+    algorithm_version: str | None = None,
 ) -> tuple[SchedulerEvidencePayloadBinding, ...]:
     """Build a lossless canonical binding for every independently retained record."""
 
     bindings: list[SchedulerEvidencePayloadBinding] = []
     for subject_id, record in records:
+        payload = (
+            record.model_dump(mode="json")
+            if algorithm_version is None
+            else scheduler_typed_payload_projection(
+                record,
+                algorithm_version=algorithm_version,
+            )
+        )
+        payload_sha256 = scheduler_canonical_sha256(payload)
         bindings.append(
-            SchedulerEvidencePayloadBinding.build(
-                kind=kind,
+            SchedulerEvidencePayloadBinding(
+                record_id=scheduler_canonical_sha256(
+                    {
+                        "kind": kind,
+                        "subject_id": subject_id,
+                        "payload_sha256": payload_sha256,
+                    }
+                ),
                 subject_id=subject_id,
-                payload=record,
+                payload_sha256=payload_sha256,
             )
         )
     ordered = tuple(sorted(bindings, key=lambda item: (item.subject_id, item.record_id)))
@@ -4326,6 +6260,8 @@ def _validate_scheduler_consensus_review_authority(
 
 def _scheduler_candidate_payload_sha256s(
     candidates: Iterable[CandidateFinding],
+    *,
+    algorithm_version: str,
 ) -> dict[str, str]:
     """Hash complete candidate payloads using the scheduler's canonical encoding."""
 
@@ -4334,7 +6270,10 @@ def _scheduler_candidate_payload_sha256s(
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("scheduler report authority candidate inventory is ambiguous")
     return {
-        candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+        candidate.candidate_id: scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version=algorithm_version,
+        )
         for candidate in ordered
     }
 
@@ -4552,6 +6491,7 @@ def _validate_scheduler_retained_judge_decisions(
     judge_bindings = _scheduler_evidence_payload_bindings(
         "judge",
         ((item.group_id, item) for item in retained_judges),
+        algorithm_version=pass_result.plan.manifest.algorithm_version,
     )
     if judge_bindings != judgment.judge_decisions:
         raise ValueError("scheduler judgment differs from exact retained judge decisions")
@@ -4697,6 +6637,7 @@ def _validate_scheduler_terminal_finding_replay(
         decision.candidate_id: decision for decision in report.verification_decisions
     }
 
+    from mmaudit.orchestration.actor_model import bind_judged_actor_context, calibrate_finding
     from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
     from mmaudit.orchestration.pipeline import (
         _enforce_post_judge_execution_severity_accounting,
@@ -4718,6 +6659,7 @@ def _validate_scheduler_terminal_finding_replay(
     replayed: list[tuple[SchedulerTerminalFindingState, Finding]] = []
     for group in publication_groups(replay_candidates):
         judge = judges_by_group.get(group.group_id)
+        actor_model_evaluation = getattr(report, "actor_model_evaluation", None)
         status_candidates = status_bearing_candidate_ids(
             group,
             decisions=verification_by_candidate,
@@ -4736,6 +6678,10 @@ def _validate_scheduler_terminal_finding_replay(
             consensus_review=consensus_review,
             cross_examinations=report.cross_examination_decisions,
             deterministically_rejected_candidate_ids=(deterministically_rejected_candidate_ids),
+            apply_judge_classification=(
+                actor_model_evaluation is None
+                or actor_model_evaluation.input_evidence.state is not ActorModelInputState.CURRENT
+            ),
         )
         finding = enforce_critical_evidence_cap(
             finding,
@@ -4750,6 +6696,17 @@ def _validate_scheduler_terminal_finding_replay(
                 status_bearing_candidate_ids=status_candidates,
             )
         )
+        if actor_model_evaluation is not None:
+            finding = bind_judged_actor_context(
+                finding,
+                judgment=judge,
+                actor_input=actor_model_evaluation.input_evidence,
+            )
+            finding = calibrate_finding(
+                finding,
+                actor_context=finding.actor_context,
+                actor_input=actor_model_evaluation.input_evidence,
+            ).finding
         judge_vote = _scheduler_judge_vote(decision=judge, snapshot=snapshot)
         if judge_vote is not None:
             finding = finding.model_copy(update={"model_votes": [*finding.model_votes, judge_vote]})
@@ -5269,11 +7226,30 @@ def _validate_scheduler_terminal_report_authority(
         if observed != expected:
             raise ValueError(f"public {label} evidence differs from scheduler judgment authority")
 
-    _validate_scheduler_retained_judge_decisions(
+    retained_judges = _validate_scheduler_retained_judge_decisions(
         judgment=judgment,
         snapshot=snapshot,
         require_complete_pass=require_complete_pass,
     )
+    _validate_public_judge_decisions(report, retained_judges)
+
+
+def _validate_public_judge_decisions(
+    report: AuditReport,
+    retained_judges: Iterable[JudgeDecision],
+) -> None:
+    """Bind the public annotation inventory to exact private scheduler completions."""
+
+    # Pre-actor reports never exposed scheduler judge annotations as a public
+    # field. Preserve exact replay of those already-sealed byte streams instead
+    # of imposing today's serialization contract retroactively. Once an actor
+    # evaluation exists, the retained annotation inventory is calibration
+    # authority and must match exactly.
+    if report.actor_model_evaluation is None:
+        return
+    expected = tuple(sorted(retained_judges, key=lambda item: item.group_id))
+    if tuple(report.judge_decisions) != expected:
+        raise ValueError("public judge decisions differ from exact retained scheduler output")
 
 
 def _validate_scheduler_report_authority(
@@ -5294,7 +7270,11 @@ def _validate_scheduler_report_authority(
     reproduction_artifact = _ManifestReproductionArtifact.model_validate(
         _read_json_artifact(root, "reproduction-results.json")
     )
-    candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
+    algorithm_version = journal.manifest.algorithm_version
+    candidate_hashes = _scheduler_candidate_payload_sha256s(
+        candidate_artifact.findings,
+        algorithm_version=algorithm_version,
+    )
     # Assurance imports manifest validation through its benchmark path, so keep
     # this qualification predicate local to detached verification.
     from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
@@ -5319,7 +7299,8 @@ def _validate_scheduler_report_authority(
         attach_formal_counterexamples(
             [blind_candidates[candidate_id] for candidate_id in sorted(blind_candidates)],
             list(report.formal_runs),
-        )
+        ),
+        algorithm_version=algorithm_version,
     )
     cross_shard_authority = accepted_hash_authority[SchedulerPassKind.CROSS_SHARD_INTEGRATION]
 
@@ -5714,6 +7695,8 @@ def _validate_scheduler_model_request(
         or request.task_plan_sha256 != task.task_plan_sha256
         or request.scope_sha256 != task.scope.scope_sha256
         or request.role != task.role
+        or request.purpose is not task.purpose
+        or request.parent_task_id != task.parent_task_id
         or request.requested_model != task.requested_model
         or request.root_lineage != task.root_lineage
         or request.terminal_status is not result.terminal_status
@@ -5730,6 +7713,7 @@ def _validate_scheduler_model_request(
         or request.normalizer_sha256 != result.normalizer_sha256
         or request.reviewed_source_descriptor_sha256s != result.reviewed_source_descriptor_sha256s
         or request.reviewed_candidate_ids != result.reviewed_candidate_ids
+        or request.retrieval_custody != result.retrieval_custody
     ):
         raise ValueError("scheduler public model request differs from terminal task evidence")
     if result.activation_id is None:
@@ -5802,6 +7786,10 @@ def _scheduler_usage_is_creditable(
         if config is not None
         else None
     )
+    configured_model = config is None or request.requested_model in configured_model_ids(
+        config,
+        include_fallbacks=True,
+    )
     lineage_bound = (
         routed_lineage == request.root_lineage
         if routed_lineage is not None
@@ -5844,6 +7832,7 @@ def _scheduler_usage_is_creditable(
         and usage.request_body_sha256 is not None
         and not usage.fallback_used
         and not usage.substitution_detected
+        and configured_model
         and lineage_bound
         and recovery_position_bound
     )
@@ -5891,6 +7880,111 @@ def _validate_language_capability_artifact(
     return artifact
 
 
+def _validate_actor_model_evaluation_artifact(
+    root: Path,
+    report: AuditReport,
+    *,
+    expected_binding: ManifestFileBinding | None = None,
+) -> ActorModelEvaluation:
+    """Bind the standalone actor evaluation to the exact report embedding."""
+
+    evaluation = report.actor_model_evaluation
+    if evaluation is None:
+        raise ValueError("current report lacks typed actor-model evaluation")
+    try:
+        artifact = ActorModelEvaluation.model_validate(
+            _read_json_artifact(
+                root,
+                ACTOR_MODEL_EVALUATION_ARTIFACT_PATH,
+                expected_binding=expected_binding,
+            )
+        )
+    except ValueError as exc:
+        raise ValueError("actor-model evaluation artifact is invalid") from exc
+    if artifact != evaluation:
+        raise ValueError("actor-model evaluation artifact differs from the final report")
+    return artifact
+
+
+def _validate_actor_model_baseline_artifact(
+    root: Path,
+    report: AuditReport,
+    *,
+    expected_binding: ManifestFileBinding | None = None,
+) -> ActorModelBaselineArtifact:
+    """Bind the upstream pre-calibration inventory to the report and evaluation."""
+
+    baseline = report.actor_model_baseline
+    evaluation = report.actor_model_evaluation
+    if baseline is None or evaluation is None:
+        raise ValueError("current report lacks typed actor-model baseline custody")
+    try:
+        artifact = ActorModelBaselineArtifact.model_validate(
+            _read_json_artifact(
+                root,
+                ACTOR_MODEL_BASELINE_ARTIFACT_PATH,
+                expected_binding=expected_binding,
+            )
+        )
+    except ValueError as exc:
+        raise ValueError("actor-model baseline artifact is invalid") from exc
+    if artifact != baseline:
+        raise ValueError("actor-model baseline artifact differs from the final report")
+    from mmaudit.orchestration.actor_model import validate_actor_model_evaluation
+
+    validate_actor_model_evaluation(
+        findings=(*report.findings, *report.rejected_findings, *report.filtered_findings),
+        evaluation=evaluation,
+        baseline_artifact=artifact,
+        judge_decisions=report.judge_decisions,
+    )
+    return artifact
+
+
+def _validate_actor_model_configuration(
+    report: AuditReport,
+    config: AuditConfig,
+) -> None:
+    """Join report actor evidence to the exact manifest-recorded operator configuration."""
+
+    evaluation = report.actor_model_evaluation
+    if report.schema_version not in {"1.3", "1.4"}:
+        return
+    if evaluation is None:
+        raise ValueError("report schema 1.3+ lacks actor-model configuration custody")
+    actor_input = evaluation.input_evidence
+    actor_config = config.actor_model
+    run_started_at_raw = report.metadata.get("run_started_at")
+    if not isinstance(run_started_at_raw, str):
+        raise ValueError("report lacks its typed actor-model run-start timestamp")
+    try:
+        run_started_at = datetime.fromisoformat(run_started_at_raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("report actor-model run-start timestamp is invalid") from exc
+    if run_started_at.tzinfo is None or evaluation.evaluated_at != run_started_at:
+        raise ValueError("actor-model evaluation differs from the exact run-start timestamp")
+    if actor_input.configured_path != actor_config.path or actor_input.configured != (
+        actor_config.path is not None
+    ):
+        raise ValueError("actor-model input path differs from manifest configuration")
+    source = actor_input.source_evidence
+    if source is not None and (
+        source.actor_model.subject_id != actor_config.expected_subject_id
+        or source.actor_model.artifact_sha256 != actor_config.expected_model_sha256
+        or (
+            actor_config.expected_source_sha256 is not None
+            and source.source_sha256 != actor_config.expected_source_sha256
+        )
+    ):
+        raise ValueError("actor-model evidence differs from manifest operator pins")
+    if (
+        actor_config.required
+        and report.completed
+        and actor_input.state is not ActorModelInputState.CURRENT
+    ):
+        raise ValueError("completed report lacks its required current actor-model input")
+
+
 def validate_manifest_artifacts(
     manifest: RunEvidenceManifest,
     run_dir: Path,
@@ -5914,9 +8008,9 @@ def validate_manifest_artifacts(
         observed = actual[path]
         if observed.size != binding.size or observed.sha256 != binding.sha256:
             raise ValueError(f"run artifact hash mismatch: {path}")
-    if manifest.schema_version in {"1.1", "1.2", "1.3"}:
+    if manifest.schema_version in {"1.1", "1.2", "1.3", "1.4"}:
         required_artifacts = {"final-findings.json", "metadata.json"}
-        if manifest.schema_version in {"1.2", "1.3"}:
+        if manifest.schema_version in {"1.2", "1.3", "1.4"}:
             required_artifacts.update(
                 MANIFEST_BOUND_REPORT_DELIVERABLES
                 | {
@@ -5940,14 +8034,53 @@ def validate_manifest_artifacts(
                 expected_binding=expected["final-findings.json"],
             )
         )
+        if (manifest.schema_version == "1.4") != (report.schema_version == "1.4"):
+            raise ValueError(
+                "manifest schema 1.4 and report schema 1.4 require the same taxonomy boundary"
+            )
+        if report.schema_version in {"1.3", "1.4"}:
+            if (
+                ACTOR_MODEL_BASELINE_ARTIFACT_PATH not in expected
+                or ACTOR_MODEL_EVALUATION_ARTIFACT_PATH not in expected
+            ):
+                raise ValueError(
+                    "report schema 1.3+ requires emitted actor-model baseline and evaluation"
+                )
+            _validate_actor_model_baseline_artifact(
+                root,
+                report,
+                expected_binding=expected[ACTOR_MODEL_BASELINE_ARTIFACT_PATH],
+            )
+            _validate_actor_model_evaluation_artifact(
+                root,
+                report,
+                expected_binding=expected[ACTOR_MODEL_EVALUATION_ARTIFACT_PATH],
+            )
+        _validate_known_issue_taxonomy_artifacts(
+            root,
+            report,
+            required=manifest.schema_version == "1.4",
+            expected_corpus_binding=expected.get(KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH),
+            expected_coverage_binding=expected.get(KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH),
+        )
+        observed_taxonomy_bindings = sorted(
+            (
+                binding
+                for binding in manifest.bindings.coverage
+                if binding.identifier in _KNOWN_ISSUE_TAXONOMY_BINDING_IDS
+            ),
+            key=lambda binding: binding.identifier,
+        )
+        if observed_taxonomy_bindings != _known_issue_taxonomy_bindings(report):
+            raise ValueError("manifest known-issue taxonomy bindings differ from the report")
         _validate_report_artifact_consistency(
             root,
             report,
-            report_bundle_required=manifest.schema_version in {"1.2", "1.3"},
+            report_bundle_required=manifest.schema_version in {"1.2", "1.3", "1.4"},
         )
         language_artifact_bound = LANGUAGE_CAPABILITY_ARTIFACT_PATH in expected
         if (
-            manifest.schema_version in {"1.2", "1.3"}
+            manifest.schema_version in {"1.2", "1.3", "1.4"}
             or language_artifact_bound
             or report.language_capability is not None
         ):
@@ -5963,7 +8096,8 @@ def validate_manifest_artifacts(
         validate_solidity_shard_artifacts(root, report)
         if manifest.run_configuration is not None:
             effective_config = manifest.run_configuration.reconstruct_effective_config()
-            if manifest.schema_version == "1.3":
+            _validate_actor_model_configuration(report, effective_config)
+            if manifest.schema_version in {"1.3", "1.4"}:
                 _require_report_model_retry_policy(
                     report,
                     effective_config,
@@ -6012,7 +8146,12 @@ def validate_manifest_artifacts(
                 qualification_runtime=qualification_runtime,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
-                require_retained_usage_custody=manifest.schema_version in {"1.2", "1.3"},
+                require_retained_usage_custody=manifest.schema_version
+                in {
+                    "1.2",
+                    "1.3",
+                    "1.4",
+                },
             )
             context_manifest = _validated_context_manifest(
                 root,
@@ -6054,21 +8193,30 @@ def validate_manifest_artifacts(
                 report,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
-                require_retained_usage_custody=manifest.schema_version in {"1.2", "1.3"},
+                require_retained_usage_custody=manifest.schema_version
+                in {
+                    "1.2",
+                    "1.3",
+                    "1.4",
+                },
             )
             context_manifest = _validated_context_manifest(
                 root,
                 report,
                 scheduler_artifact=scheduler_artifact,
             )
-        if report.schema_version == "1.2" or manifest.schema_version in {"1.2", "1.3"}:
+        if report.schema_version in {"1.2", "1.3", "1.4"} or manifest.schema_version in {
+            "1.2",
+            "1.3",
+            "1.4",
+        }:
             _validate_model_execution_cost_ledger_custody(
                 root,
                 report,
                 scheduler_artifact,
-                current_model_execution_required=manifest.schema_version in {"1.2", "1.3"},
+                current_model_execution_required=manifest.schema_version in {"1.2", "1.3", "1.4"},
             )
-        if manifest.schema_version in {"1.2", "1.3"}:
+        if manifest.schema_version in {"1.2", "1.3", "1.4"}:
             assert manifest.run_configuration is not None
             _validate_run_terminal_report_authority(
                 root,
@@ -8013,6 +10161,148 @@ def _reproduction_bindings(
     return sorted(bindings, key=lambda item: item.identifier)
 
 
+def _committed_known_issue_taxonomy() -> tuple[KnownIssueTaxonomy, str, int]:
+    """Load the exact packaged taxonomy bytes used by current report issuance."""
+
+    resource = load_known_issue_taxonomy()
+    return resource.corpus, resource.raw_sha256, len(resource.raw_bytes)
+
+
+def _known_issue_taxonomy_bindings(report: AuditReport) -> list[ManifestHashBinding]:
+    """Bind current taxonomy corpus, profile, and disposition semantics."""
+
+    coverage = report.taxonomy_coverage
+    if report.schema_version != "1.4":
+        if coverage is not None:
+            raise ValueError("pre-taxonomy reports cannot retain taxonomy coverage")
+        return []
+    if coverage is None:
+        raise ValueError("report schema 1.4 requires taxonomy coverage")
+    profile = coverage.profile_assessment
+    bindings = [
+        ManifestHashBinding(
+            identifier="known-issue-taxonomy/corpus",
+            sha256=coverage.corpus.corpus_sha256,
+            details={
+                "artifact": KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+                "items": str(len(coverage.corpus.items)),
+                "taxonomy_version": coverage.corpus.taxonomy_version,
+            },
+        ),
+        ManifestHashBinding(
+            identifier="known-issue-taxonomy/corpus-raw",
+            sha256=coverage.corpus_raw_sha256,
+            details={"artifact": KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH},
+        ),
+        ManifestHashBinding(
+            identifier="known-issue-taxonomy/coverage",
+            sha256=coverage.coverage_sha256,
+            details={
+                "artifact": KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+                "critical_gaps": str(len(coverage.critical_gap_ids)),
+            },
+        ),
+        (
+            ManifestHashBinding(
+                identifier="known-issue-taxonomy/profile-assessment",
+                sha256=profile.assessment_sha256,
+                details={
+                    "classification_complete": str(profile.classification_complete).lower(),
+                    "state": "present",
+                },
+            )
+            if profile is not None
+            else _binding(
+                "known-issue-taxonomy/profile-assessment",
+                {"present": False},
+                {"state": "absent"},
+            )
+        ),
+    ]
+    return sorted(bindings, key=lambda binding: binding.identifier)
+
+
+def _validate_known_issue_taxonomy_artifacts(
+    root: Path,
+    report: AuditReport,
+    *,
+    required: bool,
+    expected_corpus_binding: ManifestFileBinding | None = None,
+    expected_coverage_binding: ManifestFileBinding | None = None,
+) -> None:
+    """Require exact packaged corpus bytes and the report's exact coverage body."""
+
+    paths = {
+        KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH: root / KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+        KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH: (
+            root / KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH
+        ),
+    }
+    present = {
+        name
+        for name, path in paths.items()
+        if path.exists() or path.is_symlink() or path.is_junction()
+    }
+    if not required:
+        if present or report.taxonomy_coverage is not None:
+            raise ValueError("pre-taxonomy report custody cannot retain taxonomy artifacts")
+        return
+    if report.schema_version != "1.4" or report.taxonomy_coverage is None:
+        raise ValueError("manifest schema 1.4 requires report schema 1.4 taxonomy coverage")
+    validate_known_issue_taxonomy_coverage_provenance(
+        report.taxonomy_coverage,
+        invariants=report.invariants,
+        model_review_coverage=report.model_review_coverage,
+    )
+    if present != _KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATHS:
+        raise ValueError("manifest schema 1.4 requires both known-issue taxonomy leaves")
+    if expected_corpus_binding is not None and (
+        expected_corpus_binding.path != KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH
+    ):
+        raise ValueError("known-issue taxonomy corpus binding has the wrong path")
+    if expected_coverage_binding is not None and (
+        expected_coverage_binding.path != KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH
+    ):
+        raise ValueError("known-issue taxonomy coverage binding has the wrong path")
+
+    with ExitStack() as observations:
+        corpus_payload = observations.enter_context(
+            _open_json_artifact_observation(
+                root,
+                KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH,
+                expected_binding=expected_corpus_binding,
+            )
+        )
+        coverage_payload = observations.enter_context(
+            _open_json_artifact_observation(
+                root,
+                KNOWN_ISSUE_TAXONOMY_COVERAGE_ARTIFACT_PATH,
+                expected_binding=expected_coverage_binding,
+            )
+        )
+        corpus_sha256, corpus_size = _file_sha256(
+            paths[KNOWN_ISSUE_TAXONOMY_ARTIFACT_PATH],
+            max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+        )
+        corpus = KnownIssueTaxonomy.model_validate(corpus_payload)
+        standalone_coverage = KnownIssueTaxonomyCoverage.model_validate(coverage_payload)
+        committed_corpus, committed_sha256, committed_size = _committed_known_issue_taxonomy()
+        report_coverage = report.taxonomy_coverage
+        report_coverage_artifact = build_coverage_artifact(report)
+        if corpus_sha256 != committed_sha256 or corpus_size != committed_size:
+            raise ValueError("known-issue taxonomy leaf differs from the committed corpus bytes")
+        if corpus != committed_corpus or corpus != report_coverage.corpus:
+            raise ValueError("known-issue taxonomy corpus differs from report coverage")
+        if report_coverage.corpus_raw_sha256 != corpus_sha256:
+            raise ValueError("known-issue taxonomy raw hash differs from the committed leaf")
+        if standalone_coverage != report_coverage:
+            raise ValueError("standalone taxonomy coverage differs from the final report")
+        if standalone_coverage.corpus != corpus:
+            raise ValueError("standalone taxonomy coverage binds a different corpus")
+        if report_coverage_artifact.taxonomy_coverage != standalone_coverage:
+            raise ValueError("coverage.json and standalone taxonomy coverage disagree")
+
+
 def _coverage_bindings(
     report: AuditReport,
     solidity_coverage: dict[str, Any],
@@ -8049,6 +10339,7 @@ def _coverage_bindings(
             {"artifact": "solidity-coverage.json"},
         ),
     ]
+    bindings.extend(_known_issue_taxonomy_bindings(report))
     if not legacy_schema_1_1:
         bindings.append(
             _binding(

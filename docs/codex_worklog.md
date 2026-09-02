@@ -4,21 +4,2130 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-28T08:10:11Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-09-02T12:10:08Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
-OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_D06AE996_REVOCATION_DEADLOCK_ALL_CANDIDATE_DISCOVERY_PROVIDER_FREE_PRIOR_R23_INDEX22_FULL_ADMISSION_FOR_FAILED_LAUNCH_CAMPAIGN_FAILED_CLOSED_LEDGER_UNCHANGED_57_ENTRIES_068118684_SPEND_ZERO_COMPLETED_REAL_AUDITS_V3_REVOKERECON_REQUIRED_NONAUTHORIZING
-LAST_RECONCILED_OPERATOR_RESULTS: `d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089` / 148339 bytes / 2648 lines; latest `2026-08-28T07:56Z`, operator-reported, nonauthorizing, and not independently authenticated by Codex.
-CURRENT_TICKET: UNSELECTED
-CURRENT_LOCAL_SLICE_STATUS: V3_SCHEMARETRY_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING
-LAST_COMPLETED_TICKET: V3-SCHEMARETRY-001
-NEXT_ACTION: Stop at this completed boundary. `V3-REVOKERECON-001` is the next dependency-ready queued provider-free ticket but remains unselected until a separate work unit. It must clear the whole-plan candidate-discovery deadlock so an unrevoked alternative succeeds while the revoked assignment remains refused. Before selecting it, read the current operator-result record. No provider or operator action is current; do not infer a run index.
-LAST_VALIDATION_COMMAND: Consolidated 18-module schema-retry/config/CLI/quote/budget/OpenRouter/durable/smoke/manifest/runtime/autonomy/schema pytest matrix plus product-documentation/objective governance; canonical generation verification; scoped Ruff check/format; strict mypy and py_compile over 11 production modules; strict JSON; and diff integrity.
-LAST_VALIDATION_RESULT: 1,094 distinct relevant provider-free tests passed: 1,069 behavior/evidence tests with two known code-object deprecation warnings and 25 product-governance tests. Canonical generation, scoped Ruff check/format, strict mypy and py_compile over all 11 selected production modules, strict JSON, and diff integrity passed. No repository-wide suite is claimed.
-LAST_CHECKPOINT_COMMIT: Current accumulated provider-free source checkpoint `f8960d92569cb9d8865ada9284981458699e4dab`, direct child of `888b4c3c43119644c231473806c7ec77eb90bdca`, contains 125 reviewed implementation/test/schema/governance paths and excludes both the unrelated `.gitignore` edit and unchanged `operator_results.md`. It is pushed and remote-resolved on `origin/agent/v3-wip-checkpoint`; the non-force custody-history reconciliation is synchronized through merge `ed1e478`. Current inventory raw/self/discovery/universe hashes are `1a665257e440562070b2cd40850009dbf43a2a56d2146f0ed223c58270f52e19`, `85ba15048e7c6e2ca738c8f9120ef2df5f62b234fcb3eac5407dd0d23b959d34`, `d00d39076f28d90853731c6b7ecbbec7d30a94cef5a27a8eeb9cd248b1d7754d`, and `5dcd00d64f536200bc619ef455fbba2285c4715883c4ce752918148b6f072766`; schema raw hash is `ad38cfc95945bd5bfbd105069a4c19a1d81f80a1b3cf30caadda4b2eede97992`. Counts are 3,783 sources / 3,786 occurrences / 3,737 gate sources / 46 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual; AuditConfig has 507 unique leaf locators / 510 occurrences / 3 shared locators. Historical coverage remains complete at `33001d12`; prior truncation-promotion checkpoint: `e61b7d7`; recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 41 unfinished tickets and no ticket is `IN_PROGRESS`. `V3-REVOKERECON-001` is next dependency-ready, queued, and unselected; it is the immediate provider-free whole-plan candidate-discovery deadlock, with acceptance requiring unrevoked-alternative admission and continued revoked-route refusal. `V3-MODELREFRESH-001` remains `PARTIAL`; `V3-LEARNING-001` remains `PARTIAL`; `V3-CALIBRATE-001` remains `BLOCKED_TECHNICAL`; and `V3-AUTONOMY-001`, `V3-TRUNCATION-001`, and `V3-AUTHRUNNER-001` remain partial at their recorded boundaries. The latest operator record grants no continuing admission or authority. The 15 unbound-generation observations remain unresolved. `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued. No provider or operator action, command, campaign, qualification, release, or run index is current.
+AUTORUN_STATUS: V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_IMPLEMENTATION_NOT_STARTED_CODEX_ZERO_EXTERNAL_COMMANDS
+OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_AF7A24E_OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY_PRICEFORM_REFUSAL_UPHELD_REASONING_EFFORT_REQUIRED_PRICELEXEME_QUEUED_PRIOR_LIVE_V1_0_METADATA_SURVEY_12_MODELS_112_ENDPOINTS_ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES_V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1_ZERO_ADMISSIBLE_CANDIDATES_ACTIVE_PLAN_UNCHANGED_LEDGER_UNCHANGED_57_ENTRIES_068118684_SPEND_ZERO_COMPLETED_REAL_AUDITS_NONAUTHORIZING_NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX
+LAST_RECONCILED_OPERATOR_RESULTS: `af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b` / 162656 bytes / 2902 lines; latest `2026-09-01T04:49Z`; this record is current, operator-reported, nonauthorizing, and not independently authenticated by Codex.
+CURRENT_TICKET: V3-PRICELEXEME-001
+CURRENT_TICKET_IMPLEMENTATION_STARTED: false
+CURRENT_LOCAL_SLICE_STATUS: V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_IMPLEMENTATION_NOT_STARTED_CODEX_ZERO_EXTERNAL_COMMANDS
+LAST_COMPLETED_TICKET: V3-RETRIEVAL-001
+LAST_PARTIAL_TICKET: V3-CANDROUTE-001
+NEXT_ACTION: Implement and validate only `V3-PRICELEXEME-001`: preserve provider price-number lexemes losslessly at JSON decode time, retain the existing float-transit refusal, and prove decode-to-snapshot-to-digest identity with provider-free positive and negative regressions. `implementation_started=false` at this boundary. Keep `V3-CANDROUTE-001` `PARTIAL`, the active plan unchanged, and zero admissible or selected real replacements. Do not select a candidate, emit a successor plan, call a provider, launch a campaign, qualify a route, publish a release, or grant authority.
+LAST_VALIDATION_COMMAND: `TMPDIR=/Users/generalcuster/Documents/dev/Auditor/.pytest_cache/custody-runtime PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -P -m pytest -q -x -p no:cacheprovider --basetemp=.pytest_cache/custody-cases/retrieval-final-r4`
+LAST_VALIDATION_RESULT: `V3-RETRIEVAL-001` is `COMPLETE`. The exact escalated local-loopback sequential suite exited `0` with `8156 passed, 22 skipped, 12 warnings in 9963.54s (2:46:03)`. Post-closure validation passed `27` governance tests, release-schema generation verification, Ruff check, Ruff format check over `607` files with protected operator evidence excluded, strict mypy over `228` source files, strict JSON, and diff integrity. Focused retrieval suites previously passed `18` and `60`; the failed-primary integration passed `1`; schema/inventory validation passed `62`. The earlier sandbox-stopped and stale-governance runs remain historical noncrediting attempts.
+CURRENT_AUTONOMY_INVENTORY: CURRENT_RECONCILED_V3_PRICELEXEME_001_SELECTION_AFTER_V3_RETRIEVAL_001_COMPLETE. Raw `71bcd46da89cd7a1b31ec0ca35b5a7f4a4004ffbc871fd34ff0e520ab0894073`; self `ebdcf5520ffe0f82d3a0bcc6fb5669ce2e2724730521ad71f55e54f29e2da830`; discovery `63550cead89dcf5425fa06374df61e225a93342b7a55a3774532597b002b33ee`; universe `d0a1471e64dc50a32e23a3dab4c52a14d56acb22f8ab5f460a2494c7a0f3c6fa`; schema raw `228db72a188433fa9727fc8f0185b69949c615c81f56abbad1565cc0492af4ab`; 3895 sources / 3898 occurrences / 3846 gate sources / 49 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Endpoint diagnostic schema v1.1 raw SHA-256 is `326cd2a83b5bc1b825018bfbfe2e7244c62587105d1bc188e4dbe3ff7b8a2b72`.
+LAST_CHECKPOINT_COMMIT: Current HEAD `4c553590fedd4d297442f0a73da703d993f5eec9` records the operator decision to preserve price lexemes and queues `V3-PRICELEXEME-001`; it is remote-resolved on `origin/agent/v3-wip-checkpoint`. The completed taxonomy and retrieval implementations remain uncommitted; price-lexeme implementation has not started. Previous provider-free source checkpoint `f8960d92569cb9d8865ada9284981458699e4dab`, direct child of `888b4c3c43119644c231473806c7ec77eb90bdca`, remains pushed and remote-resolved. Historical coverage remains complete at `33001d12`; prior truncation-promotion checkpoint: `e61b7d7`; recursive checkpoint: `dcd9ab2`; specialist checkpoint: `721d17a`; retained-parent checkpoint: `390e9b2`; PLANCONSTRAINTS repair checkpoint: `425502c`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 40 unfinished tickets. `V3-PRICELEXEME-001` is the selected current ticket with `implementation_started=false`; `V3-RETRIEVAL-001` is the last completed ticket. `V3-CANDROUTE-001` remains `PARTIAL` because no route is currently admissible or selected under the existing custody model. The latest operator record grants no admission or authority. The 15 unbound-generation observations remain unresolved. No Codex provider or operator action, command, campaign, qualification, release, or run index exists.
+
+## 2026-09-02T12:10:08Z — V3-RETRIEVAL-001 terminal validation and inventory reconciled; post-closure gates passed
+
+- **Validation:** The finalized transition bytes pass `27` governance tests, release-schema
+  generation verification, Ruff check, Ruff format check over `607` files with protected operator
+  evidence excluded, strict mypy over `228` source files, strict JSON, and diff integrity.
+- **Result:** The terminal full-suite result remains `8156 passed, 22 skipped, 12 warnings in
+  9963.54s (2:46:03)`. `V3-RETRIEVAL-001` is `COMPLETE`.
+- **Next boundary:** `V3-PRICELEXEME-001` is the sole `IN_PROGRESS` ticket with
+  `implementation_started=false`. This reconciliation changes no pricing decoder, retry behavior,
+  runtime configuration, candidate route, or active plan and performs no provider, route, plan,
+  campaign, qualification, audit, release, or authority action.
+
+## 2026-09-02T12:04:05Z — V3-RETRIEVAL-001 terminal validation and inventory reconciled
+
+- **Terminal validation:** The exact escalated local-loopback sequential suite command recorded in
+  `LAST_VALIDATION_COMMAND` exited `0` with `8156 passed, 22 skipped, 12 warnings in 9963.54s
+  (2:46:03)`. This supplies terminal full-suite pass credit to the already completed retrieval ticket.
+- **Inventory custody:** The current generated autonomy inventory is reconciled to the
+  `V3-PRICELEXEME-001` selection boundary after retrieval completion. Its raw, self, discovery,
+  universe, and schema hashes and all eight counts are pinned in the current header.
+- **Current boundary:** `V3-PRICELEXEME-001` is the sole `IN_PROGRESS` ticket at a selection-only
+  boundary with `implementation_started=false`. `V3-PRICEFORM-001` remains `QUEUED`, and
+  `V3-CANDROUTE-001` remains `PARTIAL`, downstream, and unselected.
+- **Authority boundary:** This reconciliation changes only worklog state and a provider-free
+  governance regression. It changes no pricing decoder, retry behavior, runtime configuration,
+  candidate route, or active plan and performs no provider, credential, ledger, operator command,
+  campaign, run-index, qualification, audit, release, spend, or authority action.
+
+## 2026-09-02T08:52:48Z — V3-PRICELEXEME-001 selected; implementation_started=false
+
+- **Selection:** `V3-PRICELEXEME-001` is the current bounded work unit after retrieval closure.
+  Implementation has not started. The ticket will preserve provider numeric price lexemes at JSON
+  decode time so exact pricing can be proved without weakening the existing float-transit refusal.
+- **Boundary:** Selection does not admit or select a candidate route, change the active plan, grant
+  provider or runner authority, or establish qualification, audit, completion, release, or spend.
+  `V3-CANDROUTE-001` remains `PARTIAL`, with zero currently admissible or selected replacements.
+- **Transition action:** This entry and its mirrored worklog state are documentation-only. No code,
+  configuration, provider, credential, operator command, campaign, run index, ledger, or authority
+  action occurred.
+- **Exact next safe action:** Inspect the provider metadata pricing decode and snapshot custody path,
+  then implement only lossless decimal capture and its provider-free positive and negative
+  regressions. Preserve byte-identical replay for existing sealed evidence.
+
+## 2026-09-02T08:51:35Z — V3-RETRIEVAL-001 COMPLETE
+
+- **Defensive result:** The fixed typed read-only retrieval allowlist is complete over exact indexed,
+  redacted, in-scope Solidity evidence. Opaque requests cannot express paths, globs, shell,
+  filesystem, or network access; refusals, static per-role budgets, single-shot fallback, canonical
+  request/result/exchange hashes, exact replay, provider-safe rendering, and durable failure custody
+  are enforced without changing schema-failure retry behavior.
+- **Validation:** Focused retrieval planning/context suites passed `18` and `60`; the schema-invalid
+  failed-primary integration passed `1` and proved one primary route request with private transcript
+  plus hash-only public custody; schema/inventory validation passed `62`. The first sequential full
+  run was sandbox-stopped at loopback after `3022 passed, 26 skipped`; the exact escalated loopback
+  test then passed `1`. The escalated rerun reached `5336 passed, 22 skipped` before the expected
+  stale governance-hash failure at this terminal transition, so no complete-suite exit `0` is
+  claimed.
+- **Optional LOW follow-ups:** The host-only retrieval entity model can still represent a non-null
+  enclosing `contract_name`, although every operational builder strips it and the secret-parent
+  regression proves ordinary, planning, and final render exclusion; enforce the type-level invariant
+  before introducing another construction or deserialization path. Add a negative truncation-custody
+  regression proving omission of any non-retrieval context field remains rejected; the current exact
+  eight-field whitelist already fails closed. Neither follow-up defeats a retrieval acceptance
+  criterion.
+- **Terminal boundary:** This completion transition changes only the two mirrored worklogs. It makes
+  no code or configuration change and performs no provider, credential, operator command, campaign,
+  run index, qualification, selection, ledger, audit, release, spend, or authority action.
+
+## 2026-09-02T04:20:45Z — V3-RETRIEVAL-001 pre-activation custody hardening
+
+- **Defensive result:** Retrieval custody now binds a successful planner's schema-v1.1,
+  transcript-free request/context evidence to the exact static allocation policy and the exact
+  transcript corpus before any private transcript can be persisted. A shared dependency-light
+  validator also rejects a self-consistent transcript that exceeds the exact role allocation.
+- **Regression result:** Provider-free negatives reject corpus drift, legacy unbound planning
+  context, same-role policy drift, and a resealed oversized result. The successful, empty, and
+  exhausted paths remain accepted.
+- **Validation:** Scheduler retrieval-planning tests pass `18`; adjacent retrieval protocol,
+  context-evidence, taint, budget, and planning-agent tests pass `60`; targeted Ruff passes. The
+  complete sequential suite and canonical inventory regeneration remain pending.
+- **Authority boundary:** Retry code and configuration are unchanged. No provider, credential,
+  private ledger, operator command, route, campaign, run index, qualification, audit, release,
+  spend, or authority action occurred.
+- **Open work:** Regenerate schemas/inventory, rerun focused durability and the complete sequential
+  provider-free suite, reconcile terminal governance, and close only this ticket.
+
+## 2026-09-02T03:52:14Z — V3-RETRIEVAL-001 truncation-custody compatibility repair
+
+- **Defensive result:** Legacy schema-v1 context evidence intentionally omits eight retrieval-only
+  defaults from canonical serialization. Specialist truncation recovery now accepts only those
+  exact default omissions while continuing to require explicit requested-surface custody and all
+  non-retrieval fields.
+- **Validation:** The exact regression unit and failed end-to-end integration pass; the complete
+  focused truncation-journal and retrieval-evidence matrix passes `86`. The earlier reduced
+  integration sweep otherwise passed `214` with `25` explicit prerequisite skips and `4` long-path
+  deselections. Canonical schema/inventory regeneration and verification pass.
+- **Authority boundary:** No provider, credential, private ledger, operator command, route,
+  campaign, run index, qualification, audit, release, spend, or authority action occurred.
+- **Open work:** Update terminal governance projections, run the complete sequential provider-free
+  suite and static gates, reconcile the latest operator record, and close only this ticket.
+
+## 2026-09-02T01:32:34Z — V3-RETRIEVAL-001 durable budget and failure custody closure
+
+- **Defensive result:** The exact blind pass plan now owns the full self-hashed role budget and
+  static per-primary allocations before dispatch. The pipeline uses only that allocation; surplus
+  primaries are terminally recorded as local single-shot fallbacks without planner transport.
+- **Custody result:** A successful planner's full transcript is persisted in a standalone private
+  artifact before primary activation. Successful, failed, invalid, and resumed primaries retain
+  exact plan/allocation/policy/transcript joins, while the public artifact exposes hashes only.
+  A nonempty local lookup followed by schema-invalid primary output is retained and replayable; the
+  primary route is sent exactly once, with retry code and configuration unchanged.
+- **Schema/governance result:** Scheduler and dependent release schemas are regenerated and
+  byte-current. The three retrieval runtime modules are included in the frozen audited source
+  universe, now `3895` sources / `3898` occurrences / `3846` gate sources.
+- **Validation:** Retrieval `67`, scheduler model/journal/manifest `280`, and schema/inventory `62`
+  pass. The affected matrix passes `1083`; its one temporary-directory ancestry custody failure
+  passes alone. Four selected end-to-end scheduler scenarios pass, including the maximum portfolio
+  and failed-primary transcript case. Full Ruff, strict mypy, generation verification, and diff
+  integrity pass. No provider, credential, network, operator command, spend, or external action
+  occurred.
+- **Open work:** Run the complete sequential provider-free suite and final release/governance
+  validation, reconcile the latest operator record, then close only this ticket.
+
+## 2026-09-02T00:57:22Z — V3-RETRIEVAL-001 planner allocation enforcement
+
+- **Defensive result:** The retrieval planning agent now accepts only a transcript-free planning
+  context carrying an exact retrieval policy and corpus commitment for the same review role. It
+  rejects ordinary/final contexts, role drift, and request batches above the allocation before any
+  deterministic host lookup; a zero allocation accepts only an empty request batch.
+- **Model boundary:** Static role allocation evidence now lives with the dependency-light retrieval
+  protocol models and remains re-exported through the orchestration builder, so scheduler models
+  can bind the full plan without a models-to-orchestration dependency.
+- **Validation:** The combined retrieval-budget and planning-agent slice passes `24`; scoped Ruff
+  and strict mypy pass. No provider, credential, network, operator command, spend, or external
+  action occurred.
+- **Open work:** Persist the full allocation in the exact blind pass plan, bind each transcript to
+  its allocation, finish standalone failed-primary custody, then run schema, integration, replay,
+  and complete provider-free validation.
+
+## 2026-09-02T00:49:43Z — V3-RETRIEVAL-001 role-wide budget allocation
+
+- **Defensive result:** Retrieval ceilings are now pre-allocated deterministically across all
+  sorted primary task IDs for one role. Concurrent shards receive immutable self-hashed policies
+  whose aggregate accepted-request, result-byte, and result-token maxima cannot exceed `4`,
+  `16384`, and `5462`; surplus tasks receive exact zero allocations and ordinary fallback.
+- **Envelope result:** A caller can no longer construct a policy whose transcript envelope is too
+  small even for the empty protocol record. The conservative transcript envelope is fixed, while
+  ordinary request/result exhaustion remains typed, append-only, and exactly replayable.
+- **Validation:** The focused retrieval/budget/privacy/context group passes `41`; the full affected
+  context group passes `134`; the retrieval/context/planner group passes `50`; scoped Ruff and
+  strict mypy pass. No provider, credential, network, operator command, spend, or external action
+  occurred.
+- **Open work:** Wire the static plan into each source primary, require planner batches to respect
+  their exact allocation, finish failed-primary durable transcript custody, and run final schema,
+  integration, replay, and full provider-free validation.
+
+## 2026-09-02T00:31:58Z — V3-RETRIEVAL-001 privacy, empty fallback, and schema lifecycle closure
+
+- **Defensive result:** Provider-visible Solidity entity projections now drop enclosing contract
+  names because a clean child range can otherwise inherit a secret-tainted parent spelling. A
+  synthetic regression proves that a secret-shaped contract declaration cannot leak through its
+  separately clean indexed function in ordinary, planning, or final rendering.
+- **Fallback result:** A zero-request planner batch remains distinct from exhaustion but now
+  deterministically requires the unchanged ordinary single-shot context. Its empty planner output
+  and private empty transcript remain hash-bound; it cannot select the reduced planning package as
+  the substantive review context.
+- **Schema/artifact result:** Frozen primary scheduler response-schema set identities remain v1
+  `c913ab94...` and v2 `cd191368...`; the retrieval request batch is registered in a detached v2
+  auxiliary inventory. Manifest validation is purpose-aware, retrieval children expose only their
+  purpose/parent publicly, and exact non-crediting child failures no longer invalidate a complete
+  primary pass.
+- **Validation:** Focused retrieval/privacy/fallback tests pass `42`; the schema/artifact slice
+  reports `12` focused unit tests, `14` registry/runtime tests, and two complete scheduler pipeline
+  regressions passing, with targeted Ruff, strict mypy, and diff checks clean after the final small
+  style correction. No provider, credential, network, operator command, spend, or external action
+  occurred.
+- **Open work:** Persist the full private transcript and hash-only public custody before primary
+  activation so a successful planner plus failed primary remains replayable; then regenerate
+  canonical schemas and run sequential focused, integration, and full provider-free validation.
+
+## 2026-09-02T00:14:24Z — V3-RETRIEVAL-001 runtime pipeline and resume custody
+
+- **Defensive result:** Each source-audit primary now has one separately budgeted and scheduled
+  non-crediting retrieval-planning child. The host executes only the fixed local allowlist, then
+  selects either a transcript-bound final context or the exact ordinary single-shot package when
+  retrieval exhausts or is unavailable. Planner success is recorded only after local execution and
+  final-context feasibility are proved.
+- **Resume and budget custody:** Retained planner batches are rebound through the planner agent with
+  their exact retained usage identity, replayed against a freshly rebuilt corpus, and compared with
+  the primary's private transcript custody. Planning and final packages reconverge against exact
+  JSON-escape-aware endpoint budgets. Planner usage remains provider-accounted but is excluded from
+  substantive review and minimum-floor credit.
+- **Privacy closure:** When any Solidity source is withheld or tainted, ordinary fallback context
+  now removes unproved free-form Solidity metadata while the private retrieval corpus retains raw
+  typed index/graph custody for deterministic filtering. A regression proves withheld paths, index
+  warnings, and entity documentation cannot reach either ordinary or retrieval-bound rendering.
+- **Validation:** Retrieval/context/planner tests pass `46`; scheduler retrieval/runtime, portfolio
+  wiring, and preview tests pass `37`; targeted Ruff and strict mypy pass. A broad integration probe
+  identified pending response-schema registration and fake-provider/legacy test assumptions; those
+  are the active closure work. No provider, credential, network, operator command, spend, or
+  external action occurred.
+- **Open work:** Complete schema/manifest projection and integration-harness updates, then run
+  release-schema, replay, focused integration, and full provider-free validation.
+
+## 2026-09-01T23:48:18Z — V3-RETRIEVAL-001 safe context and scheduler model custody
+
+- **Defensive result:** Retrieval-bound planning and final contexts now expose only canonical safe
+  subject projections. Withheld paths, entity documentation/signatures, index warnings, graph
+  labels/metadata, and unrelated deterministic Solidity payloads are removed before transport; a
+  provider-free regression reproduces and closes the previously confirmed index-metadata egress.
+- **Bounded custody:** Transcript envelope bytes/tokens are policy-enforced independently of record
+  payload totals. Empty batches hash consistently. Planning and final-result phases explicitly
+  distinguish whether another request is authorized, and context workflow token attribution binds
+  both external workflow material and the retrieval context while preserving legacy zero-workflow
+  hashes.
+- **Scheduler model result:** Scheduler-v2 now models non-crediting retrieval-planning children,
+  exact planner-batch/transcript equality, bounded hash-only public custody, private full transcript
+  custody, and exhaustion fallback to unchanged context-evidence v1.0. Frozen v1/v2 response-schema
+  digests remain unchanged.
+- **Validation:** Retrieval/context focused tests pass `38`; the added safe-egress/context/scheduler
+  slice passes `12`; scheduler model and journal suites pass `69` and `201`; the complete OpenRouter
+  unit module passes `470` with two existing deprecation warnings. Targeted Ruff and strict mypy
+  pass. No provider, credential, network, operator command, spend, or external action occurred.
+- **Open work:** Finish scheduler runtime and pipeline execution/resume linkage, then manifest/replay
+  projection, schema generation, and end-to-end provider-free regressions.
+
+## 2026-09-01T23:33:00Z — V3-RETRIEVAL-001 core and context evidence implemented
+
+- **Defensive result:** Added a dependency-light, hash-free provider request batch and host-built
+  request/result/exchange/transcript custody for four fixed indexed Solidity lookup operations.
+  Deterministic resolution enforces shard scope, secret-taint refusal, graph omission semantics,
+  per-request and aggregate byte/token ceilings, terminal exhaustion, and exact local replay.
+- **Context and request custody:** `ContextBuilder` now constructs a safe corpus from exact original
+  and redacted source custody, attaches only a corpus commitment and role policy to provider context,
+  reserves a conservative transcript envelope, counts retrieved text under the existing source
+  ceiling, and binds policy/corpus/transcript plus every exchange hash into schema-v1.1 request
+  evidence. Ordinary schema-v1.0 context evidence remains serialization-compatible. Self-consistent
+  transcripts that exceed their narrowed role policy fail before transport.
+- **Agent and prompt boundary:** A separate non-crediting planning request emits only the typed
+  batch; native `tool_calls` remain prohibited. The shared rules distinguish validated read-only
+  lookup from execution without authorizing shell, filesystem, network, or arbitrary path access.
+- **Validation:** Core, planner, prompt, taint, context, serialization, and OpenRouter tests pass
+  `636` cases. Core-only passed `27`; planner-related passed `89`; targeted Ruff, strict mypy,
+  formatting, dependency-light import, and diff integrity pass. No provider, credential, network,
+  operator command, spend, or external action occurred.
+- **Open work:** Finish scheduler runtime linkage, final-context fallback, manifest/replay
+  projection, and end-to-end provider-free regressions before closing the ticket.
+
+## 2026-09-01T23:12:09Z — V3-RETRIEVAL-001 secret-taint custody implemented
+
+- **Defensive result:** `ContextBuilder` now retains a private, detached, reason-only retrieval
+  projection: canonical merged 1-based inclusive line intervals for content-secret matches and
+  immutable whole-file withholding reasons for scanner- or path-secret exclusions. The projection
+  retains no match value, kind, fingerprint, character offset, or original content, including when
+  configured redaction is disabled.
+- **Validation:** The two new taint-custody regressions pass; the existing context serialization,
+  repository, and context suites pass `84` tests. Targeted Ruff, strict mypy for `context.py`, and
+  diff integrity pass. No provider, credential, network, operator command, spend, or external action
+  occurred.
+- **Open work:** Bind this projection into the typed retrieval corpus so whole-file exclusions and
+  intersecting indexed ranges refuse safely, then finish scheduler, context, manifest, and replay
+  integration.
+
+## 2026-09-01T23:00:17Z — V3-RETRIEVAL-001 protocol boundary mapped
+
+- **Defensive objective:** Preserve the existing provider execution prohibition while adding only a
+  fixed typed lookup over already-indexed, already-redacted, shard-scoped Solidity evidence.
+- **Design result:** Native provider `tool_calls` and `function_call` remain rejected. The bounded
+  flow is one separately identified structured lookup-request batch, deterministic host resolution,
+  then the existing candidate-review request with a canonical validated-results block. Lookup turns
+  are not retries and must receive separate usage, budget, scheduler, and replay custody.
+- **Safety boundary:** The corpus is precomputed while original and redacted source are both locally
+  available. Indexed range hashes must match original bytes; any range intersecting a detected
+  secret is refused even when configured redaction is disabled; arbitrary paths or caller-selected
+  line bounds are never accepted. Graph omissions make relation results partial or unavailable.
+- **Commands run / results:** Read-only source and test mapping plus strict JSON and diff-integrity
+  checks passed during selection. No provider, credential, network, operator command, spend, or
+  external action occurred.
+- **Exact next safe action:** Implement and test the immutable corpus, allowlisted resolver, bounded
+  transcript, and prompt contract before wiring separately accounted provider and scheduler custody.
+
+## 2026-09-01T22:37:33Z — V3-RETRIEVAL-001 selected
+
+- **Selection:** Began the recorded next dependency-ready work unit after rereading both queues,
+  both worklogs, the ticket contract, and the exact current operator record.
+- **Required decisions reconciled:** `V3-PRICEFORM-001` still rejects float-transited pricing because
+  it cannot prove the provider's original decimal lexeme. `REASONING_EFFORT_SUPPORT` remains required
+  for the candidate role because the sealed request emits `effort=high` and reserves reasoning
+  tokens. The operator accepted both decisions and separately queued `V3-PRICELEXEME-001`; neither
+  decision is relaxed or reimplemented by this ticket.
+- **Defensive objective:** Add a fixed typed read-only lookup vocabulary over exact indexed Solidity
+  entities, graph relations, and validated redacted source ranges; enforce per-role request and token
+  budgets; record refusals and exchange hashes for replay; and preserve single-shot fallback on
+  exhaustion.
+- **Authority boundary:** Work is local, synthetic, and provider-free. No route, successor plan,
+  provider/operator command, campaign, run index, qualification, audit, or release authority is
+  selected or granted; the active plan and `completed_real_audits = 0` remain unchanged.
+- **Exact next safe action:** Map the existing index, graph, context-redaction, structured-response,
+  scheduler, and manifest custody surfaces, then implement the smallest typed retrieval protocol and
+  provider-free regressions.
+
+## 2026-09-01T22:18:07Z — V3-TAXONOMY-001 complete
+
+- **Defensive objective:** Bind a versioned known-issue taxonomy to deterministic protocol
+  profiles and require an explicit cited disposition for every applicable class without granting
+  finding authority.
+- **Completed changes:** Closed the provider-free taxonomy capability after the complete sequential
+  gate. The corpus remains hash-pinned at 19 items / 15 critical items; applicability is
+  deterministic and evidence-backed; omission becomes `GAP`; critical gaps block maximum-assurance
+  `COMPLETE`; report denominators and custody replay remain enforced; taxonomy evidence cannot
+  create findings.
+- **Files changed:** Taxonomy/custody, deterministic applicability and report consumers,
+  orchestration/recovery hardening, safe regressions, governed inventory, queues, runtime status,
+  traceability, and both worklogs.
+- **Commands run / results:** The terminal sequential command above exited `0` with `8073 passed,
+  22 skipped, 12 warnings` in `9810.83s (2:43:30)`. Earlier retained gates include `291`
+  assurance/report/learning, `233` model-coverage/review/manifest, `314` release/replay, `350`
+  scheduler and `103` governance tests. The post-closure governance matrix passes `103` tests in
+  `49.98s`; canonical generation/verification, Ruff, strict mypy, JSON, and diff integrity pass.
+  Final operator-evidence reread remains exact at the current AF7A24E checksum, 162656 bytes, 2902
+  lines, latest `2026-09-01T04:49Z`, and remains nonauthorizing and not independently authenticated.
+- **Authority boundary:** Provider-free local implementation and validation only; no provider,
+  credential, route, campaign, run index, spend, qualification, runtime, audit, or release
+  authority changed.
+- **Remaining limitations:** Release construction remains `BLOCKED_TECHNICAL` before side effects;
+  the 22 terminal skips require unavailable or explicit opt-in prerequisites. The operator record
+  is nonauthorizing and not independently authenticated; no real route is admissible or selected,
+  and completed real audits remain zero.
+- **Exact next safe action:** STOP. At a new ticket boundary, `V3-RETRIEVAL-001` is next
+  dependency-ready but remains queued and unselected.
+
+## 2026-09-01T19:32:38Z — V3-TAXONOMY-001 governed and static preflight
+
+- **Defensive objective:** Reconcile every production repair into governed source custody and prove
+  the current tree is documentarily and statically coherent before the final complete-suite run.
+- **Completed changes:** Canonical generation refreshed the autonomy inventory without changing its
+  3892-source coverage or logical-gate counts. Current runtime/worklog pointers and documentation
+  regression constants now bind the new raw, self, and source-universe digests; historical hashes
+  remain untouched.
+- **Files changed:** Governed autonomy inventory, current runtime/worklog hash pointers,
+  `tests/unit/test_product_documentation.py`, and both worklogs.
+- **Commands run / results:** Generator write/verify passes. Governance/schema/inventory/
+  traceability passes `103` tests in `50.50s`. Ruff lint passes; Ruff format checks `597` files while
+  preserving operator evidence; strict mypy passes over `226` source files; JSON parsing and
+  `git diff --check` pass.
+- **Authority boundary:** Provider-free local governance only; no provider, public network, target,
+  credential, route, campaign, run index, spend, or authority changed.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning and stop on
+  the first concrete failure, if any.
+
+## 2026-09-01T19:27:16Z — V3-TAXONOMY-001 sequential unit-tail closure
+
+- **Defensive objective:** Exhaust the remaining post-qualification unit surface after each
+  concrete repair before committing another complete-suite restart.
+- **Completed changes:** No new code or fixture change in this slice. The final recovery-evidence,
+  recovery-journal, usage, and verifier/judge tail is green. All prior tail failures were repaired
+  and validated in their complete owning modules.
+- **Files changed:** Both worklogs only.
+- **Commands run / results:** The final remaining tail passes `294` tests in `586.35s`. Across the
+  fail-fast slices, every unit file from `test_model_qualification.py` through the alphabetic end
+  has now been traversed on the current tree.
+- **Authority boundary:** Provider-free local validation only; no provider, public network, target,
+  credential, route, campaign, run index, spend, or authority changed.
+- **Exact next safe action:** Regenerate and verify governed artifacts, run governance/static
+  preflight, then restart the complete sequential suite from the beginning.
+
+## 2026-09-01T19:16:25Z — V3-TAXONOMY-001 recovery multi-suffix fixture custody
+
+- **Defensive objective:** Preserve one-uncheckpointed-append live custody while testing that a
+  deliberately corrupted two-suffix journal is rejected before ledger mutation on resume.
+- **Completed changes:** The synthetic crash fixture now expects process death on its first suffix
+  and the exact private-custody refusal on its impossible second same-process append. The second
+  artifact is already durable when refused, so the existing resume and ledger-immutability
+  assertions still exercise the intended corrupt disk state. Production scheduler custody is
+  unchanged.
+- **Files changed:** `tests/unit/test_truncation_recovery_cost_resume.py` and both worklogs.
+- **Commands run / results:** The final tail segment stopped after `43 passed / 1 failed` in
+  `49.88s`. The exact regression passes; all `11` recovery-cost-resume tests pass in `38.79s`;
+  targeted Ruff lint/format and `git diff --check` pass.
+- **Authority boundary:** Provider-free local crash-fixture repair only; no provider, public
+  network, target, credential, route, campaign, run index, ledger value, spend, or authority
+  changed.
+- **Exact next safe action:** Resume the remaining sequential unit tail after recovery cost resume,
+  regenerate governed artifacts, run governance/static preflight, then restart the complete suite.
+
+## 2026-09-01T19:10:49Z — V3-TAXONOMY-001 truncation exception and depth boundaries
+
+- **Defensive objective:** Reject schema-invalid complete candidate reviews without retaining raw
+  validation state, and classify over-depth truncated frames as a bounded invalid frame.
+- **Completed changes:** Complete document and frame decoding now raise sanitized public errors only
+  after internal exceptions leave scope, retaining just the safe structured-output failure enum.
+  Prefix scanning converts its compiled nesting-depth sentinel into the existing noncrediting
+  `INVALID_FRAME` projection. Schema-invalid output remains terminal and is not retried.
+- **Files changed:** `src/mmaudit/models/truncation.py`, `tests/unit/test_truncation.py`, and both
+  worklogs.
+- **Commands run / results:** The post-refresh tail stopped after `2602 passed / 1 failed` in
+  `557.82s`. Four focused exception-hygiene cases and the depth-bound case pass; the full truncation
+  module passes `44` tests in `2.05s`; targeted Ruff lint/format, strict mypy, and
+  `git diff --check` pass.
+- **Authority boundary:** Provider-free local validation hardening only; no provider, public
+  network, target, credential, route, retry configuration, campaign, run index, spend, or
+  authority changed.
+- **Exact next safe action:** Resume the sequential unit tail after truncation, regenerate governed
+  artifacts, run governance/static preflight, then restart the complete suite.
+
+## 2026-09-01T18:56:30Z — V3-TAXONOMY-001 shared price-cap test contract
+
+- **Defensive objective:** Keep singleton route-price validation delegated to the shared exact-price
+  projector while proving malformed or non-dominated exact-string prices still fail closed.
+- **Completed changes:** Two stale singleton assertions now expect the stable OpenRouter wrapper for
+  shared projector refusal. The endpoint-specific message remains tested on the multi-endpoint
+  path. Production pricing, binary-float/non-string refusal, and route admission are unchanged;
+  `V3-PRICELEXEME-001` remains queued and unimplemented.
+- **Files changed:** `tests/unit/test_openrouter_refresh_runtime.py` and both worklogs.
+- **Commands run / results:** The resumed unit tail stopped after `90 passed / 1 failed` in
+  `99.70s`. The cache-dominance regression passes; all eight malformed-price cases pass; the full
+  refresh-runtime module passes `90` tests in `89.74s`; targeted Ruff lint/format and
+  `git diff --check` pass.
+- **Authority boundary:** Provider-free local test-contract repair only; no provider, public
+  network, target, credential, route, campaign, run index, spend, or authority changed.
+- **Exact next safe action:** Resume the sequential unit tail after refresh runtime, regenerate
+  governed artifacts, run governance/static preflight, then restart the complete suite.
+
+## 2026-09-01T18:48:10Z — V3-TAXONOMY-001 pre-transport reasoning failure evidence
+
+- **Defensive objective:** Preserve the exact routed reasoning plan on a reserved request that is
+  refused before provider transport, without weakening policy drift or usage-custody validation.
+- **Completed changes:** Failure usage now seals typed reasoning evidence whenever its request token
+  plan contains a reasoning plan, including the explicit unobserved state before transport. The
+  regression proves the original policy error, released zero-spend reservation, and typed
+  unobserved reasoning custody.
+- **Files changed:** `src/mmaudit/models/openrouter.py`,
+  `tests/unit/test_openrouter_policy_eligibility.py`, and both worklogs.
+- **Commands run / results:** The sequential unit tail stopped after `1015 passed / 1 failed / 2
+  warnings` in `106.63s`. The exact repaired regression passes; the policy-eligibility module
+  passes all `9` tests in `5.46s`; targeted Ruff lint/format and `git diff --check` pass.
+- **Authority boundary:** Provider-free local evidence repair only; no provider, public network,
+  target, credential, route, campaign, run index, spend, or authority changed.
+- **Exact next safe action:** Resume the sequential unit tail at policy eligibility, regenerate
+  governed artifacts, run governance/static preflight, then restart the complete suite.
+
+## 2026-09-01T18:37:54Z — V3-TAXONOMY-001 certified-ensemble source-custody fixture repair
+
+- **Defensive objective:** Preserve fail-closed source-backed whole-protocol review credit while
+  making the certified-ensemble synthetic fixture carry the exact typed surface custody required
+  by production.
+- **Completed changes:** Whole-protocol synthetic usage now carries deterministic requested-surface
+  manifest and source-location proof hashes. Negative variants retain those unrelated fields so
+  each fails only its named context boundary. Production qualification and ensemble minima are
+  unchanged.
+- **Files changed:** `tests/unit/test_model_qualification.py` and both worklogs.
+- **Commands run / results:** The fourth complete suite stopped after `4045 passed / 22 skipped / 1
+  failed / 7 warnings` in `8531.85s`. The model-qualification module passes all `90` tests in
+  `47.10s`; its five negative context variants pass; Ruff lint/format and `git diff --check` pass.
+- **Authority boundary:** Provider-free local regression repair only; no provider, public network,
+  target, credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Regenerate governed artifacts, run governance/static preflight, then
+  restart the complete sequential suite from the beginning.
+
+## 2026-09-01T16:05:15Z — V3-TAXONOMY-001 post-fixture governance and static closure
+
+- **Defensive objective:** Reconcile the current-schema fixture repairs and prove the tree is
+  documentarily and statically consistent before the next complete-suite attempt.
+- **Completed changes:** Canonical generation and verification remain exact; production code and
+  authority boundaries are unchanged.
+- **Commands run / results:** Governance, schema, and traceability pass `103` tests in `52.04s`;
+  Ruff lint passes; Ruff format checks `597` files while preserving operator evidence; strict mypy
+  passes over `226` source files; `git diff --check` passes.
+- **Authority boundary:** Provider-free local governance only; no external action or authority.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning.
+
+## 2026-09-01T16:02:42Z — V3-TAXONOMY-001 current report fixture matrix closure
+
+- **Defensive objective:** Eliminate analogous current-to-legacy fixture drift before the next
+  complete-suite attempt while preserving exact schema-1.4 actor and taxonomy custody.
+- **Completed changes:** Current policy, refresh-route tamper, scheduler-erasure, and semantic-shard
+  manifest fixtures now remain coherent schema-1.4 reports with their required taxonomy gate and
+  artifacts. Deliberate legacy projections still remove current-only fields explicitly. Production
+  validators are unchanged.
+- **Files changed:** `tests/unit/test_manifest_policy_selection.py`,
+  `tests/unit/test_manifest.py`, `tests/unit/test_scheduler_manifest.py`,
+  `tests/unit/test_semantic_sharding.py`, and both worklogs.
+- **Commands run / results:** The four-file matrix passes `172` tests in `29.91s`; targeted Ruff
+  lint/format and `git diff --check` pass. Independent full-file runs pass `14`, `76`, `15`, and
+  `67` tests respectively.
+- **Authority boundary:** Provider-free local regression repair only; no provider, public network,
+  target, credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Regenerate governed artifacts, run governance/static preflight, then
+  restart the complete sequential suite from the beginning.
+
+## 2026-09-01T15:56:46Z — V3-TAXONOMY-001 current policy-manifest fixture repair
+
+- **Defensive objective:** Preserve current schema-1.4 taxonomy custody in newly issued policy
+  manifests while keeping the deliberate legacy policy-version regression semantically isolated.
+- **Completed changes:** The policy-manifest fixture now retains current taxonomy coverage and its
+  exact quality gate when recomputing the minimum analysis floor. Its schema-1.1 negative case
+  removes current taxonomy and actor fields before exercising the intended policy-selection guard.
+  Production report and manifest validators are unchanged and remain fail-closed.
+- **Files changed:** `tests/unit/test_manifest_policy_selection.py` and both worklogs.
+- **Commands run / results:** The third complete suite stopped at the fixture setup error after
+  `3472 passed / 22 skipped / 1 error / 6 warnings` in `7116.40s`. The repaired file passes all
+  `14` tests in `4.85s`; targeted Ruff lint/format and `git diff --check` pass.
+- **Authority boundary:** Provider-free local regression repair only; no provider, public network,
+  target, credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Complete the analogous-fixture audit, regenerate governed artifacts,
+  run focused governance/static gates, then restart the complete sequential suite.
+
+## 2026-09-01T13:50:52Z — V3-TAXONOMY-001 post-repair governance and static closure
+
+- **Defensive objective:** Reconcile the detached replay fixture repair into governed custody and
+  prove the tree is documentarily and statically consistent before the next complete-suite run.
+- **Completed changes:** Canonical generation and verification remain exact after the fixture
+  repair and stronger context-bound helper. Production code and authority boundaries are
+  unchanged.
+- **Commands run / results:** Governance, schema, and traceability pass `103` tests in `52.19s`;
+  Ruff lint passes; Ruff format checks `597` files while preserving operator evidence; strict mypy
+  passes over `226` source files; `git diff --check` passes.
+- **Authority boundary:** Provider-free local governance only; no external action or authority.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning.
+
+## 2026-09-01T13:45:29Z — V3-TAXONOMY-001 detached replay test-custody repair
+
+- **Defensive objective:** Preserve the exact full-journal scheduler authority view and typed
+  context-request evidence while repairing stale detached test fixtures exposed by the second
+  complete-suite attempt.
+- **Completed changes:** Detached scheduler journals now retain plans and activations required by
+  the production authority snapshot. The origin-identity usage helper now supplies exact
+  role-matched `ContextRequestEvidence` and its digest. Production manifest replay and model-review
+  custody checks are unchanged and remain fail-closed.
+- **Files changed:** `tests/unit/test_manifest_consensus.py` and
+  `tests/unit/test_model_candidate_origin_identity.py`, plus both worklogs.
+- **Commands run / results:** The second complete suite stopped at one stale detached-journal
+  failure after `3453 passed / 22 skipped / 1 failed / 6 warnings` in `7116.18s`. The repaired
+  manifest/origin-identity matrix passes `31` tests in `0.83s`; targeted Ruff lint and format pass.
+- **Authority boundary:** Provider-free local regression repair only; no provider, public network,
+  target, credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Regenerate governed artifacts, run focused governance/static gates,
+  then restart the complete sequential suite from the beginning.
+
+## 2026-09-01T11:35:17Z — V3-TAXONOMY-001 post-failure governance and static closure
+
+- **Defensive objective:** Reconcile the calibration canonicalization change into governed source
+  custody and prove the repaired tree is statically and documentarily consistent before restart.
+- **Completed changes:** The final inventory remains `3892` sources / `3895` occurrences with new
+  raw `6217d4ef5525973b0982371023a2b578af5491496d87ab6e4aa1130e2337c1f6`, self
+  `321e32248644a6babf3a4044080501bfc9cd2deef50ac3f6b53dc25d2de981d3`, and universe
+  `fb3ff4b427eb0f1ac40a499c8786dd15053de0249fd192b5763f0c4cde9f9f17` hashes; discovery and
+  schema hashes are unchanged.
+- **Commands run / results:** Canonical generation write/verify passes; governance, schema, and
+  traceability pass `103` tests in `51.04s`; Ruff lint passes; Ruff format checks `597` files while
+  preserving operator evidence; strict mypy passes over `226` source files.
+- **Authority boundary:** Provider-free local governance only; no external action or authority.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning.
+
+## 2026-09-01T11:29:15Z — V3-TAXONOMY-001 full-suite canonicalization and private-runtime repairs
+
+- **Defensive objective:** Preserve exact policy-only calibration transitions, clean-chain ancestor
+  isolation, and weak transport identity under the new actor/taxonomy configuration and required
+  repo-local pytest basetemp.
+- **Completed changes:** Calibration transition hashes now use the same canonical AuditConfig form
+  as `stable_hash()`, including its legacy omission of a wholly default actor-model block, before
+  replacing only the qualification-policy pin. Clean-chain tests retain repository fixtures under
+  repo-local pytest custody but place the trusted runtime in a disposable physical owner-private
+  root, preserving ancestor-control-file rejection. The direct pipeline revocation regression uses
+  a weak-referenceable client stub so production identity binding reaches the intended tombstone.
+- **Files changed:** `src/mmaudit/models/calibration_transition.py`,
+  `tests/unit/test_calibration_release_transition.py`, `tests/unit/test_clean_chain.py`,
+  `tests/unit/test_coverage_pipeline_wiring.py`, and both worklogs.
+- **Commands run / results:** The complete suite was stopped after `2435 passed / 22 skipped /
+  24 failed` in `7018.28s`. Targeted files then pass `6`, `22`, and `7` tests independently; their
+  combined matrix passes `35` tests in `13.61s`; targeted Ruff and diff checks pass.
+- **Authority boundary:** The policy-only delta remains exact and nonauthorizing; production
+  clean-chain and weak transport bindings remain fail-closed. No provider, public network, target,
+  credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Regenerate governed artifacts, then restart the complete sequential
+  suite from the beginning and stop on the next concrete failure, if any.
+
+## 2026-09-01T09:25:11Z — V3-TAXONOMY-001 exact Hardhat mount regression
+
+- **Defensive objective:** Remove the final location-dependent isolation assertion and prove the
+  exact host capabilities granted to the synthetic local Hardhat wrapper.
+- **Completed changes:** The regression now binds the cidfile and seccomp profile to the disposable
+  private runtime directory and requires exactly three mounts: read-only workspace, writable
+  private output, and read-only private RPC socket. It no longer rejects every descendant of the
+  operator home. Production isolation code is unchanged.
+- **Files changed:** `tests/unit/test_hardhat_isolation_backend.py` and both worklogs.
+- **Commands run / results:** Targeted Ruff passes; all `38` Hardhat isolation tests pass in
+  `4.02s` with an approved local-only `127.0.0.1` listener after the ordinary sandbox correctly
+  denied socket binding; governed generation write/verify passes with unchanged hashes.
+- **Authority boundary:** The listener was disposable and loopback-only. No provider, public
+  network, target, credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Restart the complete sequential suite on the final pre-closure tree.
+
+## 2026-09-01T09:20:30Z — V3-TAXONOMY-001 isolation regression matrix closure
+
+- **Defensive objective:** Make the isolation regression contract independent of the physical
+  location of the required repo-local pytest basetemp while preserving its exact trust boundaries.
+- **Completed changes:** The rootless discovery fixture now creates a nested synthetic repository
+  and proves its synthetic runtime is outside that repository. The Bubblewrap case permits empty
+  ancestor-directory scaffolding but rejects the operator home as a bind source. Along with the
+  earlier exact container mount/runtime checks and macOS whole-home denial, every analogous test
+  now asserts the actual boundary. Production isolation code is unchanged.
+- **Files changed:** `tests/unit/test_adversarial_repository.py`, `tests/unit/test_isolation.py`,
+  `tests/unit/test_reproduction.py`, and both worklogs.
+- **Commands run / results:** The complete three-file unit matrix passes `77` tests in `2.33s`;
+  targeted Ruff format/check passes; governed generation write/verify passes with unchanged hashes.
+- **Authority boundary:** Local provider-free test hardening only; no external action, target,
+  credential, route, campaign, run index, or authority changed.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning and stop on
+  the next concrete failure, if any.
+
+## 2026-09-01T09:16:21Z — V3-TAXONOMY-001 location-independent isolation regression
+
+- **Defensive objective:** Preserve exact container and macOS isolation claims when the required
+  physical pytest basetemp is itself below the operator's home path.
+- **Completed changes:** Three stale substring assertions now prove the actual boundary: container
+  runtime controls stay in the disposable private runtime directory, bind mounts are exactly the
+  private workspace and output directory, and the macOS policy grants no whole-home `subpath` rule.
+  Production isolation code is unchanged.
+- **Files changed:** `tests/unit/test_adversarial_repository.py`, `tests/unit/test_isolation.py`,
+  `tests/unit/test_reproduction.py`, and both worklogs.
+- **Commands run / results:** The sequential suite was stopped at the first concrete failure after
+  `367 passed / 26 skipped` in `5501.33s`. Both analogous failures were reproduced. The repaired
+  three-test matrix passes in `0.34s`, and targeted Ruff format/check passes.
+- **Authority boundary:** This is local provider-free test hardening only. No repository target,
+  provider, credential, private ledger, route, command, campaign, run index, or authority changed.
+- **Exact next safe action:** Restart the complete sequential suite from the beginning and stop on
+  the next concrete failure, if any.
+
+## 2026-09-01T07:37:58Z — V3-TAXONOMY-001 operator-decision governance and static closure
+
+- **Defensive objective:** Reconcile the operator's two candidate-route decisions into current
+  governance without relaxing a constraint, selecting a route, or starting the separately queued
+  price-custody ticket.
+- **Completed changes:** Current runtime, traceability, both operator guides, model-selection
+  guidance, and regression contracts bind the exact AF7 artifact. The binary-float price refusal
+  stands; reasoning effort remains required for all four route purposes; `V3-PRICELEXEME-001` stays
+  queued, unselected, and unimplemented; and the conditional xAI route is not currently admissible
+  or selected. Historical endpoint-survey evidence remains historical.
+- **Files changed:** `docs/models/model_selection.md`, both operator-prerequisite guides,
+  `docs/remediation/v3/runtime_status.json`, `docs/remediation/v3/review_traceability.json`,
+  `tests/unit/test_product_documentation.py`, governed inventory artifacts, and both worklogs.
+- **Commands run / results:** Documentation contract `21` passed; governance/schema/inventory `103`
+  passed in `50.41s`; canonical generation write/verify passed; Ruff format checked `597` files while
+  preserving the operator-owned evidence bytes; Ruff lint passed; strict mypy passed over `226`
+  source files; JSON and diff checks passed on the reconciled surfaces.
+- **Authority boundary:** The operator record is nonauthorizing and not independently authenticated
+  by Codex. No provider call, route selection, command, campaign, run index, qualification, runtime,
+  audit, or release authority follows.
+- **Exact next safe action:** Run the complete sequential provider-free suite. If it passes, close
+  only `V3-TAXONOMY-001`; keep `V3-RETRIEVAL-001` unselected as next and
+  `V3-PRICELEXEME-001` queued.
+
+## 2026-09-01T07:14:29Z — V3-TAXONOMY-001 generation and operator-delta reconciliation
+
+- **Defensive objective:** Freeze the latest governed taxonomy artifacts and reconcile an
+  externally committed operator decision without treating it as authority or starting a second
+  ticket.
+- **Completed changes:** Canonical generation is current at `3892` sources. While governance ran,
+  HEAD advanced to remote-resolved `4c553590`, whose operator-supplied record upholds the current
+  numeric-price refusal, confirms `effort=high` remains required, chooses future lossless
+  price-lexeme custody, and queues `V3-PRICELEXEME-001`. It reports zero spend and the unchanged
+  57-entry / `0.68118684` USD ledger. The active plan, zero currently admissible/selected route,
+  completed-real-audit count, and taxonomy scope remain unchanged.
+- **Files changed:** Governed schemas/inventory, queue/worklog/runtime/traceability reconciliation
+  surfaces, tests, and the prior active-slice files. `operator_results.md` is preserved exactly as
+  committed by the external monitoring session.
+- **Commands run / results:** Generator write/verify passes; schema/inventory tests pass `62` in
+  `50.43s`; affected taxonomy/replay/manifest units pass `457` in `39.87s`; governance passes `38`
+  tests before stopping on stale current-evidence and expected pre-closure assertions.
+- **Authority boundary:** The new operator record is nonauthorizing and not independently
+  authenticated by Codex. `V3-PRICELEXEME-001` remains queued, no route is selected, and no provider,
+  operator, campaign, qualification, audit, or release action follows.
+- **Exact next safe action:** Finish local reconciliation of the new exact operator record, rerun
+  governance, then complete static and sequential full-suite gates for `V3-TAXONOMY-001` only.
+
+## 2026-09-01T07:05:48Z — V3-TAXONOMY-001 truncation-recovery integration closure
+
+- **Defensive objective:** Preserve exact candidate and private model-review semantics across
+  zero-transport truncation resumes while allowing each run to retain a fresh, self-hashed actor
+  input observation.
+- **Completed changes:** The shared truncation integration inventory helper now strictly validates
+  embedded actor evidence and excludes only `evaluated_at` plus its derived `evidence_sha256` from
+  canonical resume comparison. Candidate findings remain byte-exact, and every artifact, context,
+  source, surface, status, limitation, and actor semantic field remains comparison-bound. Production
+  resume and authority behavior is unchanged.
+- **Files changed:** `tests/integration/test_scheduler_truncation_recovery_pipeline.py` and the
+  prior active-slice files.
+- **Commands run / results:** The focused direct recovery/resume case passes `1` test in
+  `140.94s`; the remaining six pipeline cases pass in `1128.81s`; with the two deterministic cost
+  guards, all `9` file-local tests pass cumulatively. Targeted Ruff passes.
+- **Unresolved issues:** Regenerate and verify governed schemas/inventory, then finish governance,
+  static checks, affected unit matrices, and the complete sequential suite.
+- **Exact next safe action:** Run `scripts/generate_release_schemas.py --write` locally, verify it
+  without `--write`, then run release-schema and autonomy-inventory tests. No external action
+  follows.
+
+## 2026-09-01T06:36:00Z — V3-TAXONOMY-001 coverage integration matrix closure
+
+- **Defensive objective:** Close the provider-free coverage integration matrix while preserving
+  pre-orientation cost custody and non-replayable model-review dispatch authority.
+- **Completed changes:** One shared regression helper now proves reopened coverage differs only by
+  the exact missing-authority reason for identical noncrediting evidence references. The full
+  independent-specialist resume also pins taxonomy coverage byte-for-byte. An older instance-shadow
+  test now reflects the later portfolio gate: an injected client callable is rejected before any
+  paid transport, without invoking the shadow, weakening the exact client boundary, or changing
+  production code.
+- **Files changed:** `tests/integration/test_coverage_pipeline_integration.py` and the prior
+  active-slice files.
+- **Commands run / results:** The two resume regressions pass `2` tests in `866.65s`; ordinary
+  authority invariants pass `3` tests in `1.63s`. The instance-shadow regression passes `1` test in
+  `2.05s`, its portfolio helper guards pass `3` tests in `0.66s`, and the remaining tail passes `4`
+  tests in `7.16s`. Along with the earlier resumed segments, all `11` file-local integrations pass
+  cumulatively on the latest tree. Targeted Ruff passes.
+- **Unresolved issues:** Run the dedicated truncation-recovery integration file, regenerate
+  governed artifacts, then finish governance, static, and complete sequential validation.
+- **Exact next safe action:** Run
+  `tests/integration/test_scheduler_truncation_recovery_pipeline.py` sequentially with physical
+  repository temp custody and stop on the next concrete failure. No external action follows.
+
+## 2026-09-01T06:14:19Z — V3-TAXONOMY-001 fail-closed coverage resume reconciliation
+
+- **Defensive objective:** Preserve the non-replayable, process-local pre-dispatch authority
+  boundary while proving a transport-free resume changes no model-review coverage fact other than
+  the exact missing-authority explanation.
+- **Completed changes:** The compact-surface resume regression now asserts zero resumed transport,
+  identical coverage structure and evidence identity, noncrediting references, and the sole
+  addition of `model review lacked exact journal-derived pre-dispatch authorization`. It no longer
+  requires unsafe byte identity across a reopened journal that intentionally owns no live
+  capabilities. The partial-graph unit also covers the real compiler-plus-source supplementation
+  multiplicity produced from one lexical source signal.
+- **Files changed:** `tests/integration/test_coverage_pipeline_integration.py`,
+  `tests/unit/test_protocol_profiles.py`, and the prior active-slice files.
+- **Commands run / results:** The remaining pipeline integration tail passes `44` tests in
+  `123.72s`. The next affected integration matrix passed `40` tests with `8` expected platform
+  skips before the stale resume assertion. Its focused repair passes `1` test in `77.06s`; the
+  ordinary-review live-authority invariants pass `3` tests in `1.63s`; targeted Ruff passes.
+- **Unresolved issues:** Resume the coverage integration tail after the repaired case, then run
+  truncation recovery, governed generation, governance, static checks, and the complete sequential
+  suite.
+- **Exact next safe action:** Resume `tests/integration/test_coverage_pipeline_integration.py`
+  immediately after the repaired case with NUL-safe collection and stop on the next concrete
+  failure. No provider, operator, candidate, campaign, qualification, or release action follows.
+
+## 2026-09-01T05:37:58Z — V3-TAXONOMY-001 typed partial-graph replay repair
+
+- **Defensive objective:** Preserve source-derived protocol-profile replay when a bounded semantic
+  graph retains typed omissions, without allowing an omission to become negative-evidence credit.
+- **Completed changes:** Replay now aggregates missing oracle/proxy source signals by exact graph
+  kind and accepts them only within the same kind's enumerated omission capacity. Unrelated graph
+  omissions, fact omissions, undersized commitments, analytical-only population claims, and
+  unsupported retained positives remain rejected. The integration now proves omitted oracle and
+  proxy profiles are `INDETERMINATE`, affected taxonomy items are never `NOT_APPLICABLE`, and the
+  solely upgrade-profile item is explicitly `UNKNOWN`/`GAP`.
+- **Files changed:** `src/mmaudit/solidity/invariants.py`,
+  `tests/unit/test_protocol_profiles.py`, `tests/integration/test_pipeline.py`, and the prior
+  active-slice files.
+- **Commands run / results:** The expanded typed-omission unit passes `1` test in `0.07s`; the full
+  bounded partial-graph integration passes `1` test in `10.57s`.
+- **Unresolved issues:** Resume the pipeline integration tail after the repaired bounded-graph
+  case, then run remaining affected integrations, truncation recovery, generation, governance,
+  static, and the complete sequential suite.
+- **Exact next safe action:** Resume `tests/integration/test_pipeline.py` immediately after the
+  partial-graph case and stop on the next concrete failure. No external action or authority follows.
+
+## 2026-09-01T05:29:58Z — V3-TAXONOMY-001 custom-output inventory replay repair
+
+- **Defensive objective:** Reconstruct the exact source inventory for a run whose configured output
+  is inside the audited repository, without trusting a historical exclusion after the run is moved.
+- **Completed changes:** Verification now derives the configured output root from the canonical
+  `<output>/runs/<run-id>` layout rather than misidentifying the intermediate `runs/` directory.
+  Exact retained/current exclusion agreement remains mandatory while the run is in place. Once a
+  run is relocated outside the repository, replay applies no artifact-supplied exclusion, so new
+  source at the former output path is reported as unexpected. A focused unit covers both path
+  derivations; the existing integration covers nested same-name source retention, in-place CURRENT
+  verification, and relocated-source detection.
+- **Files changed:** `src/mmaudit/orchestration/verification.py`,
+  `tests/unit/test_manifest.py`, and the existing active-slice files.
+- **Commands run / results:** The focused output-policy unit passes `1` test in `0.81s`; the full
+  custom-output integration passes `1` test in `1.73s`.
+- **Unresolved issues:** Resume the interrupted pipeline integration tail, run the remaining
+  affected integrations and truncation-recovery integration, regenerate governed artifacts, then
+  complete governance, static, and full sequential gates.
+- **Exact next safe action:** Resume `tests/integration/test_pipeline.py` immediately after the
+  repaired custom-output case with NUL-safe collection and stop on the next concrete failure. No
+  external action or authority follows.
+
+## 2026-09-01T04:45:42Z — V3-TAXONOMY-001 fallback-index replay boundary closure
+
+- **Defensive objective:** Preserve exact source-level profile replay when fallback state
+  declarations span lines, begin after whitespace, use multiline contract headers, or appear in
+  intentionally malformed unclosed synthetic contracts.
+- **Completed changes:** Empty contract-member lines can no longer become the start identity of a
+  later state declaration. Multiline state entities retain their real declaration start/end lines.
+  Unclosed fallback blocks are bounded through EOF so malformed contracts retain their member
+  functions and conservative graph edges. The coherent state-deletion profile regression now uses
+  the newly recognized fallback state as its compiler-backed control.
+- **Files changed:** `src/mmaudit/solidity/index.py`, `tests/unit/test_solidity.py`, and
+  `tests/unit/test_protocol_profiles.py`, in addition to the prior active-slice files.
+- **Commands run / results:** The focused maximum-assurance regression passes `1` test in
+  `701.77s`. The first combined integration run passed `35` tests in `1240.46s` before the local
+  ERC-4626 fixture exposed a blank-line state-identity mismatch; that exact integration now passes
+  in `6.83s`. The first affected unit run stopped at `249 passed` on malformed fallback graph
+  retention; three focused parser/profile regressions then passed, and the complete latest-tree
+  affected unit/replay group passes `364` tests in `22.68s`.
+- **Unresolved issues:** Repeat the complete seven-file integration matrix on the final parser,
+  run truncation-recovery integration, regenerate canonical artifacts, then finish governance,
+  static, and complete sequential gates. Canonical inventory hashes must be recomputed after the
+  final source changes.
+- **Exact next safe action:** Run the complete affected integration matrix once on the latest tree,
+  preserving strict profile replay and scheduler custody. No external action or authority follows.
+
+## 2026-09-01T04:06:19Z — V3-TAXONOMY-001 pipeline closure-regression repair
+
+- **Defensive objective:** Keep incomplete blind-context planning fail-closed across fresh and
+  resumed scheduler journals, retain multiline contract-level state in fallback Solidity indexing,
+  and prevent synthetic model evidence from claiming non-advancing reachability.
+- **Completed changes:** An incomplete blind-context inventory now seals the fresh pass and never
+  opens reduction; resumed active passes preserve terminal task results and record failures only for
+  missing results. Fallback state parsing joins bounded multiline declarations only at contract-member
+  depth and supports contract headers whose opening brace is on a later line. The local fake provider
+  skips graph self-edges for non-direct surfaces instead of manufacturing an unsupported one-node
+  path. The full-production validators remain strict.
+- **Files changed:** `src/mmaudit/orchestration/pipeline.py`, `src/mmaudit/solidity/index.py`,
+  `tests/fake_openrouter.py`, `tests/integration/test_pipeline.py`,
+  `tests/integration/test_coverage_pipeline_integration.py`, `tests/unit/test_solidity.py`, and
+  `tests/unit/test_model_review_evidence.py`.
+- **Commands run / results:** The pre-correction maximum-assurance case reached the blind pass but
+  failed its expected terminal status after `502.17s` because three fake reviews used self-edges.
+  The corrected focused fresh-context/parser/reachability group passes `3` tests in `2.24s`; the
+  resumed failed-context regression passes in `4.06s`; and the original retained-success resume
+  control passes in `56.52s`. One deliberately overbroad interim resume fixture correctly failed
+  manifest replay because successful review artifacts had been made context-unrebuildable; the
+  regression was narrowed to terminal failures without weakening manifest custody. Targeted Ruff
+  and format checks over all seven files pass.
+- **Unresolved issues:** Rerun the maximum-assurance case and affected integration/unit matrices,
+  regenerate governed artifacts, run static gates and the complete sequential suite, then reconcile
+  closure governance. The last generated autonomy inventory is stale until canonical regeneration.
+- **Exact next safe action:** Rerun the maximum-assurance end-to-end case with advancing synthetic
+  paths, then run the affected integration matrix sequentially. No provider, operator, candidate,
+  plan, campaign, qualification, release, or audit action follows.
+
+## 2026-09-01T02:46:39Z — V3-TAXONOMY-001 scheduler and governance reconciliation
+
+- **Scheduler result:** The complete changed scheduler unit matrix passes `350` tests in `288.13s`.
+  A detached-v1 test fixture had omitted the real pass plan's manifest; direct and recursive v1
+  fixtures now bind the exact legacy algorithm version and pass independently.
+- **Governance:** Runtime status and review traceability now identify `V3-TAXONOMY-001` as the sole
+  active ticket, retain `V3-ACTORMODEL-001` as the last completed work, identify
+  `V3-RETRIEVAL-001` only as the post-disposition successor, and record exact taxonomy hashes,
+  counts, dispositions, nonfinding authority, completed matrices, and pending gates. Requirement K
+  is `IN_PROGRESS`; requirement U retains all historical/external obligations.
+- **Authority boundary:** The active plan, zero admissible/selected replacement state, operator
+  evidence, ledger, and completed-real-audit count remain unchanged. No external action follows.
+- **Open validation:** Run governance/schema tests, local integrations, static gates, and the
+  complete sequential suite before final disposition.
+
+## 2026-09-01T02:37:12Z — V3-TAXONOMY-001 release/replay and governed-inventory closure
+
+- **Release/replay result:** Sequential provider-free validation passes `74` core release tests,
+  `169` release artifact/forensic custody tests, and `71` replay/certification tests (`314` total).
+  Release collection and execution remain intentionally fail-closed before side effects.
+- **Operator-decision regressions:** Nine focused tests freeze the exact four route purposes,
+  directly guard the shared reasoning-effort resolver, and prove an xAI/Amazon-Bedrock-shaped
+  numeric-price response emits no discovery artifact or route report.
+- **Governed artifacts:** Canonical write and verification pass after adding the newly classified
+  scheduler directory-enumeration locus. The inventory now records `3892` sources / `3895`
+  occurrences / `3843` gate sources / `49` non-gating controls.
+- **Open validation:** Reconcile current runtime/traceability governance, then finish scheduler,
+  local-integration, static, and complete sequential matrices. No external action or authority
+  follows.
+
+## 2026-09-01T02:31:45Z — V3-TAXONOMY-001 core model consumer matrix closure
+
+- **Result:** The complete provider-free model-coverage, model-review-evidence, and manifest
+  consumer matrix passes `233` tests in `1480.56s`.
+- **Coverage:** Every credited ordinary and promoted reference replays exact retained custody before
+  the terminal live-authority gate, including the explicit later-reference contradiction regression.
+  Shared source-location proofs remain valid throughout the complete consumer fixture set.
+- **Governed follow-up:** Static audit identified one newly classified scheduler
+  directory-enumeration locus. Its frozen source-shape pin is updated; canonical inventory
+  regeneration and verification are the next active slice.
+- **Open validation:** Finish release/replay, governance, local-integration, static, and complete
+  sequential matrices. No external action or authority follows.
+
+## 2026-09-01T02:05:38Z — V3-TAXONOMY-001 assurance consumer matrix closure
+
+- **Result:** The complete provider-free assurance, report-status projection, and
+  learning-orchestration consumer matrix passes `291` tests in `1032.87s`.
+- **Coverage:** The run includes the repaired source-location proof custody and genuine live
+  ordinary pre-dispatch authority for direct, recursive, retained-partition, specialist, and
+  maximum-assurance evidence paths. No promoted evidence fixture relies on caller-constructed
+  ordinary authority.
+- **Open validation:** Finish model-coverage/model-review/manifest, release/replay, governance,
+  local-integration, canonical generation/static, and complete sequential matrices. No external
+  action or authority follows.
+
+## 2026-09-01T01:47:34Z — V3-TAXONOMY-001 shared context and assurance authority fixtures
+
+- **Shared context repair:** Synthetic scheduler review requests now bind exact source hashes, and
+  complete scheduler fixtures derive canonical source-location proofs from the same deterministic
+  request tuple before sealing context evidence. The maximum-assurance COMPLETE control again
+  proves four source-backed whole-protocol lineages and passes its scheduler clause.
+- **Assurance repair:** Direct, recursive, retained-partition, and specialist promotion fixtures no
+  longer use manually constructed ordinary artifacts as a second critical lineage. They issue
+  closure-private ordinary pre-dispatch authority in a separate live journal, consume it while
+  building coverage, and close it immediately afterward.
+- **Validation:** Synthetic COMPLETE assurance passes. The focused promoted assurance cluster
+  passes `6` tests in `527.88s`, covering direct parent/child custody, both direct retained-count
+  branches, recursive parent/leaf custody, recursive partitions, and specialist outcomes. Ruff
+  formatting and checks pass for affected test support and assurance files.
+- **Open validation:** Restart the complete assurance/report consumer group, then finish the
+  release/replay, governance, integration, static/generation, and full sequential matrices. No
+  external action or authority follows.
+
+## 2026-09-01T00:01:33Z — V3-TAXONOMY-001 consumer replay ordering repair
+
+- **Repair:** Credited model-review validation now replays every ordinary and promoted reference
+  against exact retained record, context, semantics, usage, lineage, and public custody before the
+  terminal live pre-dispatch capability gate. Valid detached evidence still fails closed for absent
+  live authority, while a later contradiction cannot be masked by an earlier valid reference or a
+  missing runtime journal.
+- **Fixture corrections:** A whole-protocol promoted fixture now seals the supporting source-audit
+  task's own deterministic request manifest instead of the promoted parent's custom manifest.
+  Forged and serialized recovery-capability lookalikes are asserted as hard failures; absent and
+  unrelated genuine capabilities remain noncrediting.
+- **Validation:** The initial two-case ordering smoke passes. Six ordinary/detached cases passed
+  before the fixture mismatch was exposed; the repaired promoted replay and negative-capability
+  cases each pass independently; the remaining direct, recursive, semantic, context, and alias
+  matrix passes `8` tests in `423.69s`; and the exact seven-pass scheduler-pipeline integration
+  passes in `59.80s`. Ruff checks pass, and strict mypy passes for the manifest source.
+- **Open validation:** Add the explicit multi-reference ordering regression, then complete the
+  consumer, release/replay, governance, local-integration, static/generation, and full sequential
+  matrices. No external action or authority follows.
+
+## 2026-08-31T23:08:41Z — V3-TAXONOMY-001 scheduler alias and recovery snapshot repair
+
+- **Independent findings:** Same-process mutation of the module-visible pre-dispatch binding class
+  could forge provider-visible authority fields after a genuine dispatch, and recovery opening had
+  both an incomplete final custody fence and a false rejection of the exact published hard-link
+  `2 -> 1` finalization for a recovery entry.
+- **Repairs:** The scheduler registry and both ordinary/recovery binding builders now lexically
+  capture the exact authority classes. Recovery snapshot adoption is transactional, permits only
+  the already-approved exact hard-link finalization pair, and requires retained count, hash-chain,
+  durable bytes, private observations, and checkpoint head to agree before checkpointing or LIVE
+  activation.
+- **Regressions:** Exploding replacement aliases cannot affect ordinary or recovery dispatch. A
+  family-root published pair succeeds on its first resume and becomes one link. Suppressing the
+  private recovery-entry observer rejects a derived uncertain suffix before LIVE, while a clean
+  follow-up resume succeeds.
+- **Validation:** Full scheduler journal passes `201` tests. Focused alias, published-pair,
+  interrupted-recovery, hard-link, and final-fence groups pass `6` tests. Scoped Ruff and strict
+  scheduler mypy pass.
+- **Open validation:** One legacy scheduler-v1 frozen-byte test was found to rebuild its purported
+  golden chain through mutable current-v2 helpers. Exact historical actor-free JSON fixtures are
+  being substituted without changing v1 source semantics or frozen hashes; the remaining
+  scheduler, taxonomy, consumer, release/replay, governance, integration, and complete sequential
+  matrices remain active. No external action or authority follows.
+
+## 2026-08-31T21:47:39Z — V3-TAXONOMY-001 governed regeneration and no-HIGH closure
+
+- **Consumer result:** The exact direct/recursive pipeline and manifest live-capability lifecycle
+  matrix passed `4` tests in `408.06s`. Detached, reopened, duck-typed, duplicated, stale, and
+  public-only recovery evidence remains noncrediting.
+- **Independent result:** Final adversarial review reports no remaining HIGH across import order,
+  ordinary/recovery dispatch authority, exact prompt lineage, promoted capability identity and
+  durable files, pipeline floor/specialist consumption, manifest replay, and actor projection.
+  Module-visible non-minting observers/dead helpers and Python same-process reflection remain lesser
+  hardening/implementation-boundary notes, not demonstrated false-credit routes.
+- **Governed artifacts:** Canonical generation passes in write and verification modes. Fail-closed
+  source-shape pins now explicitly include two new CLI entrypoints, configuration-root custody,
+  scheduler process authority, four new runtime modules, the taxonomy resource, and new filesystem
+  loci. The inventory records `3891` sources / `3894` occurrences / `3842` gate sources / `49`
+  non-gating controls; source-kind and logical-gate counts remain exact.
+- **Static/focused validation:** Ruff lint passes; Ruff format passes for all `597` governed files
+  while operator-supplied `operator_results.md` remains byte-preserved and explicitly excluded.
+  Strict mypy passes all `231` source files. Focused autonomy/schema checks pass after one exact
+  expected scheduler-filesystem count correction (`58`, not `51`).
+- **Status:** Sequential affected and complete provider-free matrices remain active. No external
+  action or authority follows.
+
+## 2026-08-31T21:20:36Z — V3-TAXONOMY-001 recovery prompt-lineage repair
+
+- **Independent HIGH and repair:** Recovery-child activation previously accepted a caller-selected
+  system-prompt hash. The scheduler-owned recovery binding now resolves every direct or nested
+  child to the exact ordinary root task and activation and requires all three system-prompt hashes
+  to be present and identical before dispatch authority or promoted credit can exist.
+- **Regressions:** Direct promotion rejects a coherent prospective child prompt drift. Recursive
+  promotion separately rejects coherent bridge and nested-leaf prompt drift. Valid direct and
+  recursive promotion, live capability use, and replay behavior remain covered.
+- **Validation:** The direct integration passed `1` test in `72.35s`; the recursive integration
+  passed `1` test in `99.62s`. Shared consumer and recovery-journal fixtures now inherit the exact
+  ordinary root prompt hash. Scoped Ruff, strict source mypy, py_compile, and diff checks pass.
+- **Status:** Consumer pipeline/manifest capability regressions are being rerun exclusively. Final
+  independent review, schema/autonomy regeneration, and affected/full sequential matrices remain.
+  No external action or authority follows.
+
+## 2026-08-31T19:28:12Z — V3-TAXONOMY-001 authority and recovery-credit reopening
+
+- **Independent HIGHs:** The external ordinary authority dynamically resolved replaceable scheduler
+  claim/register callbacks and instance-dispatched its require hook. A live journal could therefore
+  mint an arbitrary binding or preserve a real capability after close/tamper by shadowing those
+  hooks. The pending claim also matched only task/event coordinates rather than the complete
+  canonical binding. A generic one-time configurator would itself be pre-hijackable on an
+  authority-first import.
+- **Recovery HIGHs:** Recovery checkpointing could be replayed from a retained tail dispatch without
+  a fresh closure-private append marker. Promoted capability validation was family-only rather than
+  exact-capability-bound and did not pin the durable result/closure/promotion lineage, so direct
+  underscore issuance, file deletion/replacement, or cache rebasing could retain credit.
+- **Consumer HIGH:** Pipeline minimum-floor and specialist-role accounting derived successful
+  recovery requests from durable promotion markers alone. Reopened or otherwise capability-less
+  journals could therefore receive substantive completed-role credit even when promoted surface
+  coverage correctly failed closed; manifest validation encoded the same unsafe inventory.
+- **Required repair:** Bootstrap exact scheduler type and original closure callbacks without an
+  externally callable preconfiguration window; store the complete expected binding at the genuine
+  append/checkpoint transition; privately pin all recovery/promotion lineage observations and exact
+  promoted capability identity; require fresh append markers; and derive every recovery consumer
+  from successfully required direct child or recursive promoted-leaf projections only.
+- **Status:** Provider-free implementation and negative regressions are active. The earlier
+  `37`-test ordinary result remains useful evidence but no longer closes this boundary. No external
+  action or authority follows.
+
+## 2026-08-31T19:13:44Z — V3-TAXONOMY-001 ordinary dispatch-custody closure
+
+- **Completed repair:** Scheduler opening now binds the exact process, thread, root and control
+  descriptors, originally acquired lock descriptor, route, mode, and exact `SchedulerJournal`
+  object through lexical one-shot authority. Direct construction, copying, serialization, inherited
+  fork owners/roots, clone cleanup, rebinding, and generic issuer paths fail closed. Dead orphan
+  owner IDs are released without releasing their orphaned root tombstones.
+- **Dispatch authority:** An ordinary review capability can be registered only from one LIVE
+  `DISPATCHED` transition after its exact durable checkpoint. Its private binding and exact plan,
+  activation, and event file observations are retained by scheduler custody; every use rechecks
+  those immutable files and the current canonical append-only checkpoint/event prefix. Later valid
+  journal transitions do not revoke the original dispatch proof, while replacement, unlinking,
+  mutation, close, fork, clone, or reopened custody does.
+- **Validation:** The combined owner/opener/fork/durable/capability selection passed `37` tests in
+  `6.45s`. Ruff format/check, strict mypy for both source files, py_compile/import, and scoped
+  `git diff --check` passed. Independent final review found no remaining HIGH in this ordinary path.
+- **Files changed:** `src/mmaudit/orchestration/scheduler.py`,
+  `src/mmaudit/orchestration/model_review_authority.py`,
+  `tests/unit/test_scheduler_journal.py`, and `tests/unit/test_model_coverage.py`.
+- **Remaining limitation:** Recovery-child dispatch evidence is intentionally not ordinary
+  authority. Its closure-private transition caps and exact direct/recursive promotion join are now
+  the active follow-on; release collection and local release execution remain explicitly
+  `BLOCKED_TECHNICAL` before side effects.
+- **Authority boundary:** Provider-free local work only. No candidate, successor plan, command,
+  campaign, provider call, qualification, release, audit, or runtime authority was selected or
+  issued.
+
+## 2026-08-31T17:39:28Z — V3-TAXONOMY-001 raw journal ownership and capability reopening
+
+- **Independent HIGHs:** A forked `SchedulerJournal` could write a fresh `DISPATCHED` event and mint
+  child-process authority because journal custody lacked a creator-PID check. A shallow or
+  constructor-bypassed clone could share descriptors and mutable indexes while remaining a distinct
+  unregistered owner. The neutral authority issuer accepted arbitrary owner/binding/validator input.
+  Finally, `require` returned the registry's exact frozen dataclass, which `object.__setattr__` could
+  mutate, while validation rechecked only three hashes rather than the complete binding.
+- **Required repair:** Bind custody to PID plus an exact weak-referenced journal object before any
+  filesystem action; reject copy, deep-copy, serialization, clone close, and fork transitions.
+  Registration must consume a one-shot exact dispatch window established only after the durable
+  checkpoint. The registry and original binding stay closure-private; every require reconstructs
+  all request/task/role/model/lineage/surface/context/provider/schema/plan/activation/event fields
+  and returns only a detached projection.
+- **Passing adjacent evidence:** Actor provider-payload canonicalization passed `125` tests with one
+  explicit case-equivalent-filesystem skip; taxonomy core passed `41`; the local release boundary
+  passed `91` and has independent no-HIGH closure. These do not waive the reopened raw defects.
+- **Authority boundary:** Review and repair remain local/provider-free. No candidate, plan, command,
+  campaign, qualification, release authority, provider call, ledger change, or real audit occurred.
+
+## 2026-08-31T17:27:11Z — V3-TAXONOMY-001 local executed-result authority closure
+
+- **Independent HIGH and repair:** A prior compatibility path accepted self-authored detached local
+  `PASSED`/`FAILED` result artifacts even though the current runner can only emit a blocker. Four
+  forged receipts could therefore have contributed to a false complete release. Direct local
+  executed-result validation now rejects before reading evidence, and bundle validation requires
+  exact canonical blockers for all four local gates.
+- **Canonical boundary:** Blockers require the exact current plan, gate, candidate/run binding,
+  zero-duration timestamp, fixed argv and tool name, absent tool identities, `UNVERIFIED` execution,
+  no exit/timeout, exact empty stream sizes/hashes, exact zero-check result and blocker summaries,
+  and no artifacts. Historical executed results remain inadmissible without a distinct independently
+  authenticated legacy authority.
+- **Validation and review:** The isolated release collection/validation/runtime/gate matrix passed
+  `91` tests. Scoped Ruff, formatting, strict mypy, and diff checks passed. Independent re-review
+  found no remaining HIGH; dormant result-building helpers have no current acceptance route.
+- **Authority boundary:** Release collection and local execution remain deliberately
+  `BLOCKED_TECHNICAL`. No candidate, plan, command, campaign, qualification, release authority,
+  provider call, ledger change, or real audit occurred.
+
+## 2026-08-31T17:17:35Z — V3-TAXONOMY-001 local fail-closed validation and chronology architecture
+
+- **Local-gate result:** The execution entry point now validates exact in-memory candidate types and
+  returns a canonical `BLOCKED_TECHNICAL` receipt before reading either supplied path, creating a
+  file, spawning a process, or importing a tracked tool shadow. A later closure review rejected the
+  remaining historical executed-result compatibility path; no local gate can claim `PASS`.
+- **Validation:** The isolated local runtime/gate matrix passed `32` tests; the expanded release
+  collection/validation/runtime/gate matrix passed `84` tests. Two initial failures were test-only:
+  one stale error-message expectation and one assertion against a pathname the test itself renamed.
+  Both were corrected without weakening production validation.
+- **Chronology architecture:** Ordinary review authority is now dependency-neutral and process-local,
+  issued only after the durable `DISPATCHED` event/checkpoint inside a live
+  `ACTIVATED -> DISPATCHED` transition. Reopened journals start with no capability inventory; close
+  clears ordinary and promoted inventories. Focused chronology regressions and independent review
+  are still required before this slice can close.
+- **Authority boundary:** Release collection and local execution remain deliberately
+  `BLOCKED_TECHNICAL`. No candidate, plan, command, campaign, qualification, release authority,
+  provider call, ledger change, or real audit occurred.
+
+## 2026-08-31T17:02:41Z — V3-TAXONOMY-001 pre-dispatch chronology reopening
+
+- **Independent HIGH:** The provisional opaque ordinary-review capability was issued during final
+  coverage construction by replaying journal plans and activations. A scheduler journal can be
+  reopened from serialized comparison evidence, so that late issuance did not establish that the
+  exact surface commitment preceded the provider call. Coherent resealing could turn a critical
+  taxonomy `GAP` into `REVIEWED` and satisfy the COMPLETE gate.
+- **Required repair:** Issue process-private authority only at the live writable dispatch boundary,
+  bind the exact task/activation/request surface manifest/rendered context/provider prompt/schema,
+  and consume only already-issued authority. A never-dispatched resumed request may issue before its
+  actual call; completed/reopened, copied, and detached evidence may not recreate chronology.
+  Detached manifest comparison must remain noncrediting without an independent durable anchor.
+- **Other acceptance findings:** No other HIGH remains in corpus/schema pinning, deterministic
+  applicability and omission, citations, coverage denominator, taxonomy non-finding authority, or
+  maximum-assurance critical-GAP blocking. Published schemas still cannot express every Pydantic
+  cross-field invariant, a lesser documented limitation.
+- **Adjacent custody disposition:** Local execution cannot prove pre-startup isolation,
+  subprocess-network denial, and descriptor-rooted output under the current portable runner. It is
+  therefore being changed to return a typed blocker before filesystem or process access, rather
+  than retaining an unprovable functional path.
+- **Authority boundary:** Review and repair remain local/provider-free. No candidate, plan, command,
+  campaign, qualification, release authority, provider call, ledger change, or real audit occurred.
+
+## 2026-08-31T16:41:54Z — V3-TAXONOMY-001 release blocker independent closure
+
+- **Independent result:** Read-only review found no remaining HIGH. The blocker is the first runtime
+  statement, import and direct-call probes observed no file/process/network event, and immutable
+  snapshot wording correctly disclaims continuing custody over mutable paths.
+- **Tightening:** The blocker module no longer runtime-imports the validation stack. Regression
+  sentinels cover raw/path file I/O, directory rename/replace/unlink, subprocess execution, gate
+  execution, and evidence writes. Dormant CLI success output no longer claims publication, and the
+  README/Makefile now describe the blocker and current validation arguments accurately.
+- **Validation:** All `52` release validation/collection tests pass; scoped Ruff, formatting, strict
+  mypy, diff integrity, and both release Makefile dry runs pass. Collection remains deliberately
+  `BLOCKED_TECHNICAL`; this is no-HIGH closure of the fail-closed boundary, not publication support.
+- **Authority boundary:** No output was published and no candidate, plan, command, campaign,
+  qualification, release authority, provider call, ledger change, or real audit was created.
+
+## 2026-08-31T16:29:11Z — V3-TAXONOMY-001 release collection fail-closed boundary
+
+- **Technical disposition:** A portable pathname `mkdir` followed by `open` cannot prove that the
+  opened directory is the exact object created when a same-EUID actor can replace the name in that
+  gap. Release collection therefore raises a typed technical blocker before observing arguments,
+  creating directories, writing evidence, or executing a local gate. Standalone immutable snapshot
+  validation remains available for externally prepared evidence.
+- **Regression and validation:** Top-level and child directory-adoption callbacks are never reached,
+  victim files remain unchanged, the CLI cannot print publication success, and all `51` release
+  validation/collection tests passed with cache writes disabled under an isolated temp root.
+- **Still in progress:** Raw pre-dispatch authority has three fresh HIGH repairs plus actor prompt
+  canonicalization underway. Local gates are reopened because tracked-snapshot directory creation
+  has the same real-directory adoption gap; prior local passes are compatibility evidence only.
+- **Authority boundary:** This local fail-closed disposition publishes nothing and grants no
+  candidate, plan, command, campaign, qualification, release authority, provider call, ledger
+  change, or real audit.
+
+## 2026-08-31T15:39:50Z — V3-TAXONOMY-001 five-HIGH custody repair validation
+
+- **Fresh independent result:** Read-only review found five HIGHs: local-gate ancestry and ignored
+  execution inputs; sequential release-file return checks without atomic publication; forensic
+  descendant-directory substitution; and forensic publication before final verification.
+- **Implemented and tested:** Raw pre-dispatch task/activation authority now seals exact requested
+  surfaces for ordinary and promoted replay. Tracked-only local-gate snapshots exclude ignored
+  configuration and retain lexical ancestry. Forensic copy retains every descendant-directory
+  identity, keeps the incomplete marker through verification, and removes it only as the final
+  publication action; verifier results are explicitly cryptographic snapshots of mutable paths.
+- **Validation:** Raw coverage/journal/pipeline groups passed `84`, `188`, and `1` after `5` focused
+  adversarial cases. Local gate targeted/full groups passed `2`/`65`. Forensic targeted/full and
+  retained-journal groups passed `6`/`46`/`23`. All pytest commands used separate pre-created
+  runtime and case roots and disabled cache writes.
+- **Still in progress:** The distinct release evidence/report output roots are being replaced by
+  one private staged bundle and a same-parent atomic publication rename. Fresh independent raw and
+  custody re-reviews are active; therefore no no-HIGH closure or ticket completion is claimed.
+- **Authority boundary:** All work is local, deterministic, synthetic, and provider-free. No
+  candidate, plan, command, campaign, qualification, release authority, ledger change, provider
+  call, or real audit was selected or issued.
+
+## 2026-08-31T15:03:05Z — V3-TAXONOMY-001 forensic final-handoff custody repair
+
+- **Completed change:** Forensic destination creation can rebaseline only the intended parent
+  metadata and only after proving every lexical component remains the same object. Source-run and
+  retained-journal observations survive destination creation and remain exact across both copies.
+  Delivery directory identities include link count and ctime; descriptor-bound file identities,
+  sizes, and hashes are retained through nested verification and the final standalone/export return.
+- **Regressions:** Destination-ancestor adoption, source and retained-journal twin use during copy,
+  primary/dependency directory twin swap-use-restore, artifact mutation after nested verification,
+  and mutation during the second final anchor check all fail closed. Post-finalization failure
+  restores the incomplete marker.
+- **Validation:** Seven targeted race tests passed. With separate pre-created runtime and case temp
+  roots, all `41` forensic tests and `23` retained-journal compatibility tests passed; scoped Ruff,
+  formatting, strict mypy, and diff integrity pass. Two default-temp full attempts exposed unrelated
+  shared macOS `/private/.../T` ctime churn (after stale regex expectations were corrected); exact
+  ancestor custody intentionally rejects that churn, so closure commands must keep temp namespaces
+  isolated as well as test processes sequential.
+- **Remaining limitation:** Final rehashing increases I/O, and the filesystem can change after the
+  verifier returns; consumers must reverify at consumption. Raw pre-dispatch authority remains in
+  progress. No external command, provider call, candidate, plan, campaign, qualification, release
+  authority, or real audit was issued.
+
+## 2026-08-31T14:49:25Z — V3-TAXONOMY-001 release-file handoff custody repair
+
+- **Completed change:** A shared exact regular-file custody observation now binds content, size,
+  full leaf identity, and lexical parent/ancestor authority. Release validation retains that
+  authority for the report, every declared input, and every gate artifact through its final return;
+  collection independently retains the authored outputs across authoritative validation and its
+  own final handoff.
+- **Stabilization continuity:** Output-root rebaselining now compares every ancestor component
+  exactly and permits only the intended metadata transition on the same output leaf object.
+- **Regression and validation:** Coherent transient report staging, restored report/input/artifact
+  edits, post-validation report/evidence tampering, and same-leaf/replaced-ancestor cases fail
+  closed. Seven targeted cases passed, followed by all `59` validation/collection tests.
+- **Status and authority:** Raw pre-dispatch and forensic repairs remain in progress. No external
+  command, provider call, candidate, plan, campaign, qualification, release authority, or real
+  audit was issued.
+
+## 2026-08-31T14:44:52Z — V3-TAXONOMY-001 local-gate candidate custody repair
+
+- **Completed change:** Every fixed local gate now receives the retained typed candidate rather than
+  only its digest. Before execution it replays candidate semantics and retains exact metadata for
+  every tracked file and tracked parent directory; it revalidates that custody after the child and
+  again immediately before returning the receipt. Transient overwrite/restore therefore changes
+  retained ctime/identity even when final bytes and Git status are restored.
+- **Read-only plans:** Ruff check/format use `--no-cache`, mypy uses `--no-incremental`, and pytest
+  disables `cacheprovider`. This removes ordinary candidate-tree cache writes so exact directory
+  custody is a valid release invariant rather than a false failure caused by the fixed commands.
+- **Regression and validation:** A synthetic local Git candidate is changed only during the fake
+  child execution and restored before return; the gate now rejects it and emits no result artifact.
+  `tests/unit/test_release_runtime.py` passed `18`; candidate and gate-plan tests passed `45`.
+  Scoped Ruff and strict mypy pass.
+- **Status and authority:** Other independently reported custody repairs remain in progress, so this
+  is not ticket closure. No external command, provider call, candidate, plan, campaign,
+  qualification, release authority, or real audit was issued.
+
+## 2026-08-31T14:31:27Z — V3-TAXONOMY-001 full custody cross-review reopening
+
+- **Raw authority HIGH:** Exact retained `ContextPackage` replay is still downstream of the model
+  call. A caller can coherently reseal scheduler output and the late request-keyed inventory around
+  surface B while the pre-dispatch assignment was surface A. Credited ordinary and promoted
+  evidence must join immutable pre-dispatch assignment/request authority; a late inventory may not
+  mint that authority.
+- **Release handoff HIGHs:** Independent local probes accepted replaced output/destination
+  ancestry with the same leaf inode, source-run and retained-journal twin use during forensic copy,
+  coherent transient release evidence during validation, artifact mutation after validation, and
+  nested delivery substitution or mutation before return. Exact directory and file identities plus
+  content bindings must survive each stabilization and final publication boundary.
+- **Gate-execution HIGH:** Fixed local gates retain only shallow directory identity. A tracked file
+  can be changed for child execution and restored afterward while the receipt remains bound to the
+  original candidate observation. Each gate must execute inside exact candidate-tree custody, with
+  ordinary tool caches redirected or disabled so intended execution is read-only.
+- **Decisions reconfirmed:** `V3-PRICEFORM-001` continues to reject non-string billable prices
+  because the retained JSON representation cannot prove lossless identity to the published decimal;
+  therefore no admissible route exists. `REASONING_EFFORT_SUPPORT` remains genuinely required for
+  the candidate role and all route purposes to prevent silent reasoning-policy degradation.
+- **Status and authority:** Three bounded implementation slices are in progress; all tests will run
+  sequentially because exact ancestor custody intentionally detects concurrent filesystem churn.
+  No candidate, successor plan, command, campaign, qualification, release authority, provider call,
+  or real audit was selected or issued.
+
+## 2026-08-31T14:09:39Z — V3-TAXONOMY-001 stabilization-ancestor reopening
+
+- **Independent HIGH:** Release collection revalidated its initial roots and then reobserved output
+  roots, but its adoption check compared only each output leaf identity. Forensic destination
+  creation had the analogous check-before-reobserve handoff. A synthetic local probe replaced an
+  ancestor in that gap while moving the same leaf inode beneath it; both paths accepted the fresh
+  replacement ancestry for later exact checks.
+- **Required repair:** Compare every initial and stabilized lexical component before adopting the
+  new observation. Ancestors must retain exact identity; only the intended output/destination leaf
+  metadata transition may be tolerated, and it must remain the same directory object. Add
+  same-leaf/replaced-ancestor regressions for both handoffs.
+- **Status:** Root continuity is reopened `IN_PROGRESS`. The `86` focused passes and raw-context
+  passes remain compatibility evidence, not closure. No broad or full gate will be credited until
+  this finding is repaired and independently re-reviewed.
+- **Authority boundary:** Work remains local, synthetic, defensive, and provider-free. No retry,
+  route, candidate, plan, ledger, campaign, qualification, release authority, or real audit changed.
+
+## 2026-08-31T13:58:10Z — V3-TAXONOMY-001 exact-context and root-continuity repair
+
+- **Exact retained context:** Private model-review inventory schema 1.1 now retains one canonical,
+  bounded exact `ContextPackage` per recorded scheduler request. Ordinary and promoted parent,
+  leaf, and bridge credit joins that retained package and replays its boundary, role, rendered
+  hash, requested surfaces, source-location proofs, and Solidity index/graph subsets. Missing
+  exact context or graphs fails closed. Coherent ordinary A-to-B reseal, direct promoted reseal,
+  and recursive promoted reseal regressions pass, as do valid replay and production persistence
+  controls.
+- **Continuous release roots:** Release validation and collection retain their first full lexical
+  directory observations. Collection source roots remain exact; mutable output roots are
+  re-baselined only after the last intended write while proving the same object, then checked
+  exactly through validation and return. Forensic creation is descriptor-anchored to the first
+  destination-parent observation, re-baselined after its intended `mkdir`, and exact through
+  publication. Swap/restore and post-stabilization transient-edit regressions pass.
+- **Validation:** The independently rerun validation/collection/forensic unit set passed `86` in
+  `7.22s`. Raw-context focused groups passed `9`, `2`, `1`, `2`, and `1` tests respectively;
+  affected Ruff, formatting, strict mypy, and diff integrity pass. Concurrent pytest processes can
+  intentionally trip exact shared-ancestor ctime custody, so closure suites must remain sequential.
+- **Status:** Implementation is stable, but independent cross-review, governed regeneration, and
+  the full sequential closure matrix remain pending. `V3-TAXONOMY-001` stays `IN_PROGRESS`.
+- **Authority boundary:** This is local, synthetic, defensive, and provider-free. It changes no
+  retry, route, candidate, active plan, ledger, campaign, qualification, release authority, or
+  completed-real-audit count.
+
+## 2026-08-31T13:26:10Z — V3-TAXONOMY-001 independent-review reopening
+
+- **Raw-context HIGH:** A local synthetic probe kept the live host context on surface A while
+  coherently resealing usage context evidence, artifact/request projection, and forged report
+  credit around surface B. Live coverage rejected the context mismatch, but the detached central
+  validator accepted because only caller-recomputable hashes/proof descriptors survived. Full
+  on-disk journal resealing was not needed to establish that detached credit lacks exact host
+  context authority. The repair must retain a bounded, manifest-bound exact `ContextPackage` and
+  replay its surfaces, rendering, source projection, and index/graph subset for ordinary and
+  promoted credit.
+- **Remaining root HIGHs:** Release validation accepted a valid alternate report root installed
+  after first observation and restored an invalid original before fresh final observation.
+  Release collection retains the same weak leaf-only snapshot pattern. Forensic export discarded
+  its first destination-parent observation, allowing creation under a displaced alternate parent
+  before restoration. Exact first observations must survive through the final boundary.
+- **Status:** Both repairs and corresponding coherent-reseal/swap regressions are `IN_PROGRESS`.
+  Earlier green matrices remain compatibility evidence only.
+- **Authority boundary:** Work remains local, synthetic, defensive, and provider-free. No route,
+  retry, candidate, plan, ledger, campaign, qualification, release authority, or completed real
+  audit changed.
+
+## 2026-08-31T13:11:25Z — V3-TAXONOMY-001 root/raw repair validation
+
+- **Initial-root repair:** A shared lexical-directory observation now retains the anchor and every
+  path-component identity from first validation through final verification, replay,
+  certification, release observation, release-evidence writing, and forensic-export boundaries.
+  Six persistent root/parent substitution regressions and five focused forensic checks pass;
+  scoped Ruff, formatting, mypy, and diff checks are clean.
+- **Detached raw repair:** Typed request evidence now binds the exact requested-surface manifest
+  and provider-visible source ranges. Ordinary, whole-protocol, direct promoted, and recursive
+  promoted credit share request/context, semantic-record, configured-model/alias, and approved
+  root-lineage validation in live and detached paths.
+- **Validation state:** The first complete model-coverage run passed `78` and exposed two positive
+  fixture-lineage migrations. The first broad release matrix passed `302`; its two schema-1.4
+  fixture omissions are repaired, and two concurrent-ancestor failures pass repeatedly in
+  isolation. Final sequential reruns and independent re-review remain pending, so the ticket stays
+  `IN_PROGRESS`.
+- **Authority boundary:** All work remains local, synthetic, defensive, and provider-free. No
+  retry, route, candidate, plan, ledger, campaign, qualification, release authority, or completed
+  real audit changed.
+
+## 2026-08-31T12:12:55Z — V3-TAXONOMY-001 initial-root continuity reopening
+
+- **Independent reproduction:** Initial configuration and release directory checks returned only
+  lexical paths. A legitimate root could therefore be replaced after that check, with an alternate
+  root held through all subsequent observation and reads, then restored after verification.
+- **Boundary correction:** The earlier transient file edit/restore, post-observation ancestor
+  rename/symlink/restore, and resolve-time swap regressions remain green. The repair now must carry
+  the exact initial root object/identity through authoritative observation, artifact reads, and the
+  final boundary instead of trusting a later observation of the same pathname.
+- **Status:** Configuration custody and detached raw-review semantic/context custody are both
+  `IN_PROGRESS`; the `255`-test pre-review matrix is retained as compatibility evidence, not
+  closure.
+- **Authority boundary:** No external command, provider request, retry change, route or candidate
+  selection, active-plan mutation, ledger entry, campaign, qualification, release authority, or
+  completed real audit was created.
+
+## 2026-08-31T12:10:36Z — V3-TAXONOMY-001 configuration-race closure
+
+- **Closed root redirection:** Root validation preserves lexical authority, requires resolution to
+  equal the supplied absolute path, and rechecks the anchor and every path component around
+  resolution. A synthetic resolve-time directory swap is rejected.
+- **Closed configuration-input races:** One neutral custody observer retains the exact configured
+  ignore path, file bytes and identity, directory identities, and every lexical root-component
+  identity across discovery. Direct verification now rejects transient edit/restore and ancestor
+  rename/symlink/restore; certification and offline replay inherit the same bracket.
+- **Validation:** The sequential release-artifact, manifest, replay, release-verification,
+  release-collection, release-validation, and certification matrix passed `255`. Scoped Ruff,
+  formatting, strict mypy, and `git diff --check` passed.
+- **Remaining HIGH raw slice:** Independent replay review reproduced coherent whole-protocol
+  surface-inventory substitution and semantically invalid raw-record credit after fresh
+  deserialization. Exact live/detached semantic and context custody remains in progress, so the
+  ticket is not closed.
+- **Authority boundary:** No external command, provider request, retry change, route or candidate
+  selection, active-plan mutation, ledger entry, campaign, qualification, release authority, or
+  completed real audit was created.
+
+## 2026-08-31T11:41:35Z — V3-TAXONOMY-001 configuration-race reopening
+
+- **Green compatibility boundary:** Exact configuration-root threading, steady-state ignore-input
+  observations, linked-ancestor rejection, and fixture migration passed `72` manifest/verification,
+  `53` replay, and `79` release/certification tests; scoped Ruff, formatting, mypy, and diff checks
+  passed.
+- **Independent review result:** Two HIGH races remained. A lexical configuration root could be
+  redirected between component `lstat` checks and final resolution, and direct verification could
+  read a transiently edited ignore file that was restored before return. Certification and offline
+  replay inherited the second false-`CURRENT` path. Both are reproduced synthetically and reopened
+  for exact before/read/after identity-and-byte custody; the green pre-review matrix is not closure.
+- **Adjacent governance regression:** Product-documentation tests no longer require the completed
+  actor-model ticket to remain the active ticket; they instead preserve its exact completion entry
+  and current governance fields. The remaining documentation failure is the intentionally stale
+  autonomy inventory pending final source stabilization and canonical regeneration.
+- **Authority boundary:** No external command, provider request, retry change, route or candidate
+  selection, active-plan mutation, ledger entry, campaign, qualification, release authority, or
+  completed real audit was created.
+
+## 2026-08-31T11:25:28Z — V3-TAXONOMY-001 conservative replay and legacy closure slice
+
+- **Profile replay repaired:** Proxy inheritance, broad fallback and typed/custom oracle calls,
+  function-typed and multiline state declarations, and graph-provenance relabels now share exact
+  source-derived replay semantics. Retained Solidity can support positive detection, while negative
+  conclusions remain `INDETERMINATE`; compiler/fallback provenance cannot self-authorize absence.
+- **Legacy replay repaired:** Schema-1.0 verification reconstructs common pre-taxonomy bindings
+  through a schema-1.3 projection without granting legacy run-configuration authority. The replay
+  fixture now emits coherent current evidence before deriving an exact legacy pair. The complete
+  replay module passes `52`; focused profile/taxonomy/reporting/custody tests pass `41`.
+- **Independent raw review:** Two HIGH gaps remain under bounded repair. Indexed whole-protocol
+  evidence must use one deterministic live/detached credit validator, and direct/recursive promoted
+  parent credit must reject substitution, fallback routing, or incoherent requested/selected/
+  actual/returned identity. Exact configuration-root and ignore-input release custody is also in
+  final compatibility validation.
+- **Authority boundary:** Work remains local, synthetic, defensive, and provider-free. The
+  operator-recorded price rejection and candidate reasoning-effort requirement stand. No retry
+  policy, route, candidate, active plan, ledger, campaign, qualification, release authority, or
+  completed-real-audit count changed.
+
+## 2026-08-31T06:13:37Z — V3-TAXONOMY-001 configured-model custody closure
+
+- **Closed raw-custody gap:** Whole-protocol review credit now accepts only canonical
+  `whole_protocol_review:<0-9999>` roles and an exact requested model present in
+  `configured_model_ids(..., include_fallbacks=True)`. Ordinary, promoted-parent, scheduler-request,
+  and scheduler-credit paths share that boundary; a registry-only approved-lineage model no longer
+  earns credit after fresh deserialization.
+- **Focused validation:** New ordinary and promoted configured-positive/registry-only-negative
+  regressions pass, as do the existing promoted-source and detached-journal paths. Ruff, formatting,
+  strict mypy, and diff checks pass for this slice.
+- **Remaining HIGH profile repairs:** Independent review additionally reproduced compiler-only
+  oracle-edge deletion, compiler-only multiline state deletion, fallback-to-compiler provenance
+  upgrade without AST custody, and external-config ignore-root divergence. Source semantic replay,
+  manifest-bound clean compiler-artifact custody, and exact configuration-root threading are in
+  progress; no broad closure result is claimed yet.
+- **Authority boundary:** Work remains local, synthetic, defensive, and provider-free. It changes
+  no retry policy, route, candidate, active plan, ledger, campaign, qualification, release
+  authority, or completed-real-audit count.
+
+## 2026-08-31T05:59:22Z — V3-TAXONOMY-001 final profile replay reopening
+
+- **Closed raw-review gaps:** Direct and recursive promoted-parent references now replay exact
+  aggregate, parent, bridge, leaf, request, hash, configured-model, approved-lineage, and scheduler
+  custody after fresh deserialization. Persisted recovery usages use structural nonauthorizing
+  predicates; ordinary owner-held live outputs retain runtime authority checks. The full model
+  coverage suite passes `69`, the manifest suite passes `70`, and current/legacy schema custody
+  passes `34`.
+- **Why the ticket remains open:** Independent review reproduced two HIGH profile-replay defects.
+  A compiler-only source-backed oracle edge could be deleted and coherently resealed from
+  `DETECTED` to `NOT_DETECTED`; and detached replay resolved a relative ignore file against the
+  repository rather than the exact configuration root, allowing both false acceptance and false
+  rejection when the config is external.
+- **Repair scope:** Require retained compiler-only ORACLE/PROXY evidence for independently scanned
+  source signals, and pass one trusted configuration root through verification, offline replay,
+  certification, release collection/validation, CLI, and scripts. Missing root authority for a
+  current relative ignore path must fail closed. Add coherent deletion and external-config-root
+  regressions before another independent review.
+- **Authority boundary:** All work remains local and provider-free. The recorded price rejection,
+  candidate reasoning-effort requirement, zero admissible routes, active plan, ledger, campaign,
+  qualification, release authority, and completed-real-audit count remain unchanged.
+
+## 2026-08-31T05:32:29Z — V3-TAXONOMY-001 private-inventory parity repair
+
+- **Implemented:** The central `RunEvidenceManifest` validator now requires
+  `private/model-review-artifacts.json` for schema 1.4 and rejects that new inventory in schemas
+  1.0 through 1.3. The hand-authored JSON Schema and its generator contract enforce the same exact
+  boundary; legacy promoted-recovery evidence remains under its pre-existing contract.
+- **Validation:** Release-schema and taxonomy-manifest custody regressions pass `34`. The previously
+  failing direct Pydantic-model omission case now rejects, as does a coherently resealed legacy
+  manifest carrying the current-only inventory.
+- **In-progress adjacent repairs:** Aggregate promoted-parent and detached structural REAL replay
+  tests are still running. Independent source/index/graph/ignore-policy profile replay passes its
+  focused gates and is undergoing an added forged-positive audit before final acceptance.
+- **Authority boundary:** The already-recorded price-form rejection and candidate reasoning-effort
+  requirement remain unchanged. No code or configuration for retries, routes, candidates, plans,
+  campaigns, ledgers, qualification, release, or provider execution changed.
+
+## 2026-08-31T05:11:12Z — V3-TAXONOMY-001 final replay review repair boundary
+
+- **Green gates before review:** Manifest passed `70`; profile and release-schema passed `39`; the
+  affected pipeline node passed `1`; release/reporting/traceability/learning passed `184`;
+  scheduler custody passed `42`; model coverage passed `66`; strict mypy passed `229` source
+  files; Ruff, canonical generation, and diff integrity passed.
+- **Why the ticket remains open:** An independent coherent-reseal review reproduced four HIGH
+  gaps despite those green tests: promoted-parent recovery references use an aggregate artifact not
+  joined by raw replay; detached REAL replay depends on process-local authority; retained
+  index/graph and artifact-supplied ignore policy can hide profile evidence; and Pydantic/runtime
+  current/legacy private-inventory boundaries differ from the published schema.
+- **Repair scope:** Add aggregate parent promotion custody, structural detached REAL verification,
+  independently source-derived index/graph and effective-policy replay, and exact schema 1.4 versus
+  1.0-1.3 inventory parity. Add coherent mutation regressions before rerunning closure gates.
+- **Authority boundary:** Work remains local, synthetic, defensive, and provider-free. It changes
+  no retry setting, provider route, candidate, active plan, ledger, campaign, qualification,
+  release authority, or completed-real-audit count.
+
+## 2026-08-31T02:25:35Z — V3-TAXONOMY-001 release replay hardening slice
+
+- **Review result:** Independent adversarial review found exactly two remaining HIGH issues: model
+  review coverage could credit a reference without replaying its retained raw review artifact, and
+  a coherently rehashed protocol profile could support false absence without replaying discovery,
+  Solidity index, and graph evidence. No other BLOCKER or HIGH issue was reported.
+- **Repair in progress:** Manifest schema 1.4 is being extended with exact private raw-review
+  inventory custody and legacy versions remain unchanged. Issuance and verification are being
+  wired to replay deterministic protocol profiles from the same scoped discovery object used by
+  the pipeline. Adversarial raw-review, recovery-promotion, and DETECTED-to-NOT_DETECTED tests are
+  part of the repair.
+- **Validation to date:** Before these release-boundary edits, the complete assurance module passed
+  `245` tests and model coverage passed `66`. Those runs establish the underlying taxonomy gate but
+  do not close the two later review findings; the affected manifest/release matrix must be rerun.
+- **Authority boundary:** This local provider-free slice changes no retry setting, provider route,
+  candidate, active selection plan, ledger, campaign, qualification, release authority, or
+  completed-real-audit count.
+
+## 2026-08-31T01:29:59Z — V3-TAXONOMY-001 adversarial custody repair slice
+
+- **Closed review gaps:** All applicable known-issue review requests now remain mandatory T0
+  surfaces independent of corpus gate criticality; strict content-bound taxonomy subjects can earn
+  exact source reachability credit; and taxonomy coverage is recomputed from the pinned corpus,
+  retained deterministic profile assessment, and exact model-review coverage in both report and
+  manifest validation. Wrong-kind, wrong-ID, and non-T0 surfaces cannot forge `REVIEWED` credit.
+- **Published custody:** Run-evidence manifest schema 1.4 now requires exactly both taxonomy leaves
+  and all four semantic bindings, while schemas 1.0–1.3 explicitly forbid them. The generator
+  verifies the exact hand-authored version boundary and has a weakening regression.
+- **Still in progress:** Source-discovery omissions and fallback parsing are being made fail-closed
+  for negative protocol-profile evidence. Sealed legacy traceability and current manifest fixtures
+  are being migrated without granting legacy taxonomy custody. Learning maps taxonomy surfaces to
+  non-finding `OTHER` evidence.
+- **Validation:** Release-schema tests passed `29`; focused schema/custody tests passed `6`; the
+  integrated taxonomy/schema slice passed `42`. A later focused run overlapped an in-progress
+  source-completeness edit and is intentionally not credited. Full generator, style, type, release,
+  and integration validation remain required before ticket closure.
+- **Authority boundary:** This work remains local, synthetic, defensive, and provider-free. It
+  changes no retry configuration, provider route, candidate, plan, ledger, campaign,
+  qualification, release authority, or completed-real-audit count.
+
+## 2026-08-31T00:49:12Z — V3-TAXONOMY-001 pinned corpus and custody slice
+
+- **Implemented:** Added a 19-item defensive-only taxonomy with per-item semantic hashes, a
+  semantic corpus hash, an exact raw-byte pin, bounded regular-file loading, and exact-byte runtime
+  publication. Every economic template maps exactly once, while two always-applicable Solidity
+  classes prevent a vacuous maximum-assurance denominator.
+- **Typed custody:** Added a closed per-profile status inventory, content-bound known-issue review
+  identities, complete `REVIEWED` / `NOT_APPLICABLE` / `GAP` disposition models, citations,
+  exclusion-aware overall and critical denominators, a coverage self-hash, and explicit
+  `finding_authority=false`. Missing or indeterminate evidence fails closed as GAP.
+- **Integration in progress:** The pipeline builds and writes taxonomy coverage before its quality
+  and maximum-assurance decisions; the matching required critical-GAP gate and assurance clause,
+  report 1.4 field/forgery validator, traceability row, and reporting projections are implemented.
+  Deterministic profile/surface and manifest/release migrations remain under focused review.
+- **Validation so far:** New taxonomy tests passed `5`; strict mypy passed the five edited source
+  units; targeted Ruff passed. A traceability probe passed `10` and failed `2` only on the not-yet-
+  generated taxonomy schemas and in-flight bundle-deliverable constant, so closure is not claimed.
+- **Authority boundary:** All work and tests are local, synthetic, defensive, and provider-free.
+  No taxonomy item can create a finding; no external command, candidate, plan, ledger, campaign,
+  qualification, audit, or release authority changed.
+
+## 2026-08-31T00:25:18Z — V3-TAXONOMY-001 selected
+
+- **Selection:** Began the sole dependency-ready `V3-TAXONOMY-001` work unit after rereading both
+  queues and worklogs and confirming `V3-COVERAGE-001` is complete.
+- **Bounded objective:** Add one committed, versioned, hash-pinned defensive known-issue corpus;
+  derive applicability only from retained deterministic protocol-profile evidence; materialize
+  every corpus item as `REVIEWED`, `NOT_APPLICABLE`, or `GAP` with citations; publish its coverage
+  denominator beside surface coverage; and make critical gaps block maximum-assurance completion.
+- **Safety and authority boundary:** Taxonomy entries are non-finding classifications and contain
+  no exploit procedures. This slice is local and provider-free and changes no candidate, active
+  plan, credential, provider call, ledger, campaign, qualification, audit/release authority, or
+  completed-real-audit count.
+- **Exact next safe action:** Finish architecture/reporting inspection, implement typed artifacts
+  and deterministic assessment, add synthetic unit/integration regressions, then run relevant
+  generation, style, typing, and test gates before closure.
+
+## 2026-08-31T00:16:29Z — V3-ACTORMODEL-001 provider-free completion
+
+- **Defensive capability:** Completed the typed, versioned, self-hashed operator-authored actor
+  input and identity-safe bounded loader. Current, stale, missing, future, and invalid evidence;
+  held versus admitted-unfilled roles; concentration, capital-waterfall, revenue/failure exposure,
+  constraints, ordinary legitimate behavior, and typed occupancy conflicts now have exact custody.
+- **Decision boundary:** Specialists and verifiers remain actor-blind. With CURRENT actor input the
+  judge receives typed context, but judge status, severity, and confidence cannot classify the
+  finding; only the exact retained context may drive deterministic post-consensus severity
+  calibration. Baseline, evaluation, judge decisions, forensic/report/SARIF leaves, scheduler
+  replay, manifests, generated schemas, and all three local synthetic correction fixtures agree.
+- **Legacy/release custody:** FindingsArtifact `1.1` and `1.2` remain pre-actor and reject lossy
+  actor evidence; `1.3` requires it. Retained scheduler-v1 journals are read-only replay inputs and
+  mutable resume fails before filesystem, ledger, or provider work. Current-v2 disk reopen remains
+  exact.
+- **Files changed:** Actor models/loader, consensus/context/pipeline/scheduler/reporting/release
+  integrations, prompts and configuration, generated schemas/inventory, synthetic fixtures, unit
+  and local integration regressions, and queue/worklog/runtime/traceability governance.
+- **Validation:** Generator write/verify, Ruff format/check, diff integrity, and strict mypy over
+  `221` source files passed. The broad affected matrix passed `674` with `1` capability skip and
+  `2` explicit pre-existing parser deselections; the CURRENT and missing seven-pass controls pass.
+  The two parser tests were separately reproduced and independently attributed to an earlier ticket.
+- **Remaining limitations:** Actor facts are operator-authored, not independently authenticated.
+  Retained-v1 compatibility is proven compositionally without one monolithic recovered-v1 journal
+  fixture. The two unrelated truncation-parser hygiene regressions remain open and receive no pass
+  credit. No claim of complete security or maximum-assurance completion is made.
+- **Authority boundary and next action:** This completion is provider-free and nonauthorizing. It changes no
+  retry behavior/configuration, candidate, active plan, credential, ledger, campaign, qualification,
+  audit/release authority, or completed-real-audit count. Select `V3-TAXONOMY-001` only at a new
+  work-unit boundary; no current provider or operator command exists.
+
+## 2026-08-30T22:20:48Z — V3-ACTORMODEL-001 independent release-review repair slice
+
+- **Independent review findings fixed:** Added the actor baseline to latest-artifact copy and stale
+  purge; rejected nested actor applicability/context/assessment in legacy report and findings
+  schemas; preserved explicit actor-blind fields across strict candidate/judge output protocols; and
+  added version-aware legacy hash projection rather than globally deleting required wire fields.
+- **End-to-end evidence:** Added a full local seven-pass CURRENT-actor scheduler regression. The
+  retained judge deliberately emits Rejected/Critical/0.01 plus typed actor context; final findings
+  retain consensus classification/confidence, bind that exact context, calibrate High to Medium,
+  persist baseline/evaluation/judge custody, and pass detached manifest validation. The unchanged
+  missing-actor seven-pass control also passes.
+- **Validation:** Broad actor/scheduler/report/release coverage passed `436`; latest projection
+  coverage passed `14`; the CURRENT and missing-actor seven-pass integrations each passed. Strict
+  Ruff and mypy were green before the review repairs and will be rerun after canonical regeneration.
+- **Remaining review work:** Finish true pre-actor replay and focused current actor-bound manifest
+  leaf tamper coverage, regenerate schemas/inventory, rerun broad/full gates, and reconcile the
+  exact unchanged operator record before status closure.
+- **Authority boundary:** All execution is synthetic, local, and provider-free. No credential,
+  provider/network call, candidate, active plan, ledger, campaign, audit/release authority, or
+  completed-real-audit counter changed.
+
+## 2026-08-30T22:04:04Z — V3-ACTORMODEL-001 judge-custody implementation slice
+
+- **Implemented:** Made retained scheduler `JudgeDecision` annotations a complete, sorted public
+  report/artifact inventory; bound every current final and baseline actor annotation to the exact
+  matching group decision; rejected duplicate, missing, unknown, wrong-group, non-privileged, and
+  legacy actor-annotation evidence; and aligned pipeline and detached replay order to actor-blind
+  consensus, judged-context binding, then one deterministic calibration.
+- **Regression:** Added a provider-free detached CURRENT-actor replay proving a deliberately
+  divergent judge status, severity, and confidence cannot classify the finding, while the same
+  retained typed context still changes High to Medium. The legacy judge-classified projection is
+  rejected by deterministic replay.
+- **Generation and validation:** Canonical actor/baseline/evaluation and findings schemas were
+  generated; the recursive autonomy inventory was re-frozen at `3843` sources / `3846`
+  occurrences. Release-schema/inventory coverage passed `61`; the new replay passed. Focused
+  actor/consensus/manifest coverage had already passed `259` tests.
+- **Authority boundary:** The change and all fixtures remain local, synthetic, and provider-free.
+  No candidate, active plan, credential, provider call, ledger, campaign, audit authority, release
+  authority, or completed-real-audit counter changed.
+- **Exact next safe action:** Run generation verification, strict typing/style, broad affected
+  suites, independent review, and final operator-result/governance reconciliation before changing
+  ticket status.
+
+## 2026-08-30T20:30:35Z — V3-ACTORMODEL-001 implementation slice
+
+- **Implemented:** Added the typed, versioned, self-hashed operator actor model and bounded local
+  loader; current/future/stale/missing/invalid input evidence; exact role occupancy, concentration,
+  capital-waterfall, exposure, constraint, governance-conflict, per-finding assessment, and run-level
+  evaluation models; and synthetic non-deployable correction fixtures.
+- **Integrated:** Bound actor evidence into discovery withholding, every model context, judge input,
+  scheduler analysis custody, post-consensus severity calibration, thresholding, scanner and
+  deterministic-execution findings, quality gates, report/forensic/SARIF/client output, manifest
+  replay, prompts, generated schemas, and autonomy inventory. The conservative consensus maximum is
+  unchanged; actor calibration is a separate host-derived stage.
+- **Defensive behavior:** Current evidence can record justified versus unjustified against-interest
+  conduct, increase likelihood for ordinary legitimate behavior, lower activation-gated unfilled
+  roles or material constraints, and surface code/model disagreement without inferring holder facts.
+  Non-current evidence preserves baseline severity and records a limitation on every finding.
+- **Validation so far:** Focused actor/consensus/scheduler/manifest coverage passed `162`; two
+  provider-free end-to-end pipeline regressions passed after preserving strict JSON at external
+  actor-input boundaries while allowing typed persisted artifacts to parse normally. A broader
+  scheduler/manifest group retained `4` preexisting non-ACTORMODEL failures and gets no suite pass.
+- **Authority boundary:** All fixtures and execution are synthetic/local and provider-free. No
+  candidate, active plan, credential, network/provider call, ledger, campaign, audit authority,
+  release authority, or completed-real-audit counter changed.
+- **Exact next safe action:** Complete adversarial loader and reconciliation tests, canonical
+  regeneration, strict typing/style validation, affected suites, independent review, and governance
+  reconciliation before changing ticket status.
+
+## 2026-08-30T19:59:57Z — V3-ACTORMODEL-001 selected
+
+- **Selection:** Began the sole dependency-ready `V3-ACTORMODEL-001` work unit after rereading both
+  queues, both worklogs, relevant consensus/report/input surfaces, and the exact current operator
+  record. `V3-CONSENSUS-001` is complete; the schema and input path have no other dependency.
+- **Acceptance boundary:** Add only an explicit operator-authored, typed, versioned, self-bound actor
+  input; distinguish held from admitted-unfilled roles; bind concentration, capital loss order,
+  revenue and failure exposure; calibrate every finding's actor plausibility and likelihood; surface
+  source/actor occupancy disagreement as typed governance evidence; preserve missing/stale limitations.
+- **Safety and authority:** No actor fact will be inferred from repository source. Work is local and
+  provider-free; no candidate, plan, credential, provider/network call, ledger action, campaign,
+  audit authority, release authority, or completed-real-audit counter changes.
+- **Operator evidence:** Exact operator record remains `defa39935e756ca87d7844e9570caa1d128f202da7e47de6d866d5d90e261e70`,
+  159522 bytes / 2849 lines, latest `2026-08-30T19:00Z`, operator-supplied, nonauthorizing, and not
+  independently authenticated by Codex.
+- **Exact next safe action:** Implement the actor schema/loader and deterministic calibration core,
+  then integrate context, CLI, report provenance, generated schema, and safe synthetic regressions.
+
+## 2026-08-30T19:47:22Z — operator decision reconciliation for price form and candidate reasoning
+
+- **V3-PRICEFORM-001 decision:** Rejection stands. The operator-supplied directive classifies the
+  sole otherwise-viable `x-ai/grok-4.6=amazon-bedrock/us-west-2` route's billable price as a
+  non-string numeric value, while the reconciled repository evidence retains neither its raw JSON
+  numeric lexeme nor an exact-decimal parser result. After ordinary JSON-number parsing, converting a
+  binary float with `Decimal(str(value))` proves only the chosen reserialization, not identity to the
+  provider's original decimal. The current custody model therefore cannot demonstrate the requested
+  lossless conversion, so exact billable-price strings remain required. Under the current constraint
+  set, no admissible candidate route exists. The ticket remains `QUEUED`; no implementation ticket
+  was selected in this reconciliation.
+- **V3-CANDROUTE-001 decision:** `REASONING_EFFORT_SUPPORT` is genuinely required of the candidate
+  role and remains required for every `RouteConstraintPurpose`. The candidate is sealed to the same
+  `model_benchmark` reasoning policy that emits `effort=high`, excludes max-token mode, and reserves
+  reasoning tokens. Admitting a route without published support could silently ignore the emitted
+  control and would break discovery, registry, request, budget, smoke, and campaign parity. This is
+  an integrity and accounting constraint, not a judge-only convenience predicate; it is not relaxed.
+- **Authority boundary:** These are recorded policy decisions only. No code or configuration changed
+  for either decision, no candidate or successor plan was selected or emitted, no smoke or campaign
+  ran, no provider/network or private-ledger action occurred, and no authority was granted.
+  `V3-CANDROUTE-001` remains `PARTIAL` and `completed_real_audits` remains zero.
+- **Validation:** Product documentation/objective contracts passed `25` tests; the focused endpoint
+  projection/schema/CLI matrix passed `64`; canonical generation, targeted Ruff, format, and strict
+  mypy checks pass. These policy decisions add no provider-backed or terminal full-suite credit.
+
+## 2026-08-30T19:29:47Z — V3-ENDPOINTLIST-001 schema-v1.1 corrective completion
+
+- **Result:** `COMPLETE` at the corrected local diagnostic boundary. Schema v1.1 exact-selects the
+  `/models` catalog fact admission consumes and reports separate endpoint, model, and exact
+  admission-effective reasoning inventories, including source, absence-only fallback,
+  explicit-empty veto, unavailable, and contradiction. Model and endpoint structured-output facts
+  are also separate, and diagnostic/admission resolution now shares one pure resolver.
+- **Controls:** The catalog read is inside the selected-read integrity boundary and full metadata is
+  checked for credential reflection before projection. Exact identity, ZDR, raw status,
+  provider-name injectivity, successor argument, canonical field, and self-hash controls remain
+  fail-closed. The command opens no ledger, issues no completion, records no usage, and grants no
+  authority.
+- **Validation:** Integrated projection/schema/CLI/OpenRouter/route-constraint validation passed
+  `621` tests; affected isolation passed `292`; CLI-only passed `27`; independent adjacent review
+  passed `345`; generator, Ruff, and strict mypy pass. Independent adversarial review found no
+  blocker/HIGH. A wider run reproduced `16` documented baseline refresh-runtime failures and gets no
+  full-matrix pass credit. No terminal full-suite result is claimed.
+- **Evidence boundary:** The operator-reported v1.0 survey covered `12` models / `112` endpoints and
+  exposed the corrected omission, but v1.1 has not been exercised live. Codex did not issue,
+  authorize, execute, or independently authenticate the external reads. No repeat command is
+  required. The ledger remains operator-reported at `57` entries / `0.68118684` USD.
+- **Remaining limitation:** The diagnostic does not repeat constrained discovery's separate
+  `/model/<id>` canonical-slug consistency read; actual constrained discovery still enforces it.
+  The survey found zero admissible candidates, the active plan is unchanged, no route is selected,
+  and `V3-CANDROUTE-001` remains `PARTIAL`.
+- **Exact next safe action:** Select `V3-ACTORMODEL-001`. Resume `V3-CANDROUTE-001` only with
+  admissible-route evidence or a separately reviewed policy decision; do not relax effort-high or
+  issue an external command here.
+
+## 2026-08-30T19:09:10Z — V3-ENDPOINTLIST-001 reopened from live diagnostic evidence
+
+- **Evidence:** The operator-reported, nonauthorizing `2026-08-30T19:00Z` metadata survey covered
+  `12` models and `112` endpoints and reported zero endpoint-level reasoning-effort inventories.
+  The v1.0 diagnostic omitted model-level inventory and the endpoint-first/model-fallback effective
+  resolution used by admission, so its original route-choice acceptance criterion was not met.
+- **State:** `V3-ENDPOINTLIST-001` is reopened `IN_PROGRESS`; the `18:47:27Z` local-mechanism
+  completion remains historical. `V3-PLANSUCCESSOR-001` is the last completed ticket and
+  `V3-CANDROUTE-001` remains `PARTIAL` with zero admissible real candidates and no selected route.
+- **External effects:** The operator reports credentialed GET-only metadata enumeration. Codex did
+  not issue or authenticate those calls, and no repeat external command is required or authorized.
+  The operator-reported ledger remains `57` entries / `0.68118684` USD and completed real audits
+  remain zero.
+- **Exact next safe action:** Correct the local schema and projection to expose model, endpoint, and
+  exact admission-effective reasoning inventories; add parity, integrity, and presentation tests.
+- **Implementation slice:** The CLI now collects the actual `/models` catalog used by admission,
+  seals that read into the selected-read integrity boundary, scans it for credential reflection,
+  and passes it to the v1.1 projection. The four-read success path remains metadata-only and does
+  not open the cost ledger.
+- **Interim validation:** The full OpenRouter unit module passes `468` tests after adding the sealed
+  catalog read; focused projection and CLI validation remains pending the v1.1 model changes.
+- **Integrated validation:** Canonical schema/inventory generation verifies; the corrected endpoint
+  projection, schema, CLI, full OpenRouter, and route-constraint matrix passes `621` tests. Targeted
+  Ruff and strict mypy pass. The diagnostic and admission now consume one shared endpoint-first
+  reasoning-inventory resolver so future fallback drift is exercised at both surfaces.
+
+## 2026-08-30T18:47:27Z — V3-ENDPOINTLIST-001 provider-free completion
+
+- **Result:** `COMPLETE` at the local mechanism boundary. `mmaudit models list-endpoints --model
+  EXACT_ID [--json]` emits a bounded, strict, self-hashed diagnostic for authenticated exact-model
+  endpoint and ZDR metadata without selecting a route.
+- **Defensive guarantees:** Exact identity and raw operational-status parity, bijective ZDR joins,
+  global route-alias uniqueness, provider-name injectivity, output/reasoning inventory consistency,
+  required literal nonauthority fields, full metadata-read integrity, credential cleanup, no cost
+  ledger open or mutation, and zero completion usage are fail-closed and regressed.
+- **Validation:** Focused adversarial `50 passed`; affected OpenRouter/endpoint/refresh/CLI/schema
+  matrix `730 passed`; full OpenRouter `468 passed`; canonical generation, Ruff, and strict mypy
+  pass. Independent re-review found no remaining correctness or security blocker.
+- **Evidence boundary:** All endpoint fixtures and transports used by this work unit were synthetic
+  and local. No provider/network enumeration, real candidate admission, active-plan change,
+  successor emission, campaign, qualification, audit, release, or external command occurred.
+- **Remaining limitation:** No current real endpoint is established. `V3-CANDROUTE-001` remains
+  `PARTIAL`, the active plan is unchanged, and no replacement is selected.
+- **Exact next safe action:** Select `V3-ACTORMODEL-001` for the next local ticket. Resume
+  `V3-CANDROUTE-001` only with fresh nonauthorizing external metadata.
+
+## 2026-08-30T18:03:16Z — V3-ENDPOINTLIST-001 selected
+
+- **Defensive objective:** Expose the existing authenticated OpenRouter endpoint inventory for one
+  exact model as a bounded diagnostic sufficient to construct a current
+  `MODEL_ID=PROVIDER_ENDPOINT` argument without guessing.
+- **Scope:** Add a typed fail-closed endpoint projection, metadata-only CLI wiring, generated schema
+  custody, and recorded-fixture regressions for output, unknown models, ledger non-mutation, and
+  secret non-disclosure.
+- **Evidence boundary:** No live enumeration is authorized or performed. The current operator record
+  still reports zero admissible real candidates; this ticket cannot select a route or complete
+  `V3-CANDROUTE-001` from synthetic evidence.
+- **External effects:** None. No provider/network call, completion, private ledger access, candidate
+  selection, successor plan, campaign, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Inspect shared endpoint normalization and implement the bounded
+  provider-free surface with recorded metadata fixtures.
+
+## 2026-08-30T17:49:22Z — V3-CANDROUTE-001 provider-free partial closure
+
+- **Result:** `PARTIAL`, provider-free and nonauthorizing. The candidate effort-high requirement is
+  retained for every role and purpose. Schema v1.6 provides explicit predecessor-bound
+  `OPERATOR_STAGED_UNVERIFIED` endpoint refresh custody, requires constrained discovery, and grants
+  no authority. Synthetic lineage-distinct discovery and mocked live-route preflight pass.
+- **Independent review:** One HIGH schema-contract mismatch was found: v1.6 presence was required but
+  JSON Schema still permitted a null refresh. The v1.6 conditional now requires a non-null value;
+  canonical schema generation and a named regression cover the repair. No other blocker/HIGH was
+  found. A second review confirmed all 16 wider-matrix failures reproduce as unrelated baseline
+  OpenRouter refresh-runtime drift.
+- **Validation:** Ticket-focused `224 passed`; product governance `25 passed`; canonical generation,
+  targeted Ruff, strict mypy, strict JSON, and diff integrity pass. The wider matrix remains
+  non-passing at `1141 passed, 16 failed` and receives no pass credit.
+- **Remaining limitation:** The fixture stages synthetic Gemma metadata. Current operator evidence
+  still reports zero admissible real routes. The active v1.4 plan is unchanged, no replacement is
+  selected, and the route-restoration objective remains unproven.
+- **External effects:** None. No provider/network call, secret access, private evidence, active-plan
+  change, command, campaign, run index, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Stop. Resume `V3-CANDROUTE-001` only with fresh nonauthorizing operator
+  evidence for a current real route, then replay schema-v1.6 constrained discovery and provider-free
+  live-route preflight. Do not begin another ticket in this work unit.
+
+## 2026-08-30T17:42:39Z — V3-CANDROUTE-001 broader validation slice
+
+- **Validation:** The exact ticket-focused selection, successor CLI, refreshed-route smoke,
+  route-constraint, and autonomy-inventory matrix passed `223` tests. Product governance passed
+  `25` tests. Canonical generation verifies; targeted Ruff and strict mypy pass.
+- **Wider matrix:** The 1,157-case candidate/OpenRouter/runner/qualification/revocation/admission/
+  governance matrix ended `1141 passed, 16 failed`. All 16 failures are isolated to the pre-existing
+  `test_openrouter_refresh_runtime.py` slice: seven failed-usage reasoning-custody mismatches and nine
+  route-price error-contract mismatches. This ticket did not change those code or test paths, so the
+  failed matrix receives no pass credit and the unrelated defects are not repaired in this work unit.
+- **Status honesty:** The supported v1.6 path proves only provider-free unverified staging,
+  constrained discovery, and mocked live-route preflight for a synthetic lineage-distinct route. It
+  does not prove a current real endpoint admissible and selects no replacement.
+- **External effects:** None. No provider/network call, secret access, private evidence, active-plan
+  change, command, campaign, run index, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Complete independent scope/tamper and failure-isolation review, then
+  reconcile final ticket status and stop without beginning another ticket.
+
+## 2026-08-30T17:19:30Z — V3-CANDROUTE-001 endpoint-inventory implementation slice
+
+- **Completed changes:** Added backward-compatible schema v1.6 for an explicit previously-unlisted
+  endpoint transition. The transition binds the exact predecessor entry and endpoint inventory,
+  records `OPERATOR_STAGED_UNVERIFIED`, requires later constrained discovery, embeds no provider or
+  discovery metadata, grants no endpoint authority, and is self-hashed into the successor plan.
+  Existing v1.4 root and v1.5 listed-endpoint succession remain unchanged.
+- **Provider-free surface:** `models emit-selection-plan-successor` now requires the explicit
+  `--refresh-endpoint-inventory` flag for an unlisted endpoint and still refuses a listed endpoint
+  under that mode. It reads no secret, contacts no provider, and publishes only a fresh private
+  nonauthorizing plan.
+- **Regressions:** Raw and coherently resealed predecessor-inventory tamper fail; schema versions
+  require exact predecessor/refresh custody; judge collision, no-op, tombstone, and ordinary
+  unlisted defaults remain closed. A synthetic Gemma successor now starts from a stale unlisted
+  endpoint, stages the refreshed endpoint, passes constrained discovery, and reaches the actual
+  mocked `--live-route-preflight-only` path without completion, durable output, usage, or ledger
+  mutation. A candidate-role matrix proves missing high-effort inventory fails all four purposes.
+- **Validation:** The core behavior matrix passed `190` tests. Canonical schema/inventory generation
+  now writes and verifies cleanly; targeted Ruff and strict mypy pass. The broader affected and
+  governance matrices remain pending.
+- **External effects:** None. No provider/network call, secret access, private evidence, active-plan
+  change, candidate selection, command, campaign, qualification, runtime authority, audit, or
+  release. `completed_real_audits` remains zero.
+- **Exact next safe action:** Run the broader affected validation, reconcile current status/docs,
+  and perform an independent scope/tamper review before ticket closure.
+
+## 2026-08-30T17:05:25Z — V3-CANDROUTE-001 reasoning-effort decision
+
+- **Decision:** `REASONING_EFFORT_SUPPORT` remains required for the candidate role under the current
+  shared AUTHRUNNER route profile and for all four route-constraint purposes.
+- **Repository evidence:** Candidate benchmark and smoke targets use the `model_benchmark` request
+  role, whose exact control is `effort=high`, `exclude=false`, with a positive reasoning-token
+  reserve. Request construction emits that control, while selection, preview, registration, and
+  live-route preflight independently reject absent or incompatible effort inventory.
+- **Integrity consequence:** A purpose-only candidate exemption would allow incomplete discovery
+  evidence but still fail before dispatch. Removing the requirement safely would need a separately
+  sealed role-to-request policy and resealed profile, token, cost, qualification, and evidence
+  contracts; that is not this ticket. No predicate was relaxed.
+- **External effects:** None. No provider/network call, secret access, artifact activation,
+  candidate selection, command, campaign, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Add the explicit provider-free endpoint-inventory refresh path and
+  prove refreshed conforming routes pass while missing-effort, revoked, and nonconforming routes
+  still fail closed.
+
+## 2026-08-30T16:57:44Z — V3-CANDROUTE-001 selected
+
+- **Defensive objective:** Restore at least one lineage-independent candidate route to constrained
+  discovery and provider-free live-route admission without weakening unrelated safety predicates.
+- **Evidence boundary:** Operator record `b1b5c13f...` reports a complete provider-free sweep with
+  zero admissible candidates and identifies reasoning-effort inventory as the sole blocker for two
+  otherwise-clean routes. Its emitted `00b6aa8f...` artifact is not active or inspected by Codex.
+- **Selected scope:** First determine from repository call sites and request construction whether
+  reasoning effort is actually required for the candidate role. Implement role scoping only if that
+  requirement is absent; otherwise retain it and pursue the supported endpoint-inventory path.
+- **External effects:** None. No provider/network call, secret access, private artifact access,
+  candidate selection, plan activation, command, campaign, qualification, runtime authority, audit,
+  or release action.
+- **Exact next safe action:** Inspect the route-purpose matrix, candidate request construction, and
+  admission call sites; record the semantic decision before changing predicate requirements.
+
+## 2026-08-30T16:38:00Z — V3-PLANSUCCESSOR-001 latest operator-evidence reconciliation
+
+- **Defensive objective:** Reconcile the newly committed operator result without converting its
+  provider-free sweep into repository selection, runtime authority, or campaign credit.
+- **Operator evidence:** Record
+  `b1b5c13fe00f54c2b78ffc7489abac6b01bb045f6a233d7ca20dddd2d9447fbe` is 155575 bytes / 2780
+  lines, latest `2026-08-30T15:18Z`, committed locally at `b9f3bb4`. It operator-reports successor
+  plan `00b6aa8f...` from predecessor `bb3d60c...` and a complete constrained sweep with zero
+  admissible candidates. Codex did not inspect the artifact; it is not active or authoritative.
+- **Completed changes:** Closed parent-swap and interrupted-cleanup publication races with retained
+  directory-descriptor custody, private-owned-parent enforcement, parent identity revalidation,
+  independent exact-name cleanup attempts, and zero-link attestation on the still-open created inode.
+  Reconciled runtime status, traceability, model/operator guidance, queue, and tests to the new record.
+- **Tests run:** `366` affected provider-free tests and `25` product-governance tests pass. The
+  canonical generator, Ruff, strict mypy, py_compile, strict JSON, diff integrity, and an independent
+  `61`-test no-blocker publication-custody review pass.
+- **Result:** `V3-PLANSUCCESSOR-001` remains `COMPLETE`, provider-free, and nonauthorizing. No local
+  provider/network call, secret access, private ledger access, operator command, replacement
+  selection, campaign, qualification, runtime authority, audit, or release action occurred.
+- **Remaining limitation:** The active plan remains unchanged and non-runnable. The operator-reported
+  sweep found zero admissible candidates; its successor artifact is neither active nor inspected by
+  Codex. `completed_real_audits` remains zero.
+- **Exact next safe action:** Stop. `V3-CANDROUTE-001` is dependency-reconciled and next in the queue,
+  but remains unselected and must begin as a separate bounded work unit.
+
+## 2026-08-30T15:31:29Z — V3-PLANSUCCESSOR-001 complete
+
+- **Defensive objective:** Make an explicit operator-chosen live route usable under a deterministic,
+  predecessor-bound successor plan without weakening revocation, lineage, or authority custody.
+- **Completed changes:** Added backward-compatible schema-v1.5 succession while retaining exact
+  v1.4 bytes; deterministic entry/constraint/profile/role/plan hashing; exact predecessor custody;
+  unchanged judge constraints; current-revocation enforcement; historical predecessor-evidence
+  separation; fresh private mode-0600 publication; and provider-free CLI emission. The generated
+  schema now forbids a predecessor field in v1.4 and requires a non-null digest in v1.5. Frozen
+  derive, validation, eligibility, and publication roots reject global replacement and in-place
+  code mutation before artifact creation.
+- **Files changed:** Candidate selection and CLI implementation, generated candidate-selection and
+  autonomy schemas/inventory, successor/CLI/smoke regressions, model and operator guidance,
+  traceability, runtime status, queue, and both worklogs. The active plan, tombstone, operator record,
+  and unrelated `.gitignore` edit remain unchanged.
+- **Tests run:** `351` affected provider-free tests pass. Canonical generation write/verify, Ruff
+  format/check, strict mypy over the three affected source modules, py_compile, strict governance
+  JSON, diff integrity, and independent tamper/scope review pass.
+- **Result:** `COMPLETE`, provider-free and nonauthorizing. A synthetic revoked-predecessor-to-live-
+  successor flow reaches constrained discovery and the actual mocked `--live-route-preflight-only`
+  path with no completion, usage, ledger mutation, durable output bundle, provider network, or
+  authority. `completed_real_audits` remains zero.
+- **Remaining limitation:** No successor artifact or replacement candidate is selected; the active
+  plan remains stale and non-runnable. Empirical route admissibility and all external actions remain
+  separate.
+- **Exact next safe action:** Stop. Reconcile `V3-CANDROUTE-001`'s stated operator-sweep dependency
+  before selecting it; do not infer a candidate, command, run index, or authority.
+
+## 2026-08-30T14:53:27Z — V3-PLANSUCCESSOR-001 core successor slice
+
+- **Completed changes:** Added backward-compatible selection-plan v1.5 succession custody while
+  retaining byte-identical v1.4 root serialization. A private deterministic transition builder
+  derives all hashes, records the predecessor digest, narrows the operator-chosen candidate to one
+  exact endpoint, preserves profile and judge constraints, and separates historical chain
+  validation from current revocation eligibility. Added fresh mode-0600 atomic publication and a
+  provider-free `models emit-selection-plan-successor` CLI surface.
+- **Focused tests:** `42` candidate-selection tests pass, including derivation, every hash,
+  judge/profile carry-forward, no-op/unlisted/judge collision, tombstone rejection, raw and coherent
+  reseal tamper, schema-version custody, canonical reload, fresh-file refusal, and mode 0600. The
+  focused CLI emission regression passes twice deterministically, proves no secret/provider access,
+  preserves all inputs, and refuses a later revoked successor before output creation. Ruff and
+  strict mypy pass for the implementation surface.
+- **Files changed in this slice:** `candidate_selection.py`, `cli.py`, candidate-selection and
+  registry-bridge CLI tests, queue, and both worklogs. The active plan and operator record remain
+  unchanged; no replacement route was selected by repository state.
+- **External effects:** None. No provider/network call, credential, campaign, run index,
+  qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Prove successor-bound constrained discovery and the complete mocked
+  `--live-route-preflight-only` engine path, then regenerate and validate the published schema.
+
+## 2026-08-30T14:41:59Z — V3-PLANSUCCESSOR-001 selected
+
+- **Defensive objective:** Permit an operator-selected, live, unrevoked candidate route to receive a
+  deterministic successor selection plan without weakening route, revocation, or lineage custody.
+- **Scope frozen:** Add predecessor-bound successor derivation, a provider-free emission surface,
+  and succession, tamper, schema, constrained-evidence, and live-route-gate regressions. Preserve
+  judge constraints and all false authority flags; do not change the active plan or select a route.
+- **Operator evidence:** Reconciled the unchanged operator-supplied, nonauthorizing record at
+  `c585830a2f76c9b4f61104c54628c8406f8dce86aa085c3619514b1dcf047f22`; it reports replacement
+  discovery but no constrained evidence and grants no provider, campaign, audit, or release action.
+- **External effects:** None. No provider/network call, credential, private ledger, operator command,
+  candidate selection, run index, campaign, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Inspect the selection-plan hash model and implement only the bounded
+  provider-free successor builder and CLI with focused regressions.
+
+## 2026-08-28T14:27:24Z — V3-REVOKERECON-001 final provider-free closure reconciliation
+
+- **Defensive objective:** Make revocation apply to the requested assigned route without allowing
+  role, constraint, provider-policy, or transport-registry mutation to revive the tombstoned route.
+- **Completed changes:** Requested unrevoked discovery is admitted while actual pinned-plan
+  execution remains all-route validated. Exact candidate, primary, replay, judge, and refetch role
+  custody reaches concrete OpenRouter transport. Registration consumes the first detached-valid
+  constraint projection; an immutable construction record, held through weak subject/binding/policy
+  references, is authoritative over all mutable transport indexes and does not retain credentials
+  after client collection. Named refusal and plan/constraint-hash persistence remain fail-closed.
+- **Files changed:** Revocation, selection, registry bridge, route admission, CLI, benchmark,
+  OpenRouter, authenticated-runner/smoke adapters, focused tests, current model/operator guidance,
+  autonomy inventory, traceability, runtime status, queue, and both worklogs. The tombstone,
+  selection plan, and operator record are unchanged; the unrelated `.gitignore` edit is untouched.
+- **Tests run:** `941` distinct provider-free behavior tests and `25` product-governance tests pass;
+  canonical generation, Ruff format/check, strict mypy, py_compile, strict JSON, diff integrity, and
+  an independent final scope review pass. Coherent replacement of all three mutable registries,
+  missing-`None` canary deletion, constructor-time input mutation, and credential-lifecycle probes
+  fail closed with zero transport dispatch. The separate full refresh-runtime diagnostic reproduces
+  the same 16 failures at the untouched baseline and receives no pass credit.
+- **Result:** `COMPLETE`, provider-free and nonauthorizing. The current operator-supplied record
+  `c585830a2f76c9b4f61104c54628c8406f8dce86aa085c3619514b1dcf047f22` reports the reconciliation
+  working: Gemma/DeepInfra and Tencent/Novita discovery pass, MiniMax/CoreWeave reaches ordinary
+  endpoint drift, and DeepSeek/Parasail remains revoked with its named reason. This evidence is not
+  independently authenticated by Codex and grants no authority.
+- **Remaining limitation:** The unchanged plan still pins the revoked candidate. The reported
+  replacement live-route gate lacks constrained discovery evidence; no successor plan, replacement,
+  empirical validation, provider run, completed real audit, qualification, or release exists.
+- **External effects:** None. No provider/network call, credential, private ledger, operator command,
+  run index, replacement selection, campaign, qualification, runtime authority, audit, or release.
+- **Exact next safe action:** Stop. `V3-PLANSUCCESSOR-001` is queued but unselected; select no
+  successor and emit no provider/operator command or run index at this boundary.
+
+## 2026-08-28T12:35:10Z — V3-REVOKERECON-001 complete provider-free
+
+- **Defensive objective:** Reconcile candidate revocation at the requested assigned route while
+  preserving the exact DeepSeek/Parasail tombstone and role isolation.
+- **Completed changes:** Candidate discovery and pending-registry derivation gate only the requested
+  assignment; actual pinned-plan execution still validates every route. Exact candidate, primary,
+  replay, judge, and refetch role custody reaches route admission and OpenRouter transport.
+  Immutable resource, enum, helper, registry, binding, closure, plan-hash, and constraint-hash
+  substitutions fail closed. Diagnostics name the exact role, model, endpoint, and
+  `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE` reason.
+- **Tests run:** Focused and broad revocation, selection, CLI, route-admission, benchmark,
+  OpenRouter, authenticated-runner, and smoke provider-free matrices; scoped Ruff and strict mypy.
+  Final product-governance, generated-inventory, strict-JSON, and diff-integrity results are recorded
+  in the header after their terminal rerun.
+- **Result:** `COMPLETE`, provider-free and nonauthorizing. All three operator-reported unrevoked
+  alternatives are locally admitted for discovery; the exact and canonical revoked assignment stay
+  refused. No replacement candidate or successor plan was selected.
+- **Remaining limitation:** The pinned plan remains stale and non-runnable. Replacement selection,
+  empirical provider validation, 15 unbound generation identities, calibration, campaign completion,
+  qualification, successful real audits, and release authority remain unproven. One isolated
+  refresh-runtime test also fails identically at the baseline checkpoint and receives no pass credit.
+- **Operator reconciliation:** `operator_results.md` remains exactly
+  `d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089` / 148339 bytes /
+  2648 lines, latest `2026-08-28T07:56Z`; its whole-plan deadlock is historical pre-fix evidence.
+  The record is operator-supplied, nonauthorizing, and not independently authenticated by Codex.
+- **External effects:** None. No provider/network call, credential, private ledger, operator command,
+  run index, replacement selection, campaign, qualification, runner authority, audit, or release.
+- **Next ticket:** `UNSELECTED`; stop at this work-unit boundary.
+
+## 2026-08-28T09:50:52Z — V3-REVOKERECON-001 implementation checkpoint provider-free
+
+- **Completed implementation slice:** Candidate discovery no longer evaluates revocation across the
+  complete historical plan. CLI discovery gates the requested candidate first; pending-registry
+  derivation detached-validates the plan and rechecks manifest plus exact/canonical evidence
+  identities. True all-route eligibility remains unchanged for actual pinned-plan execution.
+- **Negative guarantees retained:** The immutable projection now carries the reason; refusal renders
+  exact role, requested model/alias, normalized endpoint, and reason. Optional exact role custody
+  isolates primary/replay selection while callers without role custody remain conservative. Plan and
+  route-constraint hashes remain validation-only, so changing either cannot resurrect a tombstone.
+- **Regressions:** Added direct success for all three operator-reported alternatives, direct
+  derivation under a stale pinned candidate route, provider-free CLI publication under that stale
+  plan, cross-role isolation, exact diagnostics, and unchanged plan-hash resurrection refusal.
+- **Validation:** The 101-test focused revocation/selection/CLI bridge matrix passes. A broader
+  revocation-filtered unit run found only two stale exact-message expectations among 85 selected
+  tests; both are updated. Strict mypy passes the four touched model modules. Ruff's sole test-style
+  finding is corrected and awaits the clean rerun.
+- **Files changed:** Revocation, candidate selection, registry bridge, route admission, CLI, four
+  focused test modules, the queue, and both worklogs. The tombstone resource, selection plan, and
+  operator result are unchanged.
+- **External effects:** None. No provider/network call, credential, private ledger, operator command,
+  run index, replacement selection, campaign, qualification, runner authority, or release action.
+- **Exact next safe action:** Run the broadened behavior matrix plus formatting/type/generation
+  gates, then reconcile runtime status, traceability, product documentation tests, and both worklogs.
+
+## 2026-08-28T09:29:16Z — V3-REVOKERECON-001 selected provider-free
+
+- **Defensive objective:** Restore candidate discovery for an explicitly requested unrevoked route
+  while keeping the existing candidate DeepSeek/Parasail tombstone fail-closed and diagnosable.
+- **Operator evidence reconciled:** Current `operator_results.md` is exactly
+  `d06ae996c74996110822dcd4cbbc1b754c72666551e630edb2627cc50c243089` / 148339 bytes /
+  2648 lines, latest `2026-08-28T07:56Z`. It reports plan-wide revocation evaluation under plan
+  `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`; the record is
+  operator-supplied, nonauthorizing, and not independently authenticated by Codex.
+- **Scope:** Implement route-assignment reconciliation and provider-free positive/negative tests
+  only. Preserve exact role isolation and tombstone persistence across plan changes. Do not emit a
+  successor plan, choose a replacement model, invoke a provider, or grant downstream authority.
+- **Files changed:** `docs/codex_work_queue.md` and both current worklogs for ticket selection.
+- **Commands run:** Read the queue, current worklogs, latest operator record, relevant revocation
+  implementation/test references, repository status, and recent checkpoint history.
+- **External effects:** None. The unrelated unstaged `.gitignore` edit remains untouched.
+- **Exact next safe action:** Inspect the revocation API and discovery call graph, write focused
+  failing regressions for unrevoked alternatives plus exact revoked-route diagnostics, then make the
+  smallest route-scoped implementation change.
 
 ## 2026-08-28T08:10:11Z — V3-SCHEMARETRY-001 complete provider-free
 

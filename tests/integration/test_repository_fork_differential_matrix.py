@@ -729,6 +729,7 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         manifest, manifest_path = _write_replay_bundle(
             run_dir=run_dir,
             repository_root=root,
+            configuration_root=root,
             config=config,
             baseline=baseline,
             differential=result,
@@ -742,6 +743,7 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
             manifest_path=manifest_path,
             run_dir=run_dir,
             repository_root=root,
+            configuration_root=root,
             config=config,
             file_config=config,
         )
@@ -781,7 +783,10 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
             "_repository_differential_projection",
             capture_differential_projection,
         )
-        orchestrator = OfflineReplayOrchestrator(scanner_runner=replay_scanner)
+        orchestrator = OfflineReplayOrchestrator(
+            configuration_root=root,
+            scanner_runner=replay_scanner,
+        )
         replay_started_at = time.monotonic()
         replay = asyncio.run(
             orchestrator.replay(

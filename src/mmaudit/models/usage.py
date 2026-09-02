@@ -315,10 +315,29 @@ def source_backed_whole_protocol_context(
         or record.user_prompt_sha256 is None
         or evidence.rendered_sha256 != record.user_prompt_sha256
         or evidence.source_bytes <= 0
+        or evidence.requested_surface_manifest_sha256 is None
+        or not evidence.source_location_proof_sha256s
         or record.routing.get("context_request_evidence_sha256") != evidence.evidence_sha256
     ):
         return None
     return evidence
+
+
+def has_exact_nonfallback_model_identity(record: UsageRecord) -> bool:
+    """Require one route to retain the exact requested model without fallback or substitution."""
+
+    requested_model = record.requested_model
+    routing = record.routing
+    return bool(
+        requested_model
+        and not record.substitution_detected
+        and not record.fallback_used
+        and routing.get("host_model_fallback_used") is False
+        and routing.get("provider_fallback_used") is False
+        and record.returned_model == requested_model
+        and record.actual_model == requested_model
+        and routing.get("selected_model") == requested_model
+    )
 
 
 def usage_requires_audit_policy_evidence(record: UsageRecord) -> bool:

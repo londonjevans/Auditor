@@ -134,6 +134,21 @@ async def _transition_inputs(
     return predecessor, calibration, successor, successor_config, bindings, transition
 
 
+def test_policy_replacement_hash_uses_stable_config_canonicalization(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE).effective()
+
+    assert config.actor_model == config_module.ActorModelConfig()
+    assert (
+        effective_config_sha256_with_qualification_policy(
+            config,
+            policy_sha256=config.maximum_assurance.qualification.policy_sha256,
+        )
+        == config.stable_hash()
+    )
+
+
 @pytest.mark.asyncio
 async def test_exact_policy_only_transition_is_canonical_and_non_authorizing(
     tmp_path: Path,

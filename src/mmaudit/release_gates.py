@@ -419,35 +419,102 @@ _LOCAL_GATE_PLAN_SPECS: dict[
 ] = {
     ReleaseGateId.RUFF_FORMAT: (
         "ruff",
-        ("format", "--check", "."),
+        (
+            "format",
+            "--check",
+            "--no-cache",
+            "--isolated",
+            "--target-version",
+            "py312",
+            "--line-length",
+            "100",
+            "--extend-exclude",
+            "config/public_model_lineage/sources/**",
+            "--extend-exclude",
+            "docs/remediation/v3/operator_captures/**",
+            ".",
+        ),
         300,
         None,
-        "run the exact local command python -P -m ruff format --check . and require exit zero",
+        (
+            "run the exact cache-disabled local command "
+            "python -P -S -m ruff format --check with fixed isolated options "
+            "from the retained candidate with a fixed trusted bootstrap and require exit zero"
+        ),
     ),
     ReleaseGateId.RUFF_CHECK: (
         "ruff",
-        ("check", "."),
+        (
+            "check",
+            "--no-cache",
+            "--isolated",
+            "--target-version",
+            "py312",
+            "--line-length",
+            "100",
+            "--select",
+            "E,F,I,UP,B,SIM,RUF",
+            "--ignore",
+            "E501",
+            "--extend-exclude",
+            "config/public_model_lineage/sources/**",
+            "--extend-exclude",
+            "docs/remediation/v3/operator_captures/**",
+            ".",
+        ),
         300,
         None,
-        "run the exact local command python -P -m ruff check . and require exit zero",
+        (
+            "run the exact cache-disabled local command "
+            "python -P -S -m ruff check with fixed isolated options from the retained "
+            "candidate with a fixed trusted bootstrap and require exit zero"
+        ),
     ),
     ReleaseGateId.MYPY: (
         "mypy",
-        (),
+        (
+            "--no-incremental",
+            "--config-file",
+            "{devnull}",
+            "--strict",
+            "--python-version",
+            "3.12",
+            "--disable-error-code",
+            "import-untyped",
+            "src/mmaudit",
+        ),
         600,
         None,
-        "run the exact local command python -P -m mypy and require exit zero",
+        (
+            "run the exact cache-disabled local command "
+            "python -P -S -m mypy with fixed strict options and no project config from "
+            "the retained candidate with a fixed trusted bootstrap and require exit zero"
+        ),
     ),
     ReleaseGateId.PYTEST: (
         "pytest",
         (
             "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "pytest_asyncio.plugin",
+            "-c",
+            "{devnull}",
+            "--rootdir=.",
+            "--confcutdir=.",
+            "--import-mode=importlib",
             "--junitxml",
             "{evidence_root}/release-gate-pytest-junit.xml",
+            "tests",
         ),
         1_800,
         "release-gate-pytest-junit.xml",
-        "run python -P -m pytest -q with fixed JUnit evidence and require a nonempty valid suite",
+        (
+            "run python -P -S -m pytest with plugin autoload disabled, an empty fixed config, "
+            "confined importlib root, fixed tracked test path and JUnit evidence, and the retained "
+            "candidate exposed only through the mmaudit namespace; require a nonempty valid suite"
+        ),
     ),
 }
 _LOCAL_CHILD_ENVIRONMENT_CONTRACT: dict[str, str] = {
@@ -455,7 +522,7 @@ _LOCAL_CHILD_ENVIRONMENT_CONTRACT: dict[str, str] = {
     "CI": "true",
     "GIT_CONFIG_GLOBAL": "{devnull}",
     "GIT_CONFIG_NOSYSTEM": "1",
-    "HOME": "{runtime_root}/home",
+    "HOME": "{evidence_root}",
     "HTTPS_PROXY": "http://127.0.0.1:9",
     "HTTP_PROXY": "http://127.0.0.1:9",
     "LANG": "C.UTF-8",
@@ -464,76 +531,204 @@ _LOCAL_CHILD_ENVIRONMENT_CONTRACT: dict[str, str] = {
     "NO_PROXY": "",
     "PATH": "{python_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
     "PIP_CONFIG_FILE": "{devnull}",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     "PYTHONDONTWRITEBYTECODE": "1",
     "PYTHONHASHSEED": "0",
     "PYTHONNOUSERSITE": "1",
-    "PYTHONPATH": "{network_guard_root}",
     "PYTHONSAFEPATH": "1",
-    "TMPDIR": "{runtime_root}/tmp",
-    "XDG_CACHE_HOME": "{runtime_root}/cache",
+    "RELEASE_CANDIDATE_PACKAGE_ROOT": "{candidate_root}/src/mmaudit",
+    "RELEASE_CANDIDATE_ROOT": "{candidate_root}",
+    "TMPDIR": "{evidence_root}",
+    "XDG_CACHE_HOME": "{evidence_root}",
     "all_proxy": "http://127.0.0.1:9",
     "http_proxy": "http://127.0.0.1:9",
     "https_proxy": "http://127.0.0.1:9",
     "no_proxy": "",
 }
-_LOCAL_NETWORK_GUARD_SOURCE = b'''"""Deny network operations in fixed mmaudit release-gate children."""
+_LOCAL_NETWORK_GUARD_SOURCE = b'''"""Trusted bootstrap for fixed mmaudit release-gate children."""
 
-import _socket as _raw_socket
-import socket as _socket
-
-_OriginalRawSocket = _raw_socket.socket
-_OriginalSocket = _socket.socket
+import os as _os
+import sys as _sys
 
 
-def _deny_network(*_args, **_kwargs):
-    raise PermissionError("network access is disabled for this release gate")
+def _candidate_paths():
+    candidate_root = _os.environ.get("RELEASE_CANDIDATE_ROOT")
+    package_root = _os.environ.get("RELEASE_CANDIDATE_PACKAGE_ROOT")
+    if (
+        not candidate_root
+        or not package_root
+        or not _os.path.isabs(candidate_root)
+        or not _os.path.isabs(package_root)
+        or _os.path.realpath(candidate_root) != candidate_root
+        or _os.path.realpath(package_root) != package_root
+        or package_root != _os.path.join(candidate_root, "src", "mmaudit")
+    ):
+        raise RuntimeError("fixed local release candidate paths are invalid")
+    return candidate_root, package_root
 
 
-class _NetworkDenyMixin:
-    def connect(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def connect_ex(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def bind(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def listen(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def accept(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def sendto(self, *_args, **_kwargs):
-        return _deny_network()
-
-    def sendmsg(self, *_args, **_kwargs):
-        return _deny_network()
+def _is_candidate_path(value, candidate_root):
+    if not value:
+        return True
+    absolute = _os.path.realpath(_os.path.abspath(value))
+    try:
+        return _os.path.commonpath((absolute, candidate_root)) == candidate_root
+    except ValueError:
+        return False
 
 
-class _RawNetworkDeniedSocket(_NetworkDenyMixin, _OriginalRawSocket):
-    pass
+def _prepare_fixed_runtime(tool_module):
+    if tool_module not in {"ruff", "mypy", "pytest"}:
+        raise RuntimeError("fixed local release tool is unsupported")
+    candidate_root, candidate_package_root = _candidate_paths()
+    _sys.path[:] = [
+        value for value in _sys.path if not _is_candidate_path(value, candidate_root)
+    ]
+    if any(_is_candidate_path(value, candidate_root) for value in _sys.path):
+        raise RuntimeError("candidate path remains in the generic import search path")
+
+    import _socket as raw_socket
+    import importlib.util as importlib_util
+    import runpy
+    import socket
+    import sysconfig
+
+    original_raw_socket = raw_socket.socket
+    original_socket = socket.socket
+
+    def deny_network(*_args, **_kwargs):
+        raise PermissionError("network access is disabled for this release gate")
+
+    class NetworkDenyMixin:
+        def connect(self, *_args, **_kwargs):
+            return deny_network()
+
+        def connect_ex(self, *_args, **_kwargs):
+            return deny_network()
+
+        def bind(self, *_args, **_kwargs):
+            return deny_network()
+
+        def listen(self, *_args, **_kwargs):
+            return deny_network()
+
+        def accept(self, *_args, **_kwargs):
+            return deny_network()
+
+        def sendto(self, *_args, **_kwargs):
+            return deny_network()
+
+        def sendmsg(self, *_args, **_kwargs):
+            return deny_network()
+
+    class RawNetworkDeniedSocket(NetworkDenyMixin, original_raw_socket):
+        pass
+
+    class NetworkDeniedSocket(NetworkDenyMixin, original_socket):
+        pass
+
+    socket.socket = NetworkDeniedSocket
+    socket.SocketType = RawNetworkDeniedSocket
+    raw_socket.socket = RawNetworkDeniedSocket
+    for name in (
+        "create_connection",
+        "create_server",
+        "getaddrinfo",
+        "gethostbyaddr",
+        "gethostbyname",
+        "gethostbyname_ex",
+        "getnameinfo",
+    ):
+        if hasattr(socket, name):
+            setattr(socket, name, deny_network)
+
+    site_paths = {
+        _os.path.realpath(value)
+        for key, value in sysconfig.get_paths().items()
+        if key in {"purelib", "platlib"}
+    }
+    if not site_paths:
+        raise RuntimeError("fixed local release site-package paths are unavailable")
+    for site_path in sorted(site_paths):
+        if (
+            not _os.path.isabs(site_path)
+            or not _os.path.isdir(site_path)
+            or _is_candidate_path(site_path, candidate_root)
+        ):
+            raise RuntimeError("fixed local release site-package path is unsafe")
+        _sys.path.append(site_path)
+
+    import importlib.metadata as importlib_metadata
+
+    def trusted_distribution_spec(module_name, distribution_name, *, require_main):
+        distribution = importlib_metadata.distribution(distribution_name)
+        distribution_files = distribution.files
+        if distribution_files is None:
+            raise RuntimeError("fixed local release tool distribution has no inventory")
+        trusted_files = {
+            _os.path.realpath(str(distribution.locate_file(item))) for item in distribution_files
+        }
+        module_spec = importlib_util.find_spec(module_name)
+        if (
+            module_spec is None
+            or module_spec.origin is None
+            or _os.path.realpath(module_spec.origin) not in trusted_files
+            or _is_candidate_path(module_spec.origin, candidate_root)
+        ):
+            raise RuntimeError("fixed local release tool is outside its retained distribution")
+        if require_main:
+            main_origins = {
+                _os.path.realpath(_os.path.join(location, "__main__.py"))
+                for location in (module_spec.submodule_search_locations or ())
+            }
+            if not main_origins or not main_origins <= trusted_files or any(
+                _is_candidate_path(origin, candidate_root) for origin in main_origins
+            ):
+                raise RuntimeError("fixed local release tool entry point is untrusted")
+
+    trusted_distribution_spec(tool_module, tool_module, require_main=True)
+    if tool_module == "pytest":
+        trusted_distribution_spec("pytest_asyncio", "pytest-asyncio", require_main=False)
+
+    candidate_package_init = _os.path.join(candidate_package_root, "__init__.py")
+    try:
+        _os.lstat(candidate_package_init)
+    except OSError as exc:
+        raise RuntimeError("fixed local release candidate package is unavailable") from exc
+    if not _os.path.isfile(candidate_package_init) or _os.path.islink(candidate_package_init):
+        raise RuntimeError("fixed local release candidate package is unsafe")
+    if "mmaudit" in _sys.modules:
+        raise RuntimeError("mmaudit was imported before fixed candidate routing was installed")
+
+    class MMAuditCandidateFinder:
+        def find_spec(self, fullname, path=None, target=None):
+            del path, target
+            if fullname != "mmaudit":
+                return None
+            spec = importlib_util.spec_from_file_location(
+                fullname,
+                candidate_package_init,
+                submodule_search_locations=[candidate_package_root],
+            )
+            if spec is None or spec.loader is None:
+                raise ImportError("fixed local release candidate package cannot be loaded")
+            return spec
+
+    _sys.meta_path.insert(0, MMAuditCandidateFinder())
+    return runpy
 
 
-class _NetworkDeniedSocket(_NetworkDenyMixin, _OriginalSocket):
-    pass
+def _main():
+    if len(_sys.argv) < 2:
+        raise RuntimeError("fixed local release tool argument is missing")
+    tool_module = _sys.argv[1]
+    runpy = _prepare_fixed_runtime(tool_module)
+    _sys.argv = [tool_module, *_sys.argv[2:]]
+    runpy.run_module(tool_module, run_name="__main__", alter_sys=True)
 
 
-_socket.socket = _NetworkDeniedSocket
-_socket.SocketType = _RawNetworkDeniedSocket
-_raw_socket.socket = _RawNetworkDeniedSocket
-for _name in (
-    "create_connection",
-    "create_server",
-    "getaddrinfo",
-    "gethostbyaddr",
-    "gethostbyname",
-    "gethostbyname_ex",
-    "getnameinfo",
-):
-    if hasattr(_socket, _name):
-        setattr(_socket, _name, _deny_network)
+if __name__ == "__main__":
+    _main()
 '''
 
 
@@ -548,7 +743,7 @@ def get_release_gate_child_environment_contract(
 
 
 def get_release_gate_network_guard_source(gate_id: ReleaseGateId) -> bytes:
-    """Return the exact sitecustomize source bound by a fixed local gate plan."""
+    """Return the exact trusted bootstrap source bound by a fixed local gate plan."""
 
     if gate_id not in _LOCAL_GATE_PLAN_SPECS:
         raise ValueError("release gate has no fixed local network guard")

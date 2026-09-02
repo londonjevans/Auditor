@@ -2,25 +2,43 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pickle
 from collections.abc import Callable
-from dataclasses import dataclass
+from copy import copy, deepcopy
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
 import mmaudit.models.openrouter as openrouter_module
-from mmaudit.config import AuditConfig
+import mmaudit.orchestration.manifest as manifest_module
+import mmaudit.orchestration.model_review_authority as model_review_authority_module
+import mmaudit.orchestration.pipeline as pipeline_module
+import mmaudit.orchestration.scheduler as scheduler_module
+from mmaudit.config import AuditConfig, model_lineage_index
+from mmaudit.models.coverage_planning import (
+    ModelSurfaceRiskTier,
+    build_model_surface_coverage_plan,
+    classify_model_surface_risk,
+)
 from mmaudit.models.scheduler import (
     SchedulerArtifact,
     SchedulerPassKind,
+    SchedulerPassPlan,
     SchedulerPassStatus,
     SchedulerScope,
+    SchedulerTaskEventKind,
+    SchedulerTaskKind,
+    SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryPromotionDisposition,
 )
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -44,7 +62,11 @@ from mmaudit.models.schemas import (
     InvariantSpec,
     InvariantSuite,
     InvariantTemplate,
+    KnownIssueCriticality,
+    KnownIssueTaxonomy,
+    KnownIssueTaxonomyItem,
     Location,
+    MinimumFloorRecoveryModelUsageBinding,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
@@ -57,6 +79,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    ProtocolProfileKind,
     RepositoryFile,
     RepositoryMap,
     SolidityEntity,
@@ -104,14 +127,26 @@ from mmaudit.models.truncation_recovery_journal import (
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_coverage import (
+    ModelReviewPreDispatchAuthorization,
     build_model_review_coverage,
+    build_model_review_pre_dispatch_authorizations,
     build_model_surface_requests,
     build_semantic_shard_source_review_request,
     model_review_critical_surface_gate,
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
-from mmaudit.orchestration.scheduler import SchedulerJournal
+from mmaudit.orchestration.model_review_evidence import (
+    model_surface_context_source_custody,
+    model_surface_review_record_validation_failures,
+)
+from mmaudit.orchestration.scheduler import (
+    SchedulerJournal,
+    open_scheduler_journal_for_verification,
+    require_model_review_pre_dispatch_authorization,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    require_verified_promoted_truncation_recovery_surface_coverage,
+)
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.orchestration.truncation_recovery_evidence import (
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
@@ -119,10 +154,13 @@ from mmaudit.orchestration.truncation_recovery_evidence import (
     VerifiedRecursiveTruncationRecoveryTree,
     VerifiedTruncationRecoveryClosure,
     build_truncation_recovery_child_context,
-    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
-    require_verified_promoted_truncation_recovery_surface_coverage,
     verify_recursive_truncation_recovery_tree,
     verify_truncation_recovery_closure,
+)
+from mmaudit.solidity.invariants import detect_protocol_profiles
+from mmaudit.solidity.taxonomy import (
+    LoadedKnownIssueTaxonomy,
+    build_known_issue_taxonomy_coverage,
 )
 from tests.fake_openrouter import (
     _maximum_assurance_candidates,
@@ -139,8 +177,13 @@ from tests.scheduler_support import (
     build_scheduler_test_model_payload,
     build_scheduler_test_model_surface_review_custody,
     build_scheduler_test_real_usage,
+    build_scheduler_test_usage,
     scheduler_test_delivered_source_descriptor_sha256s,
+    scheduler_test_model_surface_review_request_manifest_sha256,
     scheduler_test_response_schema_sha256,
+)
+from tests.unit.test_scheduler_journal import (
+    _bindings as _scheduler_bindings,
 )
 from tests.unit.test_scheduler_journal import (
     _inventory as _scheduler_inventory,
@@ -156,6 +199,9 @@ from tests.unit.test_scheduler_truncation_promotion_integration import (
 )
 from tests.unit.test_scheduler_truncation_promotion_integration import (
     _one_shard_bindings as _promoted_surface_bindings,
+)
+from tests.unit.test_scheduler_truncation_promotion_integration import (
+    _plan as _scheduler_test_plan,
 )
 from tests.unit.test_scheduler_truncation_promotion_integration import (
     _recovery_plan as _promoted_recovery_plan,
@@ -516,10 +562,10 @@ def _usage(
     request_id: str,
     *,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
+    schema_sha256: str = "e" * 64,
 ) -> UsageRecord:
     started_at = datetime.now(UTC)
     generation_id = f"generation-{request_id}"
-    schema_sha256 = "e" * 64
     return bind_synthetic_usage_identity(
         UsageRecord(
             request_id=request_id,
@@ -611,6 +657,14 @@ def _record(
         citation = ModelSurfaceReviewCitation(symbol=state.name)
         path = (entry_citation, citation)
     anchor = citation.symbol or request.contract
+    security_relevance = (
+        (
+            f"{anchor} authorization controls address the source linked defensive class "
+            "and its requested security invariant."
+        )
+        if request.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+        else f"{anchor} preserves the requested asset or authorization invariant."
+    )
     return ModelSurfaceReviewRecord(
         surface_id=request.surface_id,
         contract=request.contract,
@@ -624,9 +678,7 @@ def _record(
             ModelSurfaceReviewEvidenceObservation(
                 citation=citation,
                 observed_behavior=f"{anchor} writes or checks its deterministic source state.",
-                security_relevance=(
-                    f"{anchor} preserves the requested asset or authorization invariant."
-                ),
+                security_relevance=security_relevance,
             ),
         ),
         reachability=ModelSurfaceReviewReachability(
@@ -637,6 +689,33 @@ def _record(
         ),
         assumptions=(),
         confidence=0.9,
+    )
+
+
+def _semantically_invalid_record(
+    record: ModelSurfaceReviewRecord,
+) -> ModelSurfaceReviewRecord:
+    """Retain schema shape while replacing source semantics with boilerplate and a self-loop."""
+
+    observation = record.evidence_observations[0].model_copy(
+        update={
+            "observed_behavior": "Explicitly considered this supplied surface.",
+            "security_relevance": "Explicitly considered this supplied surface.",
+        }
+    )
+    assert record.reachability is not None
+    reachability = record.reachability.model_copy(
+        update={
+            "entry_point": record.citation,
+            "path": (record.citation,),
+        }
+    )
+    return record.model_copy(
+        update={
+            "rationale": "Explicitly considered this supplied surface.",
+            "evidence_observations": (observation,),
+            "reachability": reachability,
+        }
     )
 
 
@@ -775,8 +854,291 @@ def _review_contexts(
     for usage in usages:
         context = _review_context(requests, usage, index, graphs)
         _bind_usage_to_context(usage, context)
+        _with_context_request_evidence(usage, context, request_role=usage.role)
         result[usage.request_id] = [context]
     return result
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorizedOrdinaryReviewEvidence:
+    usage_records: tuple[UsageRecord, ...]
+    artifacts: tuple[ModelSurfaceReviewArtifact, ...]
+    contexts_by_request: dict[str, list[ContextPackage]]
+    authorizations: tuple[ModelReviewPreDispatchAuthorization, ...]
+    journal: SchedulerJournal
+    temporary_root: TemporaryDirectory[str]
+
+    def close(self) -> None:
+        self.journal.close()
+        self.temporary_root.cleanup()
+
+    def __enter__(self) -> _AuthorizedOrdinaryReviewEvidence:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+
+def _require_authorization_after_fork(
+    authorization: ModelReviewPreDispatchAuthorization,
+    write_descriptor: int,
+) -> None:
+    """Report whether a fork inherited invalid process-local credit authority."""
+
+    try:
+        require_model_review_pre_dispatch_authorization(authorization)
+    except ValueError:
+        result = b"rejected"
+    except BaseException:
+        result = b"error"
+    else:
+        result = b"accepted"
+    try:
+        os.write(write_descriptor, result)
+    finally:
+        os.close(write_descriptor)
+
+
+def _authorized_ordinary_review_evidence(
+    config: AuditConfig,
+    *,
+    index: SoliditySymbolIndex,
+    graphs: SolidityGraphSet,
+    requests: list[ModelSurfaceReviewRequest],
+    reviewers: tuple[tuple[str, str], ...],
+    contexts: tuple[ContextPackage, ...] | None = None,
+    before_dispatch: Callable[[SchedulerJournal], None] | None = None,
+) -> _AuthorizedOrdinaryReviewEvidence:
+    """Dispatch synthetic local tasks before constructing their matching review evidence."""
+
+    if not reviewers:
+        raise ValueError("synthetic review authority requires at least one reviewer")
+    lineage_by_model = model_lineage_index(config)
+    provisional_contexts = contexts or tuple(
+        _review_context(
+            requests,
+            _usage(role, model_id, f"pre-dispatch-context-{ordinal}"),
+            index,
+            graphs,
+        )
+        for ordinal, (role, model_id) in enumerate(reviewers)
+    )
+    if len(provisional_contexts) != len(reviewers):
+        raise ValueError("synthetic review contexts differ from reviewer inventory")
+    manifest_sha256 = ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+        requests
+    )
+    temporary_root = TemporaryDirectory(prefix="mmaudit-model-review-authority-")
+    inventory = _scheduler_inventory()
+    journal = _create_test_scheduler_journal(
+        Path(temporary_root.name) / "journal",
+        bindings=_scheduler_bindings(),
+        shard_inventory=inventory,
+        privacy_evidence_custody=_scheduler_privacy_custody(
+            source_sha256=inventory.source_tree_sha256
+        ),
+    )
+    try:
+        orientation_plan = journal.seal_pass_plan(
+            _scheduler_test_plan(journal, SchedulerPassKind.ORIENTATION)
+        )
+        orientation_task = orientation_plan.tasks[0]
+        orientation_activation = journal.activate_task(
+            orientation_task.task_id,
+            actual_input_sha256=orientation_task.input_sha256,
+            system_prompt_sha256=orientation_task.system_prompt_sha256,
+            user_prompt_sha256="3" * 64,
+            provider_prompt_sha256="4" * 64,
+            response_schema_sha256=orientation_task.response_schema_sha256,
+            delivered_source_descriptor_sha256s=(
+                scheduler_test_delivered_source_descriptor_sha256s(
+                    orientation_plan,
+                    orientation_task,
+                )
+            ),
+        )
+        journal.mark_dispatched(orientation_task.task_id)
+        orientation_payload = build_scheduler_test_model_payload(
+            orientation_plan,
+            orientation_task,
+        )
+        orientation_usage = build_scheduler_test_usage(
+            orientation_task,
+            orientation_activation,
+            seed="ordinary-authority-orientation",
+            validated_output=orientation_payload,
+            privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        )
+        orientation_output = journal.persist_output(
+            orientation_task.task_id,
+            orientation_payload,
+            usage_record=orientation_usage,
+        )
+        journal.record_terminal(
+            SchedulerTaskResult.build(
+                plan=orientation_plan,
+                task=orientation_task,
+                activation=orientation_activation,
+                terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+                terminal_evidence_sha256=(orientation_usage.validated_response_sha256 or "0" * 64),
+                output=orientation_output,
+            )
+        )
+        assert journal.seal_pass_result(SchedulerPassKind.ORIENTATION).status is (
+            SchedulerPassStatus.COMPLETE
+        )
+        tasks: list[SchedulerTaskPlan] = []
+        reviewer_context_by_key: dict[str, ContextPackage] = {}
+        shard_ids = tuple(shard.shard_id for shard in journal.manifest.shard_inventory.shards)
+        for ordinal, ((role, model_id), context) in enumerate(
+            zip(reviewers, provisional_contexts, strict=True)
+        ):
+            lineage = lineage_by_model.get(model_id.lower())
+            if lineage is None:
+                raise ValueError("synthetic review model lacks configured lineage")
+            task_key = f"ordinary-review-authority-{ordinal}"
+            reviewer_context_by_key[task_key] = context
+            tasks.append(
+                SchedulerTaskPlan.build(
+                    manifest=journal.manifest,
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    scope=(
+                        SchedulerScope.global_scope()
+                        if manifest_module._WHOLE_PROTOCOL_REVIEW_ROLE_RE.fullmatch(role)
+                        is not None
+                        else SchedulerScope.single_shard(shard_ids[0])
+                    ),
+                    task_kind=SchedulerTaskKind.MODEL_REQUEST,
+                    task_key=task_key,
+                    role=role,
+                    requested_model=model_id,
+                    root_lineage=lineage.root_lineage,
+                    input_sha256=hashlib.sha256(f"ordinary-input-{ordinal}".encode()).hexdigest(),
+                    prompt_sha256=hashlib.sha256(
+                        f"ordinary-prompt-recipe-{ordinal}".encode()
+                    ).hexdigest(),
+                    system_prompt_sha256=hashlib.sha256(
+                        f"ordinary-system-{ordinal}".encode()
+                    ).hexdigest(),
+                    normalizer_sha256=hashlib.sha256(
+                        f"ordinary-normalizer-{ordinal}".encode()
+                    ).hexdigest(),
+                    response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+                    model_surface_review_request_manifest_sha256=manifest_sha256,
+                )
+            )
+        covered_source_shards = {
+            task.scope.shard_ids[0]
+            for task in tasks
+            if task.role == "source_audit" and task.scope.shard_ids
+        }
+        supporting_model = config.models.source_audit.primary
+        supporting_lineage = lineage_by_model.get(supporting_model.lower())
+        if supporting_lineage is None:
+            raise ValueError("synthetic source-audit support lacks configured lineage")
+        for ordinal, shard_id in enumerate(
+            shard_id for shard_id in shard_ids if shard_id not in covered_source_shards
+        ):
+            task_key = f"ordinary-review-authority-support-{ordinal}"
+            reviewer_context_by_key[task_key] = provisional_contexts[0]
+            tasks.append(
+                SchedulerTaskPlan.build(
+                    manifest=journal.manifest,
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    scope=SchedulerScope.single_shard(shard_id),
+                    task_kind=SchedulerTaskKind.MODEL_REQUEST,
+                    task_key=task_key,
+                    role="source_audit",
+                    requested_model=supporting_model,
+                    root_lineage=supporting_lineage.root_lineage,
+                    input_sha256=hashlib.sha256(
+                        f"ordinary-support-input-{ordinal}".encode()
+                    ).hexdigest(),
+                    prompt_sha256=hashlib.sha256(
+                        f"ordinary-support-prompt-recipe-{ordinal}".encode()
+                    ).hexdigest(),
+                    system_prompt_sha256=hashlib.sha256(
+                        f"ordinary-support-system-{ordinal}".encode()
+                    ).hexdigest(),
+                    normalizer_sha256=hashlib.sha256(
+                        f"ordinary-support-normalizer-{ordinal}".encode()
+                    ).hexdigest(),
+                    response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+                    model_surface_review_request_manifest_sha256=manifest_sha256,
+                )
+            )
+        plan = journal.seal_pass_plan(
+            SchedulerPassPlan.build(
+                manifest=journal.manifest,
+                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                dependencies=journal.next_dependencies,
+                tasks=tasks,
+            )
+        )
+        tasks_by_key = {task.task_key: task for task in plan.tasks}
+        ordered_tasks = tuple(
+            tasks_by_key[f"ordinary-review-authority-{ordinal}"]
+            for ordinal in range(len(reviewers))
+        )
+        for task in plan.tasks:
+            context = reviewer_context_by_key[task.task_key]
+            rendered_sha256 = hashlib.sha256(render_context(context).encode()).hexdigest()
+            journal.activate_task(
+                task.task_id,
+                actual_input_sha256=rendered_sha256,
+                system_prompt_sha256=task.system_prompt_sha256,
+                user_prompt_sha256=rendered_sha256,
+                provider_prompt_sha256="c" * 64,
+                response_schema_sha256=task.response_schema_sha256,
+                delivered_source_descriptor_sha256s=(
+                    scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+                ),
+            )
+        if before_dispatch is not None:
+            before_dispatch(journal)
+        for task in plan.tasks:
+            journal.mark_dispatched(task.task_id)
+        reviewer_request_ids = {task.logical_request_id for task in ordered_tasks}
+        authorizations = tuple(
+            authorization
+            for authorization in build_model_review_pre_dispatch_authorizations(journal)
+            if require_model_review_pre_dispatch_authorization(authorization).request_id
+            in reviewer_request_ids
+        )
+        if len(authorizations) != len(ordered_tasks):
+            raise ValueError("synthetic review dispatch lacked exact live authority")
+        usages: list[UsageRecord] = []
+        artifacts: list[ModelSurfaceReviewArtifact] = []
+        contexts_by_request: dict[str, list[ContextPackage]] = {}
+        for task, (role, model_id), context in zip(
+            ordered_tasks,
+            reviewers,
+            provisional_contexts,
+            strict=True,
+        ):
+            usage = _usage(
+                role,
+                model_id,
+                task.logical_request_id,
+                schema_sha256=task.response_schema_sha256,
+            )
+            _bind_usage_to_context(usage, context)
+            _with_context_request_evidence(usage, context, request_role=role)
+            usages.append(usage)
+            artifacts.append(_artifact(requests, usage, index, graphs, context=context))
+            contexts_by_request[usage.request_id] = [context]
+        return _AuthorizedOrdinaryReviewEvidence(
+            usage_records=tuple(usages),
+            artifacts=tuple(artifacts),
+            contexts_by_request=contexts_by_request,
+            authorizations=authorizations,
+            journal=journal,
+            temporary_root=temporary_root,
+        )
+    except BaseException:
+        journal.close()
+        temporary_root.cleanup()
+        raise
 
 
 def _bind_usage_to_context(usage: UsageRecord, context: ContextPackage) -> None:
@@ -793,6 +1155,9 @@ def _with_context_request_evidence(
     """Bind synthetic usage to the exact rendered context presented to its request."""
 
     rendered_context = render_context(context)
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(context)
+    )
     context_evidence = ContextRequestEvidence.build(
         request_id=usage.request_id,
         request_role=request_role,
@@ -806,18 +1171,15 @@ def _with_context_request_evidence(
         ),
         effective_source_byte_ceiling=context.effective_source_byte_ceiling,
         rendered_sha256=hashlib.sha256(rendered_context.encode()).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
     )
-    return reattest_synthetic_real_usage(
-        usage.model_copy(
-            update={
-                "routing": {
-                    **usage.routing,
-                    "context_request_evidence": context_evidence.model_dump(mode="json"),
-                    "context_request_evidence_sha256": context_evidence.evidence_sha256,
-                }
-            }
-        )
-    )
+    usage.routing = {
+        **usage.routing,
+        "context_request_evidence": context_evidence.model_dump(mode="json"),
+        "context_request_evidence_sha256": context_evidence.evidence_sha256,
+    }
+    return reattest_synthetic_real_usage(usage)
 
 
 def _requests() -> tuple[
@@ -853,6 +1215,486 @@ def _requests_with_audited_coverage() -> tuple[
         audited_suite_coverage=audited_suite,
     )
     return index, graphs, invariants, audited_suite, requests
+
+
+def test_ordinary_review_authority_is_absent_until_live_dispatch(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    observed_before_dispatch = False
+
+    def assert_absent_before_dispatch(journal: SchedulerJournal) -> None:
+        nonlocal observed_before_dispatch
+        assert build_model_review_pre_dispatch_authorizations(journal) == ()
+        observed_before_dispatch = True
+
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+        before_dispatch=assert_absent_before_dispatch,
+    ) as evidence:
+        assert observed_before_dispatch
+        assert len(evidence.authorizations) == 1
+        binding = require_model_review_pre_dispatch_authorization(evidence.authorizations[0])
+        assert binding.request_id == evidence.usage_records[0].request_id
+
+
+def test_ordinary_review_authority_is_one_shot_and_returns_detached_binding(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        authorization = evidence.authorizations[0]
+        binding = require_model_review_pre_dispatch_authorization(authorization)
+        object.__setattr__(binding, "request_id", "forged-detached-request")
+        retained = require_model_review_pre_dispatch_authorization(authorization)
+        assert retained.request_id == evidence.usage_records[0].request_id
+
+        assert not hasattr(
+            model_review_authority_module,
+            "_issue_model_review_pre_dispatch_authorization",
+        )
+        assert not hasattr(
+            scheduler_module,
+            "_issue_model_review_pre_dispatch_authorization",
+        )
+
+        forged = object.__new__(ModelReviewPreDispatchAuthorization)
+        with pytest.raises(ValueError, match="was not issued live"):
+            require_model_review_pre_dispatch_authorization(forged)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "activation_system_prompt",
+        "activation_delivered_sources",
+        "task_input",
+        "task_prompt",
+        "task_normalizer",
+        "task_scope",
+        "dispatch_pass_plan_id",
+        "dispatch_pass_plan_sha256",
+    ),
+)
+def test_ordinary_review_authority_rejects_unsealed_retained_state_drift(
+    config_factory: Callable[..., AuditConfig],
+    mutation: str,
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        authorization = evidence.authorizations[0]
+        binding = require_model_review_pre_dispatch_authorization(authorization)
+        plan = next(
+            plan
+            for plan in evidence.journal.plans
+            if any(task.task_id == binding.task_id for task in plan.tasks)
+        )
+        task = next(task for task in plan.tasks if task.task_id == binding.task_id)
+        activation = next(
+            item for item in evidence.journal.activations if item.task_id == binding.task_id
+        )
+        dispatch = next(
+            item
+            for item in evidence.journal.events
+            if item.task_id == binding.task_id and item.kind is SchedulerTaskEventKind.DISPATCHED
+        )
+        if mutation == "activation_system_prompt":
+            object.__setattr__(activation, "system_prompt_sha256", "e" * 64)
+        elif mutation == "activation_delivered_sources":
+            object.__setattr__(activation, "delivered_source_descriptor_sha256s", ())
+        elif mutation == "task_input":
+            object.__setattr__(task, "input_sha256", "e" * 64)
+        elif mutation == "task_prompt":
+            object.__setattr__(task, "prompt_sha256", "e" * 64)
+        elif mutation == "task_normalizer":
+            object.__setattr__(task, "normalizer_sha256", "e" * 64)
+        elif mutation == "task_scope":
+            object.__setattr__(task, "scope", SchedulerScope.global_scope())
+        elif mutation == "dispatch_pass_plan_id":
+            object.__setattr__(dispatch, "pass_plan_id", "scheduler-plan-" + "e" * 64)
+        else:
+            object.__setattr__(dispatch, "pass_plan_sha256", "e" * 64)
+
+        with pytest.raises(ValueError, match="no longer live"):
+            require_model_review_pre_dispatch_authorization(authorization)
+
+
+def test_ordinary_review_authority_survives_append_only_later_transitions(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("business_logic", config.models.business_logic.primary),),
+    ) as evidence:
+        authorization = evidence.authorizations[0]
+        binding = require_model_review_pre_dispatch_authorization(authorization)
+        plan = evidence.journal.plans[-1]
+        task = next(item for item in plan.tasks if item.task_id == binding.task_id)
+        activations = {
+            activation.task_id: activation for activation in evidence.journal.activations
+        }
+        activation = activations[task.task_id]
+        context = evidence.contexts_by_request[task.logical_request_id][0]
+        payload = CandidateReviewBatch(
+            findings=[],
+            surface_reviews=tuple(
+                _record(request, task.role, index, graphs) for request in requests[:1]
+            ),
+        )
+        framed_payload = frame_candidate_review_batch(payload)
+        normalized_payload, normalization = normalize_candidate_review_document(
+            framed_payload,
+            request_id=task.logical_request_id,
+        )
+        assert normalized_payload == payload
+        usage = build_scheduler_test_usage(
+            task,
+            activation,
+            seed="ordinary-authority-later-output",
+            validated_output=framed_payload,
+            privacy_evidence_custody=evidence.journal.manifest.privacy_evidence_custody,
+        )
+        _with_context_request_evidence(usage, context, request_role=task.role)
+        base_artifact = _artifact(
+            requests[:1],
+            usage,
+            index,
+            graphs,
+            context=context,
+        )
+        artifact_payload = base_artifact.model_dump(mode="json")
+        artifact_payload.update(
+            {
+                "schema_version": "1.1",
+                "normalized_response_sha256": normalization.normalized_batch_sha256,
+                "normalization_evidence": normalization.model_dump(mode="json"),
+                "normalized_response": payload.model_dump(mode="json"),
+            }
+        )
+        artifact_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
+            artifact_payload
+        )
+        surface_artifact = ModelSurfaceReviewArtifact.model_validate(artifact_payload)
+        output = evidence.journal.persist_output(
+            task.task_id,
+            payload,
+            usage_record=usage,
+            model_surface_review_requests=requests[:1],
+            model_surface_review_artifact=surface_artifact,
+            normalization_evidence=normalization,
+        )
+        assert require_model_review_pre_dispatch_authorization(authorization) == binding
+        evidence.journal.record_terminal(
+            SchedulerTaskResult.build(
+                plan=plan,
+                task=task,
+                activation=activation,
+                terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+                terminal_evidence_sha256=usage.validated_response_sha256 or "0" * 64,
+                output=output,
+            )
+        )
+        assert require_model_review_pre_dispatch_authorization(authorization) == binding
+        for sibling in plan.tasks:
+            if sibling is task:
+                continue
+            evidence.journal.record_terminal(
+                SchedulerTaskResult.build(
+                    plan=plan,
+                    task=sibling,
+                    activation=activations[sibling.task_id],
+                    terminal_status=SchedulerTerminalStatus.FAILED,
+                    terminal_evidence_sha256=hashlib.sha256(
+                        f"terminal-{sibling.task_id}".encode()
+                    ).hexdigest(),
+                )
+            )
+        evidence.journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
+        assert require_model_review_pre_dispatch_authorization(authorization) == binding
+
+
+@pytest.mark.parametrize(
+    ("artifact_kind", "mutation"),
+    tuple(
+        (artifact_kind, mutation)
+        for artifact_kind in ("pass_plan", "activation", "dispatch_event", "checkpoint")
+        for mutation in ("unlink", "replace_same_bytes", "change_bytes")
+    ),
+)
+def test_ordinary_review_authority_rejects_bound_durable_artifact_drift(
+    config_factory: Callable[..., AuditConfig],
+    artifact_kind: str,
+    mutation: str,
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        authorization = evidence.authorizations[0]
+        binding = require_model_review_pre_dispatch_authorization(authorization)
+        plan_ordinal, _plan = next(
+            (ordinal, plan)
+            for ordinal, plan in enumerate(evidence.journal.plans)
+            if any(task.task_id == binding.task_id for task in plan.tasks)
+        )
+        activation = next(
+            item for item in evidence.journal.activations if item.task_id == binding.task_id
+        )
+        dispatch = next(
+            item
+            for item in evidence.journal.events
+            if item.task_id == binding.task_id and item.kind is SchedulerTaskEventKind.DISPATCHED
+        )
+        paths = {
+            "pass_plan": evidence.journal.path
+            / "pass-plans"
+            / f"pass-{plan_ordinal + 1:02d}-plan.json",
+            "activation": evidence.journal.path
+            / "activations"
+            / f"{activation.task_id}-{activation.activation_sha256}.json",
+            "dispatch_event": evidence.journal.path
+            / "events"
+            / f"event-{dispatch.event_index:08d}.json",
+            "checkpoint": evidence.journal.path / "journal-head-checkpoint.json",
+        }
+        target = paths[artifact_kind]
+        original = target.read_bytes()
+        if mutation == "unlink":
+            target.unlink()
+        elif mutation == "replace_same_bytes":
+            replacement = target.with_name(f".{target.name}.replacement")
+            replacement.write_bytes(original)
+            replacement.chmod(0o600)
+            os.replace(replacement, target)
+        else:
+            target.write_bytes(original + b" ")
+
+        with pytest.raises(ValueError, match="no longer live"):
+            require_model_review_pre_dispatch_authorization(authorization)
+        with pytest.raises(ValueError, match="no longer live"):
+            build_model_review_coverage(
+                config,
+                usage_records=list(evidence.usage_records),
+                review_artifacts=list(evidence.artifacts),
+                review_contexts_by_request=evidence.contexts_by_request,
+                index=index,
+                graphs=graphs,
+                invariants=invariants,
+                economic_simulations=[],
+                ordinary_review_authorizations=evidence.authorizations,
+            )
+
+
+def test_ordinary_review_credit_requires_live_pre_dispatch_authority(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        unbound = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+        )
+        authorized = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+
+    assert not any(
+        reference.credited
+        for surface in unbound.surfaces
+        for reference in surface.evidence_references
+    )
+    assert any(
+        reference.credited
+        for surface in authorized.surfaces
+        for reference in surface.evidence_references
+    )
+
+
+def test_ordinary_review_authority_rejects_copy_pickle_replace_and_fork(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        authorization = evidence.authorizations[0]
+        with pytest.raises(TypeError, match="cannot be copied"):
+            copy(authorization)
+        with pytest.raises(TypeError, match="cannot be copied"):
+            deepcopy(authorization)
+        with pytest.raises(TypeError, match="cannot be serialized"):
+            pickle.dumps(authorization)
+        with pytest.raises(TypeError):
+            replace(authorization)
+
+        if not hasattr(os, "fork"):
+            pytest.skip("process-local fork custody requires os.fork")
+        read_descriptor, write_descriptor = os.pipe()
+        child_pid = os.fork()
+        if child_pid == 0:  # pragma: no cover - asserted through the parent-side pipe
+            os.close(read_descriptor)
+            _require_authorization_after_fork(authorization, write_descriptor)
+            os._exit(0)
+        os.close(write_descriptor)
+        try:
+            fork_result = os.read(read_descriptor, 32)
+        finally:
+            os.close(read_descriptor)
+        waited_pid, status = os.waitpid(child_pid, 0)
+        assert waited_pid == child_pid
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert fork_result == b"rejected"
+
+
+@pytest.mark.parametrize("terminalize", (False, True), ids=("dispatched", "terminal"))
+def test_reopened_dispatched_or_terminal_journal_cannot_reissue_ordinary_review_authority(
+    config_factory: Callable[..., AuditConfig],
+    terminalize: bool,
+) -> None:
+    config = config_factory()
+    index, graphs, _invariants, requests = _requests()
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests[:1],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        journal = evidence.journal
+        authorization = evidence.authorizations[0]
+        if terminalize:
+            plan = journal.plans[-1]
+            activations_by_task = {
+                activation.task_id: activation for activation in journal.activations
+            }
+            for task in plan.tasks:
+                journal.record_terminal(
+                    SchedulerTaskResult.build(
+                        plan=plan,
+                        task=task,
+                        activation=activations_by_task[task.task_id],
+                        terminal_status=SchedulerTerminalStatus.FAILED,
+                        terminal_evidence_sha256=hashlib.sha256(
+                            f"terminal-{task.task_id}".encode()
+                        ).hexdigest(),
+                    )
+                )
+        journal_path = journal.path
+        manifest = journal.manifest
+        journal.close()
+        with pytest.raises(ValueError, match="no longer live"):
+            require_model_review_pre_dispatch_authorization(authorization)
+        reopened = open_scheduler_journal_for_verification(
+            journal_path,
+            expected_bindings=manifest.bindings,
+            expected_shard_inventory=manifest.shard_inventory,
+            expected_cost_ledger_baseline=manifest.cost_ledger_baseline,
+            expected_privacy_evidence_custody=manifest.privacy_evidence_custody,
+            expected_terminal_report_authority_required=(
+                manifest.terminal_report_authority_required
+            ),
+            expected_terminal_evidence_authority_required=(
+                manifest.terminal_evidence_authority_required
+            ),
+        )
+        try:
+            assert build_model_review_pre_dispatch_authorizations(reopened) == ()
+        finally:
+            reopened.close()
+
+
+def _known_issue_item(
+    item_id: str,
+    profile: ProtocolProfileKind,
+    *,
+    criticality: KnownIssueCriticality = KnownIssueCriticality.CRITICAL,
+) -> KnownIssueTaxonomyItem:
+    payload = {
+        "item_id": item_id,
+        "title": f"Synthetic defensive class {item_id}",
+        "category": "synthetic_review",
+        "criticality": criticality,
+        "applicable_protocol_profiles": [profile],
+        "defensive_question": (f"Confirm source-linked controls for defensive class {item_id}."),
+        "economic_template": None,
+    }
+    item_sha256 = KnownIssueTaxonomyItem.calculate_item_sha256(payload)
+    return KnownIssueTaxonomyItem(
+        **payload,
+        item_sha256=item_sha256,
+        review_surface_subject_id=f"known-issue:{item_id}:{item_sha256}",
+    )
+
+
+def _known_issue_taxonomy(*items: KnownIssueTaxonomyItem) -> KnownIssueTaxonomy:
+    payload = {
+        "schema_version": "1.0",
+        "taxonomy_version": "1.0",
+        "purpose": "defensive_failure_mode_coverage",
+        "finding_authority": False,
+        "items": [
+            item.model_dump(mode="json") for item in sorted(items, key=lambda item: item.item_id)
+        ],
+    }
+    return KnownIssueTaxonomy(
+        **payload,
+        corpus_sha256=KnownIssueTaxonomy.calculate_corpus_sha256(payload),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -949,6 +1791,9 @@ def _promoted_parent_truncation(
         response_sha256=projection.original_response_sha256,
     )
     rendered_context = render_context(context)
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(context)
+    )
     context_evidence = ContextRequestEvidence.build(
         request_id=task.logical_request_id,
         request_role=task.role,
@@ -962,6 +1807,8 @@ def _promoted_parent_truncation(
         ),
         effective_source_byte_ceiling=context.effective_source_byte_ceiling,
         rendered_sha256=hashlib.sha256(rendered_context.encode()).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
     )
     routing = {
         **base.routing,
@@ -1070,6 +1917,9 @@ def _promoted_bridge_truncation(
         response_sha256=projection.original_response_sha256,
     )
     rendered_context = render_context(context)
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(context)
+    )
     context_evidence = ContextRequestEvidence.build(
         request_id=base.request_id,
         request_role=parent_role,
@@ -1083,6 +1933,8 @@ def _promoted_bridge_truncation(
         ),
         effective_source_byte_ceiling=context.effective_source_byte_ceiling,
         rendered_sha256=hashlib.sha256(rendered_context.encode()).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
     )
     routing = {
         **base.routing,
@@ -1147,7 +1999,11 @@ def _build_promoted_parent_surface_fixture(
     selected_orientation_model = orientation_model_id or parent_model_id
     selected_orientation_root = orientation_root_lineage or parent_root_lineage
     transform = usage_transform or (lambda usage: usage)
-    if (specialist_role is None) != (parent_role == "source_audit"):
+    whole_protocol_parent = (
+        manifest_module._WHOLE_PROTOCOL_REVIEW_ROLE_RE.fullmatch(parent_role) is not None
+    )
+    generic_parent_role = parent_role == "source_audit" or whole_protocol_parent
+    if (specialist_role is None) != generic_parent_role:
         raise ValueError("promoted surface specialist role mode is inconsistent")
     if specialist_role is not None and (
         parent_role != f"specialist:{specialist_role}"
@@ -1155,6 +2011,10 @@ def _build_promoted_parent_surface_fixture(
         or supporting_source_root_lineage is None
     ):
         raise ValueError("promoted specialist surface fixture lacks source-review support")
+    if whole_protocol_parent and (
+        supporting_source_model_id is None or supporting_source_root_lineage is None
+    ):
+        raise ValueError("whole-protocol promotion fixture lacks source-review support")
     if recursive and specialist_role is not None:
         raise ValueError("recursive promotion fixture admits only generic recovery leaves")
     planner = PipelineScheduler(journal)
@@ -1237,13 +2097,20 @@ def _build_promoted_parent_surface_fixture(
     surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
     blind_task = planner.model_task(
         pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
-        scope=SchedulerScope.single_shard(journal.manifest.shard_inventory.shards[0].shard_id),
+        scope=(
+            SchedulerScope.global_scope()
+            if manifest_module._WHOLE_PROTOCOL_REVIEW_ROLE_RE.fullmatch(parent_role) is not None
+            else SchedulerScope.single_shard(journal.manifest.shard_inventory.shards[0].shard_id)
+        ),
         task_key=f"promoted-retained-parent-{parent_role}",
         role=parent_role,
         requested_model=parent_model_id,
         root_lineage=parent_root_lineage,
         system_prompt_sha256=hashlib.sha256(b"promoted-retained-parent-system").hexdigest(),
         response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        model_surface_review_request_manifest_sha256=(
+            surface_manifest.requested_surface_manifest_sha256
+        ),
     )
     supporting_source_task = (
         planner.model_task(
@@ -1257,8 +2124,19 @@ def _build_promoted_parent_surface_fixture(
                 b"promoted-retained-supporting-source-system"
             ).hexdigest(),
             response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+            model_surface_review_request_manifest_sha256=(
+                scheduler_test_model_surface_review_request_manifest_sha256(
+                    manifest=journal.manifest,
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    scope=SchedulerScope.single_shard(
+                        journal.manifest.shard_inventory.shards[0].shard_id
+                    ),
+                    task_key="promoted-retained-parent-source-audit",
+                    role="source_audit",
+                )
+            ),
         )
-        if specialist_role is not None
+        if specialist_role is not None or whole_protocol_parent
         else None
     )
     blind_plan = planner.prepare_pass(
@@ -1267,13 +2145,14 @@ def _build_promoted_parent_surface_fixture(
     )
     supporting_usage: UsageRecord | None = None
     if supporting_source_task is not None:
+        supporting_prompt_sha256 = hashlib.sha256(
+            b"promoted-retained-supporting-source-user"
+        ).hexdigest()
         supporting_activation = journal.activate_task(
             supporting_source_task.task_id,
-            actual_input_sha256=supporting_source_task.input_sha256,
+            actual_input_sha256=supporting_prompt_sha256,
             system_prompt_sha256=supporting_source_task.system_prompt_sha256,
-            user_prompt_sha256=hashlib.sha256(
-                b"promoted-retained-supporting-source-user"
-            ).hexdigest(),
+            user_prompt_sha256=supporting_prompt_sha256,
             provider_prompt_sha256=hashlib.sha256(
                 b"promoted-retained-supporting-source-provider"
             ).hexdigest(),
@@ -1342,11 +2221,12 @@ def _build_promoted_parent_surface_fixture(
                 output=supporting_output,
             )
         )
+    parent_prompt_sha256 = hashlib.sha256(render_context(parent_context).encode()).hexdigest()
     parent_activation = journal.activate_task(
         blind_task.task_id,
-        actual_input_sha256=blind_task.input_sha256,
+        actual_input_sha256=parent_prompt_sha256,
         system_prompt_sha256=blind_task.system_prompt_sha256,
-        user_prompt_sha256=hashlib.sha256(render_context(parent_context).encode()).hexdigest(),
+        user_prompt_sha256=parent_prompt_sha256,
         provider_prompt_sha256=hashlib.sha256(b"promoted-retained-parent-provider").hexdigest(),
         response_schema_sha256=blind_task.response_schema_sha256,
         delivered_source_descriptor_sha256s=(
@@ -1409,15 +2289,12 @@ def _build_promoted_parent_surface_fixture(
             parent_context=parent_context,
             child=child,
         )
+        child_prompt_sha256 = hashlib.sha256(render_context(child_context).encode()).hexdigest()
         child_activation = journal.activate_truncation_recovery_child(
             child.child_task_id,
-            actual_input_sha256=hashlib.sha256(
-                f"promoted-child-input:{child.child_task_id}".encode()
-            ).hexdigest(),
-            system_prompt_sha256=hashlib.sha256(
-                f"promoted-child-system:{child.child_task_id}".encode()
-            ).hexdigest(),
-            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            actual_input_sha256=child_prompt_sha256,
+            system_prompt_sha256=blind_task.system_prompt_sha256,
+            user_prompt_sha256=child_prompt_sha256,
             provider_prompt_sha256=hashlib.sha256(
                 f"promoted-child-provider:{child.child_task_id}".encode()
             ).hexdigest(),
@@ -1546,17 +2423,14 @@ def _build_promoted_parent_surface_fixture(
                 parent_context=bridge_context,
                 child=nested_child,
             )
+            nested_prompt_sha256 = hashlib.sha256(
+                render_context(nested_context).encode()
+            ).hexdigest()
             nested_activation = journal.activate_truncation_recovery_child(
                 nested_child.child_task_id,
-                actual_input_sha256=hashlib.sha256(
-                    f"promoted-nested-input:{nested_child.child_task_id}".encode()
-                ).hexdigest(),
-                system_prompt_sha256=hashlib.sha256(
-                    f"promoted-nested-system:{nested_child.child_task_id}".encode()
-                ).hexdigest(),
-                user_prompt_sha256=hashlib.sha256(
-                    render_context(nested_context).encode()
-                ).hexdigest(),
+                actual_input_sha256=nested_prompt_sha256,
+                system_prompt_sha256=blind_task.system_prompt_sha256,
+                user_prompt_sha256=nested_prompt_sha256,
                 provider_prompt_sha256=hashlib.sha256(
                     f"promoted-nested-provider:{nested_child.child_task_id}".encode()
                 ).hexdigest(),
@@ -1715,7 +2589,7 @@ def _build_promoted_parent_surface_fixture(
     assert blind_result.status is SchedulerPassStatus.COMPLETE
     scheduler_artifact = journal.artifact()
     scheduler_live_usages: tuple[UsageRecord, ...] = ()
-    if specialist_role is not None:
+    if supporting_source_task is not None:
         assert supporting_usage is not None
         scheduler_live_usages = (
             orientation_usage,
@@ -1767,6 +2641,7 @@ def test_surface_requests_cover_full_deterministic_inventory() -> None:
         set(ModelReviewSurfaceKind)
         - {
             ModelReviewSurfaceKind.INTERNAL_FUNCTION,
+            ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS,
             ModelReviewSurfaceKind.SOURCE_FILE,
         }
     )
@@ -1777,6 +2652,175 @@ def test_surface_requests_cover_full_deterministic_inventory() -> None:
         and request.invariant_considered
         for request in requests
     )
+
+
+def test_applicable_known_issue_adds_hash_bound_critical_surface(config_factory) -> None:
+    index, graphs, legacy_invariants = _inventory()
+    assessment = detect_protocol_profiles(index, graphs, {_PATH: _SOURCE})
+    invariants = InvariantSuite.model_validate(
+        {
+            **legacy_invariants.model_dump(mode="python"),
+            "protocol_profiles": [profile.value for profile in assessment.detected_profiles],
+            "protocol_profile_assessment": assessment.model_dump(mode="python"),
+        }
+    )
+    general = _known_issue_item("KI-GENERAL", ProtocolProfileKind.SOLIDITY_GENERAL)
+    unknown_oracle = _known_issue_item("KI-ORACLE", ProtocolProfileKind.ORACLE_CONSUMER)
+    taxonomy = _known_issue_taxonomy(general, unknown_oracle)
+
+    requests = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        known_issue_taxonomy=taxonomy,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    taxonomy_requests = [
+        request for request in requests if request.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+    ]
+
+    assert len(taxonomy_requests) == 1
+    request = taxonomy_requests[0]
+    assert request.subject_id == general.review_surface_subject_id
+    assert request.invariant_considered == general.defensive_question
+    assert request.critical
+    assert request.allowed_locations
+    assert classify_model_surface_risk(request) is ModelSurfaceRiskTier.T0
+    assert unknown_oracle.review_surface_subject_id not in {item.subject_id for item in requests}
+
+    coverage = build_model_review_coverage(
+        config_factory(),
+        usage_records=[],
+        review_artifacts=[],
+        review_contexts_by_request={},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        known_issue_taxonomy=taxonomy,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    taxonomy_surfaces = [
+        surface
+        for surface in coverage.surfaces
+        if surface.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+    ]
+    assert [surface.subject_id for surface in taxonomy_surfaces] == [
+        general.review_surface_subject_id
+    ]
+    assert not taxonomy_surfaces[0].reviewed
+
+
+def test_content_bound_known_issue_surface_can_earn_exact_review_credit(config_factory) -> None:
+    config = config_factory()
+    index, graphs, legacy_invariants = _inventory()
+    assessment = detect_protocol_profiles(index, graphs, {_PATH: _SOURCE})
+    invariants = InvariantSuite.model_validate(
+        {
+            **legacy_invariants.model_dump(mode="python"),
+            "protocol_profiles": [profile.value for profile in assessment.detected_profiles],
+            "protocol_profile_assessment": assessment.model_dump(mode="python"),
+        }
+    )
+    item = _known_issue_item("KI-GENERAL", ProtocolProfileKind.SOLIDITY_GENERAL)
+    taxonomy = _known_issue_taxonomy(item)
+    requests = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        known_issue_taxonomy=taxonomy,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+    )
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=[request],
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            known_issue_taxonomy=taxonomy,
+            source_contents_by_path={_PATH: _SOURCE},
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+
+    surface = next(
+        surface for surface in coverage.surfaces if surface.surface_id == request.surface_id
+    )
+    assert surface.reviewed
+    assert surface.evidence_references[0].credited
+    taxonomy_coverage = build_known_issue_taxonomy_coverage(
+        LoadedKnownIssueTaxonomy(
+            corpus=taxonomy,
+            raw_bytes=b"",
+            raw_sha256="f" * 64,
+        ),
+        invariants=invariants,
+        model_review_coverage=coverage,
+    )
+    assert taxonomy_coverage.dispositions[0].disposition.value == "REVIEWED"
+    assert taxonomy_coverage.dispositions[0].reviewed_surface_ids == [request.surface_id]
+
+
+def test_applicable_noncritical_known_issue_remains_mandatory_t0_surface(
+    config_factory,
+) -> None:
+    index, graphs, legacy_invariants = _inventory()
+    assessment = detect_protocol_profiles(index, graphs, {_PATH: _SOURCE})
+    invariants = InvariantSuite.model_validate(
+        {
+            **legacy_invariants.model_dump(mode="python"),
+            "protocol_profiles": [profile.value for profile in assessment.detected_profiles],
+            "protocol_profile_assessment": assessment.model_dump(mode="python"),
+        }
+    )
+    item = _known_issue_item(
+        "KI-NONCRITICAL",
+        ProtocolProfileKind.SOLIDITY_GENERAL,
+        criticality=KnownIssueCriticality.NON_CRITICAL,
+    )
+
+    requests = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        known_issue_taxonomy=_known_issue_taxonomy(item),
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS
+    )
+
+    assert request.subject_id == item.review_surface_subject_id
+    assert request.critical
+    assert classify_model_surface_risk(request) is ModelSurfaceRiskTier.T0
+    plan = build_model_surface_coverage_plan(
+        requests,
+        (),
+        surface_scope_by_id={
+            surface.surface_id: "scope:synthetic-taxonomy" for surface in requests
+        },
+    )
+    requirement = next(
+        requirement
+        for requirement in plan.requirements
+        if requirement.surface_id == request.surface_id
+    )
+    assert requirement.risk_tier is ModelSurfaceRiskTier.T0
 
 
 def test_semantic_shard_request_uses_exact_fallback_parser_entity_custody() -> None:
@@ -2102,42 +3146,53 @@ def test_direct_and_location_bound_invariants_make_exact_contract_surfaces_criti
     assert state_request.critical
     assert location_request.critical
 
-    usages = [
-        _usage("source_audit", config.models.source_audit.primary, "request-contract-1"),
-        _usage("business_logic", config.models.business_logic.primary, "request-contract-2"),
-        _usage("configuration", config.models.configuration.primary, "request-contract-3"),
-    ]
-    one_lineage = build_model_review_coverage(
+    with _authorized_ordinary_review_evidence(
         config,
-        usage_records=usages[:1],
-        review_artifacts=[_artifact(requests, usages[0], index, graphs)],
-        review_contexts_by_request=_review_contexts(requests, usages[:1], index, graphs),
         index=index,
         graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        audited_suite_coverage=audited_suite,
-    )
-    one_contract = next(
-        surface
-        for surface in one_lineage.surfaces
-        if surface.surface_id == contract_request.surface_id
-    )
-    assert len(one_contract.root_lineages) == 1
-    assert not one_lineage.critical_gate_passed
+        requests=requests,
+        reviewers=(
+            ("source_audit", config.models.source_audit.primary),
+            ("business_logic", config.models.business_logic.primary),
+            ("configuration", config.models.configuration.primary),
+        ),
+    ) as evidence:
+        first_request_id = evidence.usage_records[0].request_id
+        one_lineage = build_model_review_coverage(
+            config,
+            usage_records=[evidence.usage_records[0]],
+            review_artifacts=[evidence.artifacts[0]],
+            review_contexts_by_request={
+                first_request_id: evidence.contexts_by_request[first_request_id]
+            },
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            ordinary_review_authorizations=(evidence.authorizations[0],),
+        )
+        one_contract = next(
+            surface
+            for surface in one_lineage.surfaces
+            if surface.surface_id == contract_request.surface_id
+        )
+        assert len(one_contract.root_lineages) == 1
+        assert not one_lineage.critical_gate_passed
 
-    three_lineages = build_model_review_coverage(
-        config,
-        usage_records=usages,
-        review_artifacts=[_artifact(requests, usage, index, graphs) for usage in usages],
-        review_contexts_by_request=_review_contexts(requests, usages, index, graphs),
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        audited_suite_coverage=audited_suite,
-    )
-    assert three_lineages.critical_gate_passed
+        three_lineages = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+        assert three_lineages.critical_gate_passed
 
 
 def test_coverage_gap_priority_rejects_wrong_location_hash_and_unknown_entity() -> None:
@@ -3938,23 +4993,29 @@ def test_three_independent_response_lineages_cover_critical_surfaces(
 ) -> None:
     config = config_factory()
     index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
-    usages = [
-        _usage("source_audit", config.models.source_audit.primary, "request-1"),
-        _usage("business_logic", config.models.business_logic.primary, "request-2"),
-        _usage("configuration", config.models.configuration.primary, "request-3"),
-    ]
-
-    coverage = build_model_review_coverage(
+    with _authorized_ordinary_review_evidence(
         config,
-        usage_records=usages,
-        review_artifacts=[_artifact(requests, usage, index, graphs) for usage in usages],
-        review_contexts_by_request=_review_contexts(requests, usages, index, graphs),
         index=index,
         graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-        audited_suite_coverage=audited_suite,
-    )
+        requests=requests,
+        reviewers=(
+            ("source_audit", config.models.source_audit.primary),
+            ("business_logic", config.models.business_logic.primary),
+            ("configuration", config.models.configuration.primary),
+        ),
+    ) as evidence:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            ordinary_review_authorizations=evidence.authorizations,
+        )
 
     assert coverage.overall.numerator == coverage.overall.denominator == 9
     assert coverage.critical.numerator == coverage.critical.denominator == 9
@@ -3980,18 +5041,24 @@ def test_direct_entry_and_graph_adjacent_state_records_receive_credit(
         ),
         key=lambda request: request.surface_id,
     )
-    usage = _usage("source_audit", config.models.source_audit.primary, "request-direct-state")
-
-    coverage = build_model_review_coverage(
+    with _authorized_ordinary_review_evidence(
         config,
-        usage_records=[usage],
-        review_artifacts=[_artifact(selected, usage, index, graphs)],
-        review_contexts_by_request=_review_contexts(selected, [usage], index, graphs),
         index=index,
         graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-    )
+        requests=selected,
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+    ) as evidence:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            ordinary_review_authorizations=evidence.authorizations,
+        )
 
     by_id = {surface.surface_id: surface for surface in coverage.surfaces}
     assert all(by_id[request.surface_id].reviewed for request in selected)
@@ -4059,7 +5126,11 @@ def test_recovery_surface_usage_requires_exact_external_request_limit_coordinate
         surface for surface in exact.surfaces if surface.surface_id == selected[0].surface_id
     )
     assert not missing_surface.reviewed
-    assert exact_surface.reviewed
+    assert not exact_surface.reviewed
+    assert (
+        "lacked exact journal-derived pre-dispatch authorization"
+        in exact_surface.evidence_references[0].reason
+    )
     with pytest.raises(ValueError, match="unique and sorted"):
         build_model_review_coverage(
             config,
@@ -4097,6 +5168,116 @@ def _config_with_promoted_surface_model(
                 update={"registry": registry, "source_audit": source_audit}
             )
         }
+    )
+
+
+def _config_with_promoted_surface_manifest_lineage(
+    config: AuditConfig,
+    model_id: str,
+) -> AuditConfig:
+    configured = _config_with_promoted_surface_model(config, model_id)
+    root_lineage = "sha256:" + hashlib.sha256(model_id.encode()).hexdigest()
+    registry = tuple(
+        entry.model_copy(update={"root_lineage": root_lineage})
+        if entry.canonical_model_id == configured.models.source_audit.primary
+        else entry
+        for entry in configured.models.registry
+    )
+    return configured.model_copy(
+        update={
+            "models": configured.models.model_copy(update={"registry": registry}),
+            "privacy": configured.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        sorted({*configured.privacy.approved_model_lineages, root_lineage})
+                    )
+                }
+            ),
+        }
+    )
+
+
+def _config_with_registry_only_promoted_surface_model(
+    config: AuditConfig,
+    model_id: str,
+) -> AuditConfig:
+    configured = _config_with_promoted_surface_manifest_lineage(config, model_id)
+    source_audit = configured.models.source_audit.model_copy(
+        update={
+            "fallbacks": tuple(
+                fallback
+                for fallback in configured.models.source_audit.fallbacks
+                if fallback != model_id
+            )
+        }
+    )
+    return configured.model_copy(
+        update={"models": configured.models.model_copy(update={"source_audit": source_audit})}
+    )
+
+
+def _with_provider_visible_registry_alias(
+    config: AuditConfig,
+    *,
+    requested_model: str,
+    alias: str,
+    same_root: bool,
+) -> AuditConfig:
+    """Register one synthetic provider alias on the requested or a distinct lineage."""
+
+    requested_entry = next(
+        entry for entry in config.models.registry if requested_model in entry.model_ids()
+    )
+    target_entry = (
+        requested_entry
+        if same_root
+        else next(
+            entry
+            for entry in config.models.registry
+            if entry.root_lineage != requested_entry.root_lineage
+        )
+    )
+    registry = tuple(
+        entry.model_copy(update={"aliases": tuple(sorted({*entry.aliases, alias}))})
+        if entry is target_entry
+        else entry
+        for entry in config.models.registry
+    )
+    return config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"registry": registry}),
+            "privacy": config.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        sorted(
+                            {
+                                *config.privacy.approved_model_lineages,
+                                target_entry.root_lineage,
+                            }
+                        )
+                    )
+                }
+            ),
+        }
+    )
+
+
+def _with_provider_visible_model_alias(usage: UsageRecord, alias: str) -> UsageRecord:
+    """Rebind a synthetic completion whose provider-visible identity is one alias."""
+
+    return bind_synthetic_usage_identity(
+        usage.model_copy(
+            update={
+                "returned_model": alias,
+                "actual_model": alias,
+                "routing": {
+                    **usage.routing,
+                    "selected_model": alias,
+                    "canonical_model": alias,
+                    "accepted_model_aliases": sorted({usage.requested_model, alias}),
+                },
+            }
+        )
     )
 
 
@@ -4202,6 +5383,8 @@ def _coverage_from_promoted_surface_fixture(
     invariants: InvariantSuite,
     audited_suite_coverage: AuditedSuiteCoverage,
     review_artifacts: list[ModelSurfaceReviewArtifact] | None = None,
+    ordinary_review_authorizations: tuple[ModelReviewPreDispatchAuthorization, ...] = (),
+    include_promoted_surface_coverage: bool = True,
 ) -> ModelReviewCoverage:
     recovery_coordinates = tuple(
         (
@@ -4236,7 +5419,10 @@ def _coverage_from_promoted_surface_fixture(
         audited_suite_coverage=audited_suite_coverage,
         source_contents_by_path={_PATH: _SOURCE},
         recovery_usage_coordinates=recovery_coordinates,
-        promoted_recovery_surface_coverages=(fixture.surface_capability,),
+        promoted_recovery_surface_coverages=(
+            (fixture.surface_capability,) if include_promoted_surface_coverage else ()
+        ),
+        ordinary_review_authorizations=ordinary_review_authorizations,
     )
 
 
@@ -4246,6 +5432,8 @@ def _basic_promoted_surface_fixture(
     requests: tuple[ModelSurfaceReviewRequest, ...],
     records: tuple[ModelSurfaceReviewRecord, ...],
     context: ContextPackage,
+    parent_role: str = "source_audit",
+    usage_transform: Callable[[UsageRecord], UsageRecord] | None = None,
 ) -> _PromotedParentSurfaceFixture:
     inventory = _scheduler_inventory(one_shard=True)
     journal = _create_test_scheduler_journal(
@@ -4263,6 +5451,18 @@ def _basic_promoted_surface_fixture(
         parent_context=context,
         parent_model_id="synthetic/auditor-v1",
         parent_root_lineage="sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest(),
+        parent_role=parent_role,
+        usage_transform=usage_transform,
+        supporting_source_model_id=(
+            "synthetic/auditor-v1"
+            if manifest_module._WHOLE_PROTOCOL_REVIEW_ROLE_RE.fullmatch(parent_role) is not None
+            else None
+        ),
+        supporting_source_root_lineage=(
+            "sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest()
+            if manifest_module._WHOLE_PROTOCOL_REVIEW_ROLE_RE.fullmatch(parent_role) is not None
+            else None
+        ),
     )
 
 
@@ -4272,6 +5472,8 @@ def _basic_promoted_recursive_surface_fixture(
     requests: tuple[ModelSurfaceReviewRequest, ...],
     records: tuple[ModelSurfaceReviewRecord, ...],
     context: ContextPackage,
+    parent_retained_count: int = 0,
+    usage_transform: Callable[[UsageRecord], UsageRecord] | None = None,
 ) -> _PromotedRecursiveParentSurfaceFixture:
     inventory = _scheduler_inventory(one_shard=True)
     journal = _create_test_scheduler_journal(
@@ -4289,6 +5491,8 @@ def _basic_promoted_recursive_surface_fixture(
         parent_context=context,
         parent_model_id="synthetic/auditor-v1",
         parent_root_lineage="sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest(),
+        recursive_parent_retained_count=parent_retained_count,
+        usage_transform=usage_transform,
     )
 
 
@@ -4354,12 +5558,1463 @@ def _coverage_from_promoted_recursive_surface_fixture(
     )
 
 
+def _manifest_model_review_inventories(
+    fixture: _PromotedParentSurfaceFixture | _PromotedRecursiveParentSurfaceFixture,
+    snapshot: Any,
+) -> tuple[Any, Any]:
+    """Build the exact private inventories emitted for one promoted fixture."""
+
+    context_authorities = {fixture.parent_usage.request_id: [fixture.parent_context]}
+    if isinstance(fixture, _PromotedRecursiveParentSurfaceFixture):
+        context_authorities[fixture.bridge_usage.request_id] = [fixture.bridge_context]
+        context_authorities.update(
+            {
+                usage.request_id: [context]
+                for usage, context in zip(
+                    fixture.leaf_usages,
+                    fixture.leaf_contexts,
+                    strict=True,
+                )
+            }
+        )
+    else:
+        context_authorities.update(
+            {
+                usage.request_id: [context]
+                for usage, context in zip(
+                    fixture.child_usages,
+                    fixture.child_contexts,
+                    strict=True,
+                )
+            }
+        )
+    raw_inventory = manifest_module.build_model_review_artifact_inventory(
+        artifacts=tuple(
+            authority.artifact
+            for authority in manifest_module._retained_model_surface_review_authorities(snapshot)
+        ),
+        review_contexts_by_request=context_authorities,
+    )
+    if isinstance(fixture.structural_artifact, TruncationRecoveredRecursiveSurfaceReviewArtifact):
+        promoted_entry = manifest_module._RecursivePromotedModelReviewArtifact(
+            promotion_entry_sha256=fixture.promotion.entry_sha256,
+            recovered_output_artifact_sha256=(
+                fixture.promotion.recovered_output.output_artifact_sha256
+            ),
+            recursive_tree=True,
+            artifact=fixture.structural_artifact,
+        )
+        schema_version = "1.1"
+    else:
+        promoted_entry = manifest_module._DirectPromotedModelReviewArtifact(
+            promotion_entry_sha256=fixture.promotion.entry_sha256,
+            recovered_output_artifact_sha256=(
+                fixture.promotion.recovered_output.output_artifact_sha256
+            ),
+            artifact=fixture.structural_artifact,
+        )
+        schema_version = "1.0"
+    promoted_inventory = manifest_module._PromotedModelReviewArtifactInventory(
+        schema_version=schema_version,
+        promotions=(promoted_entry,),
+    )
+    return raw_inventory, promoted_inventory
+
+
+def _fresh_manifest_replay_value(model: Any) -> Any:
+    """Round-trip a strict model to remove all process-local authority."""
+
+    return type(model).model_validate_json(model.model_dump_json())
+
+
+def _open_promoted_fixture_for_verification(
+    fixture: _PromotedParentSurfaceFixture | _PromotedRecursiveParentSurfaceFixture,
+) -> SchedulerJournal:
+    artifact = fixture.scheduler_artifact
+    manifest = artifact.summary.manifest
+    journal_path = fixture.journal.path
+    fixture.journal.close()
+    return open_scheduler_journal_for_verification(
+        journal_path,
+        expected_bindings=manifest.bindings,
+        expected_shard_inventory=manifest.shard_inventory,
+        expected_cost_ledger_baseline=manifest.cost_ledger_baseline,
+        expected_privacy_evidence_custody=manifest.privacy_evidence_custody,
+        expected_terminal_report_authority_required=manifest.terminal_report_authority_required,
+        expected_terminal_evidence_authority_required=(
+            manifest.terminal_evidence_authority_required
+        ),
+    )
+
+
+def _validate_promoted_fixture_manifest_replay(
+    *,
+    config: AuditConfig,
+    coverage: ModelReviewCoverage,
+    fixture: _PromotedParentSurfaceFixture | _PromotedRecursiveParentSurfaceFixture,
+    detached: bool,
+    journal: SchedulerJournal | None = None,
+    inventory: Any | None = None,
+    promoted_inventory: Any | None = None,
+    index: SoliditySymbolIndex | None = None,
+    graphs: SolidityGraphSet | None = None,
+) -> tuple[Any, Any]:
+    snapshot = manifest_module._scheduler_report_authority_snapshot(
+        fixture.journal if journal is None else journal
+    )
+    exact_inventory, exact_promoted_inventory = _manifest_model_review_inventories(
+        fixture,
+        snapshot,
+    )
+    selected_inventory = exact_inventory if inventory is None else inventory
+    selected_promoted_inventory = (
+        exact_promoted_inventory if promoted_inventory is None else promoted_inventory
+    )
+    manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+        report=cast(Any, SimpleNamespace(model_review_coverage=coverage)),
+        inventory=selected_inventory,
+        snapshot=snapshot,
+        config=config,
+        promoted_inventory=selected_promoted_inventory,
+        detached=detached,
+        index=fixture.parent_context.solidity_index if index is None else index,
+        graphs=fixture.parent_context.solidity_graphs if graphs is None else graphs,
+        runtime_journal=(None if detached else (fixture.journal if journal is None else journal)),
+    )
+    return exact_inventory, exact_promoted_inventory
+
+
+@pytest.mark.parametrize("recursive", (False, True))
+def test_pipeline_recovery_credit_requires_private_leaf_authority_after_reopen(
+    tmp_path: Path,
+    recursive: bool,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    index, graphs, _invariants, _audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, f"pipeline-private-authority-{recursive}"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = (
+        _basic_promoted_recursive_surface_fixture(
+            tmp_path / "recursive-pipeline-private-authority",
+            requests=requests,
+            records=records,
+            context=context,
+            parent_retained_count=1,
+        )
+        if recursive
+        else _basic_promoted_surface_fixture(
+            tmp_path / "direct-pipeline-private-authority",
+            requests=requests,
+            records=records,
+            context=context,
+        )
+    )
+    direct_capabilities: tuple[VerifiedPromotedTruncationRecoverySurfaceCoverage, ...]
+    recursive_capabilities: tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...]
+    if isinstance(fixture, _PromotedRecursiveParentSurfaceFixture):
+        direct_capabilities = ()
+        recursive_capabilities = (fixture.surface_capability,)
+        expected_leaf_ids = {usage.request_id for usage in fixture.leaf_usages}
+        excluded_ids = {fixture.parent_usage.request_id, fixture.bridge_usage.request_id}
+    else:
+        direct_capabilities = (fixture.surface_capability,)
+        recursive_capabilities = ()
+        expected_leaf_ids = {usage.request_id for usage in fixture.child_usages}
+        excluded_ids = {fixture.parent_usage.request_id}
+    authorities = pipeline_module._require_current_promoted_recovery_leaf_authorities(
+        direct_capabilities=direct_capabilities,
+        recursive_capabilities=recursive_capabilities,
+    )
+
+    assert {authority.request_id for authority in authorities} == expected_leaf_ids
+    assert not ({authority.request_id for authority in authorities} & excluded_ids)
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    _raw_inventory, promoted_inventory = _manifest_model_review_inventories(fixture, snapshot)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    assert (
+        set(manifest_module._promoted_model_review_leaf_usage_inventory(fresh_promoted_inventory))
+        == expected_leaf_ids
+    )
+
+    recovery_requests = fixture.scheduler_artifact.recovery_model_requests
+    assert recovery_requests
+    selected = pipeline_module._require_promoted_recovery_leaf_requests(
+        authorities=authorities,
+        recovery_requests=recovery_requests,
+    )
+    assert {request.logical_request_id for request in selected} == expected_leaf_ids
+    recovery_usages = (
+        (fixture.bridge_usage, *fixture.leaf_usages)
+        if isinstance(fixture, _PromotedRecursiveParentSurfaceFixture)
+        else fixture.child_usages
+    )
+    successful_ids = {usage.request_id for usage in recovery_usages}
+    assert {
+        usage.request_id
+        for usage in pipeline_module._minimum_floor_creditable_usage_records(
+            usage_records=recovery_usages,
+            successful_request_ids=successful_ids,
+            all_recovery_requests=recovery_requests,
+            promoted_recovery_leaf_requests=selected,
+        )
+    } == expected_leaf_ids
+
+    exact_leaf_usage = next(
+        usage for usage in recovery_usages if usage.request_id == min(expected_leaf_ids)
+    )
+    drifted_leaf_usage = exact_leaf_usage.model_copy(
+        update={"openrouter_generation_id": "forged-generation"}
+    )
+    with pytest.raises(
+        ValueError,
+        match="promoted recovery usage differs from exact scheduler comparison evidence",
+    ):
+        pipeline_module._minimum_floor_creditable_usage_records(
+            usage_records=(drifted_leaf_usage,),
+            successful_request_ids={drifted_leaf_usage.request_id},
+            all_recovery_requests=recovery_requests,
+            promoted_recovery_leaf_requests=selected,
+        )
+
+    first_leaf_id = min(expected_leaf_ids)
+    missing_promotion = tuple(
+        request.model_copy(update={"promotion_entry_sha256": None})
+        if request.logical_request_id == first_leaf_id
+        else request
+        for request in recovery_requests
+    )
+    with pytest.raises(ValueError, match="differs from scheduler comparison evidence"):
+        pipeline_module._require_promoted_recovery_leaf_requests(
+            authorities=authorities,
+            recovery_requests=missing_promotion,
+        )
+
+    assert {
+        authority.request_id
+        for authority in pipeline_module._require_current_promoted_recovery_leaf_authorities(
+            direct_capabilities=direct_capabilities,
+            recursive_capabilities=recursive_capabilities,
+        )
+    } == expected_leaf_ids
+
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        reopened_requests = reopened.artifact().recovery_model_requests
+        assert reopened_requests == recovery_requests
+        assert all(request.promotion_entry_sha256 is not None for request in reopened_requests)
+        with pytest.raises(ValueError):
+            pipeline_module._require_current_promoted_recovery_leaf_authorities(
+                direct_capabilities=direct_capabilities,
+                recursive_capabilities=recursive_capabilities,
+            )
+        reopened_authorities = pipeline_module._require_current_promoted_recovery_leaf_authorities(
+            direct_capabilities=(reopened.promoted_truncation_recovery_surface_coverages),
+            recursive_capabilities=(
+                reopened.promoted_recursive_truncation_recovery_surface_coverages
+            ),
+        )
+        assert reopened_authorities == ()
+
+        # Durable promotion markers and public recovery rows are comparison-only.
+        assert (
+            pipeline_module._require_promoted_recovery_leaf_requests(
+                authorities=reopened_authorities,
+                recovery_requests=reopened_requests,
+            )
+            == ()
+        )
+        assert (
+            pipeline_module._minimum_floor_creditable_usage_records(
+                usage_records=recovery_usages,
+                successful_request_ids=successful_ids,
+                all_recovery_requests=reopened_requests,
+                promoted_recovery_leaf_requests=(),
+            )
+            == []
+        )
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("recursive", (False, True))
+def test_manifest_recovery_floor_requires_exact_live_promoted_leaf_capabilities(
+    tmp_path: Path,
+    recursive: bool,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    index, graphs, _invariants, _audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, f"manifest-floor-live-{recursive}"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = (
+        _basic_promoted_recursive_surface_fixture(
+            tmp_path / "recursive-manifest-floor-live",
+            requests=requests,
+            records=records,
+            context=context,
+            parent_retained_count=1,
+        )
+        if recursive
+        else _basic_promoted_surface_fixture(
+            tmp_path / "direct-manifest-floor-live",
+            requests=requests,
+            records=records,
+            context=context,
+        )
+    )
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    _raw_inventory, promoted_inventory = _manifest_model_review_inventories(fixture, snapshot)
+    serialized_leaf_inventory = manifest_module._promoted_model_review_leaf_usage_inventory(
+        promoted_inventory
+    )
+    recovery_requests = {
+        request.logical_request_id: request
+        for request in fixture.scheduler_artifact.recovery_model_requests
+    }
+    leaf_usages = (
+        fixture.leaf_usages
+        if isinstance(fixture, _PromotedRecursiveParentSurfaceFixture)
+        else fixture.child_usages
+    )
+    bindings = tuple(
+        MinimumFloorRecoveryModelUsageBinding.build(
+            usage_record=usage,
+            request_limit_scope=recovery_requests[usage.request_id].request_limit_scope,
+            request_limit_count_before=(
+                recovery_requests[usage.request_id].request_limit_count_before
+            ),
+            scheduler_request_evidence_sha256=(
+                recovery_requests[usage.request_id].request_evidence_sha256
+            ),
+        )
+        for usage in sorted(leaf_usages, key=lambda item: item.request_id)
+    )
+
+    live_leaf_inventory = manifest_module._live_promoted_model_review_leaf_usage_inventory(
+        fixture.journal
+    )
+    assert set(live_leaf_inventory) == {usage.request_id for usage in leaf_usages}
+    assert len(live_leaf_inventory) == (3 if recursive else 2)
+    assert fixture.parent_usage.request_id not in live_leaf_inventory
+    if isinstance(fixture, _PromotedRecursiveParentSurfaceFixture):
+        assert fixture.bridge_usage.request_id not in live_leaf_inventory
+        assert all(
+            authority.promotion_disposition
+            is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+            for authority in live_leaf_inventory.values()
+        )
+    else:
+        assert all(
+            authority.promotion_disposition is None for authority in live_leaf_inventory.values()
+        )
+    manifest_module._validate_minimum_floor_recovery_usage_bindings(
+        bindings=bindings,
+        serialized_leaf_inventory=serialized_leaf_inventory,
+        recovery_model_requests=recovery_requests,
+        runtime_journal=fixture.journal,
+    )
+
+    with pytest.raises(ValueError, match="lacks exact live scheduler authority"):
+        manifest_module._validate_minimum_floor_recovery_usage_bindings(
+            bindings=bindings,
+            serialized_leaf_inventory=serialized_leaf_inventory,
+            recovery_model_requests=recovery_requests,
+            runtime_journal=None,
+        )
+    with pytest.raises(ValueError, match="lacks exact live scheduler authority"):
+        manifest_module._live_promoted_model_review_leaf_usage_inventory(
+            cast(
+                Any,
+                SimpleNamespace(
+                    promoted_truncation_recovery_surface_coverages=(
+                        fixture.journal.promoted_truncation_recovery_surface_coverages
+                    ),
+                    promoted_recursive_truncation_recovery_surface_coverages=(
+                        fixture.journal.promoted_recursive_truncation_recovery_surface_coverages
+                    ),
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="repeats a request identity"):
+        manifest_module._validate_minimum_floor_recovery_usage_bindings(
+            bindings=(bindings[0], *bindings),
+            serialized_leaf_inventory=serialized_leaf_inventory,
+            recovery_model_requests=recovery_requests,
+            runtime_journal=fixture.journal,
+        )
+
+    first_request_id = min(serialized_leaf_inventory)
+    first_request = recovery_requests[first_request_id]
+    wrong_disposition = (
+        None if recursive else SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+    )
+    request_mutations = (
+        {"promotion_disposition": wrong_disposition},
+        {"terminal_status": SchedulerTerminalStatus.FAILED},
+        {"usage_record_sha256": "f" * 64},
+        {"promotion_entry_sha256": "e" * 64},
+        {"role": "business_logic"},
+        {"requested_model": "synthetic/unapproved-v1"},
+        {"request_limit_scope": "scheduler-request-" + "d" * 64},
+        {"request_limit_count_before": first_request.request_limit_count_before + 1},
+    )
+    for update in request_mutations:
+        with pytest.raises(ValueError, match="exact live promoted scheduler evidence"):
+            manifest_module._validate_minimum_floor_recovery_usage_bindings(
+                bindings=bindings,
+                serialized_leaf_inventory=serialized_leaf_inventory,
+                recovery_model_requests={
+                    **recovery_requests,
+                    first_request_id: first_request.model_copy(update=update),
+                },
+                runtime_journal=fixture.journal,
+            )
+
+    first_binding = next(binding for binding in bindings if binding.request_id == first_request_id)
+    for update in (
+        {"role": "business_logic"},
+        {"request_limit_scope": "scheduler-request-" + "c" * 64},
+        {"request_limit_count_before": first_binding.request_limit_count_before + 1},
+        {"usage_record_sha256": "b" * 64},
+        {"scheduler_request_evidence_sha256": "a" * 64},
+    ):
+        mutated_bindings = tuple(
+            binding.model_copy(update=update) if binding is first_binding else binding
+            for binding in bindings
+        )
+        with pytest.raises(ValueError, match="exact live promoted scheduler evidence"):
+            manifest_module._validate_minimum_floor_recovery_usage_bindings(
+                bindings=mutated_bindings,
+                serialized_leaf_inventory=serialized_leaf_inventory,
+                recovery_model_requests=recovery_requests,
+                runtime_journal=fixture.journal,
+            )
+
+    with pytest.raises(ValueError, match="exact live promoted scheduler evidence"):
+        manifest_module._validate_minimum_floor_recovery_usage_bindings(
+            bindings=bindings,
+            serialized_leaf_inventory=serialized_leaf_inventory,
+            recovery_model_requests={
+                request_id: request
+                for request_id, request in recovery_requests.items()
+                if request_id != first_request_id
+            },
+            runtime_journal=fixture.journal,
+        )
+
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(ValueError, match="differs from live promoted capabilities"):
+            manifest_module._validate_minimum_floor_recovery_usage_bindings(
+                bindings=bindings,
+                serialized_leaf_inventory=serialized_leaf_inventory,
+                recovery_model_requests=recovery_requests,
+                runtime_journal=reopened,
+            )
+    finally:
+        reopened.close()
+
+
+def _ordinary_model_review_snapshot(
+    *,
+    requests: tuple[ModelSurfaceReviewRequest, ...],
+    artifact: ModelSurfaceReviewArtifact,
+    usage: UsageRecord,
+    pre_dispatch_requests: tuple[ModelSurfaceReviewRequest, ...] | None = None,
+    pre_dispatch_rendered_context_sha256: str | None = None,
+    include_pre_dispatch_authority: bool = True,
+) -> Any:
+    """Build the minimal detached scheduler projection consumed by raw-review replay."""
+
+    output = SimpleNamespace(
+        model_surface_review_artifact=artifact,
+        model_completion_evidence=SimpleNamespace(usage_record=usage),
+        model_surface_review_requests=requests,
+        payload=CandidateReviewBatch(
+            findings=[],
+            surface_reviews=artifact.records,
+        ).model_dump(mode="json"),
+    )
+    authoritative_requests = requests if pre_dispatch_requests is None else pre_dispatch_requests
+    task = SimpleNamespace(
+        logical_request_id=artifact.request_id,
+        role=artifact.review_role,
+        model_surface_review_request_manifest_sha256=(
+            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                authoritative_requests
+            )
+        ),
+    )
+    activation = SimpleNamespace(
+        user_prompt_sha256=(
+            artifact.rendered_context_sha256
+            if pre_dispatch_rendered_context_sha256 is None
+            else pre_dispatch_rendered_context_sha256
+        ),
+        provider_prompt_sha256=artifact.prompt_sha256,
+        response_schema_sha256=artifact.response_schema_sha256,
+    )
+    snapshot = SimpleNamespace(
+        outputs_by_task_id={"ordinary-model-review": output},
+        journal=SimpleNamespace(truncation_recovery_entries=()),
+    )
+    if include_pre_dispatch_authority:
+        snapshot.tasks_by_task_id = {"ordinary-model-review": task}
+        snapshot.activations_by_task_id = {"ordinary-model-review": activation}
+    else:
+        snapshot.tasks_by_task_id = None
+        snapshot.activations_by_task_id = None
+    return snapshot
+
+
+def _ordinary_model_review_inventory(
+    artifact: ModelSurfaceReviewArtifact,
+    context: ContextPackage,
+) -> Any:
+    """Retain one exact private context authority beside an ordinary raw artifact."""
+
+    return manifest_module.build_model_review_artifact_inventory(
+        artifacts=(artifact,),
+        review_contexts_by_request={artifact.request_id: [context]},
+    )
+
+
+def _forge_detached_credited_surface(
+    coverage: ModelReviewCoverage,
+    artifact: ModelSurfaceReviewArtifact,
+) -> Any:
+    """Flip one typed raw reference to credited while retaining a canonical surface shape."""
+
+    surface = next(
+        item
+        for item in coverage.surfaces
+        if any(
+            reference.artifact_sha256 == artifact.artifact_sha256
+            for reference in item.evidence_references
+        )
+    )
+    reference = next(
+        item
+        for item in surface.evidence_references
+        if item.artifact_sha256 == artifact.artifact_sha256
+    )
+    assert not reference.credited
+    payload = surface.model_dump(mode="json")
+    payload["evidence_references"] = [
+        {
+            **reference.model_dump(mode="json"),
+            "credited": True,
+            "reason": "credited: forged detached raw-review custody",
+        }
+    ]
+    for derived_field in ("reviewer_roles", "root_lineages", "reviewed"):
+        payload.pop(derived_field)
+    return type(surface).model_validate(payload)
+
+
+def test_ordinary_model_review_replay_uses_runtime_authority_live_and_structure_detached(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    registry_only_config = _config_with_registry_only_promoted_surface_model(
+        config_factory(),
+        model_id,
+    )
+    usage = _usage(role, model_id, "ordinary-replay")
+    live_authority = manifest_module._RetainedModelSurfaceReviewAuthority(
+        artifact=cast(Any, None),
+        requests=(),
+        usage=usage,
+    )
+    assert manifest_module._ordinary_model_review_usage_is_creditable(
+        live_authority,
+        detached=False,
+        require_certification=False,
+    )
+
+    serialized_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    detached_authority = manifest_module._RetainedModelSurfaceReviewAuthority(
+        artifact=cast(Any, None),
+        requests=(),
+        usage=serialized_usage,
+    )
+    assert not manifest_module._ordinary_model_review_usage_is_creditable(
+        detached_authority,
+        detached=False,
+        require_certification=False,
+    )
+    assert manifest_module._ordinary_model_review_usage_is_creditable(
+        detached_authority,
+        detached=True,
+        require_certification=False,
+    )
+    assert manifest_module._usage_has_configured_approved_model_custody(
+        config,
+        serialized_usage,
+    )
+    assert not manifest_module._usage_has_configured_approved_model_custody(
+        registry_only_config,
+        serialized_usage,
+    )
+    configured_lineage = next(
+        entry.root_lineage for entry in config.models.registry if model_id in entry.model_ids()
+    )
+    scheduler_request = cast(
+        Any,
+        SimpleNamespace(
+            logical_request_id=serialized_usage.request_id,
+            requested_model=model_id,
+            root_lineage=configured_lineage,
+        ),
+    )
+    assert manifest_module._scheduler_usage_is_creditable(
+        usage=serialized_usage,
+        request=scheduler_request,
+        config=config,
+    )
+    assert not manifest_module._scheduler_usage_is_creditable(
+        usage=serialized_usage,
+        request=scheduler_request,
+        config=registry_only_config,
+    )
+    for invalid_role in (
+        "whole_protocol_review:00",
+        "whole_protocol_review:10000",
+        "whole_protocol_review:+1",
+    ):
+        assert not manifest_module._usage_has_configured_approved_model_custody(
+            config,
+            serialized_usage.model_copy(update={"role": invalid_role}),
+        )
+    assert not manifest_module._ordinary_model_review_usage_is_creditable(
+        detached_authority,
+        detached=True,
+        require_certification=True,
+    )
+
+    mock_usage = _usage(
+        role,
+        model_id,
+        "ordinary-mock-replay",
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    mock_authority = manifest_module._RetainedModelSurfaceReviewAuthority(
+        artifact=cast(Any, None),
+        requests=(),
+        usage=UsageRecord.model_validate_json(mock_usage.model_dump_json()),
+    )
+    assert not manifest_module._ordinary_model_review_usage_is_creditable(
+        mock_authority,
+        detached=True,
+        require_certification=False,
+    )
+
+
+def test_whole_protocol_raw_credit_requires_indexed_source_context_live_and_detached(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    base_context = _review_context(
+        requests,
+        _usage("whole_protocol_review", model_id, "whole-protocol-base-context"),
+        index,
+        graphs,
+    )
+
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=requests,
+        reviewers=((role, model_id),),
+        contexts=(base_context,),
+    ) as evidence:
+        legitimate_usage = evidence.usage_records[0]
+        legitimate_artifact = evidence.artifacts[0]
+        legitimate_coverage = build_model_review_coverage(
+            config,
+            usage_records=[legitimate_usage],
+            review_artifacts=[legitimate_artifact],
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PATH: _SOURCE},
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+    legitimate_references = [
+        reference
+        for surface in legitimate_coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == legitimate_artifact.artifact_sha256
+    ]
+    assert legitimate_references
+    assert all(reference.credited for reference in legitimate_references)
+
+    fresh_usage = UsageRecord.model_validate_json(legitimate_usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        legitimate_artifact.model_dump_json()
+    )
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in requests
+    )
+    fresh_inventory = _ordinary_model_review_inventory(fresh_artifact, base_context)
+    fresh_coverage = _fresh_manifest_replay_value(legitimate_coverage)
+    fresh_snapshot = _ordinary_model_review_snapshot(
+        requests=fresh_requests,
+        artifact=fresh_artifact,
+        usage=fresh_usage,
+    )
+    credited_surfaces = [
+        surface
+        for surface in fresh_coverage.surfaces
+        if any(
+            reference.credited and reference.artifact_sha256 == fresh_artifact.artifact_sha256
+            for reference in surface.evidence_references
+        )
+    ]
+    assert len(credited_surfaces) >= 2
+    first_surface, later_surface = credited_surfaces[:2]
+    assert len(first_surface.evidence_references) == 1
+    assert len(later_surface.evidence_references) == 1
+
+    # Every credited reference must replay before the terminal live-authority gate.
+    with pytest.raises(ValueError, match="lacks live pre-dispatch runtime authority"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(
+                    model_review_coverage=SimpleNamespace(surfaces=[first_surface, later_surface])
+                ),
+            ),
+            inventory=fresh_inventory,
+            snapshot=fresh_snapshot,
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+    later_payload = later_surface.model_dump(mode="json")
+    later_payload["evidence_references"][0]["request_id"] = "forged-later-credited-reference"
+    for derived_field in ("reviewer_roles", "root_lineages", "reviewed"):
+        later_payload.pop(derived_field)
+    forged_later_surface = type(later_surface).model_validate(later_payload)
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(
+                    model_review_coverage=SimpleNamespace(
+                        surfaces=[first_surface, forged_later_surface]
+                    )
+                ),
+            ),
+            inventory=fresh_inventory,
+            snapshot=fresh_snapshot,
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+    with pytest.raises(ValueError, match="lacks live pre-dispatch runtime authority"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=fresh_coverage),
+            ),
+            inventory=fresh_inventory,
+            snapshot=fresh_snapshot,
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(
+                    model_review_coverage=_fresh_manifest_replay_value(legitimate_coverage)
+                ),
+            ),
+            inventory=fresh_inventory,
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+                include_pre_dispatch_authority=False,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+    unbound_usage = _usage(role, model_id, "whole-protocol-indexed-unbound")
+    _bind_usage_to_context(unbound_usage, base_context)
+    unbound_artifact = _artifact(
+        requests,
+        unbound_usage,
+        index,
+        graphs,
+        context=base_context,
+    )
+    unbound_coverage = build_model_review_coverage(
+        config,
+        usage_records=[unbound_usage],
+        review_artifacts=[unbound_artifact],
+        review_contexts_by_request={unbound_usage.request_id: [base_context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    unbound_surface = next(
+        surface
+        for surface in unbound_coverage.surfaces
+        if any(
+            reference.artifact_sha256 == unbound_artifact.artifact_sha256
+            for reference in surface.evidence_references
+        )
+    )
+    unbound_reference = next(
+        reference
+        for reference in unbound_surface.evidence_references
+        if reference.artifact_sha256 == unbound_artifact.artifact_sha256
+    )
+    assert not unbound_reference.credited
+    forged_surface_payload = unbound_surface.model_dump(mode="json")
+    forged_surface_payload["evidence_references"] = [
+        {
+            **unbound_reference.model_dump(mode="json"),
+            "credited": True,
+            "reason": "credited: forged detached whole-protocol custody",
+        }
+    ]
+    for derived_field in ("reviewer_roles", "root_lineages", "reviewed"):
+        forged_surface_payload.pop(derived_field)
+    forged_surface = type(unbound_surface).model_validate(forged_surface_payload)
+
+    detached_unbound_usage = UsageRecord.model_validate_json(unbound_usage.model_dump_json())
+    detached_unbound_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        unbound_artifact.model_dump_json()
+    )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=[forged_surface])),
+            ),
+            inventory=_ordinary_model_review_inventory(
+                detached_unbound_artifact,
+                base_context,
+            ),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=detached_unbound_artifact,
+                usage=detached_unbound_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("alias_registration", "expected_credit"),
+    (
+        ("same_root", True),
+        ("unregistered", False),
+        ("cross_lineage", False),
+    ),
+)
+def test_model_review_provider_alias_requires_one_registered_approved_lineage_live_and_detached(
+    config_factory: Callable[..., AuditConfig],
+    alias_registration: str,
+    expected_credit: bool,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    alias = f"synthetic/{alias_registration}-provider-alias"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    if alias_registration != "unregistered":
+        config = _with_provider_visible_registry_alias(
+            config,
+            requested_model=model_id,
+            alias=alias,
+            same_root=alias_registration == "same_root",
+        )
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    selected_requests = requests[:1]
+    context = _review_context(
+        selected_requests,
+        _usage("whole_protocol_review", model_id, f"{alias_registration}-alias-context"),
+        index,
+        graphs,
+    )
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=selected_requests,
+        reviewers=((role, model_id),),
+        contexts=(context,),
+    ) as evidence:
+        usage = _with_provider_visible_model_alias(evidence.usage_records[0], alias)
+        artifact = _artifact(selected_requests, usage, index, graphs, context=context)
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=[usage],
+            review_artifacts=[artifact],
+            review_contexts_by_request={usage.request_id: [context]},
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PATH: _SOURCE},
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+    reference = next(
+        reference
+        for surface in coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == artifact.artifact_sha256
+    )
+    assert reference.credited is expected_credit
+
+    fresh_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(artifact.model_dump_json())
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in selected_requests
+    )
+    fresh_inventory = _ordinary_model_review_inventory(fresh_artifact, context)
+    detached_authority = manifest_module._RetainedModelSurfaceReviewAuthority(
+        artifact=fresh_artifact,
+        requests=fresh_requests,
+        usage=fresh_usage,
+    )
+    assert manifest_module._ordinary_model_review_usage_is_creditable(
+        detached_authority,
+        detached=True,
+        require_certification=False,
+    )
+    detached_surface = (
+        _fresh_manifest_replay_value(coverage).surfaces
+        if expected_credit
+        else [_forge_detached_credited_surface(coverage, artifact)]
+    )
+
+    def validate() -> None:
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=detached_surface)),
+            ),
+            inventory=fresh_inventory,
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"lacks live pre-dispatch runtime authority|contradicts exact scheduler artifact custody"
+        ),
+    ):
+        validate()
+
+
+def test_detached_whole_protocol_rejects_coherent_surface_inventory_substitution(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    context_requests = requests[:1]
+    substituted_requests = requests[1:2]
+    context = _review_context(
+        context_requests,
+        _usage("whole_protocol_review", model_id, "surface-substitution-context"),
+        index,
+        graphs,
+    )
+    with _authorized_ordinary_review_evidence(
+        config,
+        index=index,
+        graphs=graphs,
+        requests=context_requests,
+        reviewers=((role, model_id),),
+        contexts=(context,),
+    ) as evidence:
+        usage = evidence.usage_records[0]
+        legitimate_artifact = evidence.artifacts[0]
+        legitimate_coverage = build_model_review_coverage(
+            config,
+            usage_records=[usage],
+            review_artifacts=[legitimate_artifact],
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PATH: _SOURCE},
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+        assert any(
+            reference.credited
+            for surface in legitimate_coverage.surfaces
+            for reference in surface.evidence_references
+            if reference.artifact_sha256 == legitimate_artifact.artifact_sha256
+        )
+
+        substituted_artifact = _artifact(
+            substituted_requests,
+            usage,
+            index,
+            graphs,
+            context=context,
+        )
+        substituted_coverage = build_model_review_coverage(
+            config,
+            usage_records=[usage],
+            review_artifacts=[substituted_artifact],
+            review_contexts_by_request={usage.request_id: [context]},
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+            source_contents_by_path={_PATH: _SOURCE},
+            ordinary_review_authorizations=evidence.authorizations,
+        )
+        assert not any(
+            reference.credited
+            for surface in substituted_coverage.surfaces
+            for reference in surface.evidence_references
+            if reference.artifact_sha256 == substituted_artifact.artifact_sha256
+        )
+    forged_surface = _forge_detached_credited_surface(
+        substituted_coverage,
+        substituted_artifact,
+    )
+    fresh_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        substituted_artifact.model_dump_json()
+    )
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in substituted_requests
+    )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=[forged_surface])),
+            ),
+            inventory=_ordinary_model_review_inventory(fresh_artifact, context),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
+def test_detached_whole_protocol_rejects_coherent_context_reseal_against_retained_authority(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    actual_requests = requests[:1]
+    forged_requests = requests[1:2]
+    actual_context = _review_context(
+        actual_requests,
+        _usage("whole_protocol_review", model_id, "retained-actual-context"),
+        index,
+        graphs,
+    )
+    forged_context = _review_context(
+        forged_requests,
+        _usage("whole_protocol_review", model_id, "resealed-forged-context"),
+        index,
+        graphs,
+    )
+    missing_graphs_context = _with_exact_context_bytes(
+        actual_context.model_copy(update={"solidity_graphs": None})
+    )
+    missing_graphs_usage = _usage(role, model_id, "retained-missing-graphs")
+    _bind_usage_to_context(missing_graphs_usage, missing_graphs_context)
+    missing_graphs_usage = _with_context_request_evidence(
+        missing_graphs_usage,
+        missing_graphs_context,
+        request_role=role,
+    )
+    assert any(
+        "graphs" in failure
+        for failure in manifest_module.model_surface_retained_context_custody_failures(
+            context=missing_graphs_context,
+            usage=missing_graphs_usage,
+            requests=tuple(actual_requests),
+            request_id=missing_graphs_usage.request_id,
+            review_role=role,
+            context_role=missing_graphs_context.role,
+            rendered_context_sha256=missing_graphs_usage.user_prompt_sha256 or "",
+            requested_surface_manifest_sha256=(
+                ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                    actual_requests
+                )
+            ),
+            index=index,
+            graphs=graphs,
+        )
+    )
+
+    actual_usage = _usage(role, model_id, "coherent-context-reseal")
+    _bind_usage_to_context(actual_usage, actual_context)
+    actual_usage = _with_context_request_evidence(
+        actual_usage,
+        actual_context,
+        request_role=role,
+    )
+    forged_usage = UsageRecord.model_validate_json(actual_usage.model_dump_json())
+    _bind_usage_to_context(forged_usage, forged_context)
+    forged_usage = _with_context_request_evidence(
+        forged_usage,
+        forged_context,
+        request_role=role,
+    )
+    forged_artifact = _artifact(
+        forged_requests,
+        forged_usage,
+        index,
+        graphs,
+        context=forged_context,
+    )
+    live_coverage = build_model_review_coverage(
+        config,
+        usage_records=[forged_usage],
+        review_artifacts=[forged_artifact],
+        review_contexts_by_request={forged_usage.request_id: [actual_context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    live_reference = next(
+        reference
+        for surface in live_coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == forged_artifact.artifact_sha256
+    )
+    assert not live_reference.credited
+
+    fresh_usage = UsageRecord.model_validate_json(forged_usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        forged_artifact.model_dump_json()
+    )
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in forged_requests
+    )
+    retained_inventory = _ordinary_model_review_inventory(fresh_artifact, actual_context)
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(
+                    model_review_coverage=SimpleNamespace(
+                        surfaces=[
+                            _forge_detached_credited_surface(
+                                live_coverage,
+                                forged_artifact,
+                            )
+                        ]
+                    )
+                ),
+            ),
+            inventory=_fresh_manifest_replay_value(retained_inventory),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+    # A coherently resealed late inventory must not replace the surface/context
+    # authority already committed by the scheduler before provider dispatch.
+    resealed_inventory = _ordinary_model_review_inventory(fresh_artifact, forged_context)
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(
+                    model_review_coverage=SimpleNamespace(
+                        surfaces=[
+                            _forge_detached_credited_surface(
+                                live_coverage,
+                                forged_artifact,
+                            )
+                        ]
+                    )
+                ),
+            ),
+            inventory=_fresh_manifest_replay_value(resealed_inventory),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+                pre_dispatch_requests=tuple(actual_requests),
+                pre_dispatch_rendered_context_sha256=(
+                    hashlib.sha256(render_context(actual_context).encode()).hexdigest()
+                ),
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
+def test_detached_raw_replay_rejects_semantically_invalid_record(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    selected_requests = requests[:1]
+    context = _review_context(
+        selected_requests,
+        _usage("whole_protocol_review", model_id, "semantic-replay-context"),
+        index,
+        graphs,
+    )
+    usage = _usage(role, model_id, "semantic-replay-invalid")
+    _bind_usage_to_context(usage, context)
+    usage = _with_context_request_evidence(usage, context, request_role=role)
+    artifact = _artifact(selected_requests, usage, index, graphs, context=context)
+    invalid_artifact = _replace_artifact_record(
+        artifact,
+        _semantically_invalid_record(artifact.records[0]),
+    )
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[invalid_artifact],
+        review_contexts_by_request={usage.request_id: [context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    invalid_reference = next(
+        reference
+        for surface in coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == invalid_artifact.artifact_sha256
+    )
+    assert not invalid_reference.credited
+    assert len(invalid_reference.reason) <= 1_000
+    forged_surface = _forge_detached_credited_surface(coverage, invalid_artifact)
+    fresh_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        invalid_artifact.model_dump_json()
+    )
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in selected_requests
+    )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=[forged_surface])),
+            ),
+            inventory=_ordinary_model_review_inventory(fresh_artifact, context),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
+def test_detached_base_role_rejects_coherent_surface_context_substitution(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "source_audit"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    context_requests = requests[:1]
+    substituted_requests = requests[1:2]
+    context = _review_context(
+        context_requests,
+        _usage(role, model_id, "base-role-surface-substitution-context"),
+        index,
+        graphs,
+    )
+    usage = _usage(role, model_id, "base-role-surface-substitution")
+    _bind_usage_to_context(usage, context)
+    usage = _with_context_request_evidence(usage, context, request_role=role)
+    artifact = _artifact(substituted_requests, usage, index, graphs, context=context)
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        review_contexts_by_request={usage.request_id: [context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    forged_surface = _forge_detached_credited_surface(coverage, artifact)
+    fresh_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(artifact.model_dump_json())
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in substituted_requests
+    )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=[forged_surface])),
+            ),
+            inventory=_ordinary_model_review_inventory(fresh_artifact, context),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
+def test_detached_base_role_rejects_missing_provider_visible_source_proofs(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "source_audit"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    selected_requests = requests[:1]
+    context = _review_context(
+        selected_requests,
+        _usage(role, model_id, "base-role-source-omission-context"),
+        index,
+        graphs,
+        excerpts=[],
+    )
+    usage = _usage(role, model_id, "base-role-source-omission")
+    _bind_usage_to_context(usage, context)
+    _with_context_request_evidence(usage, context, request_role=role)
+    artifact = _artifact(selected_requests, usage, index, graphs, context=context)
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        review_contexts_by_request={usage.request_id: [context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PATH: _SOURCE},
+    )
+    reference = next(
+        reference
+        for surface in coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == artifact.artifact_sha256
+    )
+    assert not reference.credited
+    forged_surface = _forge_detached_credited_surface(coverage, artifact)
+    fresh_usage = UsageRecord.model_validate_json(usage.model_dump_json())
+    fresh_artifact = ModelSurfaceReviewArtifact.model_validate_json(artifact.model_dump_json())
+    fresh_requests = tuple(
+        ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json())
+        for request in selected_requests
+    )
+    with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(
+                Any,
+                SimpleNamespace(model_review_coverage=SimpleNamespace(surfaces=[forged_surface])),
+            ),
+            inventory=_ordinary_model_review_inventory(fresh_artifact, context),
+            snapshot=_ordinary_model_review_snapshot(
+                requests=fresh_requests,
+                artifact=fresh_artifact,
+                usage=fresh_usage,
+            ),
+            config=config,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+
+
 def test_promoted_parent_surface_credits_only_parent_origin_while_children_stay_ordinary(
     config_factory: Callable[..., AuditConfig],
     tmp_path: Path,
 ) -> None:
     model_id = "synthetic/auditor-v1"
-    config = _config_with_promoted_surface_model(config_factory(), model_id)
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
     index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
     context_usage = _usage("source_audit", model_id, "promoted-context-only")
     context = _promoted_surface_context(requests, context_usage, index, graphs)
@@ -4424,12 +7079,314 @@ def test_promoted_parent_surface_credits_only_parent_origin_while_children_stay_
     fixture.journal.close()
 
 
+def test_recovery_children_cannot_use_public_ordinary_authority_without_promotion(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context_usage = _usage("source_audit", model_id, "promoted-public-authority-context")
+    context = _promoted_surface_context(requests, context_usage, index, graphs)
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = _basic_promoted_surface_fixture(
+        tmp_path / "promoted-public-authority",
+        requests=requests,
+        records=records,
+        context=context,
+    )
+
+    public_authorizations = build_model_review_pre_dispatch_authorizations(fixture.journal)
+    public_bindings = tuple(
+        require_model_review_pre_dispatch_authorization(authorization)
+        for authorization in public_authorizations
+    )
+    assert len(public_bindings) == 1
+    assert public_bindings[0].request_id == fixture.parent_usage.request_id
+    assert not public_bindings[0].request_id.startswith("scheduler-recovery-request-")
+    assert not public_bindings[0].task_id.startswith("scheduler-recovery-task-")
+
+    coverage = _coverage_from_promoted_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+        ordinary_review_authorizations=public_authorizations,
+        include_promoted_surface_coverage=False,
+    )
+    child_request_ids = {usage.request_id for usage in fixture.child_usages}
+    child_references = tuple(
+        reference
+        for surface in coverage.surfaces
+        for reference in surface.evidence_references
+        if reference.request_id in child_request_ids
+    )
+    assert child_references
+    assert not any(reference.credited for reference in child_references)
+    assert coverage.overall.numerator == 0
+    fixture.journal.close()
+
+
+def test_promoted_parent_manifest_replay_survives_fresh_deserialization_and_rejects_tamper(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    role = "whole_protocol_review:0"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    registry_only_config = _config_with_registry_only_promoted_surface_model(
+        config_factory(),
+        model_id,
+    )
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("whole_protocol_review", model_id, "promoted-manifest-context"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, role, index, graphs) for request in requests)
+    fixture = _basic_promoted_surface_fixture(
+        tmp_path / "promoted-manifest-replay",
+        requests=requests,
+        records=records,
+        context=context,
+        parent_role=role,
+    )
+    coverage = _coverage_from_promoted_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+
+    live_snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    live_parent_attempt = next(
+        attempt
+        for attempt in live_snapshot.journal.provider_attempts
+        if attempt.task_id == fixture.promotion.parent_task_id
+    )
+    assert manifest_module._promoted_parent_usage_is_accountable(
+        live_parent_attempt.usage_record,
+        require_certification=False,
+    )
+    assert manifest_module._usage_has_configured_approved_model_custody(
+        config,
+        fixture.structural_artifact.parent.usage_record,
+    )
+
+    raw_inventory, promoted_inventory = _validate_promoted_fixture_manifest_replay(
+        config=config,
+        coverage=coverage,
+        fixture=fixture,
+        detached=False,
+    )
+    parent_surface_id = next(
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+    parent_reference = next(
+        reference
+        for surface in coverage.surfaces
+        if surface.surface_id == parent_surface_id
+        for reference in surface.evidence_references
+        if reference.credited
+    )
+    assert parent_reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+
+    fresh_coverage = _fresh_manifest_replay_value(coverage)
+    fresh_raw_inventory = _fresh_manifest_replay_value(raw_inventory)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(ValueError, match="lacks live pre-dispatch runtime authority"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+        with pytest.raises(ValueError, match="lacks exact REAL model custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=registry_only_config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+
+        promotion_entry = fresh_promoted_inventory.promotions[0]
+        tampered_promotion = promotion_entry.model_copy(
+            update={"recovered_output_artifact_sha256": "f" * 64}
+        )
+        tampered_inventory = fresh_promoted_inventory.model_copy(
+            update={"promotions": (tampered_promotion,)}
+        )
+        with pytest.raises(ValueError, match="parent promotion custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=tampered_inventory,
+            )
+
+        parent_surface = next(
+            surface
+            for surface in fresh_coverage.surfaces
+            if surface.surface_id == parent_surface_id
+        )
+        forged_reference = parent_surface.evidence_references[0].model_copy(
+            update={"root_lineage": "sha256:" + "f" * 64}
+        )
+        forged_surface = parent_surface.model_copy(
+            update={"evidence_references": [forged_reference]}
+        )
+        forged_coverage = fresh_coverage.model_copy(
+            update={
+                "surfaces": [
+                    forged_surface if surface.surface_id == parent_surface_id else surface
+                    for surface in fresh_coverage.surfaces
+                ]
+            }
+        )
+        with pytest.raises(ValueError, match="contradicts exact scheduler artifact custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=forged_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+    finally:
+        reopened.close()
+
+
+def test_promoted_parent_substitution_cannot_earn_live_or_detached_credit(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, "substituted-parent-context"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+
+    def mark_truncated_usage_substituted(usage: UsageRecord) -> UsageRecord:
+        if usage.status != "rejected_truncated_response":
+            return usage
+        return reattest_synthetic_real_usage(
+            usage.model_copy(update={"substitution_detected": True})
+        )
+
+    fixture = _basic_promoted_surface_fixture(
+        tmp_path / "substituted-promoted-parent",
+        requests=requests,
+        records=records,
+        context=context,
+        usage_transform=mark_truncated_usage_substituted,
+    )
+    exact_parent_usage = fixture.parent_usage.model_copy(update={"substitution_detected": False})
+    assert manifest_module._promoted_parent_usage_is_accountable(
+        exact_parent_usage,
+        require_certification=False,
+    )
+    for drifted_parent_usage in (
+        exact_parent_usage.model_copy(update={"requested_model": "synthetic/request-drift"}),
+        exact_parent_usage.model_copy(update={"returned_model": "synthetic/return-drift"}),
+        exact_parent_usage.model_copy(update={"actual_model": "synthetic/actual-drift"}),
+        exact_parent_usage.model_copy(
+            update={
+                "routing": {
+                    **exact_parent_usage.routing,
+                    "selected_model": "synthetic/selection-drift",
+                }
+            }
+        ),
+    ):
+        assert not manifest_module._promoted_parent_usage_is_accountable(
+            drifted_parent_usage,
+            require_certification=False,
+        )
+    coverage = _coverage_from_promoted_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+    parent_surface_ids = {
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    }
+    parent_references = [
+        reference
+        for surface in coverage.surfaces
+        if surface.surface_id in parent_surface_ids
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+    ]
+    assert parent_references
+    assert not any(reference.credited for reference in parent_references)
+
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    raw_inventory, promoted_inventory = _manifest_model_review_inventories(fixture, snapshot)
+    with pytest.raises(ValueError, match="parent lacks exact REAL model custody"):
+        _validate_promoted_fixture_manifest_replay(
+            config=config,
+            coverage=coverage,
+            fixture=fixture,
+            detached=False,
+            inventory=raw_inventory,
+            promoted_inventory=promoted_inventory,
+        )
+
+    fresh_coverage = _fresh_manifest_replay_value(coverage)
+    fresh_raw_inventory = _fresh_manifest_replay_value(raw_inventory)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(ValueError, match="parent lacks exact REAL model custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+    finally:
+        reopened.close()
+
+
 def test_promoted_parent_surface_rejects_missing_forged_serialized_and_swapped_custody(
     config_factory: Callable[..., AuditConfig],
     tmp_path: Path,
 ) -> None:
     model_id = "synthetic/auditor-v1"
-    config = _config_with_promoted_surface_model(config_factory(), model_id)
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
     index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
     context_usage = _usage("source_audit", model_id, "promoted-negative-context-only")
     context = _promoted_surface_context(requests, context_usage, index, graphs)
@@ -4496,21 +7453,19 @@ def test_promoted_parent_surface_rejects_missing_forged_serialized_and_swapped_c
             exact.surface_capability
         ).artifact.model_dump_json()
     )
-    for invalid_capabilities in (
-        (),
-        (forged,),
-        (cast(Any, serialized_projection),),
-        (swapped.surface_capability,),
-    ):
-        recovery_coordinates = tuple(
-            (
-                request.logical_request_id,
-                request.request_limit_scope,
-                request.request_limit_count_before,
-            )
-            for request in exact.scheduler_artifact.recovery_model_requests
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
         )
-        coverage = build_model_review_coverage(
+        for request in exact.scheduler_artifact.recovery_model_requests
+    )
+
+    def coverage_with(
+        capabilities: tuple[Any, ...],
+    ) -> ModelReviewCoverage:
+        return build_model_review_coverage(
             config,
             usage_records=[exact.parent_usage, *exact.child_usages],
             review_artifacts=list(exact.child_artifacts),
@@ -4533,8 +7488,18 @@ def test_promoted_parent_surface_rejects_missing_forged_serialized_and_swapped_c
             audited_suite_coverage=audited_suite,
             source_contents_by_path={_PATH: _SOURCE},
             recovery_usage_coordinates=recovery_coordinates,
-            promoted_recovery_surface_coverages=invalid_capabilities,
+            promoted_recovery_surface_coverages=capabilities,
         )
+
+    for forged_capabilities in (
+        (forged,),
+        (cast(Any, serialized_projection),),
+    ):
+        with pytest.raises(ValueError, match="promoted recovery capability is absent"):
+            coverage_with(forged_capabilities)
+
+    for nonauthorizing_capabilities in ((), (swapped.surface_capability,)):
+        coverage = coverage_with(nonauthorizing_capabilities)
         parent_surface = next(
             surface for surface in coverage.surfaces if surface.surface_id == parent_surface_id
         )
@@ -4612,6 +7577,434 @@ def test_promoted_zero_retained_recursive_surface_credits_only_three_ordinary_le
         for reference in surface.evidence_references
     )
     fixture.journal.close()
+
+
+def test_recursive_promoted_parent_manifest_replay_joins_bridge_and_rejects_tamper(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, "recursive-manifest-context"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = _basic_promoted_recursive_surface_fixture(
+        tmp_path / "recursive-promoted-manifest-replay",
+        requests=requests,
+        records=records,
+        context=context,
+        parent_retained_count=1,
+    )
+    coverage = _coverage_from_promoted_recursive_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+
+    raw_inventory, promoted_inventory = _validate_promoted_fixture_manifest_replay(
+        config=config,
+        coverage=coverage,
+        fixture=fixture,
+        detached=False,
+    )
+    parent_surface_id = next(
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+    assert any(
+        reference.credited
+        and reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+        for surface in coverage.surfaces
+        if surface.surface_id == parent_surface_id
+        for reference in surface.evidence_references
+    )
+
+    fresh_coverage = _fresh_manifest_replay_value(coverage)
+    fresh_raw_inventory = _fresh_manifest_replay_value(raw_inventory)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(ValueError, match="lacks live pre-dispatch runtime authority"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+
+        promotion_entry = fresh_promoted_inventory.promotions[0]
+        tampered_bridge = promotion_entry.artifact.bridge.model_copy(
+            update={"usage_record_sha256": "f" * 64}
+        )
+        tampered_artifact = promotion_entry.artifact.model_copy(update={"bridge": tampered_bridge})
+        tampered_promotion = promotion_entry.model_copy(update={"artifact": tampered_artifact})
+        tampered_inventory = fresh_promoted_inventory.model_copy(
+            update={"promotions": (tampered_promotion,)}
+        )
+        with pytest.raises(ValueError, match="bridge custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=tampered_inventory,
+            )
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("recursive", (False, True))
+def test_detached_promoted_parent_replays_semantic_authority(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+    recursive: bool,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, f"promoted-semantic-{recursive}-context"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = (
+        _basic_promoted_recursive_surface_fixture(
+            tmp_path / "recursive-promoted-semantic-replay",
+            requests=requests,
+            records=records,
+            context=context,
+            parent_retained_count=1,
+        )
+        if recursive
+        else _basic_promoted_surface_fixture(
+            tmp_path / "direct-promoted-semantic-replay",
+            requests=requests,
+            records=records,
+            context=context,
+        )
+    )
+    parent_surface_id = next(
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+    semantic_index = SoliditySymbolIndex.model_validate(
+        {
+            **index.model_dump(mode="python"),
+            "entities": [
+                entity.model_copy(
+                    update={
+                        "source_hash": hashlib.sha256(
+                            f"detached-semantic-drift:{entity.id}".encode()
+                        ).hexdigest()
+                    }
+                )
+                for entity in index.entities
+            ],
+        }
+    )
+    coverage = (
+        _coverage_from_promoted_recursive_surface_fixture(
+            config,
+            cast(_PromotedRecursiveParentSurfaceFixture, fixture),
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            audited_suite_coverage=audited_suite,
+        )
+        if recursive
+        else _coverage_from_promoted_surface_fixture(
+            config,
+            cast(_PromotedParentSurfaceFixture, fixture),
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            audited_suite_coverage=audited_suite,
+        )
+    )
+    parent_reference = next(
+        reference
+        for surface in coverage.surfaces
+        if surface.surface_id == parent_surface_id
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+    )
+    assert parent_reference.credited
+    fresh_coverage = _fresh_manifest_replay_value(coverage)
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    raw_inventory, promoted_inventory = _manifest_model_review_inventories(
+        fixture,
+        snapshot,
+    )
+    fresh_raw_inventory = _fresh_manifest_replay_value(raw_inventory)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(
+            ValueError,
+            match="contradicts exact scheduler artifact custody",
+        ):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+                index=semantic_index,
+            )
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("recursive", (False, True))
+def test_detached_promoted_parent_rejects_context_reseal_against_retained_authority(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+    recursive: bool,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    forged_context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, f"promoted-reseal-{recursive}-forged"),
+        index,
+        graphs,
+    )
+    actual_context = _promoted_surface_context(
+        requests[:1],
+        _usage("source_audit", model_id, f"promoted-reseal-{recursive}-actual"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+    fixture = (
+        _basic_promoted_recursive_surface_fixture(
+            tmp_path / "recursive-promoted-context-reseal",
+            requests=requests,
+            records=records,
+            context=forged_context,
+            parent_retained_count=1,
+        )
+        if recursive
+        else _basic_promoted_surface_fixture(
+            tmp_path / "direct-promoted-context-reseal",
+            requests=requests,
+            records=records,
+            context=forged_context,
+        )
+    )
+    coverage = (
+        _coverage_from_promoted_recursive_surface_fixture(
+            config,
+            cast(_PromotedRecursiveParentSurfaceFixture, fixture),
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            audited_suite_coverage=audited_suite,
+        )
+        if recursive
+        else _coverage_from_promoted_surface_fixture(
+            config,
+            cast(_PromotedParentSurfaceFixture, fixture),
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            audited_suite_coverage=audited_suite,
+        )
+    )
+    parent_surface_id = next(
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    )
+    assert any(
+        reference.credited
+        for surface in coverage.surfaces
+        if surface.surface_id == parent_surface_id
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+    )
+
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    raw_inventory, promoted_inventory = _manifest_model_review_inventories(fixture, snapshot)
+    retained_context_inventory = raw_inventory.model_copy(
+        update={
+            "context_authorities": tuple(
+                authority.model_copy(update={"context": actual_context})
+                if authority.request_id == fixture.parent_usage.request_id
+                else authority
+                for authority in raw_inventory.context_authorities
+            )
+        }
+    )
+    pre_dispatch_tasks = dict(snapshot.tasks_by_task_id or {})
+    pre_dispatch_task = pre_dispatch_tasks[fixture.promotion.parent_task_id]
+    pre_dispatch_tasks[fixture.promotion.parent_task_id] = SimpleNamespace(
+        logical_request_id=fixture.parent_usage.request_id,
+        role=pre_dispatch_task.role,
+        model_surface_review_request_manifest_sha256=(
+            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                tuple(actual_context.requested_model_surfaces)
+            )
+        ),
+    )
+    pre_dispatch_activations = dict(snapshot.activations_by_task_id or {})
+    pre_dispatch_activations[fixture.promotion.parent_task_id] = SimpleNamespace(
+        user_prompt_sha256=hashlib.sha256(render_context(actual_context).encode()).hexdigest(),
+        provider_prompt_sha256=fixture.parent_usage.prompt_sha256,
+        response_schema_sha256=fixture.parent_usage.schema_sha256,
+    )
+    pre_dispatch_snapshot = manifest_module._SchedulerReportAuthoritySnapshot(
+        journal=snapshot.journal,
+        outputs_by_task_id=snapshot.outputs_by_task_id,
+        pass_results_by_kind=snapshot.pass_results_by_kind,
+        tasks_by_task_id=pre_dispatch_tasks,
+        activations_by_task_id=pre_dispatch_activations,
+    )
+    with pytest.raises(
+        ValueError,
+        match="contradicts exact scheduler artifact custody",
+    ):
+        manifest_module._validate_model_review_artifact_inventory_against_scheduler(
+            report=cast(Any, SimpleNamespace(model_review_coverage=coverage)),
+            inventory=raw_inventory,
+            snapshot=pre_dispatch_snapshot,
+            config=config,
+            promoted_inventory=promoted_inventory,
+            detached=True,
+            index=index,
+            graphs=graphs,
+        )
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(
+            ValueError,
+            match="contradicts exact scheduler artifact custody",
+        ):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=_fresh_manifest_replay_value(coverage),
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=_fresh_manifest_replay_value(retained_context_inventory),
+                promoted_inventory=_fresh_manifest_replay_value(promoted_inventory),
+                index=index,
+                graphs=graphs,
+            )
+    finally:
+        reopened.close()
+
+
+def test_recursive_promoted_fallback_cannot_earn_live_or_detached_parent_credit(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    model_id = "synthetic/auditor-v1"
+    config = _config_with_promoted_surface_manifest_lineage(config_factory(), model_id)
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    context = _promoted_surface_context(
+        requests,
+        _usage("source_audit", model_id, "fallback-recursive-parent-context"),
+        index,
+        graphs,
+    )
+    records = tuple(_record(request, "source_audit", index, graphs) for request in requests)
+
+    def mark_truncated_usage_as_fallback(usage: UsageRecord) -> UsageRecord:
+        if usage.status != "rejected_truncated_response":
+            return usage
+        return reattest_synthetic_real_usage(
+            usage.model_copy(
+                update={
+                    "fallback_used": True,
+                    "routing": {
+                        **usage.routing,
+                        "provider_fallback_used": True,
+                    },
+                }
+            )
+        )
+
+    fixture = _basic_promoted_recursive_surface_fixture(
+        tmp_path / "fallback-recursive-promoted-parent",
+        requests=requests,
+        records=records,
+        context=context,
+        parent_retained_count=1,
+        usage_transform=mark_truncated_usage_as_fallback,
+    )
+    coverage = _coverage_from_promoted_recursive_surface_fixture(
+        config,
+        fixture,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        audited_suite_coverage=audited_suite,
+    )
+    parent_surface_ids = {
+        origin.surface_id
+        for origin in fixture.structural_artifact.origins
+        if origin.origin_kind is TruncationSurfaceOriginKind.PARENT_PROVISIONAL
+    }
+    parent_references = [
+        reference
+        for surface in coverage.surfaces
+        if surface.surface_id in parent_surface_ids
+        for reference in surface.evidence_references
+        if reference.artifact_sha256 == fixture.structural_artifact.artifact_sha256
+    ]
+    assert parent_references
+    assert not any(reference.credited for reference in parent_references)
+
+    snapshot = manifest_module._scheduler_report_authority_snapshot(fixture.journal)
+    raw_inventory, promoted_inventory = _manifest_model_review_inventories(fixture, snapshot)
+    with pytest.raises(ValueError, match="parent lacks exact REAL model custody"):
+        _validate_promoted_fixture_manifest_replay(
+            config=config,
+            coverage=coverage,
+            fixture=fixture,
+            detached=False,
+            inventory=raw_inventory,
+            promoted_inventory=promoted_inventory,
+        )
+
+    fresh_coverage = _fresh_manifest_replay_value(coverage)
+    fresh_raw_inventory = _fresh_manifest_replay_value(raw_inventory)
+    fresh_promoted_inventory = _fresh_manifest_replay_value(promoted_inventory)
+    reopened = _open_promoted_fixture_for_verification(fixture)
+    try:
+        with pytest.raises(ValueError, match="parent lacks exact REAL model custody"):
+            _validate_promoted_fixture_manifest_replay(
+                config=config,
+                coverage=fresh_coverage,
+                fixture=fixture,
+                journal=reopened,
+                detached=True,
+                inventory=fresh_raw_inventory,
+                promoted_inventory=fresh_promoted_inventory,
+            )
+    finally:
+        reopened.close()
 
 
 def test_promoted_recursive_surface_rejects_missing_bridge_and_leaf_custody(
@@ -4708,19 +8101,16 @@ def test_promoted_recursive_surface_rejects_missing_bridge_and_leaf_custody(
         for surface in without_capability.surfaces
         for reference in surface.evidence_references
     )
-    forged_capability = _coverage_from_promoted_recursive_surface_fixture(
-        config,
-        fixture,
-        index=index,
-        graphs=graphs,
-        invariants=invariants,
-        audited_suite_coverage=audited_suite,
-        capabilities=(forged,),
-    )
-    assert any(
-        "invalid or serialized recursive truncation-recovery promotion evidence" in limitation
-        for limitation in forged_capability.limitations
-    )
+    with pytest.raises(ValueError, match="promoted recovery capability is absent"):
+        _coverage_from_promoted_recursive_surface_fixture(
+            config,
+            fixture,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            audited_suite_coverage=audited_suite,
+            capabilities=(forged,),
+        )
 
     fixture.journal.close()
 
@@ -4742,8 +8132,12 @@ def test_compact_source_context_inventory_subset_receives_credit(
         ),
         key=lambda request: request.surface_id,
     )
-    usage = _usage("source_audit", config.models.source_audit.primary, "request-compact-context")
-    context = _review_context(selected, usage, index, graphs)
+    context = _review_context(
+        selected,
+        _usage("source_audit", config.models.source_audit.primary, "compact-context-seed"),
+        index,
+        graphs,
+    )
     compact_index = index.model_copy(
         update={
             "entities": [
@@ -4768,18 +8162,25 @@ def test_compact_source_context_inventory_subset_receives_credit(
             }
         )
     )
-    _bind_usage_to_context(usage, context)
-
-    coverage = build_model_review_coverage(
+    with _authorized_ordinary_review_evidence(
         config,
-        usage_records=[usage],
-        review_artifacts=[_artifact(selected, usage, index, graphs, context=context)],
-        review_contexts_by_request={usage.request_id: [context]},
         index=index,
         graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-    )
+        requests=selected,
+        reviewers=(("source_audit", config.models.source_audit.primary),),
+        contexts=(context,),
+    ) as evidence:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            ordinary_review_authorizations=evidence.authorizations,
+        )
 
     by_id = {surface.surface_id: surface for surface in coverage.surfaces}
     assert all(by_id[request.surface_id].reviewed for request in selected)
@@ -4797,6 +8198,7 @@ def test_missing_or_duplicate_source_context_cannot_authorize_coverage(
     artifact = _artifact([request], usage, index, graphs)
     context = _review_context([request], usage, index, graphs)
     _bind_usage_to_context(usage, context)
+    _with_context_request_evidence(usage, context, request_role=usage.role)
 
     missing = build_model_review_coverage(
         config,
@@ -4845,6 +8247,7 @@ def test_post_hoc_context_substitution_cannot_authorize_coverage(
     usage = _usage("source_audit", config.models.source_audit.primary, "request-context-binding")
     original_context = _review_context([request], usage, index, graphs)
     _bind_usage_to_context(usage, original_context)
+    _with_context_request_evidence(usage, original_context, request_role=usage.role)
     artifact = _artifact(
         [request],
         usage,
@@ -4900,6 +8303,7 @@ def test_nested_context_mutation_cannot_authorize_coverage(
     usage = _usage("source_audit", config.models.source_audit.primary, "request-mutated-context")
     context = _review_context([request], usage, index, graphs)
     _bind_usage_to_context(usage, context)
+    _with_context_request_evidence(usage, context, request_role=usage.role)
     artifact = _artifact([request], usage, index, graphs, context=context)
     context.repository_map.frameworks.append("SyntheticNestedMutation")
 
@@ -4956,6 +8360,15 @@ def test_serialized_generic_state_self_loop_cannot_self_authorize_coverage(
         }
     )
     artifact = _replace_artifact_record(artifact, generic_loop)
+    semantic_failures = model_surface_review_record_validation_failures(
+        state_request,
+        generic_loop,
+        "source_audit",
+        index=index,
+        graphs=graphs,
+    )
+    assert any("generic boilerplate" in failure for failure in semantic_failures)
+    assert any("exact known" in failure for failure in semantic_failures)
 
     coverage = build_model_review_coverage(
         config,
@@ -4980,7 +8393,9 @@ def test_serialized_generic_state_self_loop_cannot_self_authorize_coverage(
     assert len(state_surface.evidence_references) == 1
     reason = state_surface.evidence_references[0].reason
     assert "generic boilerplate" in reason
-    assert "exact known" in reason
+    assert "failure_count=" in reason
+    assert "full_failure_set_sha256=" in reason
+    assert len(reason) <= 1_000
 
 
 def test_serialized_record_role_mismatch_cannot_self_authorize_coverage(
@@ -5136,20 +8551,24 @@ def test_same_lineage_aliases_do_not_inflate_independence(
         }
     )
     index, graphs, invariants, requests = _requests()
-    usages = [
-        _usage("source_audit", source, "request-canonical"),
-        _usage("source_audit", alias, "request-alias"),
-    ]
-    coverage = build_model_review_coverage(
+    with _authorized_ordinary_review_evidence(
         config,
-        usage_records=usages,
-        review_artifacts=[_artifact(requests, usage, index, graphs) for usage in usages],
-        review_contexts_by_request=_review_contexts(requests, usages, index, graphs),
         index=index,
         graphs=graphs,
-        invariants=invariants,
-        economic_simulations=[],
-    )
+        requests=requests,
+        reviewers=(("source_audit", source), ("source_audit", alias)),
+    ) as evidence:
+        coverage = build_model_review_coverage(
+            config,
+            usage_records=list(evidence.usage_records),
+            review_artifacts=list(evidence.artifacts),
+            review_contexts_by_request=evidence.contexts_by_request,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            ordinary_review_authorizations=evidence.authorizations,
+        )
 
     assert coverage.overall.numerator == coverage.overall.denominator
     assert all(len(surface.root_lineages) == 1 for surface in coverage.surfaces)

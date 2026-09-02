@@ -44,6 +44,7 @@ from mmaudit.models.scheduler import (
     SchedulerArtifact,
     SchedulerEvidenceCapJudgmentOutput,
     SchedulerEvidencePayloadBinding,
+    SchedulerPassDependency,
     SchedulerReproductionHostOutput,
     SchedulerTaskOutput,
     SchedulerTerminalReportAuthority,
@@ -75,6 +76,8 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestSpec,
     InvariantExecutionResult,
     InvariantExecutionStatus,
+    KnownIssueApplicability,
+    KnownIssueDisposition,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     LocalInvariantDeployment,
@@ -87,6 +90,8 @@ from mmaudit.models.schemas import (
     PriorAuditDiscoveryStatus,
     PriorAuditRemediationStatus,
     PropertyCorpus,
+    ProtocolProfileKind,
+    ProtocolProfileStatus,
     RepositoryDifferentialRunStatus,
     RepositorySuiteDifferentialRun,
     ReproductionAttemptEvidence,
@@ -114,6 +119,7 @@ from mmaudit.models.sharding import (
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration import ci as ci_module
+from mmaudit.orchestration.actor_model import ActorModelPathIdentityError
 from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.ci import (
@@ -122,6 +128,7 @@ from mmaudit.orchestration.ci import (
     load_ci_baseline,
     load_ci_baseline_bundle,
 )
+from mmaudit.orchestration.context import ContextBudgetError, ContextBuilder
 from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
     load_context_manifest,
@@ -162,6 +169,7 @@ from mmaudit.privacy import (
     PrivacySourceClassification,
     load_privacy_retention_consent,
 )
+from mmaudit.release_artifacts import observe_release_artifacts
 from mmaudit.reporting.bundle import (
     SCANNER_SOURCE_EVIDENCE_PATH,
     CoverageArtifact,
@@ -189,6 +197,7 @@ from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_s
 from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
+from mmaudit.solidity.invariants import discover_invariants as discover_source_invariants
 from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.reproduction import translate_foundry_test
 from mmaudit.solidity.reproduction_integrity import reproduction_repository_sha256
@@ -783,7 +792,12 @@ async def test_standard_real_provider_path_requires_current_opaque_qualification
         ValueError,
         match="audit model selection lacks valid technical qualification runtime evidence",
     ):
-        await pipeline.run(allow_code_egress=True)
+        await pipeline.run(
+            allow_code_egress=True,
+            learning_capture_scope=LearningCaptureScope(
+                tenant_scope_id=f"tenant-scope-{'a' * 64}",
+            ),
+        )
 
     assert pipeline.client is None
     run_dirs = tuple((pipeline.output / "runs").iterdir())
@@ -1850,6 +1864,10 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         "audit-results.sarif",
         "coverage.json",
         "model-execution.json",
+        "known-issue-taxonomy.json",
+        "known-issue-taxonomy-coverage.json",
+        "actor-model-baseline.json",
+        "actor-model-evaluation.json",
         "context-manifest.json",
         "maximum_assurance_traceability.json",
         "run-evidence-manifest.json",
@@ -1895,7 +1913,10 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         assert artifact.language_capability.status is LanguageCapabilityStatus.REDUCED
         assert not artifact.language_capability.evm_portfolio_applicable
         assert not artifact.language_capability.evm_maximum_assurance_eligible
-    assert coverage_artifact.schema_version == "1.1"
+    assert result.report.schema_version == "1.4"
+    assert coverage_artifact.schema_version == "1.2"
+    assert result.report.taxonomy_coverage is not None
+    assert coverage_artifact.taxonomy_coverage == result.report.taxonomy_coverage
     assert not coverage_artifact.scanner_only
     assert coverage_artifact.generic_source_coverage is not None
     assert coverage_artifact.generic_source_coverage == (
@@ -1938,11 +1959,12 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         traceability,
         repository_root=Path(__file__).resolve().parents[2],
         runtime_artifacts={path.name for path in result.run_dir.iterdir() if path.is_file()},
+        runtime_schema_version=result.report.schema_version,
     )
     manifest = RunEvidenceManifest.model_validate_json(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
-    assert manifest.schema_version == "1.2"
+    assert manifest.schema_version == "1.4"
     assert manifest.run_configuration is not None
     assert (
         manifest.run_configuration.requested_language_profile
@@ -3159,10 +3181,10 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
             "approved_model_lineages": [entry["root_lineage"] for entry in registry],
         },
         repository={"max_total_context_bytes": 5_000_000},
-        execution={"budget_usd": 33},
+        execution={"budget_usd": 45},
         token_budgets={
-            "global_input_token_budget": 14_000_000,
-            "global_output_token_budget": 2_500_000,
+            "global_input_token_budget": 19_000_000,
+            "global_output_token_budget": 3_500_000,
         },
         maximum_assurance={"allow_downgrade": True},
         models={"specialists": specialists, "registry": registry},
@@ -3179,8 +3201,8 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     fake = FakeOpenRouter(
         mode="maximum_assurance",
         extra_model_ids=[slot.primary for slot in config.models.specialists.values()],
-        context_length=300_000,
-        max_prompt_tokens=280_000,
+        context_length=360_000,
+        max_prompt_tokens=300_000,
         max_completion_tokens=65_536,
     )
     execution_contexts: list[ContextPackage] = []
@@ -3269,6 +3291,13 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     assert result.report.maximum_assurance is not None
     assert result.report.maximum_assurance.status.value == "DOWNGRADED"
     assert result.report.maximum_assurance.status.value != "COMPLETE"
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    orientation_result, blind_result, reduction_result = scheduler_artifact.summary.pass_results[:3]
+    assert reduction_result.plan.dependencies == tuple(
+        SchedulerPassDependency.from_result(prior) for prior in (orientation_result, blind_result)
+    )
     failed_assurance_engines = {
         requirement.engine
         for requirement in result.report.maximum_assurance.requirements
@@ -3906,9 +3935,31 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
     async def mocked_execution_results(*_args: Any, **_kwargs: Any) -> list[Any]:
         return [execution]
 
+    def mocked_discover_invariants(
+        discovery: Any,
+        index: Any,
+        graphs: Any,
+        invariant_config: Any,
+    ) -> Any:
+        source_suite = discover_source_invariants(
+            discovery,
+            index,
+            graphs,
+            invariant_config,
+        )
+        payload = source_suite.model_dump(mode="python")
+        payload.update(
+            {
+                "invariants": suite.invariants,
+                "templates_available_count": suite.templates_available_count,
+                "executable_count": suite.executable_count,
+            }
+        )
+        return type(suite).model_validate(payload)
+
     monkeypatch.setattr(
         "mmaudit.orchestration.pipeline.discover_invariants",
-        lambda *_args, **_kwargs: suite,
+        mocked_discover_invariants,
     )
     monkeypatch.setattr(
         "mmaudit.orchestration.pipeline.build_property_corpus",
@@ -4003,6 +4054,7 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
         manifest_path=manifest_path,
         run_dir=result.run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert verification.status is RunVerificationStatus.CURRENT
@@ -4032,6 +4084,7 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
         manifest_path=manifest_path,
         run_dir=result.run_dir,
         repository_root=repository,
+        configuration_root=repository,
         config=config,
     )
     assert verification.status is RunVerificationStatus.STALE
@@ -4043,7 +4096,7 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
     ]
 
     with pytest.raises(ValueError, match="offline replay refused stale run evidence"):
-        await OfflineReplayOrchestrator(config).replay(
+        await OfflineReplayOrchestrator(config, configuration_root=repository).replay(
             manifest_path=manifest_path,
             run_dir=result.run_dir,
             repository_root=repository,
@@ -5153,6 +5206,51 @@ async def test_one_model_timeout_preserves_partial_candidate_evidence_without_pr
 
 
 @pytest.mark.asyncio
+async def test_incomplete_blind_context_inventory_seals_pass_and_never_opens_reduction(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_build = ContextBuilder.build
+
+    def fail_source_audit_context(
+        builder: ContextBuilder,
+        role: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ContextPackage:
+        if role == "source_audit":
+            raise ContextBudgetError("synthetic blind context capacity shortfall")
+        return original_build(builder, role, *args, **kwargs)
+
+    monkeypatch.setattr(ContextBuilder, "build", fail_source_audit_context)
+    result = await _run(
+        config_factory(privacy={"fail_on_detected_secret": False}),
+        vulnerable_repo,
+        tmp_path,
+        FakeOpenRouter(),
+    )
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_artifact.summary.status.value == "FAILED"
+    assert tuple(
+        pass_result.plan.pass_kind.value for pass_result in scheduler_artifact.summary.pass_results
+    ) == ("01_orientation", "02_blind_shard_review")
+    orientation_result, blind_result = scheduler_artifact.summary.pass_results
+    assert blind_result.plan.dependencies == (
+        SchedulerPassDependency.from_result(orientation_result),
+    )
+    assert not (
+        result.run_dir / "private" / "scheduler-journal" / "pass-plans" / "pass-03-plan.json"
+    ).exists()
+
+
+@pytest.mark.asyncio
 async def test_invalid_model_json_fails_without_repair_or_credit(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
@@ -5488,7 +5586,7 @@ async def test_omitted_role_decision_marks_partial_report(
 
 
 @pytest.mark.asyncio
-async def test_duplicate_candidates_merge_and_ids_are_deterministic(
+async def test_similar_distinct_publication_claims_partition_and_ids_are_deterministic(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
@@ -5497,8 +5595,24 @@ async def test_duplicate_candidates_merge_and_ids_are_deterministic(
     first_ids = sorted(finding.id for finding in first.report.findings)
     second_ids = sorted(finding.id for finding in second.report.findings)
     assert first_ids == second_ids
-    sql = next(finding for finding in first.report.findings if "SQL" in finding.title)
-    assert len(sql.contributing_candidate_ids) == 2
+    sql_findings = [
+        finding
+        for finding in first.report.findings
+        if "SQL" in finding.title or "query manipulation" in finding.title
+    ]
+    sql_candidates = CandidateFindingArtifact.model_validate_json(
+        (first.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    expected_candidate_ids = {
+        candidate.candidate_id for candidate in sql_candidates.findings if "CWE-89" in candidate.cwe
+    }
+    assert len(sql_findings) == 2
+    assert all(len(finding.contributing_candidate_ids) == 1 for finding in sql_findings)
+    assert {
+        candidate_id
+        for finding in sql_findings
+        for candidate_id in finding.contributing_candidate_ids
+    } == expected_candidate_ids
 
 
 @pytest.mark.asyncio
@@ -5885,6 +5999,144 @@ async def test_formal_adapter_failure_prevents_complete_and_provider_spend(
 
 
 @pytest.mark.asyncio
+async def test_current_actor_and_taxonomy_manifest_validates_local_scanner_only_run(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    result = await AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=tmp_path / "actor-manifest-output",
+        scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+    report_payload = json.loads(
+        (result.run_dir / "final-findings.json").read_text(encoding="utf-8")
+    )
+    coverage_payload = json.loads((result.run_dir / "coverage.json").read_text(encoding="utf-8"))
+    taxonomy_payload = json.loads(
+        (result.run_dir / "known-issue-taxonomy-coverage.json").read_text(encoding="utf-8")
+    )
+    sarif_payload = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
+    manifest_path = result.run_dir / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+
+    assert report_payload["schema_version"] == "1.4"
+    assert report_payload["actor_model_baseline"]
+    assert report_payload["actor_model_evaluation"]
+    assert "judge_decisions" in report_payload
+    assert report_payload["taxonomy_coverage"] == taxonomy_payload
+    assert coverage_payload["taxonomy_coverage"] == taxonomy_payload
+    assert taxonomy_payload["finding_authority"] is False
+    assert taxonomy_payload["critical_gate_passed"] is False
+    assert taxonomy_payload["dispositions"]
+    dispositions = {disposition["disposition"] for disposition in taxonomy_payload["dispositions"]}
+    assert taxonomy_payload["profile_assessment"] is None
+    assert dispositions == {"GAP"}
+    assert all(
+        disposition["disposition"] == "GAP" for disposition in taxonomy_payload["dispositions"]
+    )
+    assert sarif_payload["runs"][0]["results"] == []
+    assert manifest.schema_version == "1.4"
+    assert {
+        "actor-model-baseline.json",
+        "actor-model-evaluation.json",
+        "known-issue-taxonomy-coverage.json",
+        "known-issue-taxonomy.json",
+    } <= {binding.path for binding in manifest.artifacts}
+    validate_manifest_artifacts(manifest, result.run_dir)
+    release_evidence = observe_release_artifacts(
+        result.run_dir,
+        Path(__file__).resolve().parents[2],
+    )
+    assert release_evidence.manifest_sha256 == manifest.manifest_sha256
+
+    for artifact_name, label in (
+        ("actor-model-baseline.json", "baseline"),
+        ("actor-model-evaluation.json", "evaluation"),
+    ):
+        missing_run = tmp_path / f"missing-{label}"
+        shutil.copytree(result.run_dir, missing_run)
+        (missing_run / artifact_name).unlink()
+        missing_manifest_path = missing_run / "run-evidence-manifest.json"
+        missing_payload = RunEvidenceManifest.model_validate_json(
+            missing_manifest_path.read_text(encoding="utf-8")
+        ).model_dump(mode="json")
+        missing_payload["artifacts"] = [
+            binding for binding in missing_payload["artifacts"] if binding["path"] != artifact_name
+        ]
+        missing_payload["manifest_sha256"] = canonical_sha256(
+            {key: value for key, value in missing_payload.items() if key != "manifest_sha256"}
+        )
+        missing_manifest = RunEvidenceManifest.model_validate(missing_payload)
+        write_run_evidence_manifest(missing_manifest_path, missing_manifest)
+        with pytest.raises(
+            ValueError,
+            match="requires emitted actor-model baseline and evaluation",
+        ):
+            validate_manifest_artifacts(missing_manifest, missing_run)
+
+        resealed_run = tmp_path / f"resealed-{label}"
+        shutil.copytree(result.run_dir, resealed_run)
+        resealed_manifest = _replace_manifest_bound_artifact(
+            resealed_run,
+            artifact_name,
+            {"schema_version": "1.0"},
+        )
+        with pytest.raises(ValueError, match=rf"actor-model {label} artifact is invalid"):
+            validate_manifest_artifacts(resealed_manifest, resealed_run)
+
+
+@pytest.mark.asyncio
+async def test_actor_model_path_alias_aborts_before_discovery_or_model_context(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mmaudit.orchestration import pipeline as pipeline_module
+
+    raw = (FIXTURES / "actor_model" / "synthetic_orchard_actor_model.json").read_bytes()
+    actor_payload = json.loads(raw)
+    actual_directory = vulnerable_repo / "ActorEvidence"
+    actual_directory.mkdir()
+    actual_path = actual_directory / "Operator-Actor-Model.json"
+    actual_path.write_bytes(raw)
+    configured_path = "actorevidence/Operator-Actor-Model.json"
+
+    discovery_called = False
+    original_discover: Any = vars(pipeline_module)["discover_repository"]
+
+    def observe_discovery(*args: Any, **kwargs: Any) -> Any:
+        nonlocal discovery_called
+        discovery_called = True
+        return original_discover(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "discover_repository", observe_discovery)
+    config = config_factory(
+        actor_model={
+            "path": configured_path,
+            "required": False,
+            "expected_subject_id": actor_payload["subject_id"],
+            "expected_model_sha256": actor_payload["artifact_sha256"],
+            "expected_source_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+    )
+    fake = FakeOpenRouter()
+
+    with pytest.raises(ActorModelPathIdentityError, match="case or Unicode-normalization alias"):
+        await _run(
+            config,
+            vulnerable_repo,
+            tmp_path / "actor-path-alias",
+            fake,
+        )
+
+    assert discovery_called is False
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
 async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
@@ -5909,7 +6161,7 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     coverage_artifact = CoverageArtifact.model_validate_json(
         (result.run_dir / "coverage.json").read_text(encoding="utf-8")
     )
-    assert coverage_artifact.schema_version == "1.1"
+    assert coverage_artifact.schema_version == "1.2"
     assert coverage_artifact.scanner_only
     assert coverage_artifact.generic_source_coverage is not None
     assert coverage_artifact.generic_source_coverage == (
@@ -6476,6 +6728,7 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
         manifest_path=result.run_dir / "run-evidence-manifest.json",
         run_dir=result.run_dir,
         repository_root=vulnerable_repo,
+        configuration_root=vulnerable_repo,
         config=config,
     )
     assert verification.status is RunVerificationStatus.CURRENT, verification.mismatches
@@ -6492,6 +6745,7 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
         manifest_path=moved_run / "run-evidence-manifest.json",
         run_dir=moved_run,
         repository_root=vulnerable_repo,
+        configuration_root=vulnerable_repo,
         config=config,
     )
     assert moved_verification.status is RunVerificationStatus.STALE
@@ -6692,6 +6946,39 @@ async def test_pipeline_completes_with_manifest_bound_partial_graph_evidence(
     assert graphs["generation_complete"] is False
     assert graphs["edge_omissions"]
     assert graphs["fact_omissions"]
+    assert result.report.invariants is not None
+    profile_assessment = result.report.invariants.protocol_profile_assessment
+    assert profile_assessment is not None
+    profiles = {item.profile: item for item in profile_assessment.classifications}
+    omitted_profile_kinds = {
+        ProtocolProfileKind.ORACLE_CONSUMER,
+        ProtocolProfileKind.UPGRADEABLE_SYSTEM,
+    }
+    assert all(
+        profiles[profile].status is ProtocolProfileStatus.INDETERMINATE
+        for profile in omitted_profile_kinds
+    )
+    assert result.report.taxonomy_coverage is not None
+    taxonomy_items = {item.item_id: item for item in result.report.taxonomy_coverage.corpus.items}
+    omitted_profile_dispositions = [
+        disposition
+        for disposition in result.report.taxonomy_coverage.dispositions
+        if omitted_profile_kinds
+        & set(taxonomy_items[disposition.item_id].applicable_protocol_profiles)
+    ]
+    assert omitted_profile_dispositions
+    assert all(
+        disposition.applicability is not KnownIssueApplicability.NOT_APPLICABLE
+        and disposition.disposition is not KnownIssueDisposition.NOT_APPLICABLE
+        for disposition in omitted_profile_dispositions
+    )
+    upgrade_disposition = next(
+        disposition
+        for disposition in omitted_profile_dispositions
+        if disposition.item_id == "KI-UPGRADE-INITIALIZATION-AUTHORITY"
+    )
+    assert upgrade_disposition.applicability is KnownIssueApplicability.UNKNOWN
+    assert upgrade_disposition.disposition is KnownIssueDisposition.GAP
     assert result.report.solidity_coverage is not None
     assert result.report.solidity_coverage.graph_analysis_state is AnalysisState.ATTEMPTED_FAILED
     assert result.report.run_status is AuditRunStatus.INCOMPLETE

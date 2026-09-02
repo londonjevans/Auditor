@@ -600,6 +600,12 @@ async def test_policy_binding_failure_after_reserve_releases_without_post(
     assert len(snapshot.entries) == 1
     assert snapshot.entries[0].status.value == "released"
     assert harness.context_preflight_records == ()
+    assert len(harness.usage.records) == 1
+    failed_usage = harness.usage.records[0]
+    assert failed_usage.reasoning_evidence is not None
+    assert failed_usage.reasoning_evidence.state == "disabled_unreported"
+    assert failed_usage.reasoning_evidence.observation_available is False
+    assert failed_usage.reasoning_tokens == 0
 
 
 @pytest.mark.asyncio

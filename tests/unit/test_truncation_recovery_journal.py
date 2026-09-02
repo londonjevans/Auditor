@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import repeat
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -31,7 +34,9 @@ from mmaudit.models.scheduler import (
     SchedulerTruncationRecoveryPromotionDisposition,
     build_scheduler_model_request_evidence,
     build_scheduler_truncation_recovery_model_request_evidence,
+    scheduler_candidate_payload_sha256,
     scheduler_canonical_sha256,
+    scheduler_typed_payload_projection,
 )
 from mmaudit.models.schemas import (
     CandidateFinding,
@@ -88,6 +93,7 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryParentKind,
+    SchedulerTruncationRecoveryPromotionBinding,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
     SchedulerTruncationRecoveryTerminalStatus,
     rebuild_truncation_recovery_parent_from_projection,
@@ -97,6 +103,9 @@ from mmaudit.models.usage import is_recovery_creditable_usage_record
 from mmaudit.orchestration import scheduler as scheduler_module
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence, BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchBinding as ExactModelReviewPreDispatchBinding,
+)
 from mmaudit.orchestration.scheduler import SchedulerJournal
 from mmaudit.orchestration.scheduler_runtime import (
     build_scheduler_cost_ledger_baseline,
@@ -171,8 +180,15 @@ def _projection(
     *,
     retained_count: int,
     findings: tuple[CandidateFinding, ...] = (),
+    algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
 ) -> CandidateReviewTruncationProjection:
     frames = _frames(findings, surfaces)
+    if algorithm_version == "mmaudit.seven-pass-scheduler.v1":
+        for frame, finding in zip(frames[1 : 1 + len(findings)], findings, strict=True):
+            frame["record"] = scheduler_typed_payload_projection(
+                finding,
+                algorithm_version=algorithm_version,
+            )
     accepted_frame_count = 2 + len(findings) + retained_count
     accepted = ",".join(_frame_json(frame) for frame in frames[:accepted_frame_count])
     sequence = accepted_frame_count
@@ -186,6 +202,7 @@ def _projection(
         content,
         finish_reason="stop",
         native_finish_reason="max_tokens",
+        algorithm_version=algorithm_version,
     )
 
 
@@ -444,6 +461,11 @@ def _journal_with_truncated_parent(
                 requested_model=item.requested_model,
                 root_lineage=item.root_lineage,
                 candidate_ids=item.candidate_ids,
+                model_surface_review_request_manifest_sha256=(
+                    surface_manifest.requested_surface_manifest_sha256
+                    if index == 0
+                    else item.model_surface_review_request_manifest_sha256
+                ),
             )
             for index, item in enumerate(base_plan.tasks)
         )
@@ -465,6 +487,9 @@ def _journal_with_truncated_parent(
             requested_model=base_task.requested_model,
             root_lineage=base_task.root_lineage,
             candidate_ids=base_task.candidate_ids,
+            model_surface_review_request_manifest_sha256=(
+                surface_manifest.requested_surface_manifest_sha256
+            ),
         )
         planned_tasks = (task, *base_plan.tasks[1:])
     target_task_id = task.task_id
@@ -479,7 +504,7 @@ def _journal_with_truncated_parent(
     task = next(item for item in plan.tasks if item.task_id == target_task_id)
     activation = journal.activate_task(
         task.task_id,
-        actual_input_sha256=task.input_sha256,
+        actual_input_sha256="1" * 64,
         system_prompt_sha256=task.system_prompt_sha256,
         user_prompt_sha256="1" * 64,
         provider_prompt_sha256="2" * 64,
@@ -691,14 +716,100 @@ def _activate_child(
     journal: SchedulerJournal,
     child_task_id: str,
 ) -> SchedulerTruncationRecoveryChildActivation:
+    families = {family.family_id: family for family in journal.truncation_recovery_families}
+    family = next(
+        family
+        for family in families.values()
+        if any(child.child_task_id == child_task_id for child in family.recovery_plan.children)
+    )
+    while family.parent_family_id is not None:
+        family = families[family.parent_family_id]
+    root_task_id = family.recovery_plan.parent.parent_task_id
+    root_task = next(
+        task for plan in journal.plans for task in plan.tasks if task.task_id == root_task_id
+    )
+    assert root_task.system_prompt_sha256 is not None
+    rendered_sha256 = _digest(f"user:{child_task_id}")
     return journal.activate_truncation_recovery_child(
         child_task_id,
-        actual_input_sha256=_digest(f"input:{child_task_id}"),
-        system_prompt_sha256=_digest(f"system:{child_task_id}"),
-        user_prompt_sha256=_digest(f"user:{child_task_id}"),
+        actual_input_sha256=rendered_sha256,
+        system_prompt_sha256=root_task.system_prompt_sha256,
+        user_prompt_sha256=rendered_sha256,
         provider_prompt_sha256=_digest(f"provider:{child_task_id}"),
         response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
     )
+
+
+def test_mutable_authority_type_aliases_cannot_replace_recovery_dispatch_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExplodingBinding:
+        def __init__(self, **_kwargs: object) -> None:
+            pytest.fail("mutable binding alias constructed during recovery dispatch")
+
+    class ExplodingAuthorization(tuple[object, ...]):
+        pass
+
+    journal, plan, projection, _surfaces, surface_manifest = _journal_with_truncated_parent(
+        tmp_path / "captured-recovery-authority-types"
+    )
+    family = journal.open_truncation_recovery_family(
+        recovery_plan=plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    child = plan.children[0]
+    activation = _activate_child(journal, child.child_task_id)
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerModelReviewPreDispatchBinding",
+        ExplodingBinding,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerModelReviewPreDispatchAuthorization",
+        ExplodingAuthorization,
+    )
+
+    dispatched = journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+    binding = scheduler_module._require_live_model_review_authorization_for_task(
+        owner=journal,
+        task_id=child.child_task_id,
+        recovery=True,
+    )
+    assert type(binding) is ExactModelReviewPreDispatchBinding
+    root_task = next(
+        task
+        for pass_plan in journal.plans
+        for task in pass_plan.tasks
+        if task.task_id == family.recovery_plan.parent.parent_task_id
+    )
+    assert root_task.requested_model is not None
+    assert root_task.root_lineage is not None
+    assert activation.user_prompt_sha256 is not None
+    assert activation.provider_prompt_sha256 is not None
+    assert activation.response_schema_sha256 is not None
+    subset_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(
+        request
+        for request in family.requested_surface_manifest.requests
+        if request.surface_id in set(child.surface_ids)
+    )
+    assert binding == ExactModelReviewPreDispatchBinding(
+        request_id=child.child_logical_request_id,
+        task_id=child.child_task_id,
+        review_role=root_task.role,
+        requested_model=root_task.requested_model,
+        root_lineage=root_task.root_lineage,
+        requested_surface_manifest_sha256=(subset_manifest.requested_surface_manifest_sha256),
+        rendered_context_sha256=activation.user_prompt_sha256,
+        provider_prompt_sha256=activation.provider_prompt_sha256,
+        response_schema_sha256=activation.response_schema_sha256,
+        task_plan_sha256=child.child_plan_sha256,
+        activation_sha256=activation.entry_sha256,
+        dispatched_event_sha256=dispatched.entry_sha256,
+    )
+    journal.close()
 
 
 def _truncation_projection_routing(
@@ -767,10 +878,15 @@ def _typed_usage(
     router_metadata_sha256 = _digest(f"router:{activation.child_task_id}")
     exact_schema = schema_sha256 or activation.response_schema_sha256
     instant = datetime(2026, 8, 18, tzinfo=UTC)
-    context = ContextRequestEvidence.build(
+    context_role = (
+        "whole_protocol_review"
+        if re.fullmatch(r"whole_protocol_review:(?:0|[1-9][0-9]{0,3})", role) is not None
+        else role
+    )
+    built_context = ContextRequestEvidence.build(
         request_id=activation.child_logical_request_id,
         request_role=role,
-        context_role=role,
+        context_role=context_role,
         byte_budget=64,
         declared_bytes_used=32,
         rendered_bytes=32,
@@ -778,6 +894,13 @@ def _typed_usage(
         configured_maximum_source_tokens_per_request=64,
         effective_source_byte_ceiling=64,
         rendered_sha256=activation.user_prompt_sha256,
+    )
+    context = ContextRequestEvidence.model_validate(
+        {
+            **built_context.model_dump(mode="python"),
+            "requested_surface_manifest_sha256": None,
+            "source_location_proof_sha256s": (),
+        }
     )
     routing: dict[str, object] = {
         "generation_id": generation_id,
@@ -811,7 +934,11 @@ def _typed_usage(
         "request_started_at": instant.isoformat(),
         "request_ended_at": instant.isoformat(),
         "latency_ms": 0,
-        "context_request_evidence": context.model_dump(mode="json"),
+        "context_request_evidence": {
+            **context.model_dump(mode="json"),
+            "requested_surface_manifest_sha256": None,
+            "source_location_proof_sha256s": [],
+        },
         "context_request_evidence_sha256": context.evidence_sha256,
     }
     if envelope is not None:
@@ -1240,6 +1367,207 @@ def _recursive_promotion_for_public_projection(
     )
 
 
+def test_retained_v1_recovered_output_artifact_and_promotion_replay_pre_actor_json(
+    tmp_path: Path,
+) -> None:
+    base = _recursive_public_projection_base(tmp_path / "legacy-recovered.jsonl")
+    current_promotion = _recursive_promotion_for_public_projection(base)
+    current_output = current_promotion.recovered_output
+    assert len(current_output.recovered_batch.findings) == 1
+    accepted_candidate = current_output.recovered_batch.findings[0]
+    current_origin = current_output.candidate_origins[0]
+    missing_current_actor = current_output.model_dump(mode="json")
+    missing_current_finding = missing_current_actor["recovered_batch"]["findings"][0]
+    missing_current_finding.pop("actor_model_applicability")
+    missing_current_finding.pop("actor_context")
+    with pytest.raises(ValueError, match="explicit actor annotations"):
+        SchedulerRecoveredCandidateReviewOutput.model_validate_json(
+            json.dumps(missing_current_actor, sort_keys=True, separators=(",", ":")),
+            strict=True,
+        )
+
+    raw_candidate = _candidate("legacy-recursive-bridge-finding")
+    legacy_projection = _projection(
+        (),
+        retained_count=0,
+        findings=(raw_candidate,),
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    legacy_parent = rebuild_truncation_recovery_parent_from_projection(
+        claimed_parent=base.root_family.recovery_plan.parent,
+        projection=legacy_projection,
+    )
+    legacy_plan = plan_truncation_recovery(
+        parent=legacy_parent,
+        resources=base.root_family.recovery_plan.resources,
+    )
+    legacy_root = SchedulerTruncationRecoveryFamilyRoot.build(
+        request_limit_binding=base.root_family.request_limit_binding,
+        family_index=0,
+        parent_kind=SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK,
+        parent_family_id=None,
+        parent_terminal_result_sha256=base.root_family.parent_terminal_result_sha256,
+        requested_surface_manifest=base.root_family.requested_surface_manifest,
+        truncation_projection=legacy_projection,
+        recovery_plan=legacy_plan,
+        request_count_before_family=0,
+        request_limit_count_before_family=(base.root_family.request_limit_count_before_family),
+        entry_index=0,
+        previous_entry_sha256=None,
+    )
+    legacy_frame = next(
+        frame
+        for frame in legacy_projection.accepted_frames
+        if frame.phase is CandidateReviewFramePhase.FINDING
+    )
+    origin_values = current_origin.model_dump(mode="json", exclude={"origin_sha256"})
+    origin_values.update(
+        {
+            "accepted_candidate_sha256": scheduler_candidate_payload_sha256(
+                accepted_candidate,
+                algorithm_version="mmaudit.seven-pass-scheduler.v1",
+            ),
+            "raw_candidate_id": raw_candidate.candidate_id,
+            "raw_candidate_sha256": scheduler_candidate_payload_sha256(
+                raw_candidate,
+                algorithm_version="mmaudit.seven-pass-scheduler.v1",
+            ),
+            "truncation_projection_sha256": legacy_projection.evidence_sha256,
+            "accepted_frame_sequence": legacy_frame.sequence,
+            "accepted_frame_sha256": legacy_frame.frame_sha256,
+        }
+    )
+    legacy_origin = SchedulerRecoveredCandidateOrigin.model_validate_json(
+        json.dumps(
+            {**origin_values, "origin_sha256": scheduler_canonical_sha256(origin_values)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        strict=True,
+    )
+    legacy_output = SchedulerRecoveredCandidateReviewOutput.build(
+        campaign_id=current_output.campaign_id,
+        pass_plan_id=current_output.pass_plan_id,
+        parent_task_id=current_output.parent_task_id,
+        parent_logical_request_id=current_output.parent_logical_request_id,
+        parent_activation_sha256=current_output.parent_activation_sha256,
+        original_truncated_result_sha256=current_output.original_truncated_result_sha256,
+        parent_provider_attempt_sha256=current_output.parent_provider_attempt_sha256,
+        recovery_family_id=current_output.recovery_family_id,
+        family_root_sha256=current_output.family_root_sha256,
+        family_closure_sha256=current_output.family_closure_sha256,
+        structural_surface_artifact_sha256=(current_output.structural_surface_artifact_sha256),
+        recovered_batch=current_output.recovered_batch,
+        candidate_origins=(legacy_origin,),
+        scanner_fingerprints_by_request=current_output.scanner_fingerprints_by_request,
+        delivered_source_descriptor_sha256s=(current_output.delivered_source_descriptor_sha256s),
+        recursive_tree=True,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    legacy_promotion = SchedulerTruncationRecoveryFamilyPromotion.build(
+        family=base.root_family,
+        closure=base.root_closure,
+        direct_child_result_sha256s=base.root_closure.child_result_sha256s,
+        nested_family=base.nested_family,
+        nested_closure=base.nested_closure,
+        nested_child_result_sha256s=base.nested_closure.child_result_sha256s,
+        superseded_bridge_result_sha256=base.truncated_result.entry_sha256,
+        promoted_leaf_result_sha256s=(
+            base.successful_result.entry_sha256,
+            *base.nested_closure.child_result_sha256s,
+        ),
+        recovered_output=legacy_output,
+        capability_binding_sha256=_digest("legacy-recovered-capability"),
+        entry_index=len(base.entries),
+        previous_entry_sha256=base.root_closure.entry_sha256,
+    )
+
+    surface = _surface("legacy-recovered-artifact")
+    legacy_batch, normalization = normalize_candidate_review_document(
+        frame_candidate_review_batch(
+            CandidateReviewBatch(
+                findings=(raw_candidate,),
+                surface_reviews=(surface,),
+            )
+        ),
+        request_id=base.nested_child.child_logical_request_id,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    artifact_values: dict[str, object] = {
+        "schema_version": "1.1",
+        "request_id": base.nested_child.child_logical_request_id,
+        "review_role": surface.review_role,
+        "requested_surface_ids": (surface.surface_id,),
+        "requested_surface_ids_sha256": _surface_ids_sha256((surface.surface_id,)),
+        "requested_surface_manifest_sha256": _digest("legacy-recovered-manifest"),
+        "rendered_context_sha256": _digest("legacy-recovered-context"),
+        "prompt_sha256": _digest("legacy-recovered-prompt"),
+        "response_sha256": _digest("legacy-recovered-response"),
+        "validated_response_sha256": normalization.wire_validated_response_sha256,
+        "response_schema_sha256": normalization.wire_schema_sha256,
+        "normalized_response_sha256": normalization.normalized_batch_sha256,
+        "normalization_evidence": normalization.model_dump(mode="json"),
+        "normalized_response": scheduler_typed_payload_projection(
+            legacy_batch,
+            algorithm_version="mmaudit.seven-pass-scheduler.v1",
+        ),
+        "records": [surface.model_dump(mode="json")],
+    }
+    artifact_values["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
+        artifact_values,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    legacy_artifact = ModelSurfaceReviewArtifact.model_validate(artifact_values)
+
+    raw_promotion = scheduler_typed_payload_projection(
+        legacy_promotion,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    raw_artifact = scheduler_typed_payload_projection(
+        legacy_artifact,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    encoded_promotion = json.dumps(raw_promotion, sort_keys=True, separators=(",", ":"))
+    encoded_artifact = json.dumps(raw_artifact, sort_keys=True, separators=(",", ":"))
+    assert "actor_model_applicability" not in encoded_promotion + encoded_artifact
+    assert "actor_context" not in encoded_promotion + encoded_artifact
+    assert legacy_projection.wire_schema_sha256 == (
+        "478bc1d7e11e4ae1635c371ef1965025f012b5c9056af08d7a4c729425cb46a1"
+    )
+    assert normalization.normalized_batch_schema_sha256 == (
+        "29158e2c31350751f683bfa2910db39d2883d3258ef7fc41a1479d4f3133c186"
+    )
+    replayed_promotion = SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+        encoded_promotion,
+        strict=True,
+    )
+    replayed_artifact = ModelSurfaceReviewArtifact.model_validate_json(
+        encoded_artifact,
+        strict=True,
+    )
+    raw_root = scheduler_typed_payload_projection(
+        legacy_root,
+        algorithm_version="mmaudit.seven-pass-scheduler.v1",
+    )
+    encoded_root = json.dumps(raw_root, sort_keys=True, separators=(",", ":"))
+    assert "actor_model_applicability" not in encoded_root
+    replayed_root = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+        encoded_root,
+        strict=True,
+    )
+    assert validate_truncation_recovery_entry_chain((replayed_root,)) == (replayed_root,)
+    binding = SchedulerTruncationRecoveryPromotionBinding.from_promotion(replayed_promotion)
+    assert replayed_promotion.entry_sha256 == legacy_promotion.entry_sha256
+    assert replayed_promotion.recovered_output.output_sha256 == legacy_output.output_sha256
+    assert replayed_promotion.recovered_output.output_artifact_sha256 == (
+        legacy_output.output_artifact_sha256
+    )
+    assert replayed_artifact.artifact_sha256 == legacy_artifact.artifact_sha256
+    assert binding.recovered_output_artifact_sha256 == legacy_output.output_artifact_sha256
+    with pytest.raises(ValueError, match="mixes serialization algorithms"):
+        validate_truncation_recovery_entry_chain((*base.entries, replayed_promotion))
+
+
 def _recursive_public_projection_base(path: Path) -> _RecursivePublicProjectionBase:
     journal, plan, projection, surfaces, surface_manifest = _journal_with_truncated_parent(
         path,
@@ -1619,6 +1947,87 @@ def test_family_root_rejects_each_resealed_resource_scalar_not_in_durable_accoun
     journal.close()
 
 
+def test_published_family_root_temp_pair_is_finalized_and_recovered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessDeath(BaseException):
+        pass
+
+    path = tmp_path / "published-family-root-pair"
+    journal, plan, projection, _surfaces, surface_manifest = _journal_with_truncated_parent(path)
+    predecessor = journal.journal_evidence
+    recovery_directory = path / "truncation-recovery"
+    recovery_directory_identity = (
+        recovery_directory.stat().st_dev,
+        recovery_directory.stat().st_ino,
+    )
+    original_unlink = os.unlink
+    interrupted = False
+
+    def crash_before_recovery_temp_unlink(candidate: Any, **kwargs: Any) -> None:
+        nonlocal interrupted
+        parent_descriptor = kwargs.get("dir_fd")
+        if (
+            isinstance(candidate, str)
+            and candidate.startswith(".")
+            and isinstance(parent_descriptor, int)
+            and (
+                os.fstat(parent_descriptor).st_dev,
+                os.fstat(parent_descriptor).st_ino,
+            )
+            == recovery_directory_identity
+        ):
+            interrupted = True
+            raise SimulatedProcessDeath
+        original_unlink(candidate, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", crash_before_recovery_temp_unlink)
+    with pytest.raises(SimulatedProcessDeath):
+        journal.open_truncation_recovery_family(
+            recovery_plan=plan,
+            truncation_projection=projection,
+            requested_surface_manifest=surface_manifest,
+        )
+    assert interrupted is True
+    journal.close()
+    monkeypatch.undo()
+
+    names = set(item.name for item in recovery_directory.iterdir())
+    temporary_leaf = next(name for name in names if name.startswith("."))
+    target_leaf = next(name for name in names if not name.startswith("."))
+    assert temporary_leaf == scheduler_module._immutable_write_temp_leaf(target_leaf)
+    temporary_path = recovery_directory / temporary_leaf
+    target_path = recovery_directory / target_leaf
+    assert temporary_path.stat().st_ino == target_path.stat().st_ino
+    assert target_path.stat().st_nlink == 2
+    root_bytes = target_path.read_bytes()
+    published_root = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+        root_bytes,
+        strict=True,
+    )
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_journal_evidence=predecessor,
+    )
+    assert resumed.truncation_recovery_entries == (published_root,)
+    assert resumed.truncation_recovery_families == (published_root,)
+    assert target_path.read_bytes() == root_bytes
+    assert not temporary_path.exists()
+    assert target_path.stat().st_nlink == 1
+    checkpoint = SchedulerJournalEvidence.model_validate_json(
+        (path / "journal-head-checkpoint.json").read_bytes(),
+        strict=True,
+    )
+    assert checkpoint == resumed.local_journal_head_checkpoint
+    assert checkpoint == resumed.journal_evidence
+    assert checkpoint.truncation_recovery_entry_sha256s == (published_root.entry_sha256,)
+    resumed.close()
+
+
 def test_activation_only_replays_but_dispatched_child_becomes_uncertain(
     tmp_path: Path,
 ) -> None:
@@ -1674,6 +2083,63 @@ def test_activation_only_replays_but_dispatched_child_becomes_uncertain(
     assert replayed.local_journal_head_checkpoint == recovered_evidence
     assert replayed.uncertain_truncation_recovery_child_ids == (child.child_task_id,)
     replayed.close()
+
+
+def test_resume_uncertain_recovery_suffix_requires_private_custody_recording(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "uncertain-suffix-private-custody"
+    journal, plan, projection, _surfaces, surface_manifest = _journal_with_truncated_parent(path)
+    journal.open_truncation_recovery_family(
+        recovery_plan=plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    child = plan.children[0]
+    _activate_child(journal, child.child_task_id)
+    journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+    dispatch_evidence = journal.journal_evidence
+    journal.close()
+
+    observed_entries: list[SchedulerTruncationRecoveryEntry] = []
+
+    def omit_private_custody_record(
+        *,
+        owner: object,
+        entry: SchedulerTruncationRecoveryEntry,
+    ) -> None:
+        del owner
+        observed_entries.append(entry)
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_record_live_truncation_recovery_entry",
+        omit_private_custody_record,
+    )
+    with pytest.raises(ValueError, match=r"recovery custody|recovery sequence|checkpoint"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_journal_evidence=dispatch_evidence,
+        )
+    assert len(observed_entries) == 1
+    derived = observed_entries[0]
+    assert type(derived) is SchedulerTruncationRecoveryChildResult
+    assert derived.child_task_id == child.child_task_id
+    assert derived.terminal_status is SchedulerTruncationRecoveryTerminalStatus.UNCERTAIN
+    monkeypatch.undo()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    assert resumed.uncertain_truncation_recovery_child_ids == (child.child_task_id,)
+    assert resumed._truncation_recovery_indexes.results[child.child_task_id] == derived
+    assert resumed.local_journal_head_checkpoint == resumed.journal_evidence
+    resumed.close()
 
 
 def test_uncheckpointed_child_dispatch_survives_derived_result_process_death(
@@ -2866,6 +3332,9 @@ def test_specialist_typed_success_requires_durable_outcome_and_projects_only_its
         surface_manifest=surface_manifest,
         surfaces=surfaces,
     )
+    raw_context = usage.routing["context_request_evidence"]
+    assert isinstance(raw_context, dict)
+    assert not any(key.startswith("retrieval_") for key in raw_context)
     entries_before = journal.truncation_recovery_entries
     with pytest.raises(ValueError, match="lacks an accepted outcome"):
         journal.record_truncation_recovery_child_success(

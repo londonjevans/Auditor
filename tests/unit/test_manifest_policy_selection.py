@@ -164,7 +164,7 @@ def _current_report(
     )
     payload = base.model_dump(mode="python")
     payload.update(
-        schema_version="1.2",
+        schema_version="1.4",
         run_id="policy-manifest-run",
         generated_at=BASE_TIME + timedelta(hours=2),
         completed=False,
@@ -172,7 +172,14 @@ def _current_report(
         quality_status=audit_quality_status_for_run_status(floor.run_status),
         run_status=floor.run_status,
         minimum_analysis_floor=floor,
-        quality_gates=[minimum_analysis_floor_quality_gate(floor)],
+        quality_gates=[
+            minimum_analysis_floor_quality_gate(floor),
+            *[
+                gate
+                for gate in base.quality_gates
+                if gate.gate == "known_issue_taxonomy_critical_disposition"
+            ],
+        ],
         repository=repository,
         language_capability=language.assessment,
         solidity_coverage=None,
@@ -467,6 +474,11 @@ def test_report_rejects_policy_selection_on_legacy_schema(
     payload["schema_version"] = "1.1"
     payload["run_status"] = None
     payload["minimum_analysis_floor"] = None
+    payload["quality_gates"] = []
+    payload["actor_model_baseline"] = None
+    payload["actor_model_evaluation"] = None
+    payload["judge_decisions"] = []
+    payload.pop("taxonomy_coverage")
 
     with pytest.raises(ValidationError, match=r"requires report schema 1\.2"):
         AuditReport.model_validate(payload)

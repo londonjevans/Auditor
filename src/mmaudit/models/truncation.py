@@ -12,7 +12,7 @@ import copy
 import hashlib
 import json
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
@@ -58,6 +58,14 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _WIRE_PREFIX = '{"frames":['
 _WIRE_SUFFIX = "]}"
 _PROTOCOL = "CANDIDATE_REVIEW_FRAMES_V1"
+_SCHEDULER_V1 = "mmaudit.seven-pass-scheduler.v1"
+_SCHEDULER_V2 = "mmaudit.seven-pass-scheduler.v2"
+_V1_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256 = (
+    "29158e2c31350751f683bfa2910db39d2883d3258ef7fc41a1479d4f3133c186"
+)
+_V1_CANDIDATE_REVIEW_FRAME_WIRE_SCHEMA_SHA256 = (
+    "478bc1d7e11e4ae1635c371ef1965025f012b5c9056af08d7a4c729425cb46a1"
+)
 
 # These are compiled protocol limits, not caller-controlled recovery knobs.
 MAX_CANDIDATE_REVIEW_RESPONSE_BYTES = 4_000_000
@@ -136,6 +144,54 @@ class CandidateReviewTruncationError(ValueError):
         self.code = code
         self.structured_output_failure_code = structured_output_failure_code
         super().__init__(f"candidate review truncation rejected: {code.value}")
+
+
+def _strip_v1_candidate_actor_defaults(value: object, projection: object) -> None:
+    """Remove only exact neutral actor defaults absent from the v1 wire models."""
+
+    if isinstance(value, CandidateFinding):
+        if value.actor_model_applicability.value != "unstated" or value.actor_context is not None:
+            raise ValueError("scheduler v1 candidate review cannot carry actor annotations")
+        if not isinstance(projection, dict):
+            raise TypeError("candidate-review v1 projection has an invalid finding shape")
+        projection.pop("actor_model_applicability", None)
+        projection.pop("actor_context", None)
+    if isinstance(value, BaseModel):
+        if not isinstance(projection, dict):
+            raise TypeError("candidate-review v1 projection has an invalid model shape")
+        for field_name in type(value).model_fields:
+            if field_name in projection:
+                _strip_v1_candidate_actor_defaults(
+                    getattr(value, field_name), projection[field_name]
+                )
+        return
+    if isinstance(value, Mapping):
+        if not isinstance(projection, dict):
+            raise TypeError("candidate-review v1 projection has an invalid mapping shape")
+        for key, item in value.items():
+            if key in projection:
+                _strip_v1_candidate_actor_defaults(item, projection[key])
+        return
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        if not isinstance(projection, list) or len(value) != len(projection):
+            raise TypeError("candidate-review v1 projection has an invalid sequence shape")
+        for item, projected_item in zip(value, projection, strict=True):
+            _strip_v1_candidate_actor_defaults(item, projected_item)
+
+
+def candidate_review_typed_payload_projection(
+    value: BaseModel,
+    *,
+    algorithm_version: str,
+) -> Any:
+    """Return the exact candidate-review JSON projection for a scheduler version."""
+
+    if algorithm_version not in {_SCHEDULER_V1, _SCHEDULER_V2}:
+        raise ValueError("candidate-review projection uses an unknown scheduler algorithm")
+    projection = value.model_dump(mode="json")
+    if algorithm_version == _SCHEDULER_V1:
+        _strip_v1_candidate_actor_defaults(value, projection)
+    return projection
 
 
 class _FrozenStrictModel(BaseModel):
@@ -364,11 +420,11 @@ class CandidateReviewTruncationProjection(_FrozenStrictModel):
         guard = globals().get("candidate_review_protocol_implementation_is_pristine")
         if guard is not None and (not callable(guard) or not guard()):
             raise ValueError("candidate-review protocol implementation changed")
-        _require_every_model_field_supplied(self)
-        if self.wire_schema_sha256 != candidate_review_frame_wire_schema_sha256():
-            raise ValueError("truncation wire schema hash is inconsistent")
-        if self.normalized_batch_schema_sha256 != candidate_review_batch_schema_sha256():
-            raise ValueError("truncation normalized schema hash is inconsistent")
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.normalized_batch_schema_sha256,
+        )
+        _require_every_model_field_supplied(self, algorithm_version=algorithm_version)
         if not {
             self.finish_reason.casefold(),
             self.native_finish_reason.casefold() if self.native_finish_reason is not None else "",
@@ -442,7 +498,12 @@ class CandidateReviewTruncationProjection(_FrozenStrictModel):
             raise ValueError("truncation retained record/frame identities differ")
         if any(
             finding_frames_by_id[finding.candidate_id].normalized_value_sha256
-            != _canonical_sha256(finding.model_dump(mode="json"))
+            != _canonical_sha256(
+                candidate_review_typed_payload_projection(
+                    finding,
+                    algorithm_version=algorithm_version,
+                )
+            )
             for finding in self.findings
         ) or any(
             surface_frames_by_id[review.surface_id].normalized_value_sha256
@@ -698,7 +759,14 @@ class CandidateReviewTruncationProjection(_FrozenStrictModel):
             self.termination is CandidateReviewTruncationTermination.COMPLETE_DOCUMENT
         ):
             raise ValueError("truncation document completion state is inconsistent")
-        expected = _canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        expected_payload = candidate_review_typed_payload_projection(
+            self,
+            algorithm_version=algorithm_version,
+        )
+        if not isinstance(expected_payload, dict):
+            raise TypeError("truncation evidence projection has an invalid object shape")
+        expected_payload.pop("evidence_sha256", None)
+        expected = _canonical_sha256(expected_payload)
         if self.evidence_sha256 != expected:
             raise ValueError("truncation evidence hash is inconsistent")
         return self
@@ -731,10 +799,10 @@ class CandidateReviewNormalizationEvidence(_FrozenStrictModel):
             raise ValueError("candidate-review normalization evidence requires every field")
         if not _is_bounded_record_identity(self.request_id):
             raise ValueError("candidate-review normalization request identity is invalid")
-        if self.wire_schema_sha256 != candidate_review_frame_wire_schema_sha256():
-            raise ValueError("candidate-review normalization wire schema hash is inconsistent")
-        if self.normalized_batch_schema_sha256 != candidate_review_batch_schema_sha256():
-            raise ValueError("candidate-review normalization batch schema hash is inconsistent")
+        candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.normalized_batch_schema_sha256,
+        )
         expected = _canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
         if self.evidence_sha256 != expected:
             raise ValueError("candidate-review normalization evidence hash is inconsistent")
@@ -748,16 +816,36 @@ class CandidateReviewNormalizationEvidence(_FrozenStrictModel):
     ) -> CandidateReviewNormalizationEvidence:
         """Reframe one retained batch and independently replay every custody join."""
 
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.normalized_batch_schema_sha256,
+        )
         exact_batch = _strict_candidate_review_batch(batch)
         framed = frame_candidate_review_batch(exact_batch)
-        findings = [finding.model_dump(mode="json") for finding in exact_batch.findings]
+        findings = [
+            candidate_review_typed_payload_projection(
+                finding,
+                algorithm_version=algorithm_version,
+            )
+            for finding in exact_batch.findings
+        ]
         surface_reviews = [review.model_dump(mode="json") for review in exact_batch.surface_reviews]
         if (
             self.request_id != request_id
             or self.wire_validated_response_sha256
-            != _canonical_sha256(framed.model_dump(mode="json"))
+            != _canonical_sha256(
+                candidate_review_typed_payload_projection(
+                    framed,
+                    algorithm_version=algorithm_version,
+                )
+            )
             or self.normalized_batch_sha256
-            != _canonical_sha256(exact_batch.model_dump(mode="json"))
+            != _canonical_sha256(
+                candidate_review_typed_payload_projection(
+                    exact_batch,
+                    algorithm_version=algorithm_version,
+                )
+            )
             or self.findings_sha256 != _canonical_sha256(findings)
             or self.surface_reviews_sha256 != _canonical_sha256(surface_reviews)
             or self.finding_count != len(exact_batch.findings)
@@ -832,8 +920,7 @@ class CandidateReviewTruncatedEnvelopeEvidence(_FrozenStrictModel):
             and self.generation_header_id != self.generation_id
         ):
             raise ValueError("truncated envelope generation identities are inconsistent")
-        if self.wire_schema_sha256 != candidate_review_frame_wire_schema_sha256():
-            raise ValueError("truncated envelope wire schema hash is inconsistent")
+        candidate_review_wire_schema_algorithm_version(self.wire_schema_sha256)
         expected = _canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
         if self.evidence_sha256 != expected:
             raise ValueError("truncated envelope evidence hash is inconsistent")
@@ -1028,18 +1115,63 @@ _FRAME_MODELS: dict[CandidateReviewFramePhase, type[BaseModel]] = {
 }
 
 
-@lru_cache(maxsize=1)
-def candidate_review_frame_wire_schema_sha256() -> str:
+@lru_cache(maxsize=2)
+def candidate_review_frame_wire_schema_sha256(
+    *,
+    algorithm_version: str = _SCHEDULER_V2,
+) -> str:
     """Return the strict provider wire-schema hash, distinct from normalized semantics."""
 
+    if algorithm_version == _SCHEDULER_V1:
+        return _V1_CANDIDATE_REVIEW_FRAME_WIRE_SCHEMA_SHA256
+    if algorithm_version != _SCHEDULER_V2:
+        raise ValueError("candidate-review wire schema uses an unknown scheduler algorithm")
     return _strict_schema_sha256(CandidateReviewFramedDocument)
 
 
-@lru_cache(maxsize=1)
-def candidate_review_batch_schema_sha256() -> str:
+@lru_cache(maxsize=2)
+def candidate_review_batch_schema_sha256(
+    *,
+    algorithm_version: str = _SCHEDULER_V2,
+) -> str:
     """Return the strict normalized CandidateReviewBatch schema hash."""
 
+    if algorithm_version == _SCHEDULER_V1:
+        return _V1_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256
+    if algorithm_version != _SCHEDULER_V2:
+        raise ValueError("candidate-review batch schema uses an unknown scheduler algorithm")
     return _strict_schema_sha256(CandidateReviewBatch)
+
+
+def candidate_review_schema_algorithm_version(
+    *,
+    wire_schema_sha256: str,
+    normalized_batch_schema_sha256: str,
+) -> str:
+    """Resolve only an exact coherent v1 or v2 candidate-review schema pair."""
+
+    for algorithm_version in (_SCHEDULER_V1, _SCHEDULER_V2):
+        if wire_schema_sha256 == candidate_review_frame_wire_schema_sha256(
+            algorithm_version=algorithm_version,
+        ) and normalized_batch_schema_sha256 == candidate_review_batch_schema_sha256(
+            algorithm_version=algorithm_version,
+        ):
+            return algorithm_version
+    raise ValueError("candidate-review schema hashes are not one coherent algorithm pair")
+
+
+def candidate_review_wire_schema_algorithm_version(wire_schema_sha256: str) -> str:
+    """Resolve one exact supported candidate-review framed-wire schema digest."""
+
+    matches = tuple(
+        algorithm_version
+        for algorithm_version in (_SCHEDULER_V1, _SCHEDULER_V2)
+        if wire_schema_sha256
+        == candidate_review_frame_wire_schema_sha256(algorithm_version=algorithm_version)
+    )
+    if len(matches) != 1:
+        raise ValueError("candidate-review wire schema hash uses an unknown algorithm")
+    return matches[0]
 
 
 def frame_candidate_review_batch(
@@ -1129,6 +1261,7 @@ def normalize_candidate_review_document(
     document: CandidateReviewFramedDocument,
     *,
     request_id: str,
+    algorithm_version: str = _SCHEDULER_V2,
 ) -> tuple[CandidateReviewBatch, CandidateReviewNormalizationEvidence]:
     """Normalize one strict wire document and seal a replayable custody projection."""
 
@@ -1138,7 +1271,12 @@ def normalize_candidate_review_document(
         raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ARGUMENT)
     try:
         exact_document = CandidateReviewFramedDocument.model_validate_json(
-            document.model_dump_json(),
+            _CANONICAL_JSON_DUMPS(
+                candidate_review_typed_payload_projection(
+                    document,
+                    algorithm_version=algorithm_version,
+                )
+            ),
             strict=True,
         )
         batch = _complete_batch_from_frames(exact_document.frames)
@@ -1155,16 +1293,36 @@ def normalize_candidate_review_document(
         )
     if not _is_bounded_record_identity(request_id):
         raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ARGUMENT)
-    findings = [finding.model_dump(mode="json") for finding in batch.findings]
+    findings = [
+        candidate_review_typed_payload_projection(
+            finding,
+            algorithm_version=algorithm_version,
+        )
+        for finding in batch.findings
+    ]
     surface_reviews = [review.model_dump(mode="json") for review in batch.surface_reviews]
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "protocol": "CANDIDATE_REVIEW_NORMALIZATION_V1",
         "request_id": request_id,
-        "wire_schema_sha256": candidate_review_frame_wire_schema_sha256(),
-        "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(),
-        "wire_validated_response_sha256": _canonical_sha256(exact_document.model_dump(mode="json")),
-        "normalized_batch_sha256": _canonical_sha256(batch.model_dump(mode="json")),
+        "wire_schema_sha256": candidate_review_frame_wire_schema_sha256(
+            algorithm_version=algorithm_version,
+        ),
+        "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(
+            algorithm_version=algorithm_version,
+        ),
+        "wire_validated_response_sha256": _canonical_sha256(
+            candidate_review_typed_payload_projection(
+                exact_document,
+                algorithm_version=algorithm_version,
+            )
+        ),
+        "normalized_batch_sha256": _canonical_sha256(
+            candidate_review_typed_payload_projection(
+                batch,
+                algorithm_version=algorithm_version,
+            )
+        ),
         "findings_sha256": _canonical_sha256(findings),
         "surface_reviews_sha256": _canonical_sha256(surface_reviews),
         "finding_count": len(findings),
@@ -1188,22 +1346,33 @@ def decode_complete_candidate_review_document(content: str) -> CandidateReviewFr
     if not candidate_review_protocol_implementation_is_pristine():
         raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ARGUMENT)
     _validated_response_bytes(content)
+    raw_bound_failure = False
     try:
         _validate_complete_document_raw_bounds(content)
     except _CandidateReviewRawBoundError:
+        raw_bound_failure = True
+    except ValueError:
+        pass
+    if raw_bound_failure:
         raise CandidateReviewTruncationError(
             CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT
         ) from None
-    except ValueError:
-        pass
+    decoded_document: CandidateReviewFramedDocument | None = None
+    structured_output_failure_code: StructuredOutputFailureCode | None = None
     try:
-        decoded = decode_structured_output(content, CandidateReviewFramedDocument)
+        decoded_document = decode_structured_output(
+            content,
+            CandidateReviewFramedDocument,
+        ).value
     except StructuredOutputDecodeError as exc:
+        structured_output_failure_code = exc.code
+    if structured_output_failure_code is not None:
         raise CandidateReviewTruncationError(
             CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT,
-            structured_output_failure_code=exc.code,
+            structured_output_failure_code=structured_output_failure_code,
         ) from None
-    return decoded.value
+    assert decoded_document is not None
+    return decoded_document
 
 
 def decode_complete_candidate_review_frames(content: str) -> CandidateReviewBatch:
@@ -1213,9 +1382,10 @@ def decode_complete_candidate_review_frames(content: str) -> CandidateReviewBatc
     try:
         return _complete_batch_from_frames(document.frames)
     except (ValidationError, ValueError):
-        raise CandidateReviewTruncationError(
-            CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT
-        ) from None
+        pass
+    raise CandidateReviewTruncationError(
+        CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT
+    ) from None
 
 
 def project_truncated_candidate_review_prefix(
@@ -1223,6 +1393,7 @@ def project_truncated_candidate_review_prefix(
     *,
     finish_reason: str,
     native_finish_reason: str | None,
+    algorithm_version: str = _SCHEDULER_V2,
 ) -> CandidateReviewTruncationProjection:
     """Recover strictly validated provisional frames from a confirmed length truncation.
 
@@ -1248,12 +1419,15 @@ def project_truncated_candidate_review_prefix(
         )
     if not content.startswith(_WIRE_PREFIX):
         raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ENVELOPE)
+    if algorithm_version not in {_SCHEDULER_V1, _SCHEDULER_V2}:
+        raise CandidateReviewTruncationError(CandidateReviewTruncationFailureCode.INVALID_ARGUMENT)
 
     return _project_prefix(
         content,
         response_bytes=response_bytes,
         finish_reason=normalized_finish,
         native_finish_reason=normalized_native,
+        algorithm_version=algorithm_version,
     )
 
 
@@ -1357,18 +1531,33 @@ def _strict_candidate_review_batch(batch: CandidateReviewBatch) -> CandidateRevi
     return CandidateReviewBatch.model_validate_json(batch.model_dump_json(), strict=True)
 
 
-def _require_every_model_field_supplied(value: Any) -> None:
+def _require_every_model_field_supplied(
+    value: Any,
+    *,
+    algorithm_version: str = _SCHEDULER_V2,
+) -> None:
     if isinstance(value, BaseModel):
-        if set(type(value).model_fields) - value.model_fields_set:
+        missing = set(type(value).model_fields) - value.model_fields_set
+        if algorithm_version == _SCHEDULER_V1 and isinstance(value, CandidateFinding):
+            if (
+                value.actor_model_applicability.value != "unstated"
+                or value.actor_context is not None
+            ):
+                raise ValueError("scheduler v1 candidate review cannot carry actor annotations")
+            missing -= {"actor_model_applicability", "actor_context"}
+        if missing:
             raise ValueError("strict truncation evidence requires every nested field")
         for field_name in type(value).model_fields:
-            _require_every_model_field_supplied(getattr(value, field_name))
+            _require_every_model_field_supplied(
+                getattr(value, field_name),
+                algorithm_version=algorithm_version,
+            )
     elif isinstance(value, dict):
         for child in value.values():
-            _require_every_model_field_supplied(child)
+            _require_every_model_field_supplied(child, algorithm_version=algorithm_version)
     elif isinstance(value, list | tuple):
         for child in value:
-            _require_every_model_field_supplied(child)
+            _require_every_model_field_supplied(child, algorithm_version=algorithm_version)
 
 
 def _strict_schema_sha256(model: type[BaseModel]) -> str:
@@ -1649,6 +1838,7 @@ def _project_prefix(
     response_bytes: bytes,
     finish_reason: str,
     native_finish_reason: str | None,
+    algorithm_version: str,
 ) -> CandidateReviewTruncationProjection:
     state = _PrefixState()
     retained_findings: list[_RetainedFinding] = []
@@ -1682,7 +1872,7 @@ def _project_prefix(
             break
         try:
             frame_end = _scan_object_end(content, cursor)
-        except _MalformedFrameBoundaryError:
+        except (_CandidateReviewRawBoundError, _MalformedFrameBoundaryError):
             termination = CandidateReviewTruncationTermination.INVALID_FRAME
             _note_expected_invalid(state)
             discarded_start = cursor
@@ -1721,8 +1911,18 @@ def _project_prefix(
         frame_model = _FRAME_MODELS[phase]
         decoded_frame: BaseModel | None = None
         try:
-            decoded_frame = decode_structured_output(raw_frame, frame_model).value
-        except StructuredOutputDecodeError:
+            if algorithm_version == _SCHEDULER_V1:
+                decoded_frame = frame_model.model_validate_json(
+                    _CANONICAL_JSON_DUMPS(_STRICT_FRAME_JSON_DECODE(raw_frame)),
+                    strict=True,
+                )
+                _require_every_model_field_supplied(
+                    decoded_frame,
+                    algorithm_version=algorithm_version,
+                )
+            else:
+                decoded_frame = decode_structured_output(raw_frame, frame_model).value
+        except (StructuredOutputDecodeError, TypeError, ValidationError, ValueError):
             state.note_invalid_phase(phase)
 
         accepted_frame: CandidateReviewAcceptedFrame | None = None
@@ -1740,12 +1940,16 @@ def _project_prefix(
                 frame_bytes=len(raw_frame_bytes),
                 frame_sha256=_bytes_sha256(raw_frame_bytes),
                 normalized_value_sha256=_canonical_sha256(
-                    decoded_frame.record.model_dump(mode="json")
-                    if isinstance(
-                        decoded_frame,
-                        CandidateReviewFindingFrame | CandidateReviewSurfaceReviewFrame,
+                    candidate_review_typed_payload_projection(
+                        decoded_frame.record,
+                        algorithm_version=algorithm_version,
                     )
-                    else decoded_frame.model_dump(mode="json")
+                    if isinstance(decoded_frame, CandidateReviewFindingFrame)
+                    else (
+                        decoded_frame.record.model_dump(mode="json")
+                        if isinstance(decoded_frame, CandidateReviewSurfaceReviewFrame)
+                        else decoded_frame.model_dump(mode="json")
+                    )
                 ),
                 record_id=record_id,
             )
@@ -1809,8 +2013,12 @@ def _project_prefix(
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "protocol": _PROTOCOL,
-        "wire_schema_sha256": candidate_review_frame_wire_schema_sha256(),
-        "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(),
+        "wire_schema_sha256": candidate_review_frame_wire_schema_sha256(
+            algorithm_version=algorithm_version,
+        ),
+        "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(
+            algorithm_version=algorithm_version,
+        ),
         "finish_reason": finish_reason,
         "native_finish_reason": native_finish_reason,
         "truncation_confirmed": True,
@@ -1849,7 +2057,13 @@ def _project_prefix(
         "stream_integrity_valid": state.stream_integrity_valid,
         "document_complete": termination is CandidateReviewTruncationTermination.COMPLETE_DOCUMENT,
         "termination": termination.value,
-        "findings": [finding.model_dump(mode="json") for finding in findings],
+        "findings": [
+            candidate_review_typed_payload_projection(
+                finding,
+                algorithm_version=algorithm_version,
+            )
+            for finding in findings
+        ],
         "surface_reviews": [review.model_dump(mode="json") for review in surface_reviews],
         "review_credit_eligible": False,
         "coverage_credit_eligible": False,
@@ -2080,6 +2294,8 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_STRICT_FRAME_JSON_DECODE",
         "_CANONICAL_JSON_DUMPS",
         "pairwise",
+        "Mapping",
+        "Sequence",
         "BaseModel",
         "ValidationError",
         "StructuredOutputDecodeError",
@@ -2138,6 +2354,14 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_summary_state",
         "_note_expected_invalid",
         "_is_bounded_record_identity",
+        "_SCHEDULER_V1",
+        "_SCHEDULER_V2",
+        "_V1_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256",
+        "_V1_CANDIDATE_REVIEW_FRAME_WIRE_SCHEMA_SHA256",
+        "_strip_v1_candidate_actor_defaults",
+        "candidate_review_typed_payload_projection",
+        "candidate_review_schema_algorithm_version",
+        "candidate_review_wire_schema_algorithm_version",
         "_expected_phase_for_sequence",
         "_expected_control_frame_sha256",
         "frame_candidate_review_batch",

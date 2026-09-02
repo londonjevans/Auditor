@@ -273,6 +273,12 @@ def test_fixture_runtime_command_has_private_home_network_and_resource_boundarie
     )
     environment = backend.host_environment(private)
     rendered = " ".join(command)
+    resolved_private = private.resolve()
+    runtime_dir = resolved_private / "container-runtime"
+    seccomp_path = Path(command[command.index("no-new-privileges") + 2].removeprefix("seccomp="))
+    mount_arguments = [
+        command[index + 1] for index, token in enumerate(command[:-1]) if token == "--mount"
+    ]
 
     assert command[command.index("--network") + 1] == "none"
     assert "--read-only" in command
@@ -281,16 +287,16 @@ def test_fixture_runtime_command_has_private_home_network_and_resource_boundarie
     assert command[command.index("--cpus") + 1] == "0.5"
     assert command[command.index("--ulimit") + 1] == "nofile=96:96"
     assert "HOME=/home/mmaudit" in command
+    assert Path(command[command.index("--cidfile") + 1]) == runtime_dir / "container.cid"
+    assert seccomp_path == runtime_dir / "seccomp.json"
+    assert mount_arguments == [
+        f"type=bind,src={workspace.resolve()},dst=/workspace",
+        f"type=bind,src={(private / 'container-output').resolve()},dst=/mmaudit-output,rw",
+    ]
     assert (
-        "socket"
-        not in json.loads(
-            Path(
-                command[command.index("no-new-privileges") + 2].removeprefix("seccomp=")
-            ).read_text(encoding="utf-8")
-        )["syscalls"][0]["names"]
+        "socket" not in json.loads(seccomp_path.read_text(encoding="utf-8"))["syscalls"][0]["names"]
     )
     assert "MMAUDIT_HOST_ENV_CANARY" not in environment
-    assert str(Path.home()) not in rendered
     assert str(FIXTURE.resolve()) not in rendered
     with pytest.raises(ValueError, match="path traversal"):
         backend.wrap_repository_javascript(

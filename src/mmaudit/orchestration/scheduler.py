@@ -17,7 +17,8 @@ import os
 import re
 import stat
 import threading
-from collections.abc import Iterable, Iterator
+import weakref
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -32,7 +33,7 @@ from decimal import (
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Never, SupportsIndex, cast
 
 from pydantic import BaseModel
 
@@ -42,6 +43,7 @@ from mmaudit.models.candidate_review_stamping import (
 )
 from mmaudit.models.scheduler import (
     ABSENT_COST_LEDGER_BASELINE_SHA256,
+    SCHEDULER_ALGORITHM_VERSION,
     SCHEDULER_PASS_ORDER,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
@@ -62,6 +64,7 @@ from mmaudit.models.scheduler import (
     SchedulerPrivacyEvidenceCustody,
     SchedulerProviderAttemptEvidence,
     SchedulerResultOrigin,
+    SchedulerRetrievalBinding,
     SchedulerShardInventory,
     SchedulerTaskActivation,
     SchedulerTaskEvent,
@@ -69,13 +72,16 @@ from mmaudit.models.scheduler import (
     SchedulerTaskKind,
     SchedulerTaskOutput,
     SchedulerTaskPlan,
+    SchedulerTaskPurpose,
     SchedulerTaskResult,
     SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     SchedulerTruncationRecoveryModelRequestEvidence,
     build_scheduler_model_request_evidence,
     build_scheduler_truncation_recovery_model_request_evidence,
+    scheduler_candidate_payload_sha256,
     scheduler_canonical_sha256,
+    scheduler_typed_payload_projection,
 )
 from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
@@ -104,6 +110,7 @@ from mmaudit.models.truncation import (
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
+    candidate_review_schema_algorithm_version,
 )
 from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
@@ -164,14 +171,24 @@ from mmaudit.orchestration.cost_ledger import (
     ReleaseReason,
     cost_entry_sha256,
 )
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchAuthorization as SchedulerModelReviewPreDispatchAuthorization,
+)
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchBinding as SchedulerModelReviewPreDispatchBinding,
+)
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
     VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
     VerifiedRecursiveTruncationRecoveryTree,
     VerifiedTruncationRecoveryClosure,
-    _issue_verified_promoted_recursive_truncation_recovery_surface_coverage,
-    _issue_verified_promoted_truncation_recovery_surface_coverage,
+    _require_recursive_truncation_recovery_tree,
+    _require_truncation_recovery_closure,
+    _validated_promoted_recursive_surface_projection,
+    _validated_promoted_surface_projection,
     require_verified_recursive_truncation_recovery_tree_projection,
     require_verified_truncation_recovery_closure_projection,
 )
@@ -201,9 +218,12 @@ _EVENTS_DIRECTORY = "events"
 _PASS_PLANS_DIRECTORY = "pass-plans"
 _PASS_RESULTS_DIRECTORY = "pass-results"
 _TASK_OUTPUTS_DIRECTORY = "task-outputs"
+_RETRIEVAL_BINDINGS_DIRECTORY = "retrieval-bindings"
 _TASK_RESULTS_DIRECTORY = "task-results"
 _PROVIDER_ATTEMPTS_DIRECTORY = "provider-attempts"
 _TRUNCATION_RECOVERY_DIRECTORY = "truncation-recovery"
+_RECOVERY_MODEL_REVIEW_TASK_ID_RE = re.compile(r"^scheduler-recovery-task-[0-9a-f]{64}$")
+_RECOVERY_MODEL_REVIEW_REQUEST_ID_RE = re.compile(r"^scheduler-recovery-request-[0-9a-f]{64}$")
 _TRUNCATION_RECOVERY_ACCOUNTING_CONTEXT = Context(
     prec=160,
     rounding=ROUND_HALF_EVEN,
@@ -225,14 +245,2160 @@ _CONTROL_DIRECTORIES = (
     _PASS_PLANS_DIRECTORY,
     _PASS_RESULTS_DIRECTORY,
     _TASK_OUTPUTS_DIRECTORY,
+    _RETRIEVAL_BINDINGS_DIRECTORY,
     _TASK_RESULTS_DIRECTORY,
     _PROVIDER_ATTEMPTS_DIRECTORY,
     _TRUNCATION_RECOVERY_DIRECTORY,
 )
-_LIVE_CUSTODY_LOCK = threading.Lock()
-_LIVE_CUSTODY: set[tuple[int, int]] = set()
 type _EvidenceFileIdentity = tuple[int, int, int, int, int, int, int]
 type _DurableArtifactObservation = tuple[str, _EvidenceFileIdentity, str]
+
+
+class _JournalCustodyPhase(StrEnum):
+    """Private process-local lifecycle for one exact root reservation."""
+
+    OPENING = "opening"
+    LIVE = "live"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    ORPHANED = "orphaned"
+
+
+class _JournalOpenRoute(StrEnum):
+    """Authenticated factory route that owns one construction attempt."""
+
+    CREATE = "create"
+    RESUME = "resume"
+    VERIFY = "verify"
+
+
+class _ModelReviewDispatchSource(StrEnum):
+    """Private distinction between ordinary and recovery dispatch authority."""
+
+    SCHEDULER_TASK = "scheduler_task"
+    RECOVERY_CHILD = "recovery_child"
+
+
+def _retrieval_planning_result_for_primary(
+    *,
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    results_by_task: dict[str, SchedulerTaskResult],
+) -> SchedulerTaskResult | None:
+    """Resolve the sole terminal retrieval child required by one primary activation."""
+
+    children = tuple(
+        candidate
+        for candidate in plan.tasks
+        if candidate.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        and candidate.parent_task_id == task.task_id
+    )
+    if len(children) > 1:
+        raise ValueError("scheduler primary task has multiple retrieval children")
+    if not children:
+        return None
+    result = results_by_task.get(children[0].task_id)
+    if result is None:
+        raise ValueError("scheduler primary activation lacks a terminal retrieval-child result")
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class _JournalCustodyMetadata:
+    """Descriptor and identity values frozen when the exact owner is bound."""
+
+    path: Path
+    root_descriptor: int
+    root_identity: tuple[int, int, int]
+    directory_descriptors: tuple[tuple[str, int], ...]
+    directory_identities: tuple[tuple[str, tuple[int, int, int]], ...]
+    lock_descriptor: int
+    read_only: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundModelReviewArtifact:
+    """Exact immutable file identity and bytes bound to one live authorization."""
+
+    relative_path: str
+    identity: _EvidenceFileIdentity
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingModelReviewDispatch:
+    """One newly appended dispatch; retained history never creates this state."""
+
+    event_index: int
+    task_id: str
+    dispatched_event_sha256: str
+    thread_id: int
+    source: _ModelReviewDispatchSource = _ModelReviewDispatchSource.SCHEDULER_TASK
+    recovery_family_id: str | None = None
+    checkpointed: bool = False
+    claimed: bool = False
+    durable_artifacts: tuple[_BoundModelReviewArtifact, ...] = ()
+    expected_binding: SchedulerModelReviewPreDispatchBinding | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisteredModelReviewAuthorization:
+    """One opaque capability and the immutable dispatch files it authorizes."""
+
+    capability: SchedulerModelReviewPreDispatchAuthorization
+    binding: SchedulerModelReviewPreDispatchBinding
+    source: _ModelReviewDispatchSource
+    sequence_index: int
+    recovery_family_id: str | None
+    durable_artifacts: tuple[_BoundModelReviewArtifact, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RegisteredPromotionCapability:
+    """One promoted cap plus closure-private full durable lineage observations."""
+
+    capability: (
+        VerifiedPromotedTruncationRecoverySurfaceCoverage
+        | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    )
+    family_id: str
+    recursive: bool
+    verification_capability: (
+        VerifiedTruncationRecoveryClosure | VerifiedRecursiveTruncationRecoveryTree
+    )
+    model_review_bindings: tuple[SchedulerModelReviewPreDispatchBinding, ...]
+    durable_artifacts: tuple[_BoundModelReviewArtifact, ...]
+
+
+@dataclass(slots=True)
+class _JournalCustodyRecord:
+    """Mutable record held only by the closure-private custody registries."""
+
+    reservation: object
+    root_key: tuple[int, int]
+    process_id: int
+    phase: _JournalCustodyPhase = _JournalCustodyPhase.OPENING
+    open_route: _JournalOpenRoute | None = None
+    opening_thread_id: int | None = None
+    owner_id: int | None = None
+    owner_reference: weakref.ReferenceType[object] | None = None
+    metadata: _JournalCustodyMetadata | None = None
+    event_count: int = 0
+    recovery_entry_count: int = 0
+    checkpoint_observation: _BoundModelReviewArtifact | None = None
+    fresh_dispatch_tail: _PendingModelReviewDispatch | None = None
+    pending_dispatch: _PendingModelReviewDispatch | None = None
+    cleanup_complete: threading.Event | None = None
+    cleanup_succeeded: bool | None = None
+    issued_authorizations: dict[int, _RegisteredModelReviewAuthorization] | None = None
+    recovery_authorizations: dict[int, _RegisteredModelReviewAuthorization] | None = None
+    durable_artifact_observations: dict[str, _BoundModelReviewArtifact] | None = None
+    recovery_artifact_observations: dict[str, _BoundModelReviewArtifact] | None = None
+    direct_promotion_capabilities: dict[str, _RegisteredPromotionCapability] | None = None
+    recursive_promotion_capabilities: dict[str, _RegisteredPromotionCapability] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _JournalCleanupClaim:
+    """Opaque one-shot cleanup claim; descriptor metadata remains private."""
+
+    token: object
+
+
+type _AdmitJournalOpening = Callable[..., object]
+type _BindJournalCustody = Callable[..., None]
+type _ActivateJournalCustody = Callable[..., None]
+type _AssertJournalCustody = Callable[[object], _JournalCustodyMetadata]
+type _ClaimJournalClose = Callable[[object], _JournalCleanupClaim | None]
+type _ClaimFailedJournalOpen = Callable[..., _JournalCleanupClaim | None]
+type _ResolveJournalCleanup = Callable[[_JournalCleanupClaim], _JournalCustodyMetadata]
+type _FinalizeJournalCleanup = Callable[[_JournalCleanupClaim, bool], None]
+type _RecordJournalEvent = Callable[..., None]
+type _RecordRecoveryJournalEntry = Callable[..., None]
+type _RecordJournalCheckpoint = Callable[[object], None]
+type _RecordValidatedDurableSnapshot = Callable[..., None]
+type _CheckpointJournalDispatch = Callable[..., None]
+type _CheckpointRecoveryJournalDispatch = Callable[..., None]
+type _IssueJournalAuthorization = Callable[..., SchedulerModelReviewPreDispatchAuthorization]
+type _DisarmJournalDispatch = Callable[[object], None]
+type _RequirePublicJournalAuthorization = Callable[
+    [SchedulerModelReviewPreDispatchAuthorization],
+    SchedulerModelReviewPreDispatchBinding,
+]
+type _RequireJournalAuthorizationForTask = Callable[..., SchedulerModelReviewPreDispatchBinding]
+type _JournalRecoveryAuthorizationBindings = Callable[
+    ...,
+    tuple[SchedulerModelReviewPreDispatchBinding, ...],
+]
+type _JournalAuthorizations = Callable[
+    [object],
+    tuple[SchedulerModelReviewPreDispatchAuthorization, ...],
+]
+type _IssueDirectPromotionCapability = Callable[
+    ...,
+    VerifiedPromotedTruncationRecoverySurfaceCoverage,
+]
+type _IssueRecursivePromotionCapability = Callable[
+    ...,
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+]
+type _RequireDirectPromotionCapability = Callable[
+    [VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
+]
+type _RequireRecursivePromotionCapability = Callable[
+    [VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
+]
+type _JournalDirectPromotionCapabilities = Callable[
+    [object],
+    tuple[VerifiedPromotedTruncationRecoverySurfaceCoverage, ...],
+]
+type _JournalRecursivePromotionCapabilities = Callable[
+    [object],
+    tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...],
+]
+
+
+_scheduler_journal_opener_token = object()
+
+
+def _build_scheduler_journal_custody_registry(
+    opener_token: object,
+    journal_type: type[SchedulerJournal],
+    assert_opening_descriptors: Callable[[_JournalCustodyMetadata], None],
+    build_model_review_binding: Callable[..., SchedulerModelReviewPreDispatchBinding | None],
+    build_recovery_model_review_binding: Callable[..., SchedulerModelReviewPreDispatchBinding],
+    build_promotion_lineage: Callable[..., tuple[SchedulerTruncationRecoveryEntry, ...]],
+    validate_durable_promotion: Callable[..., None],
+    validate_journal_state: Callable[..., tuple[_DurableArtifactObservation, ...]],
+    require_durable_snapshot: Callable[..., None],
+    require_direct_source: Callable[..., object],
+    require_recursive_source: Callable[..., object],
+    validate_direct_projection: Callable[
+        ..., VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+    ],
+    validate_recursive_projection: Callable[
+        ...,
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
+    ],
+) -> tuple[
+    _AdmitJournalOpening,
+    _BindJournalCustody,
+    _ActivateJournalCustody,
+    _AssertJournalCustody,
+    _ClaimJournalClose,
+    _ClaimFailedJournalOpen,
+    _ResolveJournalCleanup,
+    _FinalizeJournalCleanup,
+    _RecordJournalEvent,
+    _RecordRecoveryJournalEntry,
+    _RecordJournalCheckpoint,
+    _RecordValidatedDurableSnapshot,
+    _CheckpointJournalDispatch,
+    _CheckpointRecoveryJournalDispatch,
+    _IssueJournalAuthorization,
+    _DisarmJournalDispatch,
+    _RequirePublicJournalAuthorization,
+    _RequireJournalAuthorizationForTask,
+    _JournalRecoveryAuthorizationBindings,
+    _JournalAuthorizations,
+    _IssueDirectPromotionCapability,
+    _IssueRecursivePromotionCapability,
+    _RequireDirectPromotionCapability,
+    _RequireRecursivePromotionCapability,
+    _JournalDirectPromotionCapabilities,
+    _JournalRecursivePromotionCapabilities,
+]:
+    """Build process-private custody, close, and dispatch registries.
+
+    No module attribute exposes the root, reservation, owner, cleanup, or dispatch
+    indexes.  A fork receives empty indexes and a fresh lock without unlocking or
+    closing any descriptor still owned by the parent process.
+    """
+
+    is_allowed_immutable_write_target = _is_allowed_immutable_write_target
+    immutable_write_temp_leaf = _immutable_write_temp_leaf
+    binding_type = SchedulerModelReviewPreDispatchBinding
+    authorization_type = SchedulerModelReviewPreDispatchAuthorization
+    recovery_entry_types = dict(SCHEDULER_TRUNCATION_RECOVERY_ENTRY_TYPES)
+
+    current_process_id = os.getpid
+    current_thread_id = threading.get_ident
+    make_weakref = weakref.ref
+    lock = threading.RLock()
+    process_id = current_process_id()
+    roots: dict[tuple[int, int], _JournalCustodyRecord] = {}
+    reservations: dict[int, _JournalCustodyRecord] = {}
+    owners: dict[int, _JournalCustodyRecord] = {}
+    cleanup_claims: dict[
+        int,
+        tuple[_JournalCleanupClaim, _JournalCustodyRecord],
+    ] = {}
+    forbidden_inherited_roots: set[tuple[int, int]] = set()
+
+    def require_opener(candidate: object) -> None:
+        if candidate is not opener_token:
+            raise ValueError("scheduler journal construction requires its authenticated opener")
+
+    def reset_after_fork() -> None:
+        nonlocal lock, process_id
+        forbidden_inherited_roots.update(roots)
+        lock = threading.RLock()
+        process_id = current_process_id()
+        roots.clear()
+        reservations.clear()
+        owners.clear()
+        cleanup_claims.clear()
+
+    os.register_at_fork(after_in_child=reset_after_fork)
+
+    def require_process() -> int:
+        observed = current_process_id()
+        if observed != process_id:
+            raise ValueError("scheduler custody cannot cross a process fork")
+        return observed
+
+    def exact_reservation(reservation: object) -> _JournalCustodyRecord:
+        observed_process_id = require_process()
+        record = reservations.get(id(reservation))
+        if (
+            record is None
+            or record.reservation is not reservation
+            or record.process_id != observed_process_id
+        ):
+            raise ValueError("scheduler custody reservation is absent or forged")
+        return record
+
+    def exact_owner(owner: object) -> _JournalCustodyRecord:
+        observed_process_id = require_process()
+        record = owners.get(id(owner))
+        reference = record.owner_reference if record is not None else None
+        if (
+            record is None
+            or record.process_id != observed_process_id
+            or record.owner_id != id(owner)
+            or reference is None
+            or reference() is not owner
+            or (
+                record.phase is not _JournalCustodyPhase.CLOSED
+                and roots.get(record.root_key) is not record
+            )
+        ):
+            raise ValueError("scheduler journal is not the exact process-local custody owner")
+        return record
+
+    def live_owner(owner: object) -> _JournalCustodyRecord:
+        record = exact_owner(owner)
+        if record.phase is not _JournalCustodyPhase.LIVE or record.metadata is None:
+            raise ValueError("scheduler journal custody is not live")
+        return record
+
+    def active_owner(owner: object) -> _JournalCustodyRecord:
+        """Return LIVE custody or this opener thread's unexposed OPENING owner."""
+
+        record = exact_owner(owner)
+        if record.metadata is None:
+            raise ValueError("scheduler journal custody metadata is absent")
+        if record.phase is _JournalCustodyPhase.OPENING:
+            if record.opening_thread_id != current_thread_id():
+                raise ValueError("scheduler journal opening belongs to another thread")
+        elif record.phase is not _JournalCustodyPhase.LIVE:
+            raise ValueError("scheduler journal custody is not active")
+        return record
+
+    def require_exact_recovery_custody(
+        record: _JournalCustodyRecord,
+        journal: object,
+        *,
+        checkpoint: SchedulerJournalEvidence | None = None,
+    ) -> None:
+        """Require one exact retained, durable, and privately observed recovery head."""
+
+        retained_entries = cast(Any, journal)._truncation_recovery_entries
+        observations = record.recovery_artifact_observations
+        durable = record.durable_artifact_observations
+        if (
+            type(retained_entries) is not list
+            or observations is None
+            or durable is None
+            or len(retained_entries) != record.recovery_entry_count
+            or len(observations) != record.recovery_entry_count
+        ):
+            raise ValueError("scheduler recovery custody differs from its retained count")
+        entry_sha256s: list[str] = []
+        previous_entry_sha256: str | None = None
+        for index, entry in enumerate(retained_entries):
+            if (
+                recovery_entry_types.get(entry.entry_kind) is not type(entry)
+                or entry.entry_index != index
+                or entry.previous_entry_sha256 != previous_entry_sha256
+            ):
+                raise ValueError("scheduler recovery custody has an invalid exact chain")
+            relative_path = _truncation_recovery_entry_path(
+                cast(SchedulerTruncationRecoveryEntry, entry)
+            )
+            observation = observations.get(entry.entry_sha256)
+            if (
+                observation is None
+                or observation.relative_path != relative_path
+                or observation.content != stable_json(entry).encode("utf-8")
+                or durable.get(relative_path) != observation
+            ):
+                raise ValueError("scheduler recovery custody differs from its durable artifacts")
+            entry_sha256s.append(entry.entry_sha256)
+            previous_entry_sha256 = entry.entry_sha256
+        exact_sha256s = tuple(entry_sha256s)
+        if set(observations) != set(exact_sha256s):
+            raise ValueError("scheduler recovery custody has an invalid hash inventory")
+        if checkpoint is not None and (
+            checkpoint.truncation_recovery_entry_count != record.recovery_entry_count
+            or checkpoint.truncation_recovery_entry_sha256s != exact_sha256s
+            or checkpoint.truncation_recovery_chain_head_sha256 != previous_entry_sha256
+        ):
+            raise ValueError("scheduler checkpoint differs from exact retained recovery head")
+
+    def admit_opening(
+        *,
+        opener_token: object,
+        route: _JournalOpenRoute,
+        owner: object,
+        metadata: _JournalCustodyMetadata,
+    ) -> object:
+        """Commit exact opener-owned descriptors before constructor state exists."""
+
+        require_opener(opener_token)
+        require_process()
+        if (
+            type(route) is not _JournalOpenRoute
+            or type(metadata) is not _JournalCustodyMetadata
+            or type(owner) is not journal_type
+            or id(owner) in owners
+            or metadata.read_only is not (route is _JournalOpenRoute.VERIFY)
+        ):
+            raise ValueError("scheduler journal opening admission is invalid")
+        assert_opening_descriptors(metadata)
+        root_key = metadata.root_identity[:2]
+        with lock:
+            if root_key in roots or root_key in forbidden_inherited_roots:
+                raise ValueError("scheduler journal already has live in-process custody")
+            reservation = object()
+            owner_id = id(owner)
+            record = _JournalCustodyRecord(
+                reservation=reservation,
+                root_key=root_key,
+                process_id=process_id,
+                open_route=route,
+                opening_thread_id=current_thread_id(),
+                owner_id=owner_id,
+                owner_reference=make_weakref(owner),
+                metadata=replace(metadata),
+            )
+            roots[root_key] = record
+            reservations[id(reservation)] = record
+            return reservation
+
+    def bind(
+        *,
+        reservation: object,
+        owner: object,
+        metadata: _JournalCustodyMetadata,
+        baseline_event_count: int,
+        baseline_recovery_entry_count: int,
+        initial_checkpoint_content: bytes | None,
+        opener_token: object,
+    ) -> None:
+        require_opener(opener_token)
+        require_process()
+        with lock:
+            record = exact_reservation(reservation)
+            reference = record.owner_reference
+            if (
+                record.phase is not _JournalCustodyPhase.OPENING
+                or roots.get(record.root_key) is not record
+                or id(owner) in owners
+                or record.opening_thread_id != current_thread_id()
+                or record.owner_id != id(owner)
+                or reference is None
+                or reference() is not owner
+                or record.metadata != metadata
+                or metadata.root_identity[:2] != record.root_key
+                or baseline_event_count < 0
+                or baseline_recovery_entry_count < 0
+            ):
+                raise ValueError("scheduler journal lacks one exact unclaimed reservation")
+
+            owner_id = id(owner)
+
+            def owner_discard(reference: weakref.ReferenceType[object]) -> None:
+                with lock:
+                    current = owners.get(owner_id)
+                    if current is None or current.owner_reference is not reference:
+                        return
+                    if current.phase is not _JournalCustodyPhase.CLOSED:
+                        current.phase = _JournalCustodyPhase.ORPHANED
+                        current.fresh_dispatch_tail = None
+                        current.pending_dispatch = None
+                        if current.issued_authorizations is not None:
+                            current.issued_authorizations.clear()
+                        if current.recovery_authorizations is not None:
+                            current.recovery_authorizations.clear()
+                        if current.durable_artifact_observations is not None:
+                            current.durable_artifact_observations.clear()
+                        if current.recovery_artifact_observations is not None:
+                            current.recovery_artifact_observations.clear()
+                        if current.direct_promotion_capabilities is not None:
+                            current.direct_promotion_capabilities.clear()
+                        if current.recursive_promotion_capabilities is not None:
+                            current.recursive_promotion_capabilities.clear()
+                    # The root record remains an ORPHANED fail-closed tombstone,
+                    # but a dead owner's object id must never block an unrelated
+                    # future owner after interpreter id reuse.
+                    owners.pop(owner_id, None)
+
+            record.owner_id = owner_id
+            record.owner_reference = make_weakref(owner, owner_discard)
+            record.event_count = baseline_event_count
+            record.recovery_entry_count = baseline_recovery_entry_count
+            record.checkpoint_observation = None
+            record.fresh_dispatch_tail = None
+            record.pending_dispatch = None
+            record.issued_authorizations = {}
+            record.recovery_authorizations = {}
+            record.durable_artifact_observations = {}
+            record.recovery_artifact_observations = {}
+            record.direct_promotion_capabilities = {}
+            record.recursive_promotion_capabilities = {}
+            owners[owner_id] = record
+            if initial_checkpoint_content is not None:
+                content, identity = _read_private_file_observation(
+                    metadata.root_descriptor,
+                    _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+                )
+                if content != initial_checkpoint_content:
+                    raise ValueError(
+                        "scheduler initial checkpoint differs from exact bound custody"
+                    )
+                record.checkpoint_observation = _BoundModelReviewArtifact(
+                    relative_path=_JOURNAL_HEAD_CHECKPOINT_FILENAME,
+                    identity=identity,
+                    content=content,
+                )
+
+    def activate(
+        *,
+        opener_token: object,
+        route: _JournalOpenRoute,
+        owner: object,
+    ) -> None:
+        """Advance one exact fully validated opener-owned journal to LIVE."""
+
+        require_opener(opener_token)
+        require_process()
+        with lock:
+            record = exact_owner(owner)
+            if (
+                record.phase is not _JournalCustodyPhase.OPENING
+                or record.open_route is not route
+                or record.opening_thread_id != current_thread_id()
+                or record.metadata is None
+                or record.checkpoint_observation is None
+            ):
+                raise ValueError("scheduler journal opening is not ready for live custody")
+            journal = cast(Any, owner)
+            checkpoint = journal._journal_head_checkpoint
+            retained_bytes = journal._journal_head_checkpoint_bytes
+            checkpoint_observation = record.checkpoint_observation
+            if (
+                type(checkpoint) is not SchedulerJournalEvidence
+                or type(retained_bytes) is not bytes
+                or stable_json(checkpoint).encode("utf-8") != retained_bytes
+                or checkpoint_observation.content != retained_bytes
+            ):
+                raise ValueError("scheduler journal opening checkpoint is not exact")
+            require_exact_recovery_custody(record, owner, checkpoint=checkpoint)
+            assert_opening_descriptors(record.metadata)
+            record.phase = _JournalCustodyPhase.LIVE
+            record.opening_thread_id = None
+
+    def assert_live(owner: object) -> _JournalCustodyMetadata:
+        require_process()
+        with lock:
+            record = active_owner(owner)
+            metadata = record.metadata
+            assert metadata is not None
+            return replace(metadata)
+
+    def make_cleanup_claim(record: _JournalCustodyRecord) -> _JournalCleanupClaim:
+        metadata = record.metadata
+        if metadata is None:
+            raise ValueError("scheduler bound custody lacks frozen cleanup metadata")
+        token = object()
+        claim = _JournalCleanupClaim(token=token)
+        cleanup_claims[id(token)] = (claim, record)
+        record.phase = _JournalCustodyPhase.CLOSING
+        record.cleanup_complete = threading.Event()
+        record.cleanup_succeeded = None
+        record.checkpoint_observation = None
+        record.fresh_dispatch_tail = None
+        record.pending_dispatch = None
+        if record.issued_authorizations is not None:
+            record.issued_authorizations.clear()
+        if record.recovery_authorizations is not None:
+            record.recovery_authorizations.clear()
+        if record.durable_artifact_observations is not None:
+            record.durable_artifact_observations.clear()
+        if record.recovery_artifact_observations is not None:
+            record.recovery_artifact_observations.clear()
+        if record.direct_promotion_capabilities is not None:
+            record.direct_promotion_capabilities.clear()
+        if record.recursive_promotion_capabilities is not None:
+            record.recursive_promotion_capabilities.clear()
+        return claim
+
+    def claim_close(owner: object) -> _JournalCleanupClaim | None:
+        require_process()
+        while True:
+            with lock:
+                record = exact_owner(owner)
+                if record.phase is _JournalCustodyPhase.CLOSED:
+                    return None
+                if record.phase is _JournalCustodyPhase.ORPHANED:
+                    raise ValueError("scheduler journal cleanup is orphaned")
+                if record.phase is _JournalCustodyPhase.CLOSING:
+                    completion = record.cleanup_complete
+                    if completion is None:
+                        raise ValueError("scheduler journal cleanup state is invalid")
+                elif record.phase is _JournalCustodyPhase.LIVE:
+                    return make_cleanup_claim(record)
+                else:
+                    raise ValueError("scheduler journal custody cannot be closed")
+            completion.wait()
+
+    def claim_failed_open(
+        *,
+        reservation: object,
+        owner: object | None,
+        metadata: _JournalCustodyMetadata,
+    ) -> _JournalCleanupClaim | None:
+        require_process()
+        with lock:
+            record = exact_reservation(reservation)
+            if record.phase in {
+                _JournalCustodyPhase.CLOSING,
+                _JournalCustodyPhase.CLOSED,
+            }:
+                return None
+            if record.phase is _JournalCustodyPhase.ORPHANED:
+                raise ValueError("scheduler journal cleanup is orphaned")
+            reference = record.owner_reference
+            if (
+                owner is None
+                or record.owner_id != id(owner)
+                or reference is None
+                or reference() is not owner
+                or record.phase
+                not in {
+                    _JournalCustodyPhase.OPENING,
+                    _JournalCustodyPhase.LIVE,
+                }
+                or record.metadata != metadata
+            ):
+                raise ValueError("scheduler failed-open owner differs from its reservation")
+            return make_cleanup_claim(record)
+
+    def resolve_cleanup(claim: _JournalCleanupClaim) -> _JournalCustodyMetadata:
+        require_process()
+        with lock:
+            registered = cleanup_claims.get(id(claim.token))
+            if (
+                registered is None
+                or registered[0] is not claim
+                or registered[1].phase is not _JournalCustodyPhase.CLOSING
+                or registered[1].metadata is None
+            ):
+                raise ValueError("scheduler cleanup claim is absent or forged")
+            return replace(registered[1].metadata)
+
+    def finalize_cleanup(claim: _JournalCleanupClaim, succeeded: bool) -> None:
+        require_process()
+        with lock:
+            registered = cleanup_claims.get(id(claim.token))
+            if (
+                registered is None
+                or registered[0] is not claim
+                or registered[1].phase is not _JournalCustodyPhase.CLOSING
+            ):
+                raise ValueError("scheduler cleanup claim is absent or forged")
+            cleanup_claims.pop(id(claim.token), None)
+            record = registered[1]
+            if succeeded:
+                record.phase = _JournalCustodyPhase.CLOSED
+                if roots.get(record.root_key) is record:
+                    roots.pop(record.root_key, None)
+                reservations.pop(id(record.reservation), None)
+                if record.owner_id is None:
+                    record.owner_reference = None
+                # Exact-owner CLOSED tombstones remain until that object is gone so
+                # repeated close is idempotent and an id-reused clone cannot claim it.
+            else:
+                record.phase = _JournalCustodyPhase.ORPHANED
+            record.cleanup_succeeded = succeeded
+            completion = record.cleanup_complete
+            if completion is not None:
+                completion.set()
+
+    def record_event(
+        *,
+        owner: object,
+        event: SchedulerTaskEvent,
+    ) -> None:
+        require_process()
+        with lock:
+            record = active_owner(owner)
+            journal = cast(Any, owner)
+            retained_events = journal._events
+            if (
+                type(event) is not SchedulerTaskEvent
+                or len(retained_events) != record.event_count + 1
+                or retained_events[-1] is not event
+                or event.event_index != record.event_count
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler live event sequence differs from custody baseline")
+            record.event_count += 1
+            record.pending_dispatch = None
+            if (
+                record.phase is _JournalCustodyPhase.LIVE
+                and event.kind is SchedulerTaskEventKind.DISPATCHED
+            ):
+                record.fresh_dispatch_tail = _PendingModelReviewDispatch(
+                    event_index=event.event_index,
+                    task_id=event.task_id,
+                    dispatched_event_sha256=event.event_sha256,
+                    thread_id=current_thread_id(),
+                )
+            else:
+                record.fresh_dispatch_tail = None
+
+    def record_recovery_entry(
+        *,
+        owner: object,
+        entry: SchedulerTruncationRecoveryEntry,
+    ) -> None:
+        """Observe one genuinely fresh recovery append before its checkpoint."""
+
+        require_process()
+        with lock:
+            record = active_owner(owner)
+            journal = cast(Any, owner)
+            retained_entries = journal._truncation_recovery_entries
+            metadata = record.metadata
+            observations = record.recovery_artifact_observations
+            if (
+                recovery_entry_types.get(entry.entry_kind) is not type(entry)
+                or len(retained_entries) != record.recovery_entry_count + 1
+                or retained_entries[-1] is not entry
+                or entry.entry_index != record.recovery_entry_count
+                or metadata is None
+                or observations is None
+                or entry.entry_sha256 in observations
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler live recovery sequence differs from custody baseline")
+            relative_path = _truncation_recovery_entry_path(entry)
+            parent_descriptor, leaf = _relative_parent(
+                metadata.root_descriptor,
+                dict(metadata.directory_descriptors),
+                relative_path,
+            )
+            content, identity = _read_private_file_observation(parent_descriptor, leaf)
+            if content != stable_json(entry).encode("utf-8"):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler new recovery entry differs from its durable bytes")
+            observations[entry.entry_sha256] = _BoundModelReviewArtifact(
+                relative_path=relative_path,
+                identity=identity,
+                content=content,
+            )
+            record.recovery_entry_count += 1
+            record.pending_dispatch = None
+            if (
+                record.phase is _JournalCustodyPhase.LIVE
+                and type(entry) is SchedulerTruncationRecoveryChildDispatch
+            ):
+                record.fresh_dispatch_tail = _PendingModelReviewDispatch(
+                    event_index=entry.entry_index,
+                    task_id=entry.child_task_id,
+                    dispatched_event_sha256=entry.entry_sha256,
+                    thread_id=current_thread_id(),
+                    source=_ModelReviewDispatchSource.RECOVERY_CHILD,
+                    recovery_family_id=entry.family_id,
+                )
+            else:
+                record.fresh_dispatch_tail = None
+
+    def record_checkpoint(owner: object) -> None:
+        """Freeze the exact current canonical head after a journal-owned transition."""
+
+        require_process()
+        with lock:
+            record = active_owner(owner)
+            metadata = record.metadata
+            assert metadata is not None
+            journal = cast(Any, owner)
+            checkpoint = journal._journal_head_checkpoint
+            retained_bytes = journal._journal_head_checkpoint_bytes
+            retained_events = journal._events
+            retained_recovery_entries = journal._truncation_recovery_entries
+            if (
+                type(checkpoint) is not SchedulerJournalEvidence
+                or type(retained_bytes) is not bytes
+                or stable_json(checkpoint).encode("utf-8") != retained_bytes
+                or checkpoint.event_count != record.event_count
+                or len(retained_events) != record.event_count
+                or tuple(item.event_sha256 for item in retained_events) != checkpoint.event_sha256s
+                or type(retained_recovery_entries) is not list
+            ):
+                raise ValueError("scheduler checkpoint differs from exact retained event head")
+            require_exact_recovery_custody(record, owner, checkpoint=checkpoint)
+            content, identity = _read_private_file_observation(
+                metadata.root_descriptor,
+                _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+            )
+            if content != retained_bytes:
+                raise ValueError("scheduler checkpoint differs from exact durable head")
+            previous_observation = record.checkpoint_observation
+            if previous_observation is not None and identity != previous_observation.identity:
+                if content == previous_observation.content:
+                    raise ValueError("scheduler checkpoint identity changed without a transition")
+                predecessor = _read_private_file(
+                    metadata.root_descriptor,
+                    _JOURNAL_TRANSITION_PREDECESSOR_FILENAME,
+                )
+                if predecessor != previous_observation.content:
+                    raise ValueError("scheduler checkpoint replacement lacks its exact predecessor")
+            record.checkpoint_observation = _BoundModelReviewArtifact(
+                relative_path=_JOURNAL_HEAD_CHECKPOINT_FILENAME,
+                identity=identity,
+                content=content,
+            )
+
+    def record_validated_snapshot(
+        *,
+        owner: object,
+        snapshot: tuple[_DurableArtifactObservation, ...],
+    ) -> None:
+        """Retain the first validated identity and bytes for every immutable path."""
+
+        require_process()
+        with lock:
+            record = active_owner(owner)
+            metadata = record.metadata
+            retained = record.durable_artifact_observations
+            if metadata is None or retained is None or type(snapshot) is not tuple:
+                raise ValueError("scheduler validated snapshot lacks private custody")
+            by_path = {
+                relative: (identity, content_sha256)
+                for relative, identity, content_sha256 in snapshot
+            }
+            if len(by_path) != len(snapshot):
+                raise ValueError("scheduler validated snapshot repeats an artifact path")
+            directories = dict(metadata.directory_descriptors)
+            prospective = dict(retained)
+            published_finalizations: dict[
+                str,
+                tuple[_BoundModelReviewArtifact, _BoundModelReviewArtifact],
+            ] = {}
+            allow_new_paths = record.phase is _JournalCustodyPhase.OPENING
+            checkpoint_observation = record.checkpoint_observation
+            if not allow_new_paths and checkpoint_observation is not None:
+                checkpoint_content, checkpoint_identity = _read_private_file_observation(
+                    metadata.root_descriptor,
+                    _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+                )
+                root_names = set(os.listdir(metadata.root_descriptor))
+                if (
+                    checkpoint_content != checkpoint_observation.content
+                    and checkpoint_identity != checkpoint_observation.identity
+                    and _JOURNAL_TRANSITION_PREDECESSOR_FILENAME in root_names
+                    and _read_private_file(
+                        metadata.root_descriptor,
+                        _JOURNAL_TRANSITION_PREDECESSOR_FILENAME,
+                    )
+                    == checkpoint_observation.content
+                ):
+                    allow_new_paths = True
+            for relative, (expected_identity, expected_content_sha256) in by_path.items():
+                parent_descriptor, leaf = _relative_parent(
+                    metadata.root_descriptor,
+                    directories,
+                    relative,
+                )
+                content, identity = _read_private_file_observation(
+                    parent_descriptor,
+                    leaf,
+                    allowed_published_identity=(
+                        expected_identity if expected_identity[3] == 2 else None
+                    ),
+                )
+                if (
+                    identity != expected_identity
+                    or hashlib.sha256(content).hexdigest() != expected_content_sha256
+                ):
+                    raise ValueError("scheduler validated snapshot changed before private custody")
+                previous = retained.get(relative)
+                observation = _BoundModelReviewArtifact(
+                    relative_path=relative,
+                    identity=identity,
+                    content=content,
+                )
+                if previous is not None and previous != observation:
+                    parent_name, separator, leaf = relative.rpartition("/")
+                    parent = parent_name if separator else None
+                    parent_descriptor = (
+                        metadata.root_descriptor if parent is None else directories.get(parent, -1)
+                    )
+                    prior_identity = previous.identity
+                    current_identity = observation.identity
+                    exact_published_finalization = (
+                        record.phase is _JournalCustodyPhase.OPENING
+                        and previous.content == observation.content
+                        and is_allowed_immutable_write_target(parent, leaf)
+                        and parent_descriptor >= 0
+                        and prior_identity[:3] == current_identity[:3]
+                        and prior_identity[3] == 2
+                        and current_identity[3] == 1
+                        and prior_identity[4:6] == current_identity[4:6]
+                        and current_identity[6] >= prior_identity[6]
+                        and immutable_write_temp_leaf(leaf)
+                        not in set(os.listdir(parent_descriptor))
+                    )
+                    if not exact_published_finalization:
+                        raise ValueError(
+                            "scheduler immutable artifact changed after private custody"
+                        )
+                    published_finalizations[relative] = (previous, observation)
+                if previous is not None or allow_new_paths:
+                    prospective[relative] = observation
+            if not set(retained) <= set(by_path):
+                raise ValueError("scheduler validated snapshot dropped a privately retained path")
+            recovery_observations = record.recovery_artifact_observations
+            journal = cast(Any, owner)
+            recovery_entries = journal._truncation_recovery_entries
+            if recovery_observations is None or type(recovery_entries) is not list:
+                raise ValueError("scheduler recovery snapshot lacks private custody")
+            if record.phase is not _JournalCustodyPhase.OPENING:
+                if any(
+                    prospective.get(observation.relative_path) != observation
+                    for observation in recovery_observations.values()
+                ):
+                    raise ValueError("scheduler recovery snapshot changed after private custody")
+                record.durable_artifact_observations = prospective
+                return
+            if len(recovery_entries) not in {
+                record.recovery_entry_count,
+                record.recovery_entry_count + 1,
+            }:
+                raise ValueError("scheduler recovery snapshot differs from its opening baseline")
+            rebuilt_recovery_observations: dict[str, _BoundModelReviewArtifact] = {}
+            for entry in recovery_entries[: record.recovery_entry_count]:
+                if recovery_entry_types.get(entry.entry_kind) is not type(entry):
+                    raise ValueError("scheduler recovery snapshot has an invalid entry")
+                relative_path = _truncation_recovery_entry_path(
+                    cast(SchedulerTruncationRecoveryEntry, entry)
+                )
+                recovery_observation = prospective.get(relative_path)
+                if (
+                    recovery_observation is None
+                    or recovery_observation.content != stable_json(entry).encode("utf-8")
+                    or entry.entry_sha256 in rebuilt_recovery_observations
+                ):
+                    raise ValueError(
+                        "scheduler recovery snapshot differs from its validated artifacts"
+                    )
+                rebuilt_recovery_observations[entry.entry_sha256] = recovery_observation
+            for entry_sha256, observation in recovery_observations.items():
+                rebuilt = rebuilt_recovery_observations.get(entry_sha256)
+                if rebuilt == observation:
+                    continue
+                if published_finalizations.get(observation.relative_path) != (
+                    observation,
+                    rebuilt,
+                ):
+                    raise ValueError("scheduler recovery snapshot changed after private custody")
+            record.durable_artifact_observations = prospective
+            record.recovery_artifact_observations = rebuilt_recovery_observations
+
+    def checkpoint_dispatch(
+        *,
+        owner: object,
+        task_id: str,
+        event_sha256: str,
+    ) -> None:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            journal = cast(Any, owner)
+            checkpoint = journal._journal_head_checkpoint
+            retained_events = journal._events
+            fresh = record.fresh_dispatch_tail
+            if (
+                fresh is None
+                or fresh.checkpointed
+                or fresh.claimed
+                or fresh.source is not _ModelReviewDispatchSource.SCHEDULER_TASK
+                or fresh.thread_id != current_thread_id()
+                or fresh.task_id != task_id
+                or fresh.dispatched_event_sha256 != event_sha256
+                or fresh.event_index + 1 != record.event_count
+                or type(checkpoint) is not SchedulerJournalEvidence
+                or checkpoint.event_count != record.event_count
+                or len(checkpoint.event_sha256s) != record.event_count
+                or not retained_events
+                or retained_events[-1].event_sha256 != event_sha256
+                or checkpoint.event_sha256s[-1] != event_sha256
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler dispatch lacks its exact post-append checkpoint")
+            task_and_plan = journal._indexes.tasks.get(task_id)
+            activation = journal._indexes.activations.get(task_id)
+            private_artifacts = record.durable_artifact_observations
+            checkpoint_observation = record.checkpoint_observation
+            if (
+                task_and_plan is None
+                or activation is None
+                or private_artifacts is None
+                or record.metadata is None
+                or checkpoint_observation is None
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler dispatch lacks its validated durable cache")
+            task, plan = task_and_plan
+            matching_plan_ordinals = tuple(
+                ordinal for ordinal, retained in enumerate(journal._plans) if retained is plan
+            )
+            if len(matching_plan_ordinals) != 1:
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler dispatch plan is absent or ambiguous")
+            bound_models: tuple[tuple[str, object], ...] = (
+                (_pass_plan_path(matching_plan_ordinals[0]), plan),
+                (_activation_path(activation), activation),
+                (_event_path(fresh.event_index), retained_events[-1]),
+            )
+            observations: list[_BoundModelReviewArtifact] = []
+            for relative_path, model in bound_models:
+                private_observation = private_artifacts.get(relative_path)
+                if private_observation is None:
+                    record.fresh_dispatch_tail = None
+                    record.pending_dispatch = None
+                    raise ValueError("scheduler dispatch artifact lacks validated identity")
+                parent_descriptor, leaf = _relative_parent(
+                    record.metadata.root_descriptor,
+                    dict(record.metadata.directory_descriptors),
+                    relative_path,
+                )
+                content, identity = _read_private_file_observation(parent_descriptor, leaf)
+                expected_content = stable_json(cast(BaseModel, model)).encode("utf-8")
+                if (
+                    identity != private_observation.identity
+                    or content != private_observation.content
+                    or content != expected_content
+                ):
+                    record.fresh_dispatch_tail = None
+                    record.pending_dispatch = None
+                    raise ValueError("scheduler dispatch artifact changed after validation")
+                observations.append(
+                    _BoundModelReviewArtifact(
+                        relative_path=relative_path,
+                        identity=identity,
+                        content=content,
+                    )
+                )
+            checkpoint_content, checkpoint_identity = _read_private_file_observation(
+                record.metadata.root_descriptor,
+                _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+            )
+            if (
+                checkpoint_content != journal._journal_head_checkpoint_bytes
+                or checkpoint_content != checkpoint_observation.content
+                or checkpoint_identity != checkpoint_observation.identity
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError("scheduler dispatch checkpoint differs from retained custody")
+            record.pending_dispatch = replace(
+                fresh,
+                checkpointed=True,
+                durable_artifacts=tuple(sorted(observations, key=lambda item: item.relative_path)),
+                expected_binding=build_model_review_binding(
+                    plan=plan,
+                    task=task,
+                    activation=activation,
+                    event=retained_events[-1],
+                ),
+            )
+            record.fresh_dispatch_tail = None
+
+    def checkpoint_recovery_dispatch(
+        *,
+        owner: object,
+        family_id: str,
+        task_id: str,
+        entry_sha256: str,
+    ) -> None:
+        """Arm only the just-checkpointed durable recovery-child dispatch."""
+
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            journal = cast(Any, owner)
+            entries = journal._truncation_recovery_entries
+            indexes = journal._truncation_recovery_indexes
+            checkpoint = journal._journal_head_checkpoint
+            retained_bytes = journal._journal_head_checkpoint_bytes
+            checkpoint_observation = record.checkpoint_observation
+            private_artifacts = record.recovery_artifact_observations
+            fresh = record.fresh_dispatch_tail
+            child_match = indexes.children.get(task_id)
+            family = indexes.families.get(family_id)
+            activation = indexes.activations.get(task_id)
+            dispatch = indexes.dispatches.get(task_id)
+            if (
+                fresh is None
+                or fresh.source is not _ModelReviewDispatchSource.RECOVERY_CHILD
+                or fresh.checkpointed
+                or fresh.claimed
+                or fresh.thread_id != current_thread_id()
+                or fresh.recovery_family_id != family_id
+                or fresh.task_id != task_id
+                or fresh.dispatched_event_sha256 != entry_sha256
+                or type(family) is not SchedulerTruncationRecoveryFamilyRoot
+                or child_match is None
+                or child_match[1] != family_id
+                or type(activation) is not SchedulerTruncationRecoveryChildActivation
+                or type(dispatch) is not SchedulerTruncationRecoveryChildDispatch
+                or dispatch.entry_sha256 != entry_sha256
+                or dispatch.entry_index != len(entries) - 1
+                or record.recovery_entry_count != len(entries)
+                or family.entry_index >= len(entries)
+                or activation.entry_index >= len(entries)
+                or dispatch.entry_index >= len(entries)
+                or type(entries[family.entry_index]) is not SchedulerTruncationRecoveryFamilyRoot
+                or entries[family.entry_index] != family
+                or type(entries[activation.entry_index])
+                is not SchedulerTruncationRecoveryChildActivation
+                or entries[activation.entry_index] != activation
+                or type(entries[dispatch.entry_index])
+                is not SchedulerTruncationRecoveryChildDispatch
+                or entries[dispatch.entry_index] != dispatch
+                or type(checkpoint) is not SchedulerJournalEvidence
+                or type(retained_bytes) is not bytes
+                or stable_json(checkpoint).encode("utf-8") != retained_bytes
+                or checkpoint.truncation_recovery_entry_count != len(entries)
+                or checkpoint.truncation_recovery_entry_sha256s
+                != tuple(item.entry_sha256 for item in entries)
+                or checkpoint.truncation_recovery_chain_head_sha256 != entry_sha256
+                or private_artifacts is None
+                or record.metadata is None
+                or checkpoint_observation is None
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError(
+                    "scheduler recovery dispatch lacks its exact post-append checkpoint"
+                )
+            bound_models: tuple[tuple[str, SchedulerTruncationRecoveryEntry], ...] = (
+                (_truncation_recovery_entry_path(family), family),
+                (_truncation_recovery_entry_path(activation), activation),
+                (_truncation_recovery_entry_path(dispatch), dispatch),
+            )
+            observations: list[_BoundModelReviewArtifact] = []
+            for relative_path, model in bound_models:
+                private_observation = private_artifacts.get(model.entry_sha256)
+                if (
+                    private_observation is None
+                    or private_observation.relative_path != relative_path
+                ):
+                    record.fresh_dispatch_tail = None
+                    record.pending_dispatch = None
+                    raise ValueError(
+                        "scheduler recovery dispatch artifact lacks validated identity"
+                    )
+                parent_descriptor, leaf = _relative_parent(
+                    record.metadata.root_descriptor,
+                    dict(record.metadata.directory_descriptors),
+                    relative_path,
+                )
+                content, identity = _read_private_file_observation(parent_descriptor, leaf)
+                if (
+                    identity != private_observation.identity
+                    or content != private_observation.content
+                    or content != stable_json(model).encode("utf-8")
+                ):
+                    record.fresh_dispatch_tail = None
+                    record.pending_dispatch = None
+                    raise ValueError(
+                        "scheduler recovery dispatch artifact changed after validation"
+                    )
+                observations.append(
+                    _BoundModelReviewArtifact(
+                        relative_path=relative_path,
+                        identity=identity,
+                        content=content,
+                    )
+                )
+            checkpoint_content, checkpoint_identity = _read_private_file_observation(
+                record.metadata.root_descriptor,
+                _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+            )
+            if (
+                checkpoint_content != retained_bytes
+                or checkpoint_content != checkpoint_observation.content
+                or checkpoint_identity != checkpoint_observation.identity
+            ):
+                record.fresh_dispatch_tail = None
+                record.pending_dispatch = None
+                raise ValueError(
+                    "scheduler recovery dispatch checkpoint differs from retained custody"
+                )
+            record.pending_dispatch = replace(
+                fresh,
+                checkpointed=True,
+                durable_artifacts=tuple(sorted(observations, key=lambda item: item.relative_path)),
+                expected_binding=build_recovery_model_review_binding(
+                    journal=journal,
+                    family=family,
+                    child=child_match[0],
+                    activation=activation,
+                    dispatch=dispatch,
+                ),
+            )
+            record.fresh_dispatch_tail = None
+
+    def claim_dispatch(
+        *,
+        owner: object,
+        binding: SchedulerModelReviewPreDispatchBinding,
+    ) -> bool:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            pending = record.pending_dispatch
+            recovery_request = (
+                _RECOVERY_MODEL_REVIEW_REQUEST_ID_RE.fullmatch(binding.request_id) is not None
+            )
+            recovery_task = _RECOVERY_MODEL_REVIEW_TASK_ID_RE.fullmatch(binding.task_id) is not None
+            expected_source = (
+                _ModelReviewDispatchSource.RECOVERY_CHILD
+                if recovery_request and recovery_task
+                else _ModelReviewDispatchSource.SCHEDULER_TASK
+            )
+            if (
+                type(binding) is not binding_type
+                or recovery_request is not recovery_task
+                or pending is None
+                or not pending.checkpointed
+                or pending.claimed
+                or pending.thread_id != current_thread_id()
+                or pending.source is not expected_source
+                or pending.expected_binding != binding
+                or pending.task_id != binding.task_id
+                or pending.dispatched_event_sha256 != binding.dispatched_event_sha256
+            ):
+                return False
+            record.pending_dispatch = replace(pending, claimed=True)
+            return True
+
+    def register_authorization(
+        *,
+        owner: object,
+        capability: SchedulerModelReviewPreDispatchAuthorization,
+        binding: SchedulerModelReviewPreDispatchBinding,
+    ) -> None:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            pending = record.pending_dispatch
+            recovery_request = (
+                _RECOVERY_MODEL_REVIEW_REQUEST_ID_RE.fullmatch(binding.request_id) is not None
+            )
+            recovery_task = _RECOVERY_MODEL_REVIEW_TASK_ID_RE.fullmatch(binding.task_id) is not None
+            source = (
+                _ModelReviewDispatchSource.RECOVERY_CHILD
+                if recovery_request and recovery_task
+                else _ModelReviewDispatchSource.SCHEDULER_TASK
+            )
+            issued = (
+                record.recovery_authorizations
+                if source is _ModelReviewDispatchSource.RECOVERY_CHILD
+                else record.issued_authorizations
+            )
+            if (
+                type(capability) is not authorization_type
+                or type(binding) is not binding_type
+                or recovery_request is not recovery_task
+                or pending is None
+                or not pending.checkpointed
+                or not pending.claimed
+                or len(pending.durable_artifacts) != 3
+                or pending.source is not source
+                or pending.expected_binding != binding
+                or pending.task_id != binding.task_id
+                or pending.dispatched_event_sha256 != binding.dispatched_event_sha256
+                or issued is None
+                or id(capability) in issued
+                or any(
+                    registered.binding.task_id == binding.task_id
+                    or registered.binding.request_id == binding.request_id
+                    for registered in issued.values()
+                )
+            ):
+                record.pending_dispatch = None
+                raise ValueError("scheduler dispatch authorization registration is invalid")
+            key = id(capability)
+
+            issued[key] = _RegisteredModelReviewAuthorization(
+                capability=capability,
+                binding=replace(binding),
+                source=source,
+                sequence_index=pending.event_index,
+                recovery_family_id=pending.recovery_family_id,
+                durable_artifacts=tuple(replace(item) for item in pending.durable_artifacts),
+            )
+            record.pending_dispatch = None
+
+    def issue_authorization(
+        *,
+        owner: object,
+        binding: SchedulerModelReviewPreDispatchBinding,
+    ) -> SchedulerModelReviewPreDispatchAuthorization:
+        """Construct one opaque cap only from the exact armed custody transition."""
+
+        if not claim_dispatch(owner=owner, binding=binding):
+            raise ValueError("model-review authorization lacks an armed dispatch")
+        capability = object.__new__(authorization_type)
+        register_authorization(
+            owner=owner,
+            capability=capability,
+            binding=binding,
+        )
+        return capability
+
+    def disarm_dispatch(owner: object) -> None:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            record.fresh_dispatch_tail = None
+            record.pending_dispatch = None
+
+    def require_authorization(
+        *,
+        owner: object,
+        capability: SchedulerModelReviewPreDispatchAuthorization,
+        binding: SchedulerModelReviewPreDispatchBinding,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            recovery_request = (
+                _RECOVERY_MODEL_REVIEW_REQUEST_ID_RE.fullmatch(binding.request_id) is not None
+            )
+            recovery_task = _RECOVERY_MODEL_REVIEW_TASK_ID_RE.fullmatch(binding.task_id) is not None
+            if recovery_request is not recovery_task:
+                raise ValueError("model-review authorization mixes dispatch namespaces")
+            source = (
+                _ModelReviewDispatchSource.RECOVERY_CHILD
+                if recovery_request
+                else _ModelReviewDispatchSource.SCHEDULER_TASK
+            )
+            issued = (
+                record.recovery_authorizations
+                if source is _ModelReviewDispatchSource.RECOVERY_CHILD
+                else record.issued_authorizations
+            )
+            registered = issued.get(id(capability)) if issued is not None else None
+            if (
+                registered is None
+                or registered.capability is not capability
+                or registered.binding != binding
+                or registered.source is not source
+            ):
+                raise ValueError("model-review authorization is absent from exact journal custody")
+            return require_live_registered_authorization(record, registered)
+
+    def exact_registered_owner(record: _JournalCustodyRecord) -> object:
+        reference = record.owner_reference
+        owner = reference() if reference is not None else None
+        if owner is None:
+            raise ValueError("model-review authorization lost its exact journal owner")
+        return owner
+
+    def validate_registered_authorization(
+        record: _JournalCustodyRecord,
+        registered: _RegisteredModelReviewAuthorization,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        metadata = record.metadata
+        if metadata is None:
+            raise ValueError("model-review authorization is no longer live: metadata is absent")
+        checkpoint_observation = record.checkpoint_observation
+        if checkpoint_observation is None:
+            raise ValueError("model-review authorization is no longer live: checkpoint is absent")
+        checkpoint_content, checkpoint_identity = _read_private_file_observation(
+            metadata.root_descriptor,
+            _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+        )
+        journal = cast(Any, exact_registered_owner(record))
+        checkpoint = journal._journal_head_checkpoint
+        retained_events = journal._events
+        recovery_entries = journal._truncation_recovery_entries
+        binding = registered.binding
+        current_durable_models: tuple[tuple[str, BaseModel], ...]
+        if (
+            checkpoint_identity != checkpoint_observation.identity
+            or checkpoint_content != checkpoint_observation.content
+            or type(checkpoint) is not SchedulerJournalEvidence
+            or stable_json(checkpoint).encode("utf-8") != checkpoint_content
+            or checkpoint.event_count != record.event_count
+            or len(retained_events) != record.event_count
+            or tuple(item.event_sha256 for item in retained_events) != checkpoint.event_sha256s
+            or checkpoint.truncation_recovery_entry_count != record.recovery_entry_count
+            or len(recovery_entries) != record.recovery_entry_count
+            or checkpoint.truncation_recovery_entry_sha256s
+            != tuple(item.entry_sha256 for item in recovery_entries)
+            or checkpoint.truncation_recovery_chain_head_sha256
+            != (recovery_entries[-1].entry_sha256 if recovery_entries else None)
+        ):
+            raise ValueError("model-review authorization is no longer live: checkpoint changed")
+        if registered.source is _ModelReviewDispatchSource.SCHEDULER_TASK:
+            if (
+                registered.recovery_family_id is not None
+                or registered.sequence_index >= len(retained_events)
+                or retained_events[registered.sequence_index].event_sha256
+                != binding.dispatched_event_sha256
+                or checkpoint.event_sha256s[registered.sequence_index]
+                != binding.dispatched_event_sha256
+            ):
+                raise ValueError(
+                    "model-review authorization is no longer live: dispatch prefix changed"
+                )
+            task_and_plan = journal._indexes.tasks.get(binding.task_id)
+            activation = journal._indexes.activations.get(binding.task_id)
+            dispatch = retained_events[registered.sequence_index]
+            if task_and_plan is None or activation is None:
+                raise ValueError(
+                    "model-review authorization is no longer live: retained state is absent"
+                )
+            task, plan = task_and_plan
+            matching_plan_ordinals = tuple(
+                ordinal for ordinal, retained in enumerate(journal._plans) if retained is plan
+            )
+            if len(matching_plan_ordinals) != 1:
+                raise ValueError(
+                    "model-review authorization is no longer live: retained plan is ambiguous"
+                )
+            expected_binding = build_model_review_binding(
+                plan=plan,
+                task=task,
+                activation=activation,
+                event=dispatch,
+            )
+            if expected_binding != binding:
+                raise ValueError(
+                    "model-review authorization is no longer live: retained state changed"
+                )
+            current_durable_models = (
+                (_pass_plan_path(matching_plan_ordinals[0]), plan),
+                (_activation_path(activation), activation),
+                (_event_path(registered.sequence_index), dispatch),
+            )
+        elif (
+            registered.recovery_family_id is None
+            or registered.sequence_index >= len(recovery_entries)
+            or recovery_entries[registered.sequence_index].entry_sha256
+            != binding.dispatched_event_sha256
+            or checkpoint.truncation_recovery_entry_sha256s[registered.sequence_index]
+            != binding.dispatched_event_sha256
+        ):
+            raise ValueError(
+                "recovery model-review authorization is no longer live: dispatch prefix changed"
+            )
+        else:
+            recovery_indexes = journal._truncation_recovery_indexes
+            child_match = recovery_indexes.children.get(binding.task_id)
+            family = recovery_indexes.families.get(registered.recovery_family_id)
+            activation = recovery_indexes.activations.get(binding.task_id)
+            dispatch = recovery_entries[registered.sequence_index]
+            if (
+                child_match is None
+                or child_match[1] != registered.recovery_family_id
+                or type(family) is not SchedulerTruncationRecoveryFamilyRoot
+                or type(activation) is not SchedulerTruncationRecoveryChildActivation
+                or type(dispatch) is not SchedulerTruncationRecoveryChildDispatch
+                or build_recovery_model_review_binding(
+                    journal=journal,
+                    family=family,
+                    child=child_match[0],
+                    activation=activation,
+                    dispatch=dispatch,
+                )
+                != binding
+            ):
+                raise ValueError(
+                    "recovery model-review authorization is no longer live: retained state changed"
+                )
+            current_durable_models = (
+                (_truncation_recovery_entry_path(family), family),
+                (_truncation_recovery_entry_path(activation), activation),
+                (_truncation_recovery_entry_path(dispatch), dispatch),
+            )
+        current_content_by_path = {
+            relative_path: stable_json(model).encode("utf-8")
+            for relative_path, model in current_durable_models
+        }
+        if (
+            len(current_content_by_path) != len(current_durable_models)
+            or set(current_content_by_path)
+            != {observation.relative_path for observation in registered.durable_artifacts}
+            or any(
+                current_content_by_path[observation.relative_path] != observation.content
+                for observation in registered.durable_artifacts
+            )
+        ):
+            raise ValueError(
+                "model-review authorization is no longer live: retained artifacts changed"
+            )
+        directories = dict(metadata.directory_descriptors)
+        for observation in registered.durable_artifacts:
+            parent_descriptor, leaf = _relative_parent(
+                metadata.root_descriptor,
+                directories,
+                observation.relative_path,
+            )
+            content, identity = _read_private_file_observation(parent_descriptor, leaf)
+            if identity != observation.identity or content != observation.content:
+                raise ValueError(
+                    "model-review authorization is no longer live: durable artifact changed"
+                )
+        return replace(binding)
+
+    def require_live_registered_authorization(
+        record: _JournalCustodyRecord,
+        registered: _RegisteredModelReviewAuthorization,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        """Normalize retained-state and durable failures to fail-closed revocation."""
+
+        try:
+            return validate_registered_authorization(record, registered)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("model-review pre-dispatch authorization is no longer live") from exc
+
+    def require_public_authorization(
+        capability: SchedulerModelReviewPreDispatchAuthorization,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        """Require one publicly exposed ordinary cap against its exact live owner."""
+
+        require_process()
+        if type(capability) is not authorization_type:
+            raise ValueError(
+                "model-review pre-dispatch authorization was not issued live or is no longer live"
+            )
+        with lock:
+            matches: list[tuple[_JournalCustodyRecord, _RegisteredModelReviewAuthorization]] = []
+            for record in owners.values():
+                issued = record.issued_authorizations or {}
+                registered = issued.get(id(capability))
+                if registered is not None and registered.capability is capability:
+                    matches.append((record, registered))
+            if len(matches) != 1:
+                raise ValueError(
+                    "model-review pre-dispatch authorization was not issued live or is no longer live"
+                )
+            record, registered = matches[0]
+            live_owner(exact_registered_owner(record))
+            return require_live_registered_authorization(record, registered)
+
+    def require_authorization_for_task(
+        *,
+        owner: object,
+        task_id: str,
+        recovery: bool,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            issued = record.recovery_authorizations if recovery else record.issued_authorizations
+            matches = tuple(
+                registered
+                for registered in (issued or {}).values()
+                if registered.binding.task_id == task_id
+            )
+            if len(matches) != 1:
+                raise ValueError("model-review task lacks one exact live authorization")
+            return require_live_registered_authorization(record, matches[0])
+
+    def recovery_authorization_bindings(
+        *,
+        owner: object,
+        family_ids: tuple[str, ...],
+    ) -> tuple[SchedulerModelReviewPreDispatchBinding, ...]:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            if type(family_ids) is not tuple or len(family_ids) != len(set(family_ids)):
+                raise ValueError("recovery authorization family inventory is invalid")
+            matches = tuple(
+                registered
+                for registered in (record.recovery_authorizations or {}).values()
+                if registered.recovery_family_id in family_ids
+            )
+            validated = tuple(
+                require_live_registered_authorization(record, registered) for registered in matches
+            )
+            return tuple(
+                sorted(
+                    validated,
+                    key=lambda item: next(
+                        registered.sequence_index
+                        for registered in matches
+                        if registered.binding == item
+                    ),
+                )
+            )
+
+    def current_promoted_bindings(
+        record: _JournalCustodyRecord,
+        journal: object,
+        family_id: str,
+    ) -> tuple[SchedulerModelReviewPreDispatchBinding, ...]:
+        indexes = cast(Any, journal)._truncation_recovery_indexes
+        scheduler_indexes = cast(Any, journal)._indexes
+        promotion = indexes.promotions.get(family_id)
+        family = indexes.families.get(family_id)
+        closure = indexes.closures.get(family_id)
+        if (
+            type(promotion) is not SchedulerTruncationRecoveryFamilyPromotion
+            or type(family) is not SchedulerTruncationRecoveryFamilyRoot
+            or type(closure) is not SchedulerTruncationRecoveryFamilyClosure
+        ):
+            raise ValueError("promoted recovery pre-dispatch authority lacks exact topology")
+        validate_durable_promotion(
+            promotion=promotion,
+            family=family,
+            closure=closure,
+            indexes=indexes,
+            scheduler=scheduler_indexes,
+        )
+        root_task_id = family.recovery_plan.parent.parent_task_id
+        root_binding = require_authorization_for_task(
+            owner=journal,
+            task_id=root_task_id,
+            recovery=False,
+        )
+        task_and_plan = scheduler_indexes.tasks.get(root_task_id)
+        activation = scheduler_indexes.activations.get(root_task_id)
+        history = scheduler_indexes.event_histories.get(root_task_id, [])
+        if task_and_plan is None or activation is None or len(history) < 3:
+            raise ValueError("promoted recovery lacks its ordinary root dispatch")
+        root_task, root_plan = task_and_plan
+        expected_root_binding = build_model_review_binding(
+            plan=root_plan,
+            task=root_task,
+            activation=activation,
+            event=history[2],
+        )
+        if (
+            expected_root_binding is None
+            or root_binding != expected_root_binding
+            or root_binding.request_id != family.recovery_plan.parent.parent_logical_request_id
+            or root_binding.task_plan_sha256 != family.recovery_plan.parent.parent_task_plan_sha256
+            or root_binding.activation_sha256
+            != family.recovery_plan.parent.parent_activation_sha256
+            or root_binding.requested_surface_manifest_sha256
+            != family.requested_surface_manifest.requested_surface_manifest_sha256
+        ):
+            raise ValueError("promoted recovery lacks its exact ordinary root authority")
+
+        recursive = promotion.schema_version == "1.1"
+        family_ids: tuple[str, ...]
+        if recursive:
+            tree = _recursive_recovery_tree_inventory(
+                family=family,
+                closure=closure,
+                indexes=indexes,
+            )
+            ordered_children = (
+                (family, tree.bridge_child),
+                (family, tree.direct_leaf_child),
+                *(
+                    (tree.nested_family, child)
+                    for child in tree.nested_family.recovery_plan.children
+                ),
+            )
+            family_ids = (family.family_id, tree.nested_family.family_id)
+        else:
+            if promotion.schema_version != "1.0" or len(family.recovery_plan.children) != 2:
+                raise ValueError("promoted recovery direct authority has invalid topology")
+            ordered_children = tuple((family, child) for child in family.recovery_plan.children)
+            family_ids = (family.family_id,)
+
+        private_inventory = recovery_authorization_bindings(
+            owner=journal,
+            family_ids=family_ids,
+        )
+        expected_children: list[SchedulerModelReviewPreDispatchBinding] = []
+        for child_family, child in ordered_children:
+            child_activation = indexes.activations.get(child.child_task_id)
+            dispatch = indexes.dispatches.get(child.child_task_id)
+            if (
+                type(child_activation) is not SchedulerTruncationRecoveryChildActivation
+                or type(dispatch) is not SchedulerTruncationRecoveryChildDispatch
+            ):
+                raise ValueError("promoted recovery child lacks exact dispatch artifacts")
+            expected = build_recovery_model_review_binding(
+                journal=journal,
+                family=child_family,
+                child=child,
+                activation=child_activation,
+                dispatch=dispatch,
+            )
+            registered = require_authorization_for_task(
+                owner=journal,
+                task_id=child.child_task_id,
+                recovery=True,
+            )
+            if registered != expected:
+                raise ValueError("promoted recovery child authority changed")
+            expected_children.append(expected)
+        expected_tuple = tuple(expected_children)
+        if len(private_inventory) != len(expected_tuple) or set(private_inventory) != set(
+            expected_tuple
+        ):
+            raise ValueError("promoted recovery private authority inventory differs from topology")
+        return (replace(root_binding), *(replace(binding) for binding in expected_tuple))
+
+    def require_current_full_state(record: _JournalCustodyRecord, journal: object) -> None:
+        retained = record.durable_artifact_observations
+        if retained is None:
+            raise ValueError("promoted recovery lacks its private durable baseline")
+        expected_cached = tuple(
+            (
+                relative,
+                observation.identity,
+                hashlib.sha256(observation.content).hexdigest(),
+            )
+            for relative, observation in sorted(retained.items())
+        )
+        observed = validate_journal_state(journal)
+        if observed != expected_cached:
+            raise ValueError("promoted recovery durable identity changed after validation")
+        require_durable_snapshot(journal, observed)
+
+    def validate_current_recovery_checkpoint(
+        record: _JournalCustodyRecord,
+        journal: object,
+    ) -> None:
+        metadata = record.metadata
+        checkpoint_observation = record.checkpoint_observation
+        if metadata is None or checkpoint_observation is None:
+            raise ValueError("promoted recovery lacks exact checkpoint custody")
+        checkpoint_content, checkpoint_identity = _read_private_file_observation(
+            metadata.root_descriptor,
+            _JOURNAL_HEAD_CHECKPOINT_FILENAME,
+        )
+        retained = cast(Any, journal)._truncation_recovery_entries
+        checkpoint = cast(Any, journal)._journal_head_checkpoint
+        if (
+            checkpoint_identity != checkpoint_observation.identity
+            or checkpoint_content != checkpoint_observation.content
+            or type(checkpoint) is not SchedulerJournalEvidence
+            or stable_json(checkpoint).encode("utf-8") != checkpoint_content
+            or len(retained) != record.recovery_entry_count
+            or checkpoint.truncation_recovery_entry_count != record.recovery_entry_count
+            or checkpoint.truncation_recovery_entry_sha256s
+            != tuple(item.entry_sha256 for item in retained)
+            or checkpoint.truncation_recovery_chain_head_sha256
+            != (retained[-1].entry_sha256 if retained else None)
+        ):
+            raise ValueError("promoted recovery checkpoint prefix is no longer exact")
+
+    def current_promotion_material(
+        record: _JournalCustodyRecord,
+        journal: object,
+        family_id: str,
+        recursive: bool,
+    ) -> tuple[
+        SchedulerTruncationRecoveryFamilyPromotion,
+        tuple[_BoundModelReviewArtifact, ...],
+    ]:
+        require_current_full_state(record, journal)
+        validate_current_recovery_checkpoint(record, journal)
+        indexes = cast(Any, journal)._truncation_recovery_indexes
+        family = indexes.families.get(family_id)
+        closure = indexes.closures.get(family_id)
+        promotion = indexes.promotions.get(family_id)
+        if (
+            type(family) is not SchedulerTruncationRecoveryFamilyRoot
+            or type(closure) is not SchedulerTruncationRecoveryFamilyClosure
+            or type(promotion) is not SchedulerTruncationRecoveryFamilyPromotion
+            or (promotion.schema_version == "1.1") is not recursive
+        ):
+            raise ValueError("promoted recovery lacks one exact retained promotion")
+        validate_durable_promotion(
+            promotion=promotion,
+            family=family,
+            closure=closure,
+            indexes=indexes,
+            scheduler=cast(Any, journal)._indexes,
+        )
+        lineage = build_promotion_lineage(
+            family=family,
+            closure=closure,
+            promotion=promotion,
+            indexes=indexes,
+        )
+        expected_count = 9 if recursive else 5
+        private_observations = record.recovery_artifact_observations
+        retained_entries = cast(Any, journal)._truncation_recovery_entries
+        if (
+            len(lineage) != expected_count
+            or len({entry.entry_sha256 for entry in lineage}) != expected_count
+            or private_observations is None
+        ):
+            raise ValueError("promoted recovery durable lineage is incomplete")
+        observations: list[_BoundModelReviewArtifact] = []
+        metadata = record.metadata
+        assert metadata is not None
+        directories = dict(metadata.directory_descriptors)
+        for entry in lineage:
+            if (
+                entry.entry_index >= len(retained_entries)
+                or retained_entries[entry.entry_index] != entry
+            ):
+                raise ValueError("promoted recovery lineage left its exact retained index")
+            observation = private_observations.get(entry.entry_sha256)
+            if observation is None or observation.relative_path != _truncation_recovery_entry_path(
+                entry
+            ):
+                raise ValueError("promoted recovery lineage lacks append-time custody")
+            parent_descriptor, leaf = _relative_parent(
+                metadata.root_descriptor,
+                directories,
+                observation.relative_path,
+            )
+            content, identity = _read_private_file_observation(parent_descriptor, leaf)
+            if identity != observation.identity or content != observation.content:
+                raise ValueError("promoted recovery durable lineage changed")
+            observations.append(replace(observation))
+        root_task_id = family.recovery_plan.parent.parent_task_id
+        scheduler_indexes = cast(Any, journal)._indexes
+        parent_attempt = scheduler_indexes.provider_attempts.get(root_task_id)
+        parent_result = scheduler_indexes.credited_results.get(root_task_id)
+        parent_history = scheduler_indexes.event_histories.get(root_task_id, [])
+        terminal_events = tuple(
+            event for event in parent_history if event.kind in _TERMINAL_EVENT_KINDS
+        )
+        parent_observations = record.durable_artifact_observations
+        if (
+            type(parent_attempt) is not SchedulerProviderAttemptEvidence
+            or type(parent_result) is not SchedulerTaskResult
+            or len(terminal_events) != 1
+            or type(terminal_events[0]) is not SchedulerTaskEvent
+            or parent_result.result_sha256 != promotion.original_truncated_result_sha256
+            or parent_observations is None
+        ):
+            raise ValueError("promoted recovery lacks exact main-parent durable lineage")
+        parent_models: tuple[tuple[str, BaseModel], ...] = (
+            (_provider_attempt_path(parent_attempt), parent_attempt),
+            (_task_result_path(parent_result), parent_result),
+            (_event_path(terminal_events[0].event_index), terminal_events[0]),
+        )
+        for relative_path, model in parent_models:
+            private_observation = parent_observations.get(relative_path)
+            if private_observation is None:
+                raise ValueError("promoted recovery parent lineage lacks validated identity")
+            parent_descriptor, leaf = _relative_parent(
+                metadata.root_descriptor,
+                directories,
+                relative_path,
+            )
+            content, identity = _read_private_file_observation(parent_descriptor, leaf)
+            if (
+                identity != private_observation.identity
+                or content != private_observation.content
+                or content != stable_json(model).encode("utf-8")
+            ):
+                raise ValueError("promoted recovery main-parent durable lineage changed")
+            observations.append(
+                _BoundModelReviewArtifact(
+                    relative_path=private_observation.relative_path,
+                    identity=private_observation.identity,
+                    content=private_observation.content,
+                )
+            )
+        return promotion, tuple(observations)
+
+    def issue_promotion_capability(
+        *,
+        owner: object,
+        family_id: str,
+        recursive: bool,
+        verification_capability: (
+            VerifiedTruncationRecoveryClosure | VerifiedRecursiveTruncationRecoveryTree
+        ),
+    ) -> (
+        VerifiedPromotedTruncationRecoverySurfaceCoverage
+        | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    ):
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            metadata = record.metadata
+            direct = record.direct_promotion_capabilities
+            recursive_caps = record.recursive_promotion_capabilities
+            journal = cast(Any, owner)
+            if (
+                metadata is None
+                or metadata.read_only
+                or direct is None
+                or recursive_caps is None
+                or family_id in direct
+                or family_id in recursive_caps
+                or journal._terminal_report_authority is not None
+            ):
+                raise ValueError("promoted recovery capability issue window is unavailable")
+            try:
+                bindings = current_promoted_bindings(record, owner, family_id)
+            except ValueError:
+                raise ValueError("promoted recovery pre-dispatch authority is absent") from None
+            promotion, lineage = current_promotion_material(
+                record,
+                owner,
+                family_id,
+                recursive,
+            )
+            if journal._truncation_recovery_entries[-1] != promotion:
+                raise ValueError("promoted recovery capability was not issued at its live head")
+            family = journal._truncation_recovery_indexes.families[family_id]
+            root_task_id = family.recovery_plan.parent.parent_task_id
+            task_and_plan = journal._indexes.tasks.get(root_task_id)
+            if task_and_plan is None:
+                raise ValueError("promoted recovery capability lacks its root pass")
+            _task, plan = task_and_plan
+            ordinals = tuple(
+                index
+                for index, retained_plan in enumerate(journal._plans)
+                if retained_plan.pass_plan_id == plan.pass_plan_id
+            )
+            if len(ordinals) != 1 or ordinals[0] < len(journal._pass_results):
+                raise ValueError("promoted recovery capability issue is too late")
+            capability: (
+                VerifiedPromotedTruncationRecoverySurfaceCoverage
+                | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+            )
+            if recursive:
+                if type(verification_capability) is not VerifiedRecursiveTruncationRecoveryTree:
+                    raise ValueError("recursive promotion requires exact tree authority")
+                tree = require_recursive_source(verification_capability)
+                validate_recursive_projection(tree=tree, promotion=promotion)
+                capability = object.__new__(
+                    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+                )
+                target = recursive_caps
+            else:
+                if type(verification_capability) is not VerifiedTruncationRecoveryClosure:
+                    raise ValueError("direct promotion requires exact closure authority")
+                closure_projection = require_direct_source(verification_capability)
+                validate_direct_projection(closure=closure_projection, promotion=promotion)
+                capability = object.__new__(VerifiedPromotedTruncationRecoverySurfaceCoverage)
+                target = direct
+            target[family_id] = _RegisteredPromotionCapability(
+                capability=capability,
+                family_id=family_id,
+                recursive=recursive,
+                verification_capability=verification_capability,
+                model_review_bindings=tuple(replace(binding) for binding in bindings),
+                durable_artifacts=tuple(replace(item) for item in lineage),
+            )
+            return capability
+
+    def issue_direct_promotion_capability(
+        *,
+        owner: object,
+        family_id: str,
+        closure_capability: VerifiedTruncationRecoveryClosure,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
+        return cast(
+            VerifiedPromotedTruncationRecoverySurfaceCoverage,
+            issue_promotion_capability(
+                owner=owner,
+                family_id=family_id,
+                recursive=False,
+                verification_capability=closure_capability,
+            ),
+        )
+
+    def issue_recursive_promotion_capability(
+        *,
+        owner: object,
+        family_id: str,
+        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
+        return cast(
+            VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+            issue_promotion_capability(
+                owner=owner,
+                family_id=family_id,
+                recursive=True,
+                verification_capability=tree_capability,
+            ),
+        )
+
+    def require_promotion_capability(
+        capability: (
+            VerifiedPromotedTruncationRecoverySurfaceCoverage
+            | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+        ),
+        *,
+        recursive: bool,
+    ) -> (
+        VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+        | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection
+    ):
+        require_process()
+        expected_type = (
+            VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+            if recursive
+            else VerifiedPromotedTruncationRecoverySurfaceCoverage
+        )
+        if type(capability) is not expected_type:
+            raise ValueError("promoted recovery capability is absent or forged")
+        with lock:
+            matches: list[tuple[_JournalCustodyRecord, _RegisteredPromotionCapability]] = []
+            for record in owners.values():
+                target = (
+                    record.recursive_promotion_capabilities
+                    if recursive
+                    else record.direct_promotion_capabilities
+                ) or {}
+                for registered in target.values():
+                    if registered.capability is capability:
+                        matches.append((record, registered))
+            if len(matches) != 1:
+                raise ValueError("promoted recovery capability is absent from live custody")
+            record, registered = matches[0]
+            owner = exact_registered_owner(record)
+            live_owner(owner)
+            promotion, lineage = current_promotion_material(
+                record,
+                owner,
+                registered.family_id,
+                recursive,
+            )
+            bindings = current_promoted_bindings(record, owner, registered.family_id)
+            if (
+                registered.recursive is not recursive
+                or lineage != registered.durable_artifacts
+                or bindings != registered.model_review_bindings
+            ):
+                raise ValueError("promoted recovery capability durable authority changed")
+            if recursive:
+                source = registered.verification_capability
+                if type(source) is not VerifiedRecursiveTruncationRecoveryTree:
+                    raise ValueError("recursive promotion source authority changed")
+                tree = require_recursive_source(source)
+                return validate_recursive_projection(tree=tree, promotion=promotion)
+            source = registered.verification_capability
+            if type(source) is not VerifiedTruncationRecoveryClosure:
+                raise ValueError("direct promotion source authority changed")
+            closure_projection = require_direct_source(source)
+            return validate_direct_projection(closure=closure_projection, promotion=promotion)
+
+    def require_direct_promotion_capability(
+        capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
+        return cast(
+            VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
+            require_promotion_capability(capability, recursive=False),
+        )
+
+    def require_recursive_promotion_capability(
+        capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
+        return cast(
+            VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
+            require_promotion_capability(capability, recursive=True),
+        )
+
+    def direct_promotion_capabilities(
+        owner: object,
+    ) -> tuple[VerifiedPromotedTruncationRecoverySurfaceCoverage, ...]:
+        require_process()
+        with lock:
+            registered = live_owner(owner).direct_promotion_capabilities or {}
+            return tuple(
+                cast(VerifiedPromotedTruncationRecoverySurfaceCoverage, item.capability)
+                for item in registered.values()
+            )
+
+    def recursive_promotion_capabilities(
+        owner: object,
+    ) -> tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...]:
+        require_process()
+        with lock:
+            registered = live_owner(owner).recursive_promotion_capabilities or {}
+            return tuple(
+                cast(VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, item.capability)
+                for item in registered.values()
+            )
+
+    def journal_authorizations(
+        owner: object,
+    ) -> tuple[SchedulerModelReviewPreDispatchAuthorization, ...]:
+        require_process()
+        with lock:
+            record = live_owner(owner)
+            issued = record.issued_authorizations or {}
+            retained: list[SchedulerModelReviewPreDispatchAuthorization] = []
+            for registered in issued.values():
+                if type(registered.capability) is authorization_type:
+                    retained.append(registered.capability)
+            return tuple(retained)
+
+    return (
+        admit_opening,
+        bind,
+        activate,
+        assert_live,
+        claim_close,
+        claim_failed_open,
+        resolve_cleanup,
+        finalize_cleanup,
+        record_event,
+        record_recovery_entry,
+        record_checkpoint,
+        record_validated_snapshot,
+        checkpoint_dispatch,
+        checkpoint_recovery_dispatch,
+        issue_authorization,
+        disarm_dispatch,
+        require_public_authorization,
+        require_authorization_for_task,
+        recovery_authorization_bindings,
+        journal_authorizations,
+        issue_direct_promotion_capability,
+        issue_recursive_promotion_capability,
+        require_direct_promotion_capability,
+        require_recursive_promotion_capability,
+        direct_promotion_capabilities,
+        recursive_promotion_capabilities,
+    )
 
 
 @dataclass(frozen=True)
@@ -364,6 +2530,7 @@ class _SchedulerJournalIndexes:
     tasks: dict[str, tuple[SchedulerTaskPlan, SchedulerPassPlan]]
     activations: dict[str, SchedulerTaskActivation]
     outputs: dict[str, SchedulerTaskOutput]
+    retrieval_bindings: dict[str, SchedulerRetrievalBinding]
     provider_attempts: dict[str, SchedulerProviderAttemptEvidence]
     results_by_hash: dict[str, SchedulerTaskResult]
     result_observations_by_task: dict[str, list[SchedulerTaskResult]]
@@ -622,6 +2789,14 @@ def _validate_root_scheduler_parent(
         or parent_request_limit_reservation.role != usage.role
         or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
         or pass_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+        or (
+            pass_plan.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+            and (
+                task.model_surface_review_request_manifest_sha256 is None
+                or task.model_surface_review_request_manifest_sha256
+                != family.requested_surface_manifest.requested_surface_manifest_sha256
+            )
+        )
         or result.terminal_status is not SchedulerTerminalStatus.TRUNCATED
         or result.result_origin is not SchedulerResultOrigin.ACTIVATED
         or family.parent_terminal_result_sha256 != result.result_sha256
@@ -919,6 +3094,32 @@ class _RecoveredCandidateReviewContent:
     child_results: tuple[SchedulerTruncationRecoveryChildResult, ...]
 
 
+def _candidate_review_projection_algorithm(
+    projection: CandidateReviewTruncationProjection,
+) -> str:
+    """Resolve the immutable scheduler algorithm bound by one truncation projection."""
+
+    return candidate_review_schema_algorithm_version(
+        wire_schema_sha256=projection.wire_schema_sha256,
+        normalized_batch_schema_sha256=projection.normalized_batch_schema_sha256,
+    )
+
+
+def _require_candidate_review_normalization_algorithm(
+    normalization: CandidateReviewNormalizationEvidence,
+    *,
+    algorithm_version: str,
+) -> None:
+    """Reject a recovery leaf whose normalized schema pair crosses scheduler versions."""
+
+    observed = candidate_review_schema_algorithm_version(
+        wire_schema_sha256=normalization.wire_schema_sha256,
+        normalized_batch_schema_sha256=normalization.normalized_batch_schema_sha256,
+    )
+    if observed != algorithm_version:
+        raise ValueError("scheduler recovery candidate-review schema custody mixes algorithms")
+
+
 @dataclass(frozen=True, slots=True)
 class _RecursiveRecoveryTreeInventory:
     """Exact durable shape of the single supported recursive recovery tree."""
@@ -1156,6 +3357,7 @@ def _rebuild_recovered_candidate_review_content(
         or parent_attempt.truncation_projection != family.truncation_projection
     ):
         raise ValueError("scheduler recovery promotion lacks a typed parent attempt")
+    algorithm_version = _candidate_review_projection_algorithm(family.truncation_projection)
 
     expected_surface_records = list(family.truncation_projection.surface_reviews)
     raw_candidates: dict[tuple[str, str], tuple[CandidateFinding, dict[str, Any]]] = {}
@@ -1163,7 +3365,10 @@ def _rebuild_recovered_candidate_review_content(
     parent_usage = parent_attempt.usage_record
     usage_by_request[parent_usage.request_id] = parent_usage
     for finding in family.truncation_projection.findings:
-        finding_sha256 = scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        finding_sha256 = scheduler_candidate_payload_sha256(
+            finding,
+            algorithm_version=algorithm_version,
+        )
         frames = tuple(
             frame
             for frame in family.truncation_projection.accepted_frames
@@ -1200,6 +3405,11 @@ def _rebuild_recovered_candidate_review_content(
             or result.runtime_output_artifact is None
         ):
             raise ValueError("scheduler recovery promotion has a non-creditable direct child")
+        assert result.runtime_normalization_evidence is not None
+        _require_candidate_review_normalization_algorithm(
+            result.runtime_normalization_evidence,
+            algorithm_version=algorithm_version,
+        )
         child_results.append(result)
         if result.runtime_usage_record.request_id in usage_by_request:
             raise ValueError("scheduler recovery promotion reused a request identity")
@@ -1258,12 +3468,14 @@ def _rebuild_recovered_candidate_review_content(
             common: dict[str, Any] = {
                 "origin_kind": origin_kind,
                 "accepted_candidate_id": accepted.candidate_id,
-                "accepted_candidate_sha256": scheduler_canonical_sha256(
-                    accepted.model_dump(mode="json")
+                "accepted_candidate_sha256": scheduler_candidate_payload_sha256(
+                    accepted,
+                    algorithm_version=algorithm_version,
                 ),
                 "raw_candidate_id": raw_finding.candidate_id,
-                "raw_candidate_sha256": scheduler_canonical_sha256(
-                    raw_finding.model_dump(mode="json")
+                "raw_candidate_sha256": scheduler_candidate_payload_sha256(
+                    raw_finding,
+                    algorithm_version=algorithm_version,
                 ),
                 "request_id": request_id,
                 "request_role": usage.role,
@@ -1323,6 +3535,16 @@ def _rebuild_recursive_recovered_candidate_review_content(
         or parent_attempt.truncation_projection != family.truncation_projection
     ):
         raise ValueError("scheduler recursive promotion lacks a typed root parent attempt")
+    bridge_projection = tree.bridge_result.truncation_projection
+    if bridge_projection is None:
+        raise ValueError("scheduler recursive promotion bridge lacks typed truncation custody")
+    algorithm_version = _candidate_review_projection_algorithm(family.truncation_projection)
+    bridge_algorithm_version = _candidate_review_projection_algorithm(bridge_projection)
+    nested_algorithm_version = _candidate_review_projection_algorithm(
+        tree.nested_family.truncation_projection
+    )
+    if {bridge_algorithm_version, nested_algorithm_version} != {algorithm_version}:
+        raise ValueError("scheduler recursive recovery schema custody mixes algorithms")
 
     expected_surface_records = list(family.truncation_projection.surface_reviews)
     raw_candidates: dict[tuple[str, str], tuple[CandidateFinding, dict[str, Any]]] = {}
@@ -1330,7 +3552,10 @@ def _rebuild_recursive_recovered_candidate_review_content(
     parent_usage = parent_attempt.usage_record
     usage_by_request[parent_usage.request_id] = parent_usage
     for finding in family.truncation_projection.findings:
-        finding_sha256 = scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        finding_sha256 = scheduler_candidate_payload_sha256(
+            finding,
+            algorithm_version=algorithm_version,
+        )
         frames = tuple(
             frame
             for frame in family.truncation_projection.accepted_frames
@@ -1355,15 +3580,17 @@ def _rebuild_recursive_recovered_candidate_review_content(
 
     bridge = tree.bridge_result
     bridge_usage = bridge.runtime_usage_record
-    bridge_projection = bridge.truncation_projection
-    if bridge_usage is None or bridge_projection is None:
+    if bridge_usage is None:
         raise ValueError("scheduler recursive promotion bridge lacks typed runtime custody")
     bridge_context_sha256 = bridge_usage.routing.get("context_request_evidence_sha256")
     if not isinstance(bridge_context_sha256, str):
         raise ValueError("scheduler recursive promotion bridge lacks context-request custody")
     usage_by_request[bridge_usage.request_id] = bridge_usage
     for finding in bridge_projection.findings:
-        finding_sha256 = scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        finding_sha256 = scheduler_candidate_payload_sha256(
+            finding,
+            algorithm_version=algorithm_version,
+        )
         frames = tuple(
             frame
             for frame in bridge_projection.accepted_frames
@@ -1405,6 +3632,10 @@ def _rebuild_recursive_recovered_candidate_review_content(
             or child_match is None
         ):
             raise ValueError("scheduler recursive promotion leaf lacks typed runtime custody")
+        _require_candidate_review_normalization_algorithm(
+            normalization,
+            algorithm_version=algorithm_version,
+        )
         child, _family_id = child_match
         if usage.request_id in usage_by_request:
             raise ValueError("scheduler recursive promotion reused a request identity")
@@ -1463,12 +3694,14 @@ def _rebuild_recursive_recovered_candidate_review_content(
             common: dict[str, Any] = {
                 "origin_kind": origin_kind,
                 "accepted_candidate_id": accepted.candidate_id,
-                "accepted_candidate_sha256": scheduler_canonical_sha256(
-                    accepted.model_dump(mode="json")
+                "accepted_candidate_sha256": scheduler_candidate_payload_sha256(
+                    accepted,
+                    algorithm_version=algorithm_version,
                 ),
                 "raw_candidate_id": raw_finding.candidate_id,
-                "raw_candidate_sha256": scheduler_canonical_sha256(
-                    raw_finding.model_dump(mode="json")
+                "raw_candidate_sha256": scheduler_candidate_payload_sha256(
+                    raw_finding,
+                    algorithm_version=algorithm_version,
                 ),
                 "request_id": request_id,
                 "request_role": usage.role,
@@ -1596,6 +3829,14 @@ def _validate_durable_recovery_promotion(
     if (
         pass_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
         or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+        or (
+            pass_plan.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+            and (
+                task.model_surface_review_request_manifest_sha256 is None
+                or task.model_surface_review_request_manifest_sha256
+                != family.requested_surface_manifest.requested_surface_manifest_sha256
+            )
+        )
         or task.response_schema_sha256 != family.truncation_projection.wire_schema_sha256
         or output.campaign_id != family.campaign_id
         or output.pass_plan_id != pass_plan.pass_plan_id
@@ -1670,6 +3911,47 @@ def _validate_durable_recovery_promotion(
     expected_capability_binding_sha256 = scheduler_canonical_sha256(capability_payload)
     if promotion.capability_binding_sha256 != expected_capability_binding_sha256:
         raise ValueError("scheduler recovery promotion capability binding is inconsistent")
+
+
+def _promotion_authority_lineage_entries(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    promotion: SchedulerTruncationRecoveryFamilyPromotion,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+) -> tuple[SchedulerTruncationRecoveryEntry, ...]:
+    """Return the exact durable entry lineage a promoted capability must retain."""
+
+    if promotion.schema_version == "1.1":
+        tree = _recursive_recovery_tree_inventory(
+            family=family,
+            closure=closure,
+            indexes=indexes,
+        )
+        return (
+            family,
+            *tree.root_results,
+            tree.nested_family,
+            *tree.nested_leaf_results,
+            tree.nested_closure,
+            closure,
+            promotion,
+        )
+    results = tuple(
+        indexes.results.get(child.child_task_id) for child in family.recovery_plan.children
+    )
+    if (
+        promotion.schema_version != "1.0"
+        or len(results) != 2
+        or any(type(result) is not SchedulerTruncationRecoveryChildResult for result in results)
+    ):
+        raise ValueError("scheduler direct promotion lacks exact durable lineage")
+    return (
+        family,
+        *cast(tuple[SchedulerTruncationRecoveryEntry, ...], results),
+        closure,
+        promotion,
+    )
 
 
 def _derive_truncation_recovery_indexes(
@@ -1911,6 +4193,7 @@ def _derive_scheduler_journal_indexes(
     plans: Iterable[SchedulerPassPlan],
     activations: Iterable[SchedulerTaskActivation],
     outputs: Iterable[SchedulerTaskOutput],
+    retrieval_bindings: Iterable[tuple[str, SchedulerRetrievalBinding]],
     provider_attempts: Iterable[SchedulerProviderAttemptEvidence],
     result_observations: Iterable[SchedulerTaskResult],
     events: Iterable[SchedulerTaskEvent],
@@ -1935,6 +4218,16 @@ def _derive_scheduler_journal_indexes(
         if output.task_id in outputs_by_task or output.task_id not in tasks:
             raise ValueError("scheduler output is duplicated or unplanned")
         outputs_by_task[output.task_id] = output
+
+    retrieval_bindings_by_task: dict[str, SchedulerRetrievalBinding] = {}
+    for primary_task_id, binding in retrieval_bindings:
+        if (
+            primary_task_id in retrieval_bindings_by_task
+            or primary_task_id not in tasks
+            or binding.planner_task_id not in tasks
+        ):
+            raise ValueError("scheduler retrieval binding is duplicated or unplanned")
+        retrieval_bindings_by_task[primary_task_id] = binding
 
     provider_attempts_by_task: dict[str, SchedulerProviderAttemptEvidence] = {}
     for attempt in provider_attempts:
@@ -1977,6 +4270,7 @@ def _derive_scheduler_journal_indexes(
         tasks=tasks,
         activations=activations_by_task,
         outputs=outputs_by_task,
+        retrieval_bindings=retrieval_bindings_by_task,
         provider_attempts=provider_attempts_by_task,
         results_by_hash=results_by_hash,
         result_observations_by_task=observations_by_task,
@@ -2659,12 +4953,231 @@ def _validate_cost_ledger_baseline_prefix(
         raise ValueError("current cost ledger spend precedes scheduler baseline")
 
 
+def _requires_model_review_pre_dispatch_authority(
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    *,
+    _algorithm_version: str = SCHEDULER_ALGORITHM_VERSION,
+    _blind_review: SchedulerPassKind = SchedulerPassKind.BLIND_SHARD_REVIEW,
+    _cross_shard: SchedulerPassKind = SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+    _model_request: SchedulerTaskKind = SchedulerTaskKind.MODEL_REQUEST,
+    _plan_type: type[SchedulerPassPlan] = SchedulerPassPlan,
+    _task_type: type[SchedulerTaskPlan] = SchedulerTaskPlan,
+    _stable_json: Callable[..., str] = stable_json,
+) -> bool:
+    """Identify only current surface-bound model reviews that can receive review credit."""
+
+    try:
+        canonical_plan = _plan_type.model_validate_json(_stable_json(plan), strict=True)
+        canonical_task = _task_type.model_validate_json(_stable_json(task), strict=True)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "model-review dispatch eligibility state is not canonically sealed"
+        ) from None
+    canonical_plan_task = next(
+        (item for item in canonical_plan.tasks if item.task_id == canonical_task.task_id),
+        None,
+    )
+    if canonical_plan != plan or canonical_task != task or canonical_plan_task != canonical_task:
+        raise ValueError("model-review dispatch eligibility differs from its sealed task")
+    candidate_review_contract = canonical_task.pass_kind is _blind_review or (
+        canonical_task.pass_kind is _cross_shard and canonical_task.role == "business_logic"
+    )
+    return (
+        candidate_review_contract
+        and canonical_plan.manifest.algorithm_version == _algorithm_version
+        and canonical_task.task_kind is _model_request
+    )
+
+
+def _model_review_pre_dispatch_binding(
+    *,
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    activation: SchedulerTaskActivation,
+    event: SchedulerTaskEvent,
+    _requires_authority: Callable[
+        [SchedulerPassPlan, SchedulerTaskPlan], bool
+    ] = _requires_model_review_pre_dispatch_authority,
+    _binding_type: type[SchedulerModelReviewPreDispatchBinding] = (
+        SchedulerModelReviewPreDispatchBinding
+    ),
+) -> SchedulerModelReviewPreDispatchBinding | None:
+    """Reconstruct every authorization field from exact retained scheduler state."""
+
+    manifest_sha256 = task.model_surface_review_request_manifest_sha256
+    if (
+        not _requires_authority(plan, task)
+        or manifest_sha256 is None
+        or task.requested_model is None
+        or task.root_lineage is None
+        or activation.actual_input_sha256 != activation.user_prompt_sha256
+        or activation.user_prompt_sha256 is None
+        or activation.provider_prompt_sha256 is None
+        or activation.response_schema_sha256 is None
+        or event.kind is not SchedulerTaskEventKind.DISPATCHED
+        or event.task_id != task.task_id
+        or event.activation_sha256 != activation.activation_sha256
+        or event.request_id != task.logical_request_id
+    ):
+        return None
+    plan.require_exact_task(task)
+    activation.require_exact_task(plan=plan, task=task)
+    return _binding_type(
+        request_id=task.logical_request_id,
+        task_id=task.task_id,
+        review_role=task.role,
+        requested_model=task.requested_model,
+        root_lineage=task.root_lineage,
+        requested_surface_manifest_sha256=manifest_sha256,
+        rendered_context_sha256=activation.user_prompt_sha256,
+        provider_prompt_sha256=activation.provider_prompt_sha256,
+        response_schema_sha256=activation.response_schema_sha256,
+        task_plan_sha256=task.task_plan_sha256,
+        activation_sha256=activation.activation_sha256,
+        dispatched_event_sha256=event.event_sha256,
+    )
+
+
+def _recovery_model_review_pre_dispatch_binding(
+    *,
+    journal: SchedulerJournal,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    child: TruncationRecoveryChildPlan,
+    activation: SchedulerTruncationRecoveryChildActivation,
+    dispatch: SchedulerTruncationRecoveryChildDispatch,
+    _binding_type: type[SchedulerModelReviewPreDispatchBinding] = (
+        SchedulerModelReviewPreDispatchBinding
+    ),
+) -> SchedulerModelReviewPreDispatchBinding:
+    """Rebuild one recovery child's exact provider-visible dispatch binding."""
+
+    indexes = journal._truncation_recovery_indexes
+    if (
+        type(family) is not SchedulerTruncationRecoveryFamilyRoot
+        or type(child) is not TruncationRecoveryChildPlan
+        or type(activation) is not SchedulerTruncationRecoveryChildActivation
+        or type(dispatch) is not SchedulerTruncationRecoveryChildDispatch
+        or child not in family.recovery_plan.children
+    ):
+        raise ValueError("recovery model-review authorization lacks exact child topology")
+    root_family: SchedulerTruncationRecoveryFamilyRoot | None = family
+    if family.parent_kind is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD:
+        parent_family_id = family.parent_family_id
+        root_family = indexes.families.get(parent_family_id) if parent_family_id else None
+        if (
+            type(root_family) is not SchedulerTruncationRecoveryFamilyRoot
+            or root_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            or root_family.parent_family_id is not None
+            or indexes.nested_family_by_parent_child.get(family.recovery_plan.parent.parent_task_id)
+            != family.family_id
+        ):
+            raise ValueError("recovery model-review authorization lacks its exact root family")
+    if (
+        type(root_family) is not SchedulerTruncationRecoveryFamilyRoot
+        or root_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        or root_family.parent_family_id is not None
+    ):
+        raise ValueError("recovery model-review authorization lacks an ordinary root")
+    root_task_id = root_family.recovery_plan.parent.parent_task_id
+    task_and_plan = journal._indexes.tasks.get(root_task_id)
+    root_activation = journal._indexes.activations.get(root_task_id)
+    if task_and_plan is None or type(root_activation) is not SchedulerTaskActivation:
+        raise ValueError("recovery model-review authorization lacks its ordinary parent activation")
+    root_task, root_plan = task_and_plan
+    root_plan.require_exact_task(root_task)
+    root_activation.require_exact_task(plan=root_plan, task=root_task)
+    child_surface_ids = set(child.surface_ids)
+    subset_requests = tuple(
+        request
+        for request in root_family.requested_surface_manifest.requests
+        if request.surface_id in child_surface_ids
+    )
+    subset_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(subset_requests)
+    full_manifest_sha256 = root_family.requested_surface_manifest.requested_surface_manifest_sha256
+    if (
+        root_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+        or root_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+        or root_task.requested_model is None
+        or root_task.root_lineage is None
+        or root_task.system_prompt_sha256 is None
+        or root_activation.system_prompt_sha256 is None
+        or root_task.model_surface_review_request_manifest_sha256 != full_manifest_sha256
+        or root_task.response_schema_sha256 != root_family.truncation_projection.wire_schema_sha256
+        or family.requested_surface_manifest != root_family.requested_surface_manifest
+        or child.requested_surface_manifest_sha256 != full_manifest_sha256
+        or tuple(request.surface_id for request in subset_requests) != child.surface_ids
+        or activation.family_id != family.family_id
+        or activation.family_root_sha256 != family.entry_sha256
+        or activation.child_task_id != child.child_task_id
+        or activation.child_logical_request_id != child.child_logical_request_id
+        or activation.child_plan_sha256 != child.child_plan_sha256
+        or activation.child_surface_ids != child.surface_ids
+        or activation.actual_input_sha256 != activation.user_prompt_sha256
+        or activation.system_prompt_sha256 != root_task.system_prompt_sha256
+        or activation.system_prompt_sha256 != root_activation.system_prompt_sha256
+        or activation.request_role != root_task.role
+        or activation.requested_model != root_task.requested_model
+        or activation.response_schema_sha256 != root_task.response_schema_sha256
+        or dispatch.family_id != family.family_id
+        or dispatch.family_root_sha256 != family.entry_sha256
+        or dispatch.child_task_id != child.child_task_id
+        or dispatch.child_logical_request_id != child.child_logical_request_id
+        or dispatch.child_plan_sha256 != child.child_plan_sha256
+        or dispatch.activation_id != activation.activation_id
+        or dispatch.activation_sha256 != activation.entry_sha256
+    ):
+        raise ValueError("recovery model-review authorization binding is incomplete or changed")
+    return _binding_type(
+        request_id=child.child_logical_request_id,
+        task_id=child.child_task_id,
+        review_role=root_task.role,
+        requested_model=root_task.requested_model,
+        root_lineage=root_task.root_lineage,
+        requested_surface_manifest_sha256=(subset_manifest.requested_surface_manifest_sha256),
+        rendered_context_sha256=activation.user_prompt_sha256,
+        provider_prompt_sha256=activation.provider_prompt_sha256,
+        response_schema_sha256=activation.response_schema_sha256,
+        task_plan_sha256=child.child_plan_sha256,
+        activation_sha256=activation.entry_sha256,
+        dispatched_event_sha256=dispatch.entry_sha256,
+    )
+
+
+def _issue_model_review_pre_dispatch_authorization(
+    *,
+    journal: SchedulerJournal,
+    plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    activation: SchedulerTaskActivation,
+    event: SchedulerTaskEvent,
+) -> SchedulerModelReviewPreDispatchAuthorization | None:
+    """Uninstalled placeholder replaced by the closure-captured live entrypoint."""
+
+    del journal, plan, task, activation, event
+    raise RuntimeError("scheduler dispatch entrypoint is not installed")
+
+
 class SchedulerJournal:
     """Exclusive live custody over one exact append-only scheduler campaign."""
 
-    def __init__(
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> SchedulerJournal:
+        del cls
+        raise TypeError("scheduler journals are constructed only by authenticated openers")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("scheduler journals are initialized only by authenticated openers")
+
+    def _initialize_from_opener(
         self,
         *,
+        opener_token: object,
+        bind_owner: _BindJournalCustody,
+        custody_reservation: object,
         path: Path,
         root_descriptor: int,
         root_identity: tuple[int, int, int],
@@ -2677,6 +5190,7 @@ class SchedulerJournal:
         activations: tuple[SchedulerTaskActivation, ...],
         events: tuple[SchedulerTaskEvent, ...],
         outputs: tuple[SchedulerTaskOutput, ...],
+        retrieval_bindings: tuple[tuple[str, SchedulerRetrievalBinding], ...],
         provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
         result_observations: tuple[SchedulerTaskResult, ...],
         pass_results: tuple[SchedulerPassResult, ...],
@@ -2698,7 +5212,6 @@ class SchedulerJournal:
         self._directory_descriptors = directory_descriptors
         self._directory_identities = directory_identities
         self._lock_descriptor = lock_descriptor
-        self._closed = False
         self._read_only = read_only
         self._pending_checkpoint_recovery = pending_checkpoint_recovery
         self._allowed_immutable_write_temps = allowed_immutable_write_temps
@@ -2711,6 +5224,11 @@ class SchedulerJournal:
         self._activations = list(activations)
         self._events = list(events)
         self._outputs = [_detach_canonical_model(item) for item in outputs]
+        self._retrieval_bindings = {
+            task_id: _detach_canonical_model(binding) for task_id, binding in retrieval_bindings
+        }
+        if len(self._retrieval_bindings) != len(retrieval_bindings):
+            raise ValueError("scheduler retrieval binding repeats a primary task")
         self._provider_attempts = [_detach_canonical_model(item) for item in provider_attempts]
         self._result_observations = list(result_observations)
         self._pass_results = [_detach_canonical_model(item) for item in pass_results]
@@ -2739,6 +5257,7 @@ class SchedulerJournal:
             plans=self._plans,
             activations=self._activations,
             outputs=self._outputs,
+            retrieval_bindings=self._retained_retrieval_bindings(),
             provider_attempts=self._provider_attempts,
             result_observations=self._result_observations,
             events=self._events,
@@ -2748,6 +5267,35 @@ class SchedulerJournal:
             scheduler=self._indexes,
             manifest=self.manifest,
         )
+        bind_owner(
+            reservation=custody_reservation,
+            owner=self,
+            metadata=_JournalCustodyMetadata(
+                path=path,
+                root_descriptor=root_descriptor,
+                root_identity=root_identity,
+                directory_descriptors=tuple(sorted(directory_descriptors.items())),
+                directory_identities=tuple(sorted(directory_identities.items())),
+                lock_descriptor=lock_descriptor,
+                read_only=read_only,
+            ),
+            baseline_event_count=len(events),
+            baseline_recovery_entry_count=len(truncation_recovery_entries),
+            initial_checkpoint_content=self._journal_head_checkpoint_bytes,
+            opener_token=opener_token,
+        )
+
+    def __copy__(self) -> Never:
+        raise TypeError("scheduler journal live custody cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> Never:
+        raise TypeError("scheduler journal live custody cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("scheduler journal live custody cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
+        raise TypeError("scheduler journal live custody cannot be serialized")
 
     def __enter__(self) -> SchedulerJournal:
         self._assert_live_custody()
@@ -2771,6 +5319,16 @@ class SchedulerJournal:
     @property
     def outputs(self) -> tuple[SchedulerTaskOutput, ...]:
         return tuple(_detach_canonical_model(item) for item in self._retained_outputs())
+
+    def retrieval_binding_for_task(
+        self,
+        task_id: str,
+    ) -> SchedulerRetrievalBinding | None:
+        """Return one private detached retrieval transcript for trusted runtime recovery."""
+
+        self._assert_live_custody()
+        binding = self._retrieval_bindings.get(task_id)
+        return _detach_canonical_model(binding) if binding is not None else None
 
     @property
     def provider_attempts(self) -> tuple[SchedulerProviderAttemptEvidence, ...]:
@@ -2809,6 +5367,16 @@ class SchedulerJournal:
         """Return process-private outputs for trusted internal projection only."""
 
         return tuple(sorted(self._outputs, key=lambda item: item.task_id))
+
+    def _retained_retrieval_bindings(
+        self,
+    ) -> tuple[tuple[str, SchedulerRetrievalBinding], ...]:
+        """Return private retrieval transcripts for trusted internal projection only."""
+
+        return tuple(
+            (task_id, _detach_canonical_model(binding))
+            for task_id, binding in sorted(self._retrieval_bindings.items())
+        )
 
     def _retained_provider_attempts(self) -> tuple[SchedulerProviderAttemptEvidence, ...]:
         """Return process-private attempts for trusted internal projection only."""
@@ -2933,9 +5501,18 @@ class SchedulerJournal:
                 parent_pass_plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
                 or parent_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
                 or parent_task.response_schema_sha256 != projection.wire_schema_sha256
+                or (
+                    parent_pass_plan.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+                    and parent_task.model_surface_review_request_manifest_sha256 is None
+                )
+                or (
+                    parent_task.model_surface_review_request_manifest_sha256 is not None
+                    and parent_task.model_surface_review_request_manifest_sha256
+                    != surface_manifest.requested_surface_manifest_sha256
+                )
             ):
                 raise ValueError(
-                    "scheduler recovery root requires one framed blind-review model task"
+                    "scheduler recovery root requires one surface-bound framed blind-review task"
                 )
             parent_pass_ordinals = tuple(
                 index
@@ -3060,26 +5637,10 @@ class SchedulerJournal:
         self,
         child_task_id: str,
     ) -> SchedulerTruncationRecoveryChildDispatch:
-        """Durably mark dispatch; this method performs no provider transport."""
+        """Uninstalled placeholder replaced by the closure-captured live entrypoint."""
 
-        self._assert_writable_custody()
-        activation = self._truncation_recovery_indexes.activations.get(child_task_id)
-        if (
-            activation is None
-            or child_task_id in self._truncation_recovery_indexes.dispatches
-            or child_task_id in self._truncation_recovery_indexes.results
-        ):
-            raise ValueError("only one activated recovery child may be marked dispatched")
-        child_match = self._truncation_recovery_indexes.children[child_task_id]
-        if child_match[1] in self._truncation_recovery_indexes.closures:
-            raise ValueError("scheduler recovery family is already closed")
-        entry = SchedulerTruncationRecoveryChildDispatch.build(
-            activation=activation,
-            entry_index=len(self._truncation_recovery_entries),
-            previous_entry_sha256=self._truncation_recovery_chain_head,
-        )
-        self._append_truncation_recovery_entry(entry)
-        return entry
+        del self, child_task_id
+        raise RuntimeError("scheduler recovery dispatch entrypoint is not installed")
 
     def record_truncation_recovery_child_preflight_result(
         self,
@@ -3584,35 +6145,141 @@ class SchedulerJournal:
             strict=True,
         )
 
+    def _require_current_promoted_model_review_pre_dispatch_authorizations(
+        self,
+        family_id: str,
+    ) -> tuple[SchedulerModelReviewPreDispatchBinding, ...]:
+        """Join one promoted root to its exact private root and recovery dispatch caps."""
+
+        self._assert_live_custody()
+        promotion = self._truncation_recovery_indexes.promotions.get(family_id)
+        family = self._truncation_recovery_indexes.families.get(family_id)
+        closure = self._truncation_recovery_indexes.closures.get(family_id)
+        if promotion is None or family is None or closure is None:
+            raise ValueError("promoted recovery pre-dispatch authority lacks exact topology")
+        _validate_durable_recovery_promotion(
+            promotion=promotion,
+            family=family,
+            closure=closure,
+            indexes=self._truncation_recovery_indexes,
+            scheduler=self._indexes,
+        )
+        root_task_id = family.recovery_plan.parent.parent_task_id
+        root_binding = _require_live_model_review_authorization_for_task(
+            owner=self,
+            task_id=root_task_id,
+            recovery=False,
+        )
+        expected_root_binding = SchedulerJournal._current_model_review_pre_dispatch_binding(
+            self,
+            root_task_id,
+        )
+        if (
+            root_binding != expected_root_binding
+            or root_binding.request_id != family.recovery_plan.parent.parent_logical_request_id
+            or root_binding.task_plan_sha256 != family.recovery_plan.parent.parent_task_plan_sha256
+            or root_binding.activation_sha256
+            != family.recovery_plan.parent.parent_activation_sha256
+            or root_binding.requested_surface_manifest_sha256
+            != family.requested_surface_manifest.requested_surface_manifest_sha256
+        ):
+            raise ValueError("promoted recovery lacks its exact ordinary root authority")
+
+        recursive = promotion.schema_version == "1.1"
+        family_ids: tuple[str, ...]
+        if recursive:
+            tree = _recursive_recovery_tree_inventory(
+                family=family,
+                closure=closure,
+                indexes=self._truncation_recovery_indexes,
+            )
+            nested_children = tree.nested_family.recovery_plan.children
+            ordered_children = (
+                (family, tree.bridge_child),
+                (family, tree.direct_leaf_child),
+                *((tree.nested_family, child) for child in nested_children),
+            )
+            family_ids = (family.family_id, tree.nested_family.family_id)
+        else:
+            if promotion.schema_version != "1.0" or len(family.recovery_plan.children) != 2:
+                raise ValueError("promoted recovery direct authority has invalid topology")
+            ordered_children = tuple((family, child) for child in family.recovery_plan.children)
+            family_ids = (family.family_id,)
+
+        private_inventory = _live_recovery_model_review_authorization_bindings(
+            owner=self,
+            family_ids=family_ids,
+        )
+        expected_bindings: list[SchedulerModelReviewPreDispatchBinding] = []
+        for child_family, child in ordered_children:
+            activation = self._truncation_recovery_indexes.activations.get(child.child_task_id)
+            dispatch = self._truncation_recovery_indexes.dispatches.get(child.child_task_id)
+            if (
+                type(activation) is not SchedulerTruncationRecoveryChildActivation
+                or type(dispatch) is not SchedulerTruncationRecoveryChildDispatch
+            ):
+                raise ValueError("promoted recovery child lacks exact dispatch artifacts")
+            expected = _recovery_model_review_pre_dispatch_binding(
+                journal=self,
+                family=child_family,
+                child=child,
+                activation=activation,
+                dispatch=dispatch,
+            )
+            registered = _require_live_model_review_authorization_for_task(
+                owner=self,
+                task_id=child.child_task_id,
+                recovery=True,
+            )
+            if registered != expected:
+                raise ValueError("promoted recovery child authority changed")
+            expected_bindings.append(expected)
+        expected_tuple = tuple(expected_bindings)
+        if private_inventory != tuple(
+            sorted(expected_tuple, key=lambda item: item.dispatched_event_sha256)
+        ) and set(private_inventory) != set(expected_tuple):
+            raise ValueError("promoted recovery private authority inventory differs from topology")
+        if len(private_inventory) != len(expected_tuple):
+            raise ValueError("promoted recovery private authority inventory has extras")
+        return (replace(root_binding), *(replace(binding) for binding in expected_tuple))
+
     def issue_promoted_truncation_recovery_surface_coverage(
         self,
         family_id: str,
         closure_capability: VerifiedTruncationRecoveryClosure,
     ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
-        """Issue live coverage custody only after the matching promotion was appended."""
+        """Uninstalled placeholder replaced by the closure-captured live entrypoint."""
 
-        self._require_current_promoted_truncation_recovery_family(family_id)
-        return _issue_verified_promoted_truncation_recovery_surface_coverage(
-            journal=self,
-            family_id=family_id,
-            closure_capability=closure_capability,
-        )
+        del self, family_id, closure_capability
+        raise RuntimeError("scheduler direct promotion entrypoint is not installed")
 
     def issue_promoted_recursive_truncation_recovery_surface_coverage(
         self,
         family_id: str,
         tree_capability: VerifiedRecursiveTruncationRecoveryTree,
     ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
-        """Issue live recursive coverage custody after the exact root promotion append."""
+        """Uninstalled placeholder replaced by the closure-captured live entrypoint."""
 
-        promotion = self._require_current_promoted_truncation_recovery_family(family_id)
-        if promotion.schema_version != "1.1":
-            raise ValueError("scheduler recursive surface coverage requires a recursive promotion")
-        return _issue_verified_promoted_recursive_truncation_recovery_surface_coverage(
-            journal=self,
-            family_id=family_id,
-            tree_capability=tree_capability,
-        )
+        del self, family_id, tree_capability
+        raise RuntimeError("scheduler recursive promotion entrypoint is not installed")
+
+    @property
+    def promoted_truncation_recovery_surface_coverages(
+        self,
+    ) -> tuple[VerifiedPromotedTruncationRecoverySurfaceCoverage, ...]:
+        """Return direct promotion capabilities issued by this live journal only."""
+
+        self._assert_live_custody()
+        return _live_direct_promotion_capabilities(self)
+
+    @property
+    def promoted_recursive_truncation_recovery_surface_coverages(
+        self,
+    ) -> tuple[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage, ...]:
+        """Return recursive promotion capabilities issued by this live journal only."""
+
+        self._assert_live_custody()
+        return _live_recursive_promotion_capabilities(self)
 
     @property
     def _truncation_recovery_chain_head(self) -> str | None:
@@ -3643,6 +6310,7 @@ class SchedulerJournal:
         self._truncation_recovery_indexes = indexes
         durable_snapshot = self._validate_state()
         self._adopt_validated_durable_snapshot(durable_snapshot)
+        _record_live_truncation_recovery_entry(owner=self, entry=retained)
         self._refresh_journal_head_checkpoint()
 
     @property
@@ -3720,6 +6388,7 @@ class SchedulerJournal:
         )
         self._journal_head_checkpoint = evidence
         self._journal_head_checkpoint_bytes = stable_json(evidence).encode("utf-8")
+        _record_live_journal_checkpoint(self)
 
     def _require_journal_head_checkpoint_matches_state(self) -> SchedulerJournalEvidence:
         """Compare the independent local checkpoint before any crash recovery mutation."""
@@ -3788,6 +6457,23 @@ class SchedulerJournal:
             ):
                 return False
 
+            retrieval_binding_hashes = frozenset(expected.retrieval_binding_sha256s)
+            retrieval_bindings = tuple(
+                sorted(
+                    (
+                        binding
+                        for _task_id, binding in self._retained_retrieval_bindings()
+                        if binding.binding_sha256 in retrieval_binding_hashes
+                    ),
+                    key=lambda item: item.planner_task_id,
+                )
+            )
+            if (
+                tuple(item.binding_sha256 for item in retrieval_bindings)
+                != expected.retrieval_binding_sha256s
+            ):
+                return False
+
             attempt_hashes = frozenset(expected.provider_attempt_evidence_sha256s)
             provider_attempts = tuple(
                 item
@@ -3846,6 +6532,7 @@ class SchedulerJournal:
                 model_requests=model_requests,
                 activations=activations,
                 outputs=outputs,
+                retrieval_bindings=retrieval_bindings,
                 provider_attempts=provider_attempts,
                 task_results=task_results,
                 result_observations=result_observations,
@@ -3875,6 +6562,7 @@ class SchedulerJournal:
 
         expected_activation_hashes = frozenset(expected.task_activation_sha256s)
         expected_output_hashes = frozenset(expected.task_output_artifact_sha256s)
+        expected_retrieval_binding_hashes = frozenset(expected.retrieval_binding_sha256s)
         expected_attempt_hashes = frozenset(expected.provider_attempt_evidence_sha256s)
         expected_result_hashes = frozenset(expected.task_result_sha256s)
         expected_observation_hashes = frozenset(expected.result_observation_sha256s)
@@ -3889,6 +6577,11 @@ class SchedulerJournal:
             item
             for item in self._retained_outputs()
             if item.output_artifact_sha256 not in expected_output_hashes
+        )
+        new_retrieval_bindings = tuple(
+            (task_id, binding)
+            for task_id, binding in self._retained_retrieval_bindings()
+            if binding.binding_sha256 not in expected_retrieval_binding_hashes
         )
         new_attempts = tuple(
             item
@@ -3911,6 +6604,49 @@ class SchedulerJournal:
             expected.terminal_report_authority_sha256 is None
             and self._terminal_report_authority is not None
         )
+
+        if new_retrieval_bindings:
+            if (
+                len(new_retrieval_bindings) != 1
+                or new_plans
+                or new_activations
+                or new_events
+                or new_outputs
+                or new_attempts
+                or new_task_results
+                or new_observations
+                or new_pass_results
+                or new_recovery_entries
+                or authority_added
+            ):
+                return False
+            primary_task_id, binding = new_retrieval_bindings[0]
+            predecessor_history = tuple(
+                item
+                for item in self.events[: expected.event_count]
+                if item.task_id == primary_task_id
+            )
+            if (
+                not predecessor_history
+                or predecessor_history[-1].kind is not SchedulerTaskEventKind.PLANNED
+            ):
+                return False
+            try:
+                primary_task, plan = self._task_and_plan(primary_task_id)
+                planner_task, planner_plan = self._task_and_plan(binding.planner_task_id)
+                planner_result = self._indexes.credited_results[binding.planner_task_id]
+                planner_output = self._indexes.outputs[binding.planner_task_id]
+                expected_binding = SchedulerRetrievalBinding.build_pre_activation(
+                    plan=plan,
+                    primary_task=primary_task,
+                    planner_task=planner_task,
+                    planner_output=planner_output,
+                    planner_result=planner_result,
+                    transcript=binding.transcript,
+                )
+            except (KeyError, TypeError, ValueError):
+                return False
+            return planner_plan == plan and binding == expected_binding
 
         signature = (
             len(new_plans),
@@ -4002,6 +6738,7 @@ class SchedulerJournal:
                         task=task,
                         terminal_status=observation.terminal_status,
                         terminal_evidence_sha256=observation.terminal_evidence_sha256,
+                        retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
                     )
                     expected_event_kind = SchedulerTaskEventKind.PREFLIGHT_TERMINAL
                 else:
@@ -4035,6 +6772,7 @@ class SchedulerJournal:
                         terminal_status=observation.terminal_status,
                         terminal_evidence_sha256=observation.terminal_evidence_sha256,
                         output=output,
+                        retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
                     )
             except (TypeError, ValueError):
                 return False
@@ -4063,6 +6801,7 @@ class SchedulerJournal:
                             )
                         ),
                         output=new_outputs[0],
+                        retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
                     )
                 except (TypeError, ValueError):
                     return False
@@ -4097,6 +6836,9 @@ class SchedulerJournal:
                                 activation=activation,
                                 terminal_status=SchedulerTerminalStatus.TRUNCATED,
                                 terminal_evidence_sha256=projection.evidence_sha256,
+                                retrieval_binding=self._indexes.retrieval_bindings.get(
+                                    task.task_id
+                                ),
                             )
                         else:
                             exact_recovered_result = SchedulerTaskResult.build(
@@ -4109,6 +6851,9 @@ class SchedulerJournal:
                                         "classification": "dispatch_without_terminal",
                                         "dispatch_event_sha256": dispatched[0].event_sha256,
                                     }
+                                ),
+                                retrieval_binding=self._indexes.retrieval_bindings.get(
+                                    task.task_id
                                 ),
                             )
                     except (TypeError, ValueError):
@@ -4294,6 +7039,7 @@ class SchedulerJournal:
                 activation=self._activation_for_task(task_id),
                 terminal_status=SchedulerTerminalStatus.FAILED,
                 terminal_evidence_sha256=cost_entry_sha256(released_entry),
+                retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
             )
         except (StopIteration, TypeError, ValueError):
             return False
@@ -4424,6 +7170,7 @@ class SchedulerJournal:
                     model_requests=self.model_requests,
                     activations=self.activations,
                     outputs=self._retained_outputs(),
+                    retrieval_bindings=tuple(self._retrieval_bindings.values()),
                     provider_attempts=predecessor_attempts,
                     task_results=self.task_results,
                     result_observations=self.result_observations,
@@ -4515,6 +7262,7 @@ class SchedulerJournal:
                     ),
                     activations=self.activations,
                     outputs=self._retained_outputs(),
+                    retrieval_bindings=tuple(self._retrieval_bindings.values()),
                     provider_attempts=retained_attempts,
                     task_results=predecessor_results,
                     result_observations=predecessor_observations,
@@ -4600,6 +7348,7 @@ class SchedulerJournal:
                     model_requests=self.model_requests,
                     activations=self.activations,
                     outputs=self._retained_outputs(),
+                    retrieval_bindings=tuple(self._retrieval_bindings.values()),
                     provider_attempts=retained_attempts,
                     task_results=self.task_results,
                     result_observations=predecessor_observations,
@@ -4644,6 +7393,7 @@ class SchedulerJournal:
                         model_requests=self.model_requests,
                         activations=self.activations,
                         outputs=self._retained_outputs(),
+                        retrieval_bindings=tuple(self._retrieval_bindings.values()),
                         provider_attempts=retained_attempts,
                         task_results=self.task_results,
                         result_observations=self.result_observations,
@@ -4702,6 +7452,7 @@ class SchedulerJournal:
                 _JOURNAL_TRANSITION_PREDECESSOR_FILENAME,
                 previous_bytes,
             )
+            _record_live_journal_checkpoint(self)
             return current
         current_bytes = stable_json(current).encode("utf-8")
         _replace_private_file(
@@ -4713,12 +7464,13 @@ class SchedulerJournal:
         self._journal_head_checkpoint = current
         self._journal_head_checkpoint_bytes = current_bytes
         self._adopt_validated_durable_snapshot(prospective_snapshot)
+        self._assert_live_custody()
+        _record_live_journal_checkpoint(self)
         _unlink_exact_private_file(
             self._root_descriptor,
             _JOURNAL_TRANSITION_PREDECESSOR_FILENAME,
             previous_bytes,
         )
-        self._assert_live_custody()
         return current
 
     def _adopt_staged_journal_head_checkpoint(
@@ -4747,6 +7499,7 @@ class SchedulerJournal:
             allow_pending_checkpoint=staged_predecessor_present,
         )
         self._assert_live_custody()
+        _record_live_journal_checkpoint(self)
 
     def _build_retained_journal_evidence(self) -> SchedulerJournalEvidence:
         """Project frozen live state after transition-local validation and byte custody."""
@@ -4768,6 +7521,7 @@ class SchedulerJournal:
             model_requests=model_requests,
             activations=self._activations,
             outputs=self._outputs,
+            retrieval_bindings=tuple(self._retrieval_bindings.values()),
             provider_attempts=self._provider_attempts,
             task_results=self.task_results,
             result_observations=self._result_observations,
@@ -4786,6 +7540,10 @@ class SchedulerJournal:
             *((_activation_path(item), item) for item in self._activations),
             *((_event_path(item.event_index), item) for item in self._events),
             *((_task_output_path(item), item) for item in self._outputs),
+            *(
+                (_retrieval_binding_path(task_id, binding), binding)
+                for task_id, binding in self._retained_retrieval_bindings()
+            ),
             *((_provider_attempt_path(item), item) for item in self._provider_attempts),
             *((_task_result_path(item), item) for item in self._result_observations),
             *((_pass_result_path(index), item) for index, item in enumerate(self._pass_results)),
@@ -4942,6 +7700,7 @@ class SchedulerJournal:
             model_requests=model_requests,
             activations=self.activations,
             outputs=self._retained_outputs(),
+            retrieval_bindings=tuple(self._retrieval_bindings.values()),
             provider_attempts=self._retained_provider_attempts(),
             task_results=self.task_results,
             result_observations=self.result_observations,
@@ -5131,10 +7890,17 @@ class SchedulerJournal:
     def structurally_successful_review_usage_records(self) -> tuple[UsageRecord, ...]:
         """Return durable successful review usage without promoting MOCK to REAL credit."""
 
+        primary_task_ids = {
+            task.task_id
+            for plan in self.plans
+            for task in plan.tasks
+            if task.purpose is SchedulerTaskPurpose.PRIMARY
+        }
         successful = {
             result.task_id
             for result in self.task_results
-            if result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+            if result.task_id in primary_task_ids
+            and result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
         }
         main_records = tuple(
             UsageRecord.model_validate(output.model_completion_evidence.usage_record.model_dump())
@@ -5161,10 +7927,17 @@ class SchedulerJournal:
     def restorable_review_usage_records(self) -> tuple[UsageRecord, ...]:
         """Return only usage attached to a durably credited successful review result."""
 
+        primary_task_ids = {
+            task.task_id
+            for plan in self.plans
+            for task in plan.tasks
+            if task.purpose is SchedulerTaskPurpose.PRIMARY
+        }
         successful = {
             result.task_id
             for result in self.task_results
-            if result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+            if result.task_id in primary_task_ids
+            and result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
         }
         main_records = tuple(
             UsageRecord.model_validate(output.model_completion_evidence.usage_record.model_dump())
@@ -5630,6 +8403,7 @@ class SchedulerJournal:
             model_requests=self.model_requests,
             activations=self.activations,
             outputs=self._retained_outputs(),
+            retrieval_bindings=tuple(self._retrieval_bindings.values()),
             provider_attempts=self._retained_provider_attempts(),
             task_results=self.task_results,
             result_observations=self.result_observations,
@@ -5755,25 +8529,141 @@ class SchedulerJournal:
         self._refresh_journal_head_checkpoint()
         return frozen
 
-    def mark_dispatched(self, task_id: str) -> SchedulerTaskEvent:
-        """Persist dispatch before executing a provider or external side effect."""
-
-        self._assert_writable_custody()
-        task, plan = self._task_and_plan(task_id)
-        _require_model_task_privacy_custody(self.manifest, task)
-        history = self._history_for_task(task_id)
-        activation = self._activation_for_task(task_id)
-        if len(history) != 2 or history[-1].kind is not SchedulerTaskEventKind.ACTIVATED:
-            raise ValueError("only an activated scheduler task may be dispatched")
-        event = self._append_event(
-            plan=plan,
-            task=task,
-            kind=SchedulerTaskEventKind.DISPATCHED,
-            request_id=task.logical_request_id,
-            activation=activation,
+    def _current_model_review_pre_dispatch_binding(
+        self,
+        task_id: str,
+        *,
+        _build_binding: Callable[..., SchedulerModelReviewPreDispatchBinding | None] = (
+            _model_review_pre_dispatch_binding
+        ),
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        self._assert_live_custody()
+        task_and_plan = self._indexes.tasks.get(task_id)
+        activation = self._indexes.activations.get(task_id)
+        history = self._indexes.event_histories.get(task_id, [])
+        if (
+            task_and_plan is None
+            or activation is None
+            or len(history) < 3
+            or history[2].kind is not SchedulerTaskEventKind.DISPATCHED
+        ):
+            raise ValueError("model-review authorization lacks exact dispatched state")
+        task, plan = task_and_plan
+        event = history[2]
+        if (
+            type(plan) is not SchedulerPassPlan
+            or type(task) is not SchedulerTaskPlan
+            or type(activation) is not SchedulerTaskActivation
+            or type(event) is not SchedulerTaskEvent
+            or not any(item is plan for item in self._plans)
+            or not any(item is task for item in plan.tasks)
+            or not any(item is activation for item in self._activations)
+            or event.event_index >= len(self._events)
+            or self._events[event.event_index] is not event
+        ):
+            raise ValueError("model-review authorization lacks exact retained objects")
+        try:
+            canonical_plan = SchedulerPassPlan.model_validate_json(
+                stable_json(plan),
+                strict=True,
+            )
+            canonical_task = SchedulerTaskPlan.model_validate_json(
+                stable_json(task),
+                strict=True,
+            )
+            canonical_activation = SchedulerTaskActivation.model_validate_json(
+                stable_json(activation),
+                strict=True,
+            )
+            canonical_event = SchedulerTaskEvent.model_validate_json(
+                stable_json(event),
+                strict=True,
+            )
+            prior_task_event = SchedulerTaskEvent.model_validate_json(
+                stable_json(history[1]),
+                strict=True,
+            )
+            previous_event = (
+                SchedulerTaskEvent.model_validate_json(
+                    stable_json(self._events[event.event_index - 1]),
+                    strict=True,
+                )
+                if event.event_index > 0
+                else None
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                "model-review authorization retained state is not canonically sealed"
+            ) from None
+        canonical_plan_task = next(
+            (item for item in canonical_plan.tasks if item.task_id == canonical_task.task_id),
+            None,
         )
-        self._refresh_journal_head_checkpoint()
-        return event
+        if (
+            canonical_plan != plan
+            or canonical_task != task
+            or canonical_activation != activation
+            or canonical_event != event
+            or canonical_plan_task != canonical_task
+        ):
+            raise ValueError("model-review authorization retained state changed after sealing")
+        canonical_activation.require_exact_task(
+            plan=canonical_plan,
+            task=canonical_task,
+        )
+        rebuilt_event = SchedulerTaskEvent.build(
+            plan=canonical_plan,
+            task=canonical_task,
+            kind=SchedulerTaskEventKind.DISPATCHED,
+            event_index=canonical_event.event_index,
+            previous_event=previous_event,
+            prior_task_event=prior_task_event,
+            activation=canonical_activation,
+            request_id=canonical_task.logical_request_id,
+        )
+        if rebuilt_event != canonical_event:
+            raise ValueError("model-review authorization dispatch event is not exact")
+        binding = _build_binding(
+            plan=canonical_plan,
+            task=canonical_task,
+            activation=canonical_activation,
+            event=canonical_event,
+        )
+        if binding is None:
+            raise ValueError("model-review authorization lacks complete provider-visible state")
+        return binding
+
+    def _require_current_model_review_pre_dispatch_binding(
+        self,
+        capability: SchedulerModelReviewPreDispatchAuthorization,
+        binding: SchedulerModelReviewPreDispatchBinding,
+    ) -> SchedulerModelReviewPreDispatchBinding:
+        """Rebuild and compare every field while this exact journal owns the capability."""
+
+        self._assert_live_custody()
+        registered = require_model_review_pre_dispatch_authorization(capability)
+        expected = self._current_model_review_pre_dispatch_binding(binding.task_id)
+        if expected != binding or registered != binding:
+            raise ValueError("model-review authorization binding differs from scheduler state")
+        return expected
+
+    def mark_dispatched(self, task_id: str) -> SchedulerTaskEvent:
+        """Uninstalled placeholder replaced by the closure-captured live entrypoint."""
+
+        del self, task_id
+        raise RuntimeError("scheduler dispatch entrypoint is not installed")
+
+    @property
+    def model_review_pre_dispatch_authorizations(
+        self,
+    ) -> tuple[SchedulerModelReviewPreDispatchAuthorization, ...]:
+        """Return only capabilities issued by this live process before dispatch."""
+
+        self._assert_live_custody()
+        authorizations = _live_model_review_authorizations(self)
+        for authorization in authorizations:
+            require_model_review_pre_dispatch_authorization(authorization)
+        return authorizations
 
     def activate_task(
         self,
@@ -5797,6 +8687,20 @@ class SchedulerJournal:
             raise ValueError("only one never-activated planned task may be activated")
         if task_id in self._indexes.activations:
             raise ValueError("scheduler task already has durable activation evidence")
+        retrieval_planning_result = _retrieval_planning_result_for_primary(
+            plan=plan,
+            task=task,
+            results_by_task=self._indexes.credited_results,
+        )
+        retrieval_binding = self._indexes.retrieval_bindings.get(task_id)
+        if (
+            retrieval_planning_result is not None
+            and retrieval_planning_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+            and retrieval_binding is None
+        ):
+            raise ValueError("retrieval-bound primary lacks its durable private transcript")
+        if retrieval_binding is not None:
+            retrieval_binding.require_exact_planned_primary(plan=plan, task=task)
         activation = SchedulerTaskActivation.build(
             plan=plan,
             task=task,
@@ -5807,7 +8711,14 @@ class SchedulerJournal:
             response_schema_sha256=response_schema_sha256,
             delivered_source_descriptor_sha256s=(delivered_source_descriptor_sha256s),
             upstream_task_result_sha256s=upstream_task_result_sha256s,
+            retrieval_planning_result=retrieval_planning_result,
         )
+        if retrieval_binding is not None:
+            retrieval_binding.require_exact_primary(
+                plan=plan,
+                task=task,
+                activation=activation,
+            )
         _write_model(
             self._root_descriptor,
             self._directory_descriptors,
@@ -5824,6 +8735,58 @@ class SchedulerJournal:
         self._refresh_journal_head_checkpoint()
         return activation
 
+    def persist_retrieval_binding(
+        self,
+        task_id: str,
+        binding: SchedulerRetrievalBinding,
+    ) -> SchedulerRetrievalBinding:
+        """Persist one full private retrieval transcript before primary activation."""
+
+        self._assert_writable_custody()
+        task, plan = self._task_and_plan(task_id)
+        history = self._history_for_task(task_id)
+        if len(history) != 1 or history[-1].kind is not SchedulerTaskEventKind.PLANNED:
+            raise ValueError("scheduler retrieval binding requires a planned primary")
+        if task_id in self._indexes.activations:
+            raise ValueError("scheduler retrieval binding cannot follow primary activation")
+        existing = self._indexes.retrieval_bindings.get(task_id)
+        if existing is not None:
+            if existing != binding:
+                raise ValueError("scheduler primary already has different retrieval custody")
+            return _detach_canonical_model(existing)
+        planner_task_and_plan = self._indexes.tasks.get(binding.planner_task_id)
+        planner_result = self._indexes.credited_results.get(binding.planner_task_id)
+        planner_output = self._indexes.outputs.get(binding.planner_task_id)
+        if (
+            planner_task_and_plan is None
+            or planner_task_and_plan[1] != plan
+            or planner_result is None
+            or planner_output is None
+        ):
+            raise ValueError("scheduler retrieval binding lacks exact terminal planner custody")
+        expected = SchedulerRetrievalBinding.build_pre_activation(
+            plan=plan,
+            primary_task=task,
+            planner_task=planner_task_and_plan[0],
+            planner_output=planner_output,
+            planner_result=planner_result,
+            transcript=binding.transcript,
+        )
+        if expected != binding:
+            raise ValueError("scheduler retrieval binding differs from exact planner custody")
+        retained = _detach_canonical_model(expected)
+        _write_model(
+            self._root_descriptor,
+            self._directory_descriptors,
+            _retrieval_binding_path(task_id, retained),
+            retained,
+        )
+        self._retrieval_bindings[task_id] = retained
+        self._indexes.retrieval_bindings[task_id] = retained
+        self._validate_incremental_state(task_id=task_id)
+        self._refresh_journal_head_checkpoint()
+        return _detach_canonical_model(retained)
+
     def persist_output(
         self,
         task_id: str,
@@ -5835,6 +8798,7 @@ class SchedulerJournal:
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
         normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
     ) -> SchedulerTaskOutput:
         """Persist one private normalized task output before success may be recorded."""
 
@@ -5848,6 +8812,11 @@ class SchedulerJournal:
             raise ValueError("scheduler task already has durable output evidence")
         if task_id in self._indexes.provider_attempts:
             raise ValueError("scheduler task already has non-creditable provider evidence")
+        retained_retrieval_binding = self._indexes.retrieval_bindings.get(task_id)
+        if retrieval_binding is not None and retained_retrieval_binding != retrieval_binding:
+            raise ValueError("scheduler output retrieval custody differs from durable transcript")
+        if retrieval_binding is not None and retained_retrieval_binding is None:
+            raise ValueError("scheduler output retrieval custody was not persisted pre-activation")
         output = SchedulerTaskOutput.build(
             plan=plan,
             task=task,
@@ -5859,6 +8828,7 @@ class SchedulerJournal:
             model_surface_review_artifact=model_surface_review_artifact,
             accepted_candidates=accepted_candidates,
             normalization_evidence=normalization_evidence,
+            retrieval_binding=retained_retrieval_binding,
         )
         _write_model(
             self._root_descriptor,
@@ -6000,6 +8970,7 @@ class SchedulerJournal:
             activation=activation,
             terminal_status=SchedulerTerminalStatus.FAILED,
             terminal_evidence_sha256=cost_entry_sha256(released_entry),
+            retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
         )
         _write_model(
             self._root_descriptor,
@@ -6101,6 +9072,7 @@ class SchedulerJournal:
             terminal_status=frozen.terminal_status,
             terminal_evidence_sha256=frozen.terminal_evidence_sha256,
             output=output,
+            retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
         )
         if frozen != expected:
             raise ValueError("scheduler task result differs from its exact planned identity")
@@ -6141,6 +9113,7 @@ class SchedulerJournal:
             task=task,
             terminal_status=frozen.terminal_status,
             terminal_evidence_sha256=frozen.terminal_evidence_sha256,
+            retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
         )
         if frozen != expected:
             raise ValueError("scheduler preflight result differs from its exact planned identity")
@@ -6197,6 +9170,7 @@ class SchedulerJournal:
             activation=activation,
             terminal_status=frozen.terminal_status,
             terminal_evidence_sha256=frozen.terminal_evidence_sha256,
+            retrieval_binding=self._indexes.retrieval_bindings.get(task.task_id),
         )
         if frozen != expected:
             raise ValueError(
@@ -6349,21 +9323,20 @@ class SchedulerJournal:
     def close(self) -> None:
         """Release live custody without changing durable task state."""
 
-        if self._closed:
+        claim = _claim_live_journal_close(self)
+        if claim is None:
             return
-        self._usage_recovery_scope = None
-        self._usage_recovery_expires_at = None
-        self._closed = True
-        identity = self._root_identity[:2]
+        # The claim is atomic and revokes every process-local dispatch authority
+        # before any caller-visible instance field or descriptor is touched.
+        state_error: BaseException | None = None
         try:
-            fcntl.flock(self._lock_descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(self._lock_descriptor)
-            for descriptor in self._directory_descriptors.values():
-                os.close(descriptor)
-            os.close(self._root_descriptor)
-            with _LIVE_CUSTODY_LOCK:
-                _LIVE_CUSTODY.discard(identity)
+            self._usage_recovery_scope = None
+            self._usage_recovery_expires_at = None
+        except BaseException as exc:  # pragma: no cover - hostile in-process field drift
+            state_error = exc
+        _cleanup_journal_claim(claim)
+        if state_error is not None:
+            raise ValueError("scheduler journal state cleanup failed closed") from state_error
 
     def _append_event(
         self,
@@ -6396,6 +9369,7 @@ class SchedulerJournal:
         )
         self._retain_event(event)
         self._validate_incremental_state(task_id=task.task_id)
+        _record_live_journal_event(owner=self, event=event)
         return event
 
     def _events_by_task(self) -> dict[str, list[SchedulerTaskEvent]]:
@@ -6540,8 +9514,18 @@ class SchedulerJournal:
         self._pass_results.append(_detach_canonical_model(pass_result))
 
     def _assert_live_custody(self) -> None:
-        if self._closed:
-            raise ValueError("scheduler journal custody is closed")
+        metadata = _assert_exact_live_journal_owner(self)
+        if (
+            self.path != metadata.path
+            or self._root_descriptor != metadata.root_descriptor
+            or self._root_identity != metadata.root_identity
+            or tuple(sorted(self._directory_descriptors.items())) != metadata.directory_descriptors
+            or tuple(sorted(self._directory_identities.items())) != metadata.directory_identities
+            or self._lock_descriptor != metadata.lock_descriptor
+            or self._read_only is not metadata.read_only
+        ):
+            raise ValueError("scheduler journal instance fields differ from frozen custody")
+        _assert_opening_descriptor_custody(metadata)
         staged_checkpoint_present = bool(
             {
                 _JOURNAL_HEAD_CHECKPOINT_PENDING_FILENAME,
@@ -6606,6 +9590,7 @@ class SchedulerJournal:
             or len(self._indexes.tasks) != sum(len(plan.tasks) for plan in self._plans)
             or len(self._indexes.activations) != len(self._activations)
             or len(self._indexes.outputs) != len(self._outputs)
+            or len(self._indexes.retrieval_bindings) != len(self._retrieval_bindings)
             or len(self._indexes.provider_attempts) != len(self._provider_attempts)
             or len(self._indexes.results_by_hash) != len(self._result_observations)
             or len(self._indexes.event_ids) != len(self._events)
@@ -6663,6 +9648,27 @@ class SchedulerJournal:
         credited = self._indexes.credited_results.get(task_id)
         if activation is not None:
             activation.require_exact_task(plan=plan, task=task)
+            retrieval_planning_result = _retrieval_planning_result_for_primary(
+                plan=plan,
+                task=task,
+                results_by_task=self._indexes.credited_results,
+            )
+            expected_activation = SchedulerTaskActivation.build(
+                plan=plan,
+                task=task,
+                actual_input_sha256=activation.actual_input_sha256,
+                system_prompt_sha256=activation.system_prompt_sha256,
+                user_prompt_sha256=activation.user_prompt_sha256,
+                provider_prompt_sha256=activation.provider_prompt_sha256,
+                response_schema_sha256=activation.response_schema_sha256,
+                delivered_source_descriptor_sha256s=(
+                    activation.delivered_source_descriptor_sha256s
+                ),
+                upstream_task_result_sha256s=activation.upstream_task_result_sha256s,
+                retrieval_planning_result=retrieval_planning_result,
+            )
+            if activation != expected_activation:
+                raise ValueError("scheduler activation differs from exact retrieval custody")
         if output is not None and activation is not None:
             output.require_exact_activation(activation)
         if output is not None and provider_attempt is not None:
@@ -6732,6 +9738,7 @@ class SchedulerJournal:
             activations=self.activations,
             events=self.events,
             outputs=self._retained_outputs(),
+            retrieval_bindings=self._retained_retrieval_bindings(),
             provider_attempts=self._retained_provider_attempts(),
             result_observations=self.result_observations,
             pass_results=self._retained_pass_results(),
@@ -6810,6 +9817,7 @@ class SchedulerJournal:
             self.activations,
             self.events,
             self._retained_outputs(),
+            self._retained_retrieval_bindings(),
             self._retained_provider_attempts(),
             self.result_observations,
             self._retained_pass_results(),
@@ -6825,14 +9833,15 @@ class SchedulerJournal:
             plans=durable_state[0],
             activations=durable_state[1],
             outputs=durable_state[3],
-            provider_attempts=durable_state[4],
-            result_observations=durable_state[5],
+            retrieval_bindings=durable_state[4],
+            provider_attempts=durable_state[5],
+            result_observations=durable_state[6],
             events=durable_state[2],
         )
         if self._indexes != expected_indexes:
             raise ValueError("scheduler in-memory indexes differ from full reconstruction")
         expected_recovery_indexes = _derive_truncation_recovery_indexes(
-            entries=durable_state[7],
+            entries=durable_state[8],
             scheduler=expected_indexes,
             manifest=persisted_manifest,
         )
@@ -6845,6 +9854,153 @@ class SchedulerJournal:
             )
         self._assert_live_custody()
         return after_reconstruction
+
+
+def _build_scheduler_dispatch_entrypoints(
+    *,
+    checkpoint_dispatch: _CheckpointJournalDispatch,
+    checkpoint_recovery_dispatch: _CheckpointRecoveryJournalDispatch,
+    issue_authorization: _IssueJournalAuthorization,
+    disarm_dispatch: _DisarmJournalDispatch,
+    requires_authority: Callable[[SchedulerPassPlan, SchedulerTaskPlan], bool],
+    current_binding: Callable[..., SchedulerModelReviewPreDispatchBinding],
+    recovery_binding: Callable[..., SchedulerModelReviewPreDispatchBinding],
+) -> tuple[
+    Callable[..., SchedulerTaskEvent], Callable[..., SchedulerTruncationRecoveryChildDispatch]
+]:
+    """Capture every raw issuance callback behind the two genuine dispatch methods."""
+
+    def mark_dispatched(self: SchedulerJournal, task_id: str) -> SchedulerTaskEvent:
+        self._assert_writable_custody()
+        task, plan = self._task_and_plan(task_id)
+        _require_model_task_privacy_custody(self.manifest, task)
+        history = self._history_for_task(task_id)
+        activation = self._activation_for_task(task_id)
+        if len(history) != 2 or history[-1].kind is not SchedulerTaskEventKind.ACTIVATED:
+            raise ValueError("only an activated scheduler task may be dispatched")
+        review_authority_required = requires_authority(plan, task)
+        try:
+            event = self._append_event(
+                plan=plan,
+                task=task,
+                kind=SchedulerTaskEventKind.DISPATCHED,
+                request_id=task.logical_request_id,
+                activation=activation,
+            )
+            self._refresh_journal_head_checkpoint()
+            checkpoint_dispatch(
+                owner=self,
+                task_id=task.task_id,
+                event_sha256=event.event_sha256,
+            )
+            if requires_authority(plan, task) is not review_authority_required:
+                raise ValueError("model-review dispatch eligibility changed during dispatch")
+            if review_authority_required:
+                binding = current_binding(self, task.task_id)
+                if binding.dispatched_event_sha256 != event.event_sha256:
+                    raise ValueError("model-review dispatch differs from its retained event")
+                issue_authorization(owner=self, binding=binding)
+            return event
+        finally:
+            disarm_dispatch(self)
+
+    def mark_recovery_dispatched(
+        self: SchedulerJournal,
+        child_task_id: str,
+    ) -> SchedulerTruncationRecoveryChildDispatch:
+        self._assert_writable_custody()
+        activation = self._truncation_recovery_indexes.activations.get(child_task_id)
+        if (
+            activation is None
+            or child_task_id in self._truncation_recovery_indexes.dispatches
+            or child_task_id in self._truncation_recovery_indexes.results
+        ):
+            raise ValueError("only one activated recovery child may be marked dispatched")
+        child_match = self._truncation_recovery_indexes.children[child_task_id]
+        if child_match[1] in self._truncation_recovery_indexes.closures:
+            raise ValueError("scheduler recovery family is already closed")
+        entry = SchedulerTruncationRecoveryChildDispatch.build(
+            activation=activation,
+            entry_index=len(self._truncation_recovery_entries),
+            previous_entry_sha256=self._truncation_recovery_chain_head,
+        )
+        try:
+            self._append_truncation_recovery_entry(entry)
+            retained_dispatch = self._truncation_recovery_indexes.dispatches[child_task_id]
+            child, family_id = self._truncation_recovery_indexes.children[child_task_id]
+            family = self._truncation_recovery_indexes.families[family_id]
+            retained_activation = self._truncation_recovery_indexes.activations[child_task_id]
+            binding = recovery_binding(
+                journal=self,
+                family=family,
+                child=child,
+                activation=retained_activation,
+                dispatch=retained_dispatch,
+            )
+            checkpoint_recovery_dispatch(
+                owner=self,
+                family_id=family_id,
+                task_id=child_task_id,
+                entry_sha256=retained_dispatch.entry_sha256,
+            )
+            issue_authorization(owner=self, binding=binding)
+            return retained_dispatch
+        finally:
+            disarm_dispatch(self)
+
+    return mark_dispatched, mark_recovery_dispatched
+
+
+def _build_scheduler_promotion_entrypoints(
+    *,
+    issue_direct: _IssueDirectPromotionCapability,
+    issue_recursive: _IssueRecursivePromotionCapability,
+) -> tuple[
+    Callable[..., VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    Callable[..., VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+]:
+    """Capture promotion issuance so no raw scheduler registry hook remains importable."""
+
+    def issue_direct_method(
+        self: SchedulerJournal,
+        family_id: str,
+        closure_capability: VerifiedTruncationRecoveryClosure,
+    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
+        return issue_direct(
+            owner=self,
+            family_id=family_id,
+            closure_capability=closure_capability,
+        )
+
+    def issue_recursive_method(
+        self: SchedulerJournal,
+        family_id: str,
+        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
+        return issue_recursive(
+            owner=self,
+            family_id=family_id,
+            tree_capability=tree_capability,
+        )
+
+    return issue_direct_method, issue_recursive_method
+
+
+def _build_scheduler_snapshot_adopter(
+    *,
+    adopt: Callable[..., None],
+    retain_snapshot: _RecordValidatedDurableSnapshot,
+) -> Callable[..., None]:
+    """Capture the private baseline callback ahead of the mutable journal cache."""
+
+    def adopt_with_private_baseline(
+        self: SchedulerJournal,
+        snapshot: tuple[_DurableArtifactObservation, ...],
+    ) -> None:
+        retain_snapshot(owner=self, snapshot=snapshot)
+        adopt(self, snapshot)
+
+    return adopt_with_private_baseline
 
 
 def _scheduler_wall_clock() -> datetime:
@@ -7010,9 +10166,19 @@ def _validate_live_scheduler_model_refresh(
     return True, True
 
 
-def create_scheduler_journal(
+def _create_scheduler_journal_impl(
     path: Path,
     *,
+    _opener_token: object,
+    _create_root: Callable[[Path], None],
+    _open_root: Callable[[Path], tuple[int, tuple[int, int, int]]],
+    _open_directories: Callable[..., tuple[dict[str, int], dict[str, tuple[int, int, int]]]],
+    _acquire_lock: Callable[..., int],
+    _admit_opening: _AdmitJournalOpening,
+    _bind_owner: _BindJournalCustody,
+    _activate_opening: _ActivateJournalCustody,
+    _journal_type: type[SchedulerJournal],
+    _initialize_owner: Callable[..., None],
     bindings: SchedulerBindings,
     analysis_input_inventory: SchedulerAnalysisInputInventory,
     shard_inventory: SchedulerShardInventory,
@@ -7059,20 +10225,20 @@ def create_scheduler_journal(
         require_terminal_report_authority=require_terminal_report_authority,
     )
     absolute = Path(os.path.abspath(path))
-    _create_private_root(absolute)
+    _create_root(absolute)
+    opening_process_id = os.getpid()
     root_descriptor = -1
     lock_descriptor = -1
     directory_descriptors: dict[str, int] = {}
     directory_identities: dict[str, tuple[int, int, int]] = {}
-    registered = False
+    reservation: object | None = None
+    journal: SchedulerJournal | None = None
     root_identity: tuple[int, int, int] | None = None
     try:
-        root_descriptor, root_identity = _open_private_root(absolute)
-        _register_live_custody(root_identity[:2])
-        registered = True
-        lock_descriptor = _acquire_custody_lock(root_descriptor, create=True)
+        root_descriptor, root_identity = _open_root(absolute)
+        lock_descriptor = _acquire_lock(root_descriptor, create=True)
         _assert_root_path_identity(absolute, root_descriptor, root_identity)
-        directory_descriptors, directory_identities = _open_control_directories(
+        directory_descriptors, directory_identities = _open_directories(
             root_descriptor,
             create=True,
         )
@@ -7088,7 +10254,26 @@ def create_scheduler_journal(
             _ANALYSIS_INPUT_INVENTORY_FILENAME,
             validated_analysis_inputs,
         )
-        journal = SchedulerJournal(
+        journal = object.__new__(_journal_type)
+        reservation = _admit_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.CREATE,
+            owner=journal,
+            metadata=_JournalCustodyMetadata(
+                path=absolute,
+                root_descriptor=root_descriptor,
+                root_identity=root_identity,
+                directory_descriptors=tuple(sorted(directory_descriptors.items())),
+                directory_identities=tuple(sorted(directory_identities.items())),
+                lock_descriptor=lock_descriptor,
+                read_only=False,
+            ),
+        )
+        _initialize_owner(
+            journal,
+            opener_token=_opener_token,
+            bind_owner=_bind_owner,
+            custody_reservation=reservation,
             path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
@@ -7101,6 +10286,7 @@ def create_scheduler_journal(
             activations=(),
             events=(),
             outputs=(),
+            retrieval_bindings=(),
             provider_attempts=(),
             result_observations=(),
             pass_results=(),
@@ -7121,21 +10307,40 @@ def create_scheduler_journal(
         ):
             journal._usage_recovery_scope = _issue_trusted_usage_recovery_scope(())
             journal._usage_recovery_expires_at = _scheduler_recovery_expires_at(manifest.bindings)
+        _activate_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.CREATE,
+            owner=journal,
+        )
         return journal
     except BaseException:
         _release_failed_open(
+            opening_process_id=opening_process_id,
+            path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
             lock_descriptor=lock_descriptor,
             directory_descriptors=directory_descriptors,
-            registered=registered,
+            directory_identities=directory_identities,
+            read_only=False,
+            reservation=reservation,
+            owner=journal,
         )
         raise
 
 
-def resume_scheduler_journal(
+def _resume_scheduler_journal_impl(
     path: Path,
     *,
+    _opener_token: object,
+    _open_root: Callable[[Path], tuple[int, tuple[int, int, int]]],
+    _open_directories: Callable[..., tuple[dict[str, int], dict[str, tuple[int, int, int]]]],
+    _acquire_lock: Callable[..., int],
+    _admit_opening: _AdmitJournalOpening,
+    _bind_owner: _BindJournalCustody,
+    _activate_opening: _ActivateJournalCustody,
+    _journal_type: type[SchedulerJournal],
+    _initialize_owner: Callable[..., None],
     expected_bindings: SchedulerBindings,
     expected_analysis_input_inventory: SchedulerAnalysisInputInventory,
     expected_shard_inventory: SchedulerShardInventory,
@@ -7152,6 +10357,10 @@ def resume_scheduler_journal(
 ) -> SchedulerJournal:
     """Resume only an exact-bound campaign, classifying interrupted dispatches."""
 
+    if expected_bindings.algorithm_version != SCHEDULER_ALGORITHM_VERSION:
+        raise ValueError(
+            "legacy scheduler journals are verification/replay-only and cannot be resumed mutably"
+        )
     refresh_authorized, pricing_authorized = _validate_live_scheduler_model_refresh(
         bindings=expected_bindings,
         audit_model_refresh_evidence=audit_model_refresh_evidence,
@@ -7178,17 +10387,17 @@ def resume_scheduler_journal(
     except ValueError:
         raise ValueError("scheduler resume bindings or shard inventory do not match") from None
     absolute = Path(os.path.abspath(path))
-    root_descriptor, root_identity = _open_private_root(absolute)
+    opening_process_id = os.getpid()
+    root_descriptor, root_identity = _open_root(absolute)
     lock_descriptor = -1
     directory_descriptors: dict[str, int] = {}
     directory_identities: dict[str, tuple[int, int, int]] = {}
-    registered = False
+    reservation: object | None = None
+    journal: SchedulerJournal | None = None
     try:
-        _register_live_custody(root_identity[:2])
-        registered = True
-        lock_descriptor = _acquire_custody_lock(root_descriptor, create=False)
+        lock_descriptor = _acquire_lock(root_descriptor, create=False)
         _assert_root_path_identity(absolute, root_descriptor, root_identity)
-        directory_descriptors, directory_identities = _open_control_directories(
+        directory_descriptors, directory_identities = _open_directories(
             root_descriptor,
             create=False,
         )
@@ -7238,6 +10447,11 @@ def resume_scheduler_journal(
             SchedulerCampaignManifest,
             allowed_published_immutable_targets=allowed_published_immutable_targets,
         )
+        if manifest.algorithm_version != SCHEDULER_ALGORITHM_VERSION:
+            raise ValueError(
+                "legacy scheduler journals are verification/replay-only and cannot be resumed "
+                "mutably"
+            )
         analysis_input_inventory = _read_model(
             root_descriptor,
             directory_descriptors,
@@ -7296,6 +10510,7 @@ def resume_scheduler_journal(
             activations,
             events,
             outputs,
+            retrieval_bindings,
             provider_attempts,
             result_observations,
             pass_results,
@@ -7338,7 +10553,26 @@ def resume_scheduler_journal(
             if transition_predecessor_present
             else None
         )
-        journal = SchedulerJournal(
+        journal = object.__new__(_journal_type)
+        reservation = _admit_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.RESUME,
+            owner=journal,
+            metadata=_JournalCustodyMetadata(
+                path=absolute,
+                root_descriptor=root_descriptor,
+                root_identity=root_identity,
+                directory_descriptors=tuple(sorted(directory_descriptors.items())),
+                directory_identities=tuple(sorted(directory_identities.items())),
+                lock_descriptor=lock_descriptor,
+                read_only=False,
+            ),
+        )
+        _initialize_owner(
+            journal,
+            opener_token=_opener_token,
+            bind_owner=_bind_owner,
+            custody_reservation=reservation,
             path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
@@ -7351,6 +10585,7 @@ def resume_scheduler_journal(
             activations=activations,
             events=events,
             outputs=outputs,
+            retrieval_bindings=retrieval_bindings,
             provider_attempts=provider_attempts,
             result_observations=result_observations,
             pass_results=pass_results,
@@ -7454,14 +10689,24 @@ def resume_scheduler_journal(
                 non_usage_request_limit_transitions=recovery_bridge_transitions,
             )
             journal._usage_recovery_expires_at = _scheduler_recovery_expires_at(manifest.bindings)
+        _activate_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.RESUME,
+            owner=journal,
+        )
         return journal
     except BaseException:
         _release_failed_open(
+            opening_process_id=opening_process_id,
+            path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
             lock_descriptor=lock_descriptor,
             directory_descriptors=directory_descriptors,
-            registered=registered,
+            directory_identities=directory_identities,
+            read_only=False,
+            reservation=reservation,
+            owner=journal,
         )
         raise
 
@@ -7473,16 +10718,14 @@ def open_scheduler_privacy_evidence_custody(
     """Hold the exact pre-dispatch privacy custody under scheduler authority."""
 
     absolute = Path(os.path.abspath(path))
+    opening_process_id = os.getpid()
     root_descriptor = -1
     root_identity: tuple[int, int, int] | None = None
     lock_descriptor = -1
     directory_descriptors: dict[str, int] = {}
     directory_identities: dict[str, tuple[int, int, int]] = {}
-    registered = False
     try:
         root_descriptor, root_identity = _open_private_root(absolute)
-        _register_live_custody(root_identity[:2])
-        registered = True
         lock_descriptor = _acquire_custody_lock(root_descriptor, create=False)
         _assert_root_path_identity(absolute, root_descriptor, root_identity)
         directory_descriptors, directory_identities = _open_control_directories(
@@ -7494,6 +10737,16 @@ def open_scheduler_privacy_evidence_custody(
             directory_descriptors,
             directory_identities,
         )
+        opening_metadata = _JournalCustodyMetadata(
+            path=absolute,
+            root_descriptor=root_descriptor,
+            root_identity=root_identity,
+            directory_descriptors=tuple(sorted(directory_descriptors.items())),
+            directory_identities=tuple(sorted(directory_identities.items())),
+            lock_descriptor=lock_descriptor,
+            read_only=True,
+        )
+        _assert_opening_descriptor_custody(opening_metadata)
         with _open_model_observation(
             root_descriptor,
             directory_descriptors,
@@ -7524,17 +10777,31 @@ def open_scheduler_privacy_evidence_custody(
                 )
     finally:
         _release_failed_open(
+            opening_process_id=opening_process_id,
+            path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
             lock_descriptor=lock_descriptor,
             directory_descriptors=directory_descriptors,
-            registered=registered,
+            directory_identities=directory_identities,
+            read_only=True,
+            reservation=None,
+            owner=None,
         )
 
 
-def open_scheduler_journal_for_verification(
+def _open_scheduler_journal_for_verification_impl(
     path: Path,
     *,
+    _opener_token: object,
+    _open_root: Callable[[Path], tuple[int, tuple[int, int, int]]],
+    _open_directories: Callable[..., tuple[dict[str, int], dict[str, tuple[int, int, int]]]],
+    _acquire_lock: Callable[..., int],
+    _admit_opening: _AdmitJournalOpening,
+    _bind_owner: _BindJournalCustody,
+    _activate_opening: _ActivateJournalCustody,
+    _journal_type: type[SchedulerJournal],
+    _initialize_owner: Callable[..., None],
     expected_bindings: SchedulerBindings,
     expected_shard_inventory: SchedulerShardInventory,
     expected_analysis_input_inventory: SchedulerAnalysisInputInventory | None = None,
@@ -7579,17 +10846,17 @@ def open_scheduler_journal_for_verification(
             "scheduler verification bindings or shard inventory do not match"
         ) from None
     absolute = Path(os.path.abspath(path))
-    root_descriptor, root_identity = _open_private_root(absolute)
+    opening_process_id = os.getpid()
+    root_descriptor, root_identity = _open_root(absolute)
     lock_descriptor = -1
     directory_descriptors: dict[str, int] = {}
     directory_identities: dict[str, tuple[int, int, int]] = {}
-    registered = False
+    reservation: object | None = None
+    journal: SchedulerJournal | None = None
     try:
-        _register_live_custody(root_identity[:2])
-        registered = True
-        lock_descriptor = _acquire_custody_lock(root_descriptor, create=False)
+        lock_descriptor = _acquire_lock(root_descriptor, create=False)
         _assert_root_path_identity(absolute, root_descriptor, root_identity)
-        directory_descriptors, directory_identities = _open_control_directories(
+        directory_descriptors, directory_identities = _open_directories(
             root_descriptor,
             create=False,
         )
@@ -7635,6 +10902,7 @@ def open_scheduler_journal_for_verification(
             activations,
             events,
             outputs,
+            retrieval_bindings,
             provider_attempts,
             result_observations,
             pass_results,
@@ -7651,7 +10919,26 @@ def open_scheduler_journal_for_verification(
             _JOURNAL_HEAD_CHECKPOINT_FILENAME,
             SchedulerJournalEvidence,
         )
-        journal = SchedulerJournal(
+        journal = object.__new__(_journal_type)
+        reservation = _admit_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.VERIFY,
+            owner=journal,
+            metadata=_JournalCustodyMetadata(
+                path=absolute,
+                root_descriptor=root_descriptor,
+                root_identity=root_identity,
+                directory_descriptors=tuple(sorted(directory_descriptors.items())),
+                directory_identities=tuple(sorted(directory_identities.items())),
+                lock_descriptor=lock_descriptor,
+                read_only=True,
+            ),
+        )
+        _initialize_owner(
+            journal,
+            opener_token=_opener_token,
+            bind_owner=_bind_owner,
+            custody_reservation=reservation,
             path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
@@ -7664,6 +10951,7 @@ def open_scheduler_journal_for_verification(
             activations=activations,
             events=events,
             outputs=outputs,
+            retrieval_bindings=retrieval_bindings,
             provider_attempts=provider_attempts,
             result_observations=result_observations,
             pass_results=pass_results,
@@ -7683,16 +10971,181 @@ def open_scheduler_journal_for_verification(
             != observed_journal_evidence
         ):
             raise ValueError("scheduler verification journal evidence does not match")
+        _activate_opening(
+            opener_token=_opener_token,
+            route=_JournalOpenRoute.VERIFY,
+            owner=journal,
+        )
         return journal
     except BaseException:
         _release_failed_open(
+            opening_process_id=opening_process_id,
+            path=absolute,
             root_descriptor=root_descriptor,
             root_identity=root_identity,
             lock_descriptor=lock_descriptor,
             directory_descriptors=directory_descriptors,
-            registered=registered,
+            directory_identities=directory_identities,
+            read_only=True,
+            reservation=reservation,
+            owner=journal,
         )
         raise
+
+
+type _PublicSchedulerJournalOpener = Callable[..., SchedulerJournal]
+
+
+def _build_scheduler_journal_openers(
+    *,
+    opener_token: object,
+    journal_type: type[SchedulerJournal],
+    initialize_owner: Callable[..., None],
+    create_root: Callable[[Path], None],
+    open_root: Callable[[Path], tuple[int, tuple[int, int, int]]],
+    open_directories: Callable[..., tuple[dict[str, int], dict[str, tuple[int, int, int]]]],
+    acquire_lock: Callable[..., int],
+    admit_opening: _AdmitJournalOpening,
+    bind_owner: _BindJournalCustody,
+    activate_opening: _ActivateJournalCustody,
+    create_impl: Callable[..., SchedulerJournal],
+    resume_impl: Callable[..., SchedulerJournal],
+    verify_impl: Callable[..., SchedulerJournal],
+) -> tuple[
+    _PublicSchedulerJournalOpener,
+    _PublicSchedulerJournalOpener,
+    _PublicSchedulerJournalOpener,
+]:
+    """Build the only routes able to construct and activate a journal owner."""
+
+    hidden_keywords = frozenset(
+        {
+            "_opener_token",
+            "_create_root",
+            "_open_root",
+            "_open_directories",
+            "_acquire_lock",
+            "_admit_opening",
+            "_bind_owner",
+            "_activate_opening",
+            "_journal_type",
+            "_initialize_owner",
+        }
+    )
+
+    def invoke(
+        route: _JournalOpenRoute,
+        operation: Callable[..., SchedulerJournal],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> SchedulerJournal:
+        if hidden_keywords & set(kwargs):
+            raise TypeError("scheduler opener internals cannot be supplied by callers")
+        acquired: list[
+            tuple[
+                int,
+                int,
+                tuple[int, int, int],
+                tuple[int, int, int, int],
+                int,
+                int,
+                bool,
+            ]
+        ] = []
+        invocation_process_id = os.getpid()
+        invocation_thread_id = threading.get_ident()
+
+        def acquire_exact_lock(root_descriptor: int, *, create: bool) -> int:
+            if (
+                acquired
+                or os.getpid() != invocation_process_id
+                or threading.get_ident() != invocation_thread_id
+                or create is not (route is _JournalOpenRoute.CREATE)
+            ):
+                raise ValueError("scheduler opener lock acquisition route changed")
+            descriptor = acquire_lock(root_descriptor, create=create)
+            acquired.append(
+                (
+                    root_descriptor,
+                    descriptor,
+                    _directory_identity(os.fstat(root_descriptor)),
+                    _file_identity(os.fstat(descriptor)),
+                    invocation_process_id,
+                    invocation_thread_id,
+                    create,
+                )
+            )
+            return descriptor
+
+        def admit_exact_opening(
+            *,
+            opener_token: object,
+            route: _JournalOpenRoute,
+            owner: object,
+            metadata: _JournalCustodyMetadata,
+        ) -> object:
+            if len(acquired) != 1:
+                raise ValueError("scheduler opener lacks one exact acquired lock")
+            (
+                root_descriptor,
+                lock_descriptor,
+                root_identity,
+                lock_identity,
+                process_id,
+                thread_id,
+                create,
+            ) = acquired.pop()
+            if (
+                route is not expected_route
+                or type(owner) is not journal_type
+                or process_id != os.getpid()
+                or thread_id != threading.get_ident()
+                or create is not (route is _JournalOpenRoute.CREATE)
+                or metadata.root_descriptor != root_descriptor
+                or metadata.lock_descriptor != lock_descriptor
+                or metadata.root_identity != root_identity
+                or _file_identity(os.fstat(lock_descriptor)) != lock_identity
+            ):
+                raise ValueError("scheduler opener descriptor admission changed")
+            return admit_opening(
+                opener_token=opener_token,
+                route=route,
+                owner=owner,
+                metadata=metadata,
+            )
+
+        expected_route = route
+        internal_kwargs = dict(kwargs)
+        internal_kwargs.update(
+            {
+                "_opener_token": opener_token,
+                "_open_root": open_root,
+                "_open_directories": open_directories,
+                "_acquire_lock": acquire_exact_lock,
+                "_admit_opening": admit_exact_opening,
+                "_bind_owner": bind_owner,
+                "_activate_opening": activate_opening,
+                "_journal_type": journal_type,
+                "_initialize_owner": initialize_owner,
+            }
+        )
+        if route is _JournalOpenRoute.CREATE:
+            internal_kwargs["_create_root"] = create_root
+        try:
+            return operation(*args, **internal_kwargs)
+        finally:
+            acquired.clear()
+
+    def create(*args: Any, **kwargs: Any) -> SchedulerJournal:
+        return invoke(_JournalOpenRoute.CREATE, create_impl, args, kwargs)
+
+    def resume(*args: Any, **kwargs: Any) -> SchedulerJournal:
+        return invoke(_JournalOpenRoute.RESUME, resume_impl, args, kwargs)
+
+    def verify(*args: Any, **kwargs: Any) -> SchedulerJournal:
+        return invoke(_JournalOpenRoute.VERIFY, verify_impl, args, kwargs)
+
+    return create, resume, verify
 
 
 def _recover_interrupted_state(
@@ -7834,6 +11287,7 @@ def _recover_interrupted_state(
                     activation=activations_by_task[task.task_id],
                     terminal_status=SchedulerTerminalStatus.FAILED,
                     terminal_evidence_sha256=cost_entry_sha256(released_tail[0][1]),
+                    retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
                 )
                 observed = observations_by_task.get(task.task_id, [])
                 if observed and observed != [released_failure]:
@@ -7884,6 +11338,7 @@ def _recover_interrupted_state(
                     terminal_status=SchedulerTerminalStatus.SUCCEEDED,
                     terminal_evidence_sha256=terminal_evidence_sha256,
                     output=output,
+                    retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
                 )
                 observed = observations_by_task.get(task.task_id, [])
                 if observed and observed != [succeeded]:
@@ -7911,6 +11366,7 @@ def _recover_interrupted_state(
                     activation=activation,
                     terminal_status=SchedulerTerminalStatus.FAILED,
                     terminal_evidence_sha256=cost_entry_sha256(released_tail[-1][1]),
+                    retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
                 )
                 observed = observations_by_task.get(task.task_id, [])
                 if observed and observed != [released_failure]:
@@ -7942,6 +11398,7 @@ def _recover_interrupted_state(
                     activation=activation,
                     terminal_status=SchedulerTerminalStatus.TRUNCATED,
                     terminal_evidence_sha256=projection.evidence_sha256,
+                    retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
                 )
                 observed = observations_by_task.get(task.task_id, [])
                 matching_truncation = [item for item in observed if item == truncated]
@@ -7986,6 +11443,7 @@ def _recover_interrupted_state(
                         activation=activation,
                         terminal_status=retained_result.terminal_status,
                         terminal_evidence_sha256=(retained_result.terminal_evidence_sha256),
+                        retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
                     )
                 except (TypeError, ValueError):
                     raise ValueError(
@@ -8016,6 +11474,7 @@ def _recover_interrupted_state(
                         "dispatch_event_sha256": dispatch.event_sha256,
                     }
                 ),
+                retrieval_binding=journal._indexes.retrieval_bindings.get(task.task_id),
             )
             matching = [
                 item for item in observations_by_task.get(task.task_id, []) if item == uncertain
@@ -8150,6 +11609,7 @@ def _load_state(
     tuple[SchedulerTaskActivation, ...],
     tuple[SchedulerTaskEvent, ...],
     tuple[SchedulerTaskOutput, ...],
+    tuple[tuple[str, SchedulerRetrievalBinding], ...],
     tuple[SchedulerProviderAttemptEvidence, ...],
     tuple[SchedulerTaskResult, ...],
     tuple[SchedulerPassResult, ...],
@@ -8221,6 +11681,33 @@ def _load_state(
         if candidate_name != PurePosixPath(_task_output_path(output)).name:
             raise ValueError("scheduler output filename differs from its stable hash")
         outputs.append(output)
+    retrieval_bindings: list[tuple[str, SchedulerRetrievalBinding]] = []
+    planner_parent_task_ids = {
+        task.task_id: task.parent_task_id
+        for plan in plans
+        for task in plan.tasks
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+    }
+    for candidate_name in _durable_directory_names(
+        directory_descriptors[_RETRIEVAL_BINDINGS_DIRECTORY],
+        _RETRIEVAL_BINDINGS_DIRECTORY,
+        allowed_immutable_write_temps,
+    ):
+        binding = _read_model(
+            root_descriptor,
+            directory_descriptors,
+            f"{_RETRIEVAL_BINDINGS_DIRECTORY}/{candidate_name}",
+            SchedulerRetrievalBinding,
+            allowed_published_immutable_targets=allowed_published_immutable_targets,
+        )
+        primary_task_id = planner_parent_task_ids.get(binding.planner_task_id)
+        if (
+            primary_task_id is None
+            or candidate_name
+            != PurePosixPath(_retrieval_binding_path(primary_task_id, binding)).name
+        ):
+            raise ValueError("scheduler retrieval binding filename differs from exact topology")
+        retrieval_bindings.append((primary_task_id, binding))
     provider_attempts: list[SchedulerProviderAttemptEvidence] = []
     for candidate_name in _durable_directory_names(
         directory_descriptors[_PROVIDER_ATTEMPTS_DIRECTORY],
@@ -8264,6 +11751,7 @@ def _load_state(
         tuple(sorted(activations, key=lambda item: item.task_id)),
         tuple(events),
         tuple(sorted(outputs, key=lambda item: item.task_id)),
+        tuple(sorted(retrieval_bindings, key=lambda item: item[0])),
         tuple(sorted(provider_attempts, key=lambda item: item.task_id)),
         tuple(
             sorted(
@@ -8281,11 +11769,12 @@ def _load_state(
         activations=loaded[1],
         events=loaded[2],
         outputs=loaded[3],
-        provider_attempts=loaded[4],
-        result_observations=loaded[5],
-        pass_results=loaded[6],
-        truncation_recovery_entries=loaded[7],
-        terminal_report_authority=loaded[8],
+        retrieval_bindings=loaded[4],
+        provider_attempts=loaded[5],
+        result_observations=loaded[6],
+        pass_results=loaded[7],
+        truncation_recovery_entries=loaded[8],
+        terminal_report_authority=loaded[9],
     )
     _validate_artifact_inventory(
         root_descriptor=root_descriptor,
@@ -8298,11 +11787,12 @@ def _load_state(
         activations=loaded[1],
         events=loaded[2],
         outputs=loaded[3],
-        provider_attempts=loaded[4],
-        result_observations=loaded[5],
-        pass_results=loaded[6],
-        truncation_recovery_entries=loaded[7],
-        terminal_report_authority=loaded[8],
+        retrieval_bindings=loaded[4],
+        provider_attempts=loaded[5],
+        result_observations=loaded[6],
+        pass_results=loaded[7],
+        truncation_recovery_entries=loaded[8],
+        terminal_report_authority=loaded[9],
         allow_pending_checkpoint=allow_pending_checkpoint,
         allowed_immutable_write_temps=allowed_immutable_write_temps,
         allowed_published_immutable_targets=allowed_published_immutable_targets,
@@ -8354,7 +11844,20 @@ def _load_truncation_recovery_entries(
             )
         except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise ValueError("scheduler truncation recovery entry is invalid") from exc
-        if content != stable_json(entry).encode("utf-8"):
+        canonical_serializations: set[bytes] = set()
+        for algorithm_version in (
+            "mmaudit.seven-pass-scheduler.v1",
+            SCHEDULER_ALGORITHM_VERSION,
+        ):
+            try:
+                projection = scheduler_typed_payload_projection(
+                    entry,
+                    algorithm_version=algorithm_version,
+                )
+            except ValueError:
+                continue
+            canonical_serializations.add(stable_json(projection).encode("utf-8"))
+        if content not in canonical_serializations:
             raise ValueError("scheduler truncation recovery entry is not canonical")
         if (
             entry.entry_index != index
@@ -8482,6 +11985,7 @@ def _validate_loaded_state(
     activations: tuple[SchedulerTaskActivation, ...],
     events: tuple[SchedulerTaskEvent, ...],
     outputs: tuple[SchedulerTaskOutput, ...],
+    retrieval_bindings: tuple[tuple[str, SchedulerRetrievalBinding], ...],
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     pass_results: tuple[SchedulerPassResult, ...],
@@ -8544,11 +12048,31 @@ def _validate_loaded_state(
             normalization_evidence=(
                 completion.normalization_evidence if completion is not None else None
             ),
+            retrieval_binding=output.retrieval_binding,
             schema_version=output.schema_version,
         )
         if output != expected_output:
             raise ValueError("scheduler output differs from its exact normalized task evidence")
         outputs_by_task[output.task_id] = output
+
+    retrieval_bindings_by_task: dict[str, SchedulerRetrievalBinding] = {}
+    for primary_task_id, binding in retrieval_bindings:
+        if (
+            primary_task_id in retrieval_bindings_by_task
+            or primary_task_id not in task_lookup
+            or binding.planner_task_id not in task_lookup
+        ):
+            raise ValueError("scheduler retrieval binding is duplicated or unplanned")
+        primary_task, primary_plan = task_lookup[primary_task_id]
+        planner_task, planner_plan = task_lookup[binding.planner_task_id]
+        if (
+            planner_plan != primary_plan
+            or primary_task.purpose is not SchedulerTaskPurpose.PRIMARY
+            or planner_task.purpose is not SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            or planner_task.parent_task_id != primary_task_id
+        ):
+            raise ValueError("scheduler retrieval binding differs from sealed task topology")
+        retrieval_bindings_by_task[primary_task_id] = binding
 
     provider_attempts_by_task: dict[str, SchedulerProviderAttemptEvidence] = {}
     for attempt in provider_attempts:
@@ -8591,6 +12115,7 @@ def _validate_loaded_state(
                 task=task,
                 terminal_status=result.terminal_status,
                 terminal_evidence_sha256=result.terminal_evidence_sha256,
+                retrieval_binding=retrieval_bindings_by_task.get(task.task_id),
             )
         else:
             result_activation = activations_by_task.get(result.task_id)
@@ -8608,6 +12133,7 @@ def _validate_loaded_state(
                 terminal_status=result.terminal_status,
                 terminal_evidence_sha256=result.terminal_evidence_sha256,
                 output=result_output,
+                retrieval_binding=retrieval_bindings_by_task.get(task.task_id),
             )
         if result != expected_task_result:
             raise ValueError("scheduler task result differs from its sealed task plan")
@@ -8718,6 +12244,39 @@ def _validate_loaded_state(
             if not set(event_activation.upstream_task_result_sha256s) <= available_result_hashes:
                 raise ValueError("scheduler activation references unavailable upstream results")
             task_plan = task_lookup[task.task_id][1]
+            retrieval_planning_result = _retrieval_planning_result_for_primary(
+                plan=task_plan,
+                task=task,
+                results_by_task=credited_results,
+            )
+            loaded_retrieval_binding = retrieval_bindings_by_task.get(task.task_id)
+            if loaded_retrieval_binding is None:
+                loaded_output = outputs_by_task.get(task.task_id)
+                loaded_retrieval_binding = (
+                    loaded_output.retrieval_binding if loaded_output is not None else None
+                )
+            if (
+                retrieval_planning_result is not None
+                and retrieval_planning_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+                and loaded_retrieval_binding is None
+            ):
+                raise ValueError("retrieval-bound activation lacks private transcript custody")
+            expected_activation = SchedulerTaskActivation.build(
+                plan=task_plan,
+                task=task,
+                actual_input_sha256=event_activation.actual_input_sha256,
+                system_prompt_sha256=event_activation.system_prompt_sha256,
+                user_prompt_sha256=event_activation.user_prompt_sha256,
+                provider_prompt_sha256=event_activation.provider_prompt_sha256,
+                response_schema_sha256=event_activation.response_schema_sha256,
+                delivered_source_descriptor_sha256s=(
+                    event_activation.delivered_source_descriptor_sha256s
+                ),
+                upstream_task_result_sha256s=(event_activation.upstream_task_result_sha256s),
+                retrieval_planning_result=retrieval_planning_result,
+            )
+            if event_activation != expected_activation:
+                raise ValueError("scheduler activation differs from exact retrieval custody")
             if task.task_kind is SchedulerTaskKind.EMPTY_COMPLETION:
                 workset = task_plan.candidate_workset
                 if workset is None or event_activation.upstream_task_result_sha256s != (
@@ -8728,6 +12287,43 @@ def _validate_loaded_state(
                     )
         event_ids.add(event.event_id)
         previous_global = event
+
+    effective_retrieval_bindings = dict(retrieval_bindings_by_task)
+    for output in outputs:
+        if output.retrieval_binding is not None:
+            existing = effective_retrieval_bindings.get(output.task_id)
+            if existing is not None and existing != output.retrieval_binding:
+                raise ValueError("scheduler output differs from standalone retrieval custody")
+            effective_retrieval_bindings[output.task_id] = output.retrieval_binding
+    for primary_task_id, binding in effective_retrieval_bindings.items():
+        task, plan = task_lookup[primary_task_id]
+        primary_activation = activations_by_task.get(task.task_id)
+        planner_task_and_plan = task_lookup.get(binding.planner_task_id)
+        planner_result = credited_results.get(binding.planner_task_id)
+        planner_output = outputs_by_task.get(binding.planner_task_id)
+        if (
+            planner_task_and_plan is None
+            or planner_task_and_plan[1] != plan
+            or planner_result is None
+            or planner_output is None
+        ):
+            raise ValueError("scheduler retrieval binding lacks exact private planner custody")
+        expected_binding = SchedulerRetrievalBinding.build_pre_activation(
+            plan=plan,
+            primary_task=task,
+            planner_task=planner_task_and_plan[0],
+            planner_output=planner_output,
+            planner_result=planner_result,
+            transcript=binding.transcript,
+        )
+        if binding != expected_binding:
+            raise ValueError("scheduler retrieval binding differs from private planner custody")
+        if primary_activation is not None:
+            binding.require_exact_primary(
+                plan=plan,
+                task=task,
+                activation=primary_activation,
+            )
 
     for task_id, history in histories.items():
         kinds = tuple(item.kind for item in history)
@@ -8894,6 +12490,7 @@ def _validate_loaded_state(
         plans=plans,
         activations=activations,
         outputs=outputs,
+        retrieval_bindings=retrieval_bindings,
         provider_attempts=provider_attempts,
         result_observations=result_observations,
         events=events,
@@ -8946,6 +12543,7 @@ def _validate_artifact_inventory(
     activations: tuple[SchedulerTaskActivation, ...],
     events: tuple[SchedulerTaskEvent, ...],
     outputs: tuple[SchedulerTaskOutput, ...],
+    retrieval_bindings: tuple[tuple[str, SchedulerRetrievalBinding], ...],
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     pass_results: tuple[SchedulerPassResult, ...],
@@ -8979,6 +12577,10 @@ def _validate_artifact_inventory(
             PurePosixPath(_pass_result_path(index)).name for index in range(len(pass_results))
         },
         _TASK_OUTPUTS_DIRECTORY: {PurePosixPath(_task_output_path(item)).name for item in outputs},
+        _RETRIEVAL_BINDINGS_DIRECTORY: {
+            PurePosixPath(_retrieval_binding_path(task_id, binding)).name
+            for task_id, binding in retrieval_bindings
+        },
         _PROVIDER_ATTEMPTS_DIRECTORY: {
             PurePosixPath(_provider_attempt_path(item)).name for item in provider_attempts
         },
@@ -9017,6 +12619,7 @@ def _validate_artifact_inventory(
         activations=activations,
         events=events,
         outputs=outputs,
+        retrieval_bindings=retrieval_bindings,
         provider_attempts=provider_attempts,
         result_observations=result_observations,
         pass_results=pass_results,
@@ -9049,6 +12652,7 @@ def _retained_child_artifact_paths(
     activations: tuple[SchedulerTaskActivation, ...],
     events: tuple[SchedulerTaskEvent, ...],
     outputs: tuple[SchedulerTaskOutput, ...],
+    retrieval_bindings: tuple[tuple[str, SchedulerRetrievalBinding], ...],
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     pass_results: tuple[SchedulerPassResult, ...],
@@ -9062,6 +12666,7 @@ def _retained_child_artifact_paths(
         *(_pass_plan_path(index) for index in range(len(plans))),
         *(_pass_result_path(index) for index in range(len(pass_results))),
         *(_task_output_path(item) for item in outputs),
+        *(_retrieval_binding_path(task_id, binding) for task_id, binding in retrieval_bindings),
         *(_provider_attempt_path(item) for item in provider_attempts),
         *(_task_result_path(item) for item in result_observations),
         *(_truncation_recovery_entry_path(item) for item in truncation_recovery_entries),
@@ -9255,6 +12860,36 @@ def _write_model(
     _write_fresh_private_file(parent_descriptor, leaf, content)
 
 
+def _canonical_scheduler_model_bytes(model: StrictModel) -> bytes:
+    """Serialize retained actor-sensitive models with their immutable algorithm boundary."""
+
+    algorithm_version: str | None = None
+    if isinstance(model, SchedulerTaskOutput):
+        algorithm_version = (
+            SCHEDULER_ALGORITHM_VERSION
+            if model.schema_version in {"1.2", "1.3"}
+            else "mmaudit.seven-pass-scheduler.v1"
+        )
+    elif (
+        isinstance(model, SchedulerProviderAttemptEvidence)
+        and model.truncation_projection is not None
+    ):
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=model.truncation_projection.wire_schema_sha256,
+            normalized_batch_schema_sha256=(
+                model.truncation_projection.normalized_batch_schema_sha256
+            ),
+        )
+    if algorithm_version is None:
+        return stable_json(model).encode("utf-8")
+    return stable_json(
+        scheduler_typed_payload_projection(
+            model,
+            algorithm_version=algorithm_version,
+        )
+    ).encode("utf-8")
+
+
 def _read_model[ModelT: StrictModel](
     root_descriptor: int,
     directory_descriptors: dict[str, int],
@@ -9279,10 +12914,10 @@ def _read_model[ModelT: StrictModel](
         allowed_published_identity=allowed_targets.get(relative),
     )
     try:
-        model = model_type.model_validate(json.loads(content))
+        model = model_type.model_validate_json(content)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("scheduler journal artifact is invalid") from exc
-    if content != stable_json(model).encode("utf-8"):
+    if content != _canonical_scheduler_model_bytes(model):
         raise ValueError("scheduler journal artifact is not canonical")
     return model
 
@@ -9334,7 +12969,7 @@ def _open_model_observation[ModelT: StrictModel](
             model = model_type.model_validate(json.loads(content))
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise ValueError("scheduler journal artifact is invalid") from exc
-        if content != stable_json(model).encode("utf-8"):
+        if content != _canonical_scheduler_model_bytes(model):
             raise ValueError("scheduler journal artifact is not canonical")
         try:
             yield model
@@ -9514,6 +13149,7 @@ def _is_allowed_immutable_write_target(parent: str | None, leaf: str) -> bool:
     if parent in {
         _ACTIVATIONS_DIRECTORY,
         _TASK_OUTPUTS_DIRECTORY,
+        _RETRIEVAL_BINDINGS_DIRECTORY,
         _TASK_RESULTS_DIRECTORY,
         _PROVIDER_ATTEMPTS_DIRECTORY,
     }:
@@ -9898,6 +13534,13 @@ def _task_output_path(output: SchedulerTaskOutput) -> str:
     return f"{_TASK_OUTPUTS_DIRECTORY}/{output.task_id}-{output.output_artifact_sha256}.json"
 
 
+def _retrieval_binding_path(
+    primary_task_id: str,
+    binding: SchedulerRetrievalBinding,
+) -> str:
+    return f"{_RETRIEVAL_BINDINGS_DIRECTORY}/{primary_task_id}-{binding.binding_sha256}.json"
+
+
 def _provider_attempt_path(attempt: SchedulerProviderAttemptEvidence) -> str:
     return (
         f"{_PROVIDER_ATTEMPTS_DIRECTORY}/{attempt.task_id}-{attempt.attempt_evidence_sha256}.json"
@@ -10026,7 +13669,7 @@ def _acquire_custody_lock(root_descriptor: int, *, create: bool) -> int:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in {errno.EACCES, errno.EAGAIN}:
-                raise ValueError("scheduler journal already has live custody") from exc
+                raise ValueError("scheduler journal already has live in-process custody") from exc
             raise
         return descriptor
     except BaseException:
@@ -10034,33 +13677,170 @@ def _acquire_custody_lock(root_descriptor: int, *, create: bool) -> int:
         raise
 
 
-def _register_live_custody(identity: tuple[int, int]) -> None:
-    with _LIVE_CUSTODY_LOCK:
-        if identity in _LIVE_CUSTODY:
-            raise ValueError("scheduler journal already has live in-process custody")
-        _LIVE_CUSTODY.add(identity)
+def _assert_opening_descriptor_custody(metadata: _JournalCustodyMetadata) -> None:
+    """Prove an opener's exact path, descriptors, mode, and held lock."""
+
+    _assert_root_path_identity(
+        metadata.path,
+        metadata.root_descriptor,
+        metadata.root_identity,
+    )
+    directories = dict(metadata.directory_descriptors)
+    identities = dict(metadata.directory_identities)
+    if set(directories) != set(_CONTROL_DIRECTORIES) or set(identities) != set(
+        _CONTROL_DIRECTORIES
+    ):
+        raise ValueError("scheduler opening control-directory custody is incomplete")
+    for name in _CONTROL_DIRECTORIES:
+        opened = os.fstat(directories[name])
+        entry = _stat_entry(metadata.root_descriptor, name)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or stat.S_IMODE(opened.st_mode) != 0o700
+            or _directory_identity(opened) != identities[name]
+            or _directory_identity(entry) != identities[name]
+            or stat.S_ISLNK(entry.st_mode)
+        ):
+            raise ValueError("scheduler opening control-directory descriptor changed")
+    lock_metadata = os.fstat(metadata.lock_descriptor)
+    lock_entry = _stat_entry(metadata.root_descriptor, _LOCK_FILENAME)
+    if (
+        not stat.S_ISREG(lock_metadata.st_mode)
+        or lock_metadata.st_nlink != 1
+        or stat.S_IMODE(lock_metadata.st_mode) != 0o600
+        or _file_identity(lock_metadata) != _file_identity(lock_entry)
+        or stat.S_ISLNK(lock_entry.st_mode)
+    ):
+        raise ValueError("scheduler opening lock descriptor is not exact")
+
+    contender = -1
+    contender_blocked = False
+    try:
+        contender = os.open(
+            _LOCK_FILENAME,
+            os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG,
+            dir_fd=metadata.root_descriptor,
+        )
+        try:
+            fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                raise ValueError("scheduler opening lock proof is unavailable") from exc
+            contender_blocked = True
+        else:
+            fcntl.flock(contender, fcntl.LOCK_UN)
+            raise ValueError("scheduler opening lock descriptor is not held")
+    finally:
+        if contender >= 0:
+            os.close(contender)
+    if not contender_blocked:
+        raise ValueError("scheduler opening lock descriptor lacks exact contention proof")
+    try:
+        # This is idempotent only for the exact open-file description that owns
+        # the lock.  An unlocked same-inode descriptor blocks behind the owner.
+        fcntl.flock(metadata.lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        raise ValueError("scheduler opening lock descriptor is not the exact owner") from exc
+
+
+def _cleanup_descriptor_inventory(metadata: _JournalCustodyMetadata) -> list[OSError]:
+    """Attempt every frozen cleanup step and retain every operating-system error."""
+
+    errors: list[OSError] = []
+    if metadata.lock_descriptor >= 0:
+        try:
+            fcntl.flock(metadata.lock_descriptor, fcntl.LOCK_UN)
+        except OSError as exc:
+            errors.append(exc)
+        try:
+            os.close(metadata.lock_descriptor)
+        except OSError as exc:
+            errors.append(exc)
+    for _name, descriptor in metadata.directory_descriptors:
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            errors.append(exc)
+    if metadata.root_descriptor >= 0:
+        try:
+            os.close(metadata.root_descriptor)
+        except OSError as exc:
+            errors.append(exc)
+    return errors
+
+
+def _cleanup_journal_claim(claim: _JournalCleanupClaim) -> None:
+    """Consume one exact close claim; any cleanup uncertainty stays orphaned."""
+
+    metadata = _resolve_journal_cleanup(claim)
+    errors = _cleanup_descriptor_inventory(metadata)
+    try:
+        _finalize_journal_cleanup(claim, not errors)
+    except ValueError as exc:
+        if errors:
+            raise ValueError("scheduler journal descriptor cleanup failed closed") from errors[0]
+        raise ValueError("scheduler journal cleanup finalization failed closed") from exc
+    if errors:
+        raise ValueError("scheduler journal descriptor cleanup failed closed") from errors[0]
 
 
 def _release_failed_open(
     *,
+    opening_process_id: int,
+    path: Path,
     root_descriptor: int,
     root_identity: tuple[int, int, int] | None,
     lock_descriptor: int,
     directory_descriptors: dict[str, int],
-    registered: bool,
+    directory_identities: dict[str, tuple[int, int, int]],
+    read_only: bool,
+    reservation: object | None,
+    owner: SchedulerJournal | None,
 ) -> None:
-    if registered and root_identity is not None:
-        with _LIVE_CUSTODY_LOCK:
-            _LIVE_CUSTODY.discard(root_identity[:2])
-    if lock_descriptor >= 0:
-        try:
-            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(lock_descriptor)
-    for descriptor in directory_descriptors.values():
-        os.close(descriptor)
-    if root_descriptor >= 0:
-        os.close(root_descriptor)
+    """Release only this opener's exact reservation and descriptors.
+
+    A forked child performs zero cleanup: inherited descriptors and locks remain
+    untouched so the parent process's custody cannot be weakened.
+    """
+
+    if os.getpid() != opening_process_id:
+        return
+    if root_identity is None:
+        errors = _cleanup_descriptor_inventory(
+            _JournalCustodyMetadata(
+                path=path,
+                root_descriptor=root_descriptor,
+                root_identity=(-1, -1, -1),
+                directory_descriptors=tuple(sorted(directory_descriptors.items())),
+                directory_identities=tuple(sorted(directory_identities.items())),
+                lock_descriptor=lock_descriptor,
+                read_only=read_only,
+            )
+        )
+        if errors:
+            raise ValueError("scheduler failed-open descriptor cleanup failed") from errors[0]
+        return
+    metadata = _JournalCustodyMetadata(
+        path=path,
+        root_descriptor=root_descriptor,
+        root_identity=root_identity,
+        directory_descriptors=tuple(sorted(directory_descriptors.items())),
+        directory_identities=tuple(sorted(directory_identities.items())),
+        lock_descriptor=lock_descriptor,
+        read_only=read_only,
+    )
+    if reservation is None:
+        errors = _cleanup_descriptor_inventory(metadata)
+        if errors:
+            raise ValueError("scheduler failed-open descriptor cleanup failed") from errors[0]
+        return
+    claim = _claim_failed_journal_open(
+        reservation=reservation,
+        owner=owner,
+        metadata=metadata,
+    )
+    if claim is not None:
+        _cleanup_journal_claim(claim)
 
 
 def _assert_root_path_identity(
@@ -10150,3 +13930,126 @@ def _stat_entry(parent_descriptor: int, leaf: str) -> os.stat_result:
         return os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
     except OSError as exc:
         raise ValueError("scheduler journal entry is unavailable") from exc
+
+
+(
+    _admit_scheduler_journal_opening,
+    _bind_scheduler_journal_opening_owner,
+    _activate_scheduler_journal_opening,
+    _assert_exact_live_journal_owner,
+    _claim_live_journal_close,
+    _claim_failed_journal_open,
+    _resolve_journal_cleanup,
+    _finalize_journal_cleanup,
+    _record_live_journal_event,
+    _record_live_truncation_recovery_entry,
+    _record_live_journal_checkpoint,
+    _record_live_validated_durable_snapshot,
+    _checkpoint_live_model_review_dispatch,
+    _checkpoint_live_recovery_model_review_dispatch,
+    _issue_live_model_review_authorization,
+    _disarm_live_model_review_dispatch,
+    require_model_review_pre_dispatch_authorization,
+    _require_live_model_review_authorization_for_task,
+    _live_recovery_model_review_authorization_bindings,
+    _live_model_review_authorizations,
+    _issue_live_direct_promotion_capability,
+    _issue_live_recursive_promotion_capability,
+    require_verified_promoted_truncation_recovery_surface_coverage,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    _live_direct_promotion_capabilities,
+    _live_recursive_promotion_capabilities,
+) = _build_scheduler_journal_custody_registry(
+    _scheduler_journal_opener_token,
+    SchedulerJournal,
+    _assert_opening_descriptor_custody,
+    _model_review_pre_dispatch_binding,
+    _recovery_model_review_pre_dispatch_binding,
+    _promotion_authority_lineage_entries,
+    _validate_durable_recovery_promotion,
+    SchedulerJournal._validate_state,
+    SchedulerJournal._require_durable_snapshot,
+    _require_truncation_recovery_closure,
+    _require_recursive_truncation_recovery_tree,
+    _validated_promoted_surface_projection,
+    _validated_promoted_recursive_surface_projection,
+)
+_scheduler_adopt_validated_snapshot = _build_scheduler_snapshot_adopter(
+    adopt=SchedulerJournal._adopt_validated_durable_snapshot,
+    retain_snapshot=_record_live_validated_durable_snapshot,
+)
+SchedulerJournal._adopt_validated_durable_snapshot = (  # type: ignore[method-assign]
+    _scheduler_adopt_validated_snapshot
+)
+del _scheduler_adopt_validated_snapshot
+del _build_scheduler_snapshot_adopter
+del _record_live_validated_durable_snapshot
+(
+    _scheduler_mark_dispatched,
+    _scheduler_mark_recovery_dispatched,
+) = _build_scheduler_dispatch_entrypoints(
+    checkpoint_dispatch=_checkpoint_live_model_review_dispatch,
+    checkpoint_recovery_dispatch=_checkpoint_live_recovery_model_review_dispatch,
+    issue_authorization=_issue_live_model_review_authorization,
+    disarm_dispatch=_disarm_live_model_review_dispatch,
+    requires_authority=_requires_model_review_pre_dispatch_authority,
+    current_binding=SchedulerJournal._current_model_review_pre_dispatch_binding,
+    recovery_binding=_recovery_model_review_pre_dispatch_binding,
+)
+SchedulerJournal.mark_dispatched = _scheduler_mark_dispatched  # type: ignore[method-assign]
+SchedulerJournal.mark_truncation_recovery_child_dispatched = (  # type: ignore[method-assign]
+    _scheduler_mark_recovery_dispatched
+)
+del _scheduler_mark_dispatched
+del _scheduler_mark_recovery_dispatched
+del _build_scheduler_dispatch_entrypoints
+del _checkpoint_live_model_review_dispatch
+del _checkpoint_live_recovery_model_review_dispatch
+del _issue_live_model_review_authorization
+del _disarm_live_model_review_dispatch
+del _issue_model_review_pre_dispatch_authorization
+del _requires_model_review_pre_dispatch_authority
+del _model_review_pre_dispatch_binding
+(
+    _scheduler_issue_direct_promotion,
+    _scheduler_issue_recursive_promotion,
+) = _build_scheduler_promotion_entrypoints(
+    issue_direct=_issue_live_direct_promotion_capability,
+    issue_recursive=_issue_live_recursive_promotion_capability,
+)
+SchedulerJournal.issue_promoted_truncation_recovery_surface_coverage = (  # type: ignore[method-assign]
+    _scheduler_issue_direct_promotion
+)
+SchedulerJournal.issue_promoted_recursive_truncation_recovery_surface_coverage = (  # type: ignore[method-assign]
+    _scheduler_issue_recursive_promotion
+)
+del _scheduler_issue_direct_promotion
+del _scheduler_issue_recursive_promotion
+del _build_scheduler_promotion_entrypoints
+del _issue_live_direct_promotion_capability
+del _issue_live_recursive_promotion_capability
+(
+    create_scheduler_journal,
+    resume_scheduler_journal,
+    open_scheduler_journal_for_verification,
+) = _build_scheduler_journal_openers(
+    opener_token=_scheduler_journal_opener_token,
+    journal_type=SchedulerJournal,
+    initialize_owner=SchedulerJournal._initialize_from_opener,
+    create_root=_create_private_root,
+    open_root=_open_private_root,
+    open_directories=_open_control_directories,
+    acquire_lock=_acquire_custody_lock,
+    admit_opening=_admit_scheduler_journal_opening,
+    bind_owner=_bind_scheduler_journal_opening_owner,
+    activate_opening=_activate_scheduler_journal_opening,
+    create_impl=_create_scheduler_journal_impl,
+    resume_impl=_resume_scheduler_journal_impl,
+    verify_impl=_open_scheduler_journal_for_verification_impl,
+)
+del _build_scheduler_journal_custody_registry
+del _build_scheduler_journal_openers
+del _scheduler_journal_opener_token
+del _admit_scheduler_journal_opening
+del _bind_scheduler_journal_opening_owner
+del _activate_scheduler_journal_opening

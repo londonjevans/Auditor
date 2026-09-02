@@ -28,9 +28,18 @@ from pydantic_core import SchemaValidator
 from mmaudit.constants import SEVERITY_ORDER, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.candidate_review_stamping import (
     CandidateReviewStampingError,
+    model_review_origin_candidate_id,
     stamp_candidate_review_findings,
 )
 from mmaudit.models.openrouter import strict_json_schema_sha256
+from mmaudit.models.retrieval import (
+    SOLIDITY_RETRIEVAL_MAX_EXCHANGES,
+    SolidityRetrievalRequestBatch,
+    SolidityRetrievalRoleBudgetAllocation,
+    SolidityRetrievalRoleBudgetPlan,
+    SolidityRetrievalTranscript,
+    require_solidity_retrieval_transcript_within_policy,
+)
 from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
     CandidateCrossExaminationResponse,
@@ -49,6 +58,7 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestBatch,
     GeneratedFoundryTestSpec,
     InvariantReviewBatch,
+    JudgeDecision,
     JudgeDecisionBatch,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
@@ -76,6 +86,8 @@ from mmaudit.models.truncation import (
     candidate_review_batch_schema_sha256,
     candidate_review_frame_wire_schema_sha256,
     candidate_review_protocol_implementation_is_pristine,
+    candidate_review_schema_algorithm_version,
+    candidate_review_wire_schema_algorithm_version,
 )
 from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_COMPLETION_TOKENS,
@@ -121,8 +133,12 @@ if TYPE_CHECKING:
         AuditModelRefreshPricingEvidence,
     )
 
-SCHEDULER_ALGORITHM_VERSION = "mmaudit.seven-pass-scheduler.v1"
-SCHEDULER_ANALYSIS_INPUT_LABELS = (
+SchedulerAlgorithmVersion = Literal[
+    "mmaudit.seven-pass-scheduler.v1",
+    "mmaudit.seven-pass-scheduler.v2",
+]
+SCHEDULER_ALGORITHM_VERSION: SchedulerAlgorithmVersion = "mmaudit.seven-pass-scheduler.v2"
+SCHEDULER_ANALYSIS_INPUT_LABELS_V1 = (
     "run_options",
     "discovery",
     "repository_map",
@@ -147,6 +163,10 @@ SCHEDULER_ANALYSIS_INPUT_LABELS = (
     "execution_candidate_build",
     "model_surface_requests",
     "model_surface_review_assignments",
+)
+SCHEDULER_ANALYSIS_INPUT_LABELS = (
+    "actor_model_evidence",
+    *SCHEDULER_ANALYSIS_INPUT_LABELS_V1,
 )
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SHARD_ID_PATTERN = r"^shard-[0-9a-f]{24}$"
@@ -192,6 +212,22 @@ _SCHEDULER_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     ReportQualityReview,
     ThreatModel,
     VerificationBatch,
+)
+_SCHEDULER_AUXILIARY_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (SolidityRetrievalRequestBatch,)
+_SCHEDULER_V1_ACTOR_NEUTRAL_RESPONSE_SCHEMA_SHA256S: Mapping[type[BaseModel], str] = (
+    MappingProxyType(
+        {
+            CandidateReviewBatch: (
+                "29158e2c31350751f683bfa2910db39d2883d3258ef7fc41a1479d4f3133c186"
+            ),
+            CandidateReviewFramedDocument: (
+                "478bc1d7e11e4ae1635c371ef1965025f012b5c9056af08d7a4c729425cb46a1"
+            ),
+            JudgeDecisionBatch: (
+                "07163523897a848ac18dbed0eb64978fc0aa89381512afddc6a18d2d9b113b09"
+            ),
+        }
+    )
 )
 
 
@@ -245,6 +281,15 @@ def scheduler_role_requires_specialist_accepted_outcome(role: str) -> bool:
     return role in _SPECIALIST_ACCEPTED_OUTCOME_ROLES
 
 
+def scheduler_task_requires_specialist_accepted_outcome(task: SchedulerTaskPlan) -> bool:
+    """Apply specialist acceptance only to substantive primary model work."""
+
+    return (
+        task.purpose is SchedulerTaskPurpose.PRIMARY
+        and scheduler_role_requires_specialist_accepted_outcome(task.role)
+    )
+
+
 def _bounded_scheduler_items[ItemT](
     values: Iterable[ItemT],
     *,
@@ -284,6 +329,103 @@ def scheduler_canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
+_LEGACY_ACTOR_ANNOTATION_FIELDS = frozenset(
+    {
+        "actor_model_applicability",
+        "actor_context",
+    }
+)
+
+
+def _strip_legacy_actor_annotations(value: object, projection: object) -> None:
+    """Remove only actor fields absent from exact scheduler-v1 typed payloads."""
+
+    if isinstance(value, CandidateFinding | JudgeDecision):
+        if value.actor_model_applicability.value != "unstated" or value.actor_context is not None:
+            raise ValueError("scheduler v1 typed payload cannot carry actor annotations")
+        if not isinstance(projection, dict):
+            raise TypeError("scheduler typed payload projection has an invalid object shape")
+        for field_name in _LEGACY_ACTOR_ANNOTATION_FIELDS:
+            projection.pop(field_name, None)
+    if isinstance(value, BaseModel):
+        if not isinstance(projection, dict):
+            raise TypeError("scheduler typed payload projection has an invalid model shape")
+        for field_name in type(value).model_fields:
+            if field_name in projection:
+                _strip_legacy_actor_annotations(getattr(value, field_name), projection[field_name])
+        return
+    if isinstance(value, Mapping):
+        if not isinstance(projection, dict):
+            raise TypeError("scheduler typed payload projection has an invalid mapping shape")
+        for key, item in value.items():
+            projected_key = key.value if isinstance(key, StrEnum) else key
+            if projected_key in projection:
+                _strip_legacy_actor_annotations(item, projection[projected_key])
+        return
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        if not isinstance(projection, list) or len(value) != len(projection):
+            raise TypeError("scheduler typed payload projection has an invalid sequence shape")
+        for item, projected_item in zip(value, projection, strict=True):
+            _strip_legacy_actor_annotations(item, projected_item)
+
+
+def scheduler_typed_payload_projection(
+    value: BaseModel,
+    *,
+    algorithm_version: str,
+) -> Any:
+    """Serialize a typed payload under one exact scheduler algorithm contract.
+
+    Version 1 predates typed actor annotations and therefore omits exactly those
+    fields from candidate and judge records. Version 2 retains the current full,
+    explicit wire representation, including actor-neutral default values.
+    """
+
+    if not isinstance(value, BaseModel):
+        raise TypeError("scheduler typed payload projection requires a Pydantic model")
+    if algorithm_version not in {
+        "mmaudit.seven-pass-scheduler.v1",
+        "mmaudit.seven-pass-scheduler.v2",
+    }:
+        raise ValueError("scheduler typed payload projection uses an unknown algorithm")
+    projection = value.model_dump(mode="json")
+    if algorithm_version == "mmaudit.seven-pass-scheduler.v1":
+        _strip_legacy_actor_annotations(value, projection)
+    return projection
+
+
+def scheduler_candidate_payload_sha256(
+    candidate: CandidateFinding,
+    *,
+    algorithm_version: str,
+) -> str:
+    """Hash one candidate under the exact scheduler algorithm serialization."""
+
+    return scheduler_canonical_sha256(
+        scheduler_typed_payload_projection(
+            candidate,
+            algorithm_version=algorithm_version,
+        )
+    )
+
+
+def _scheduler_value_projection(value: Any, *, algorithm_version: str) -> Any:
+    """Project an arbitrary scheduler hash body through typed model boundaries."""
+
+    if isinstance(value, BaseModel):
+        return scheduler_typed_payload_projection(value, algorithm_version=algorithm_version)
+    if isinstance(value, Mapping):
+        return {
+            key: _scheduler_value_projection(item, algorithm_version=algorithm_version)
+            for key, item in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [
+            _scheduler_value_projection(item, algorithm_version=algorithm_version) for item in value
+        ]
+    return value
+
+
 @cache
 def _scheduler_response_schema_model_registry() -> Mapping[str, _SchedulerResponseSchemaBinding]:
     """Build the closed response registry with exact validator-generation custody."""
@@ -297,6 +439,37 @@ def _scheduler_response_schema_model_registry() -> Mapping[str, _SchedulerRespon
     return MappingProxyType(registry)
 
 
+@cache
+def _scheduler_auxiliary_response_schema_model_registry() -> Mapping[
+    str, _SchedulerResponseSchemaBinding
+]:
+    """Bind auxiliary wire schemas without changing frozen primary inventories."""
+
+    bindings = tuple(
+        _SchedulerResponseSchemaBinding.capture(model)
+        for model in _SCHEDULER_AUXILIARY_RESPONSE_MODELS
+    )
+    registry = {binding.schema_sha256: binding for binding in bindings}
+    if len(registry) != len(_SCHEDULER_AUXILIARY_RESPONSE_MODELS):
+        raise ValueError("scheduler auxiliary response registry contains a schema-hash collision")
+    if set(registry) & set(_scheduler_response_schema_model_registry()):
+        raise ValueError("scheduler primary and auxiliary response schemas collide")
+    return MappingProxyType(registry)
+
+
+def _scheduler_all_response_schema_model_registry() -> Mapping[
+    str, _SchedulerResponseSchemaBinding
+]:
+    """Return a live primary-plus-auxiliary view for exact task parsing."""
+
+    return MappingProxyType(
+        {
+            **_scheduler_response_schema_model_registry(),
+            **_scheduler_auxiliary_response_schema_model_registry(),
+        }
+    )
+
+
 def scheduler_response_schema_model_registry() -> dict[str, type[BaseModel]]:
     """Return a copy only when every fixed response class still has its frozen schema."""
 
@@ -306,10 +479,19 @@ def scheduler_response_schema_model_registry() -> dict[str, type[BaseModel]]:
     return {schema_sha256: binding.response_model for schema_sha256, binding in registry.items()}
 
 
+def scheduler_auxiliary_response_schema_model_registry() -> dict[str, type[BaseModel]]:
+    """Return the detached purpose-specific auxiliary response registry."""
+
+    registry = _scheduler_auxiliary_response_schema_model_registry()
+    for binding in registry.values():
+        binding.require_current()
+    return {schema_sha256: binding.response_model for schema_sha256, binding in registry.items()}
+
+
 def scheduler_response_schema_sha256(response_model: type[Any]) -> str:
     """Return the registered strict-schema hash without regenerating its schema."""
 
-    registry = _scheduler_response_schema_model_registry()
+    registry = _scheduler_all_response_schema_model_registry()
     for binding in registry.values():
         binding.require_current()
     matches = tuple(
@@ -322,18 +504,179 @@ def scheduler_response_schema_sha256(response_model: type[Any]) -> str:
     return matches[0]
 
 
+def scheduler_response_schema_sha256_for_algorithm(
+    response_model: type[Any],
+    *,
+    algorithm_version: str,
+) -> str:
+    """Return the exact current or actor-neutral v1 response-schema digest."""
+
+    if algorithm_version == "mmaudit.seven-pass-scheduler.v1":
+        legacy = _SCHEDULER_V1_ACTOR_NEUTRAL_RESPONSE_SCHEMA_SHA256S.get(response_model)
+        if legacy is not None:
+            return legacy
+    elif algorithm_version != "mmaudit.seven-pass-scheduler.v2":
+        raise ValueError("scheduler response schema uses an unknown algorithm")
+    return scheduler_response_schema_sha256(response_model)
+
+
+def scheduler_response_schema_inventory_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> tuple[dict[str, str], ...]:
+    """Return the closed response-schema inventory for one scheduler algorithm."""
+
+    registry = _scheduler_response_schema_model_registry()
+    models = tuple(binding.response_model for binding in registry.values())
+    if len(models) != len(set(models)):
+        raise ValueError("scheduler response-schema registry contains a duplicate type")
+    return tuple(
+        {
+            "model_type": f"{model.__module__}.{model.__qualname__}",
+            "schema_sha256": scheduler_response_schema_sha256_for_algorithm(
+                model,
+                algorithm_version=algorithm_version,
+            ),
+        }
+        for model in sorted(models, key=lambda item: f"{item.__module__}.{item.__qualname__}")
+    )
+
+
+def scheduler_response_schema_hashes_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> frozenset[str]:
+    """Return the exact response-schema hashes permitted by one scheduler algorithm."""
+
+    return frozenset(
+        item["schema_sha256"]
+        for item in scheduler_response_schema_inventory_for_algorithm(
+            algorithm_version=algorithm_version,
+        )
+    )
+
+
+def scheduler_response_schema_set_sha256_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> str:
+    """Hash the closed response-schema inventory for one scheduler algorithm."""
+
+    return scheduler_canonical_sha256(
+        scheduler_response_schema_inventory_for_algorithm(
+            algorithm_version=algorithm_version,
+        )
+    )
+
+
+def scheduler_auxiliary_response_schema_inventory_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> tuple[dict[str, str], ...]:
+    """Return purpose-scoped schemas without changing the frozen primary set."""
+
+    if algorithm_version == "mmaudit.seven-pass-scheduler.v1":
+        return ()
+    if algorithm_version != "mmaudit.seven-pass-scheduler.v2":
+        raise ValueError("scheduler auxiliary response schema uses an unknown algorithm")
+    registry = _scheduler_auxiliary_response_schema_model_registry()
+    models = tuple(binding.response_model for binding in registry.values())
+    if len(models) != len(set(models)):
+        raise ValueError("scheduler auxiliary response registry contains a duplicate type")
+    return tuple(
+        {
+            "model_type": f"{model.__module__}.{model.__qualname__}",
+            "schema_sha256": scheduler_response_schema_sha256_for_algorithm(
+                model,
+                algorithm_version=algorithm_version,
+            ),
+        }
+        for model in sorted(models, key=lambda item: f"{item.__module__}.{item.__qualname__}")
+    )
+
+
+def scheduler_auxiliary_response_schema_hashes_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> frozenset[str]:
+    """Return exact purpose-scoped schema hashes for one scheduler algorithm."""
+
+    return frozenset(
+        item["schema_sha256"]
+        for item in scheduler_auxiliary_response_schema_inventory_for_algorithm(
+            algorithm_version=algorithm_version,
+        )
+    )
+
+
+def scheduler_auxiliary_response_schema_set_sha256_for_algorithm(
+    *,
+    algorithm_version: str,
+) -> str:
+    """Hash the detached purpose-scoped schema inventory."""
+
+    return scheduler_canonical_sha256(
+        scheduler_auxiliary_response_schema_inventory_for_algorithm(
+            algorithm_version=algorithm_version,
+        )
+    )
+
+
+def _scheduler_response_schema_binding(
+    schema_sha256: str,
+) -> _SchedulerResponseSchemaBinding | None:
+    """Resolve a current schema or one exact actor-neutral v1 compatibility alias."""
+
+    registry = _scheduler_all_response_schema_model_registry()
+    current = registry.get(schema_sha256)
+    if current is not None:
+        return current
+    legacy_models = tuple(
+        model
+        for model, legacy_sha256 in _SCHEDULER_V1_ACTOR_NEUTRAL_RESPONSE_SCHEMA_SHA256S.items()
+        if legacy_sha256 == schema_sha256
+    )
+    if len(legacy_models) != 1:
+        return None
+    current_sha256 = scheduler_response_schema_sha256(legacy_models[0])
+    return registry.get(current_sha256)
+
+
+def _actor_sensitive_response_schema_algorithm(schema_sha256: str) -> str | None:
+    """Classify only response schemas changed by actor annotations."""
+
+    if schema_sha256 in _SCHEDULER_V1_ACTOR_NEUTRAL_RESPONSE_SCHEMA_SHA256S.values():
+        return "mmaudit.seven-pass-scheduler.v1"
+    current_hashes = {
+        scheduler_response_schema_sha256(model)
+        for model in _SCHEDULER_V1_ACTOR_NEUTRAL_RESPONSE_SCHEMA_SHA256S
+    }
+    if schema_sha256 in current_hashes:
+        return "mmaudit.seven-pass-scheduler.v2"
+    return None
+
+
 def _task_uses_candidate_review_contract(task: SchedulerTaskPlan) -> bool:
     """Return whether a model task has a framed-wire/normalized-batch contract."""
 
-    return task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW or (
-        task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
-        and task.role == "business_logic"
+    return (
+        task.purpose is SchedulerTaskPurpose.PRIMARY
+        and task.task_kind is SchedulerTaskKind.MODEL_REQUEST
+        and (
+            task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            or (
+                task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+                and task.role == "business_logic"
+            )
+        )
     )
 
 
 def _expected_response_model(task: SchedulerTaskPlan) -> type[BaseModel]:
     """Select the retained normalized response type authorized for a scheduler role."""
 
+    if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+        return SolidityRetrievalRequestBatch
     if task.pass_kind is SchedulerPassKind.ORIENTATION and task.role == "threat_model":
         return ThreatModel
     if task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
@@ -360,14 +703,31 @@ def _expected_response_model(task: SchedulerTaskPlan) -> type[BaseModel]:
     raise ValueError("scheduler model role lacks a registered response contract")
 
 
+def _parse_retrieval_request_batch_payload(payload: Any) -> SolidityRetrievalRequestBatch:
+    """Validate a strict retrieval batch through its JSON wire boundary."""
+
+    return SolidityRetrievalRequestBatch.model_validate_json(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+            default=_json_default,
+        )
+    )
+
+
 def _parse_scheduler_model_payload(
     *,
     task: SchedulerTaskPlan,
     activation: SchedulerTaskActivation,
     payload: Any,
+    algorithm_version: str = SCHEDULER_ALGORITHM_VERSION,
 ) -> BaseModel:
-    registry = _scheduler_response_schema_model_registry()
-    wire_binding = registry.get(activation.response_schema_sha256 or "")
+    registry = _scheduler_all_response_schema_model_registry()
+    wire_schema_sha256 = activation.response_schema_sha256 or ""
+    wire_binding = _scheduler_response_schema_binding(wire_schema_sha256)
     expected_model = _expected_response_model(task)
     candidate_review_contract = _task_uses_candidate_review_contract(task)
     permitted_wire_models = (
@@ -375,12 +735,20 @@ def _parse_scheduler_model_payload(
         if candidate_review_contract
         else (expected_model,)
     )
-    if wire_binding is None or wire_binding.response_model not in permitted_wire_models:
+    if (
+        wire_binding is None
+        or wire_binding.response_model not in permitted_wire_models
+        or wire_schema_sha256
+        != scheduler_response_schema_sha256_for_algorithm(
+            wire_binding.response_model,
+            algorithm_version=algorithm_version,
+        )
+    ):
         raise ValueError(
             f"scheduler task output for role {task.role} uses the wrong response schema"
         )
     normalized_schema_sha256 = (
-        candidate_review_batch_schema_sha256()
+        scheduler_response_schema_sha256(CandidateReviewBatch)
         if candidate_review_contract
         else wire_binding.schema_sha256
     )
@@ -398,7 +766,22 @@ def _parse_scheduler_model_payload(
         ) from None
     schema_validator = binding.validator
     try:
-        parsed = cast(BaseModel, schema_validator.validate_python(payload))
+        parsed = cast(
+            BaseModel,
+            (
+                schema_validator.validate_json(
+                    json.dumps(
+                        payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                        allow_nan=False,
+                    )
+                )
+                if response_model is SolidityRetrievalRequestBatch
+                else schema_validator.validate_python(payload)
+            ),
+        )
     except (TypeError, ValueError):
         raise ValueError(
             f"scheduler task output for role {task.role} violates its registered response schema"
@@ -514,8 +897,29 @@ def repository_pseudo_shard_id(source_sha256: str) -> str:
     )
 
 
-def _model_sha256(model: BaseModel, *, exclude: set[str]) -> str:
-    return scheduler_canonical_sha256(model.model_dump(mode="json", exclude=exclude))
+def _model_sha256(
+    model: BaseModel,
+    *,
+    exclude: set[str],
+    algorithm_version: str = SCHEDULER_ALGORITHM_VERSION,
+) -> str:
+    projection = scheduler_typed_payload_projection(
+        model,
+        algorithm_version=algorithm_version,
+    )
+    if not isinstance(projection, dict):
+        raise TypeError("scheduler model hash projection has an invalid object shape")
+    for field_name in exclude:
+        projection.pop(field_name, None)
+    return scheduler_canonical_sha256(projection)
+
+
+def _candidate_review_wire_schema_is_supported(schema_sha256: str) -> bool:
+    try:
+        candidate_review_wire_schema_algorithm_version(schema_sha256)
+    except ValueError:
+        return False
+    return True
 
 
 class SchedulerPassKind(StrEnum):
@@ -551,6 +955,13 @@ class SchedulerTaskKind(StrEnum):
     MODEL_REQUEST = "MODEL_REQUEST"
     HOST_COMPUTATION = "HOST_COMPUTATION"
     EMPTY_COMPLETION = "EMPTY_COMPLETION"
+
+
+class SchedulerTaskPurpose(StrEnum):
+    """Whether a task performs substantive review or plans bounded retrieval."""
+
+    PRIMARY = "PRIMARY"
+    RETRIEVAL_PLANNING = "RETRIEVAL_PLANNING"
 
 
 class SchedulerTerminalStatus(StrEnum):
@@ -940,7 +1351,7 @@ class SchedulerShardInventory(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     semantic_inventory_sha256: str = Field(pattern=_SHA256_PATTERN)
     shards: tuple[SchedulerShardDescriptor, ...] = Field(min_length=1, max_length=100_000)
@@ -1758,9 +2169,10 @@ class SchedulerBindings(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["1.0"] = "1.0"
-    algorithm_version: Literal["mmaudit.seven-pass-scheduler.v1"] = (
-        "mmaudit.seven-pass-scheduler.v1"
-    )
+    algorithm_version: Literal[
+        "mmaudit.seven-pass-scheduler.v1",
+        "mmaudit.seven-pass-scheduler.v2",
+    ] = SCHEDULER_ALGORITHM_VERSION
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     source_sha256: str = Field(pattern=_SHA256_PATTERN)
     analysis_input_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -1993,9 +2405,9 @@ class SchedulerAnalysisInputInventory(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     descriptors: tuple[SchedulerAnalysisInputDescriptor, ...] = Field(
-        min_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
+        min_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS_V1),
         max_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
     )
     analysis_input_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -2007,7 +2419,7 @@ class SchedulerAnalysisInputInventory(StrictModel):
     ) -> SchedulerAnalysisInputInventory:
         canonical = tuple(sorted(descriptors, key=lambda item: item.label))
         values = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "descriptors": canonical,
         }
         return cls(**values, analysis_input_sha256=scheduler_canonical_sha256(values))
@@ -2015,7 +2427,12 @@ class SchedulerAnalysisInputInventory(StrictModel):
     @model_validator(mode="after")
     def inventory_is_complete_and_exact(self) -> Self:
         labels = tuple(item.label for item in self.descriptors)
-        if labels != tuple(sorted(SCHEDULER_ANALYSIS_INPUT_LABELS)):
+        expected_labels = (
+            SCHEDULER_ANALYSIS_INPUT_LABELS_V1
+            if self.schema_version == "1.0"
+            else SCHEDULER_ANALYSIS_INPUT_LABELS
+        )
+        if labels != tuple(sorted(expected_labels)):
             raise ValueError("scheduler analysis-input inventory is incomplete or duplicated")
         if self.analysis_input_sha256 != _model_sha256(
             self,
@@ -2143,9 +2560,10 @@ class SchedulerCampaignManifest(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
-    algorithm_version: Literal["mmaudit.seven-pass-scheduler.v1"] = (
-        "mmaudit.seven-pass-scheduler.v1"
-    )
+    algorithm_version: Literal[
+        "mmaudit.seven-pass-scheduler.v1",
+        "mmaudit.seven-pass-scheduler.v2",
+    ] = SCHEDULER_ALGORITHM_VERSION
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     bindings: SchedulerBindings
     shard_inventory: SchedulerShardInventory
@@ -2251,6 +2669,8 @@ class SchedulerCampaignManifest(StrictModel):
             raise ValueError("scheduler campaign terminal-report authority mode is inconsistent")
         if self.mandatory_passes != SCHEDULER_PASS_ORDER:
             raise ValueError("scheduler campaign must retain all seven ordered mandatory passes")
+        if self.algorithm_version != self.bindings.algorithm_version:
+            raise ValueError("scheduler campaign algorithm differs from its exact bindings")
         if self.shard_ids != self.shard_inventory.shard_ids:
             raise ValueError("scheduler campaign shard IDs differ from its exact inventory")
         if (
@@ -2332,15 +2752,16 @@ class SchedulerPassDependency(StrictModel):
 class SchedulerTaskPlan(StrictModel):
     """One canonical host or model work recipe within a mandatory pass.
 
-    The three request hashes are immutable recipe commitments known while the
-    pass is sealed.  Actual rendered input, provider prompt, schema, and dynamic
-    dependency-result hashes are bound immediately before dispatch by
-    :class:`SchedulerTaskActivation`.
+    The request hashes are immutable recipe commitments known while the pass is
+    sealed. Blind model-surface reviews may additionally commit the exact
+    requested-surface manifest before dispatch. Actual rendered input, provider
+    prompt, schema, and dynamic dependency-result hashes are bound immediately
+    before dispatch by :class:`SchedulerTaskActivation`.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -2348,11 +2769,25 @@ class SchedulerTaskPlan(StrictModel):
     pass_id: str = Field(pattern=r"^scheduler-pass-[0-9a-f]{64}$")
     scope: SchedulerScope
     task_kind: SchedulerTaskKind
+    purpose: SchedulerTaskPurpose = Field(
+        default=SchedulerTaskPurpose.PRIMARY,
+        exclude_if=lambda value: value is SchedulerTaskPurpose.PRIMARY,
+    )
+    parent_task_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-task-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
     task_key: str = Field(pattern=_SAFE_KEY_PATTERN)
     role: str = Field(pattern=_ROLE_PATTERN)
     requested_model: str | None = Field(default=None, pattern=_MODEL_ID_PATTERN)
     root_lineage: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     candidate_ids: tuple[str, ...] = Field(default=(), max_length=100_000)
+    model_surface_review_request_manifest_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     input_sha256: str = Field(pattern=_SHA256_PATTERN)
     prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
     system_prompt_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
@@ -2380,11 +2815,42 @@ class SchedulerTaskPlan(StrictModel):
         requested_model: str | None = None,
         root_lineage: str | None = None,
         candidate_ids: Iterable[str] = (),
+        model_surface_review_request_manifest_sha256: str | None = None,
+        purpose: SchedulerTaskPurpose = SchedulerTaskPurpose.PRIMARY,
+        parent_task_id: str | None = None,
     ) -> SchedulerTaskPlan:
         validated_manifest = SchedulerCampaignManifest.model_validate(
             manifest.model_dump(mode="python")
         )
         validated_scope = SchedulerScope.model_validate(scope.model_dump(mode="python"))
+        if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING and (
+            validated_manifest.algorithm_version != "mmaudit.seven-pass-scheduler.v2"
+            or task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+            or parent_task_id is None
+            or normalizer_sha256 is not None
+            or response_schema_sha256
+            != scheduler_response_schema_sha256(SolidityRetrievalRequestBatch)
+        ):
+            raise ValueError("retrieval-planning task shape is not exact")
+        if purpose is SchedulerTaskPurpose.PRIMARY and parent_task_id is not None:
+            raise ValueError("primary scheduler task cannot link a parent task")
+        if (
+            validated_manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+            and task_kind is SchedulerTaskKind.MODEL_REQUEST
+            and purpose is SchedulerTaskPurpose.PRIMARY
+            and (
+                pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+                or (
+                    pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+                    and role == "business_logic"
+                )
+            )
+            and model_surface_review_request_manifest_sha256 is None
+        ):
+            raise ValueError(
+                "scheduler-v2 candidate-review task requires a sealed surface manifest"
+            )
         audit_selection = validated_manifest.bindings.audit_model_selection
         if task_kind is SchedulerTaskKind.MODEL_REQUEST and audit_selection is not None:
             if requested_model is None or root_lineage is None:
@@ -2393,7 +2859,9 @@ class SchedulerTaskPlan(StrictModel):
             if selected_route.root_lineage != root_lineage:
                 raise ValueError("scheduler request root differs from audit-selected model")
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": (
+                "1.1" if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING else "1.0"
+            ),
             "evidence_authority": "comparison_required",
             "campaign_id": validated_manifest.campaign_id,
             "manifest_sha256": validated_manifest.manifest_sha256,
@@ -2412,6 +2880,13 @@ class SchedulerTaskPlan(StrictModel):
             "normalizer_sha256": normalizer_sha256,
             "response_schema_sha256": response_schema_sha256,
         }
+        if purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+            values["purpose"] = purpose
+            values["parent_task_id"] = parent_task_id
+        if model_surface_review_request_manifest_sha256 is not None:
+            values["model_surface_review_request_manifest_sha256"] = (
+                model_surface_review_request_manifest_sha256
+            )
         identity = scheduler_canonical_sha256(values)
         body = {
             **values,
@@ -2432,7 +2907,10 @@ class SchedulerTaskPlan(StrictModel):
             self.requested_model is not None
             and self.root_lineage is not None
             and self.system_prompt_sha256 is not None
-            and self.normalizer_sha256 is not None
+            and (
+                self.normalizer_sha256 is not None
+                or self.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            )
         )
         if self.task_kind is SchedulerTaskKind.MODEL_REQUEST and not model_fields_present:
             raise ValueError("model scheduler task requires exact model and root lineage")
@@ -2443,9 +2921,27 @@ class SchedulerTaskPlan(StrictModel):
             or self.normalizer_sha256 is not None
         ):
             raise ValueError("host scheduler task cannot carry model identity")
+        if self.purpose is SchedulerTaskPurpose.PRIMARY:
+            if self.schema_version != "1.0" or self.parent_task_id is not None:
+                raise ValueError("primary scheduler task must retain its legacy identity shape")
+        elif (
+            self.schema_version != "1.1"
+            or self.parent_task_id is None
+            or self.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or self.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+            or self.normalizer_sha256 is not None
+            or self.response_schema_sha256
+            != scheduler_response_schema_sha256(SolidityRetrievalRequestBatch)
+        ):
+            raise ValueError("retrieval-planning scheduler task shape is not exact")
         _candidate_id_inventory(self.candidate_ids, "task candidate")
         if self.candidate_ids and self.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
             raise ValueError("host scheduler task cannot claim model candidate review")
+        if (
+            self.model_surface_review_request_manifest_sha256 is not None
+            and self.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+        ):
+            raise ValueError("host scheduler task cannot claim a model-surface request manifest")
         values = self.model_dump(
             mode="json",
             exclude={"task_id", "logical_request_id", "task_plan_sha256"},
@@ -2513,18 +3009,47 @@ class SchedulerConditionalAbsence(StrictModel):
         return self
 
 
+def _retrieval_role_budget_plans_for_tasks(
+    tasks: tuple[SchedulerTaskPlan, ...],
+) -> tuple[SolidityRetrievalRoleBudgetPlan, ...]:
+    """Derive complete per-role ceilings from the exact retrieval-child inventory."""
+
+    primary_by_id = {
+        task.task_id: task for task in tasks if task.purpose is SchedulerTaskPurpose.PRIMARY
+    }
+    primary_ids_by_role: dict[str, list[str]] = {}
+    for child in tasks:
+        if child.purpose is not SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+            continue
+        parent = primary_by_id.get(child.parent_task_id or "")
+        if parent is not None:
+            primary_ids_by_role.setdefault(parent.role, []).append(parent.task_id)
+    return tuple(
+        SolidityRetrievalRoleBudgetPlan.build(
+            role=role,
+            primary_task_ids=primary_ids,
+        )
+        for role, primary_ids in sorted(primary_ids_by_role.items())
+    )
+
+
 class SchedulerPassPlan(StrictModel):
     """A sealed exact task inventory for one mandatory pass."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     manifest: SchedulerCampaignManifest
     pass_kind: SchedulerPassKind
     pass_id: str = Field(pattern=r"^scheduler-pass-[0-9a-f]{64}$")
     dependencies: tuple[SchedulerPassDependency, ...]
     tasks: tuple[SchedulerTaskPlan, ...] = Field(min_length=1, max_length=100_000)
+    retrieval_role_budget_plans: tuple[SolidityRetrievalRoleBudgetPlan, ...] = Field(
+        default=(),
+        max_length=100_000,
+        exclude_if=lambda value: not value,
+    )
     candidate_workset: SchedulerCandidateWorkset | None = None
     conditional_absence: SchedulerConditionalAbsence | None = None
     blind_plan_barrier_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
@@ -2560,6 +3085,34 @@ class SchedulerPassPlan(StrictModel):
 
         return self._tasks_by_id.get(task.task_id) == task
 
+    def retrieval_role_budget_plan_for_task(
+        self,
+        primary_task_id: str,
+    ) -> SolidityRetrievalRoleBudgetPlan:
+        """Return the detached role plan that contains one exact primary task."""
+
+        matches = tuple(
+            role_plan
+            for role_plan in self.retrieval_role_budget_plans
+            if any(
+                allocation.primary_task_id == primary_task_id
+                for allocation in role_plan.allocations
+            )
+        )
+        if len(matches) != 1:
+            raise KeyError("scheduler pass lacks one exact retrieval role budget for the task")
+        return SolidityRetrievalRoleBudgetPlan.model_validate(matches[0].model_dump(mode="python"))
+
+    def retrieval_role_budget_allocation_for_task(
+        self,
+        primary_task_id: str,
+    ) -> SolidityRetrievalRoleBudgetAllocation:
+        """Return the detached static allocation for one exact primary task."""
+
+        return self.retrieval_role_budget_plan_for_task(primary_task_id).allocation_for_task(
+            primary_task_id
+        )
+
     @classmethod
     def build(
         cls,
@@ -2593,6 +3146,7 @@ class SchedulerPassPlan(StrictModel):
                 key=lambda item: item.task_id,
             )
         )
+        retrieval_role_budget_plans = _retrieval_role_budget_plans_for_tasks(canonical_tasks)
         pass_id = validated_manifest.pass_id(pass_kind)
         barrier = (
             scheduler_canonical_sha256(
@@ -2607,7 +3161,7 @@ class SchedulerPassPlan(StrictModel):
             else None
         )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if retrieval_role_budget_plans else "1.0",
             "evidence_authority": "comparison_required",
             "manifest": validated_manifest,
             "pass_kind": pass_kind,
@@ -2618,6 +3172,8 @@ class SchedulerPassPlan(StrictModel):
             "conditional_absence": conditional_absence,
             "blind_plan_barrier_sha256": barrier,
         }
+        if retrieval_role_budget_plans:
+            values["retrieval_role_budget_plans"] = retrieval_role_budget_plans
         plan_id = "scheduler-plan-" + scheduler_canonical_sha256(values)
         body = {**values, "pass_plan_id": plan_id}
         return cls(**body, pass_plan_sha256=scheduler_canonical_sha256(body))
@@ -2638,6 +3194,45 @@ class SchedulerPassPlan(StrictModel):
         task_ids = tuple(item.task_id for item in self.tasks)
         if task_ids != tuple(sorted(set(task_ids))):
             raise ValueError("scheduler pass tasks must be unique and sorted")
+        primary_tasks = tuple(
+            task for task in self.tasks if task.purpose is SchedulerTaskPurpose.PRIMARY
+        )
+        retrieval_tasks = tuple(
+            task for task in self.tasks if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        )
+        if not primary_tasks:
+            raise ValueError("scheduler pass requires at least one primary task")
+        tasks_by_id = {task.task_id: task for task in self.tasks}
+        retrieval_parent_ids: list[str] = []
+        for child in retrieval_tasks:
+            parent = tasks_by_id.get(child.parent_task_id or "")
+            if (
+                self.manifest.algorithm_version != "mmaudit.seven-pass-scheduler.v2"
+                or self.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+                or parent is None
+                or parent.purpose is not SchedulerTaskPurpose.PRIMARY
+                or child.task_id == parent.task_id
+                or child.logical_request_id == parent.logical_request_id
+                or child.scope != parent.scope
+                or child.role != parent.role
+                or child.requested_model != parent.requested_model
+                or child.root_lineage != parent.root_lineage
+                or child.candidate_ids != parent.candidate_ids
+                or child.model_surface_review_request_manifest_sha256
+                != parent.model_surface_review_request_manifest_sha256
+            ):
+                raise ValueError("scheduler retrieval child differs from its exact primary parent")
+            retrieval_parent_ids.append(parent.task_id)
+        if len(retrieval_parent_ids) != len(set(retrieval_parent_ids)):
+            raise ValueError("scheduler primary task cannot have multiple retrieval children")
+        expected_budget_plans = _retrieval_role_budget_plans_for_tasks(self.tasks)
+        if self.retrieval_role_budget_plans != expected_budget_plans:
+            raise ValueError(
+                "scheduler retrieval role budgets differ from the exact child inventory"
+            )
+        expected_schema_version = "1.1" if expected_budget_plans else "1.0"
+        if self.schema_version != expected_schema_version:
+            raise ValueError("scheduler pass-plan schema differs from its retrieval budget shape")
         manifest_shards = set(self.manifest.shard_ids)
         for task in self.tasks:
             if (
@@ -2649,6 +3244,14 @@ class SchedulerPassPlan(StrictModel):
                 raise ValueError("scheduler task differs from its pass identity")
             if not set(task.scope.shard_ids) <= manifest_shards:
                 raise ValueError("scheduler task scope contains an unknown shard")
+            if (
+                self.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+                and _task_uses_candidate_review_contract(task)
+                and task.model_surface_review_request_manifest_sha256 is None
+            ):
+                raise ValueError(
+                    "scheduler-v2 candidate-review pass lacks sealed surface authority"
+                )
             audit_selection = self.manifest.bindings.audit_model_selection
             if task.task_kind is SchedulerTaskKind.MODEL_REQUEST and audit_selection is not None:
                 assert task.requested_model is not None and task.root_lineage is not None
@@ -2656,11 +3259,11 @@ class SchedulerPassPlan(StrictModel):
                 if selected_route.root_lineage != task.root_lineage:
                     raise ValueError("scheduler task differs from its audit-selected route")
         empty_tasks = [
-            item for item in self.tasks if item.task_kind is SchedulerTaskKind.EMPTY_COMPLETION
+            item for item in primary_tasks if item.task_kind is SchedulerTaskKind.EMPTY_COMPLETION
         ]
         if empty_tasks:
             if (
-                len(self.tasks) != 1
+                len(primary_tasks) != 1
                 or len(empty_tasks) != 1
                 or self.conditional_absence is None
                 or empty_tasks[0].role != "host:conditional_absence"
@@ -2702,14 +3305,14 @@ class SchedulerPassPlan(StrictModel):
             ):
                 raise ValueError("scheduler absence is not derived from its exact empty workset")
         if self.pass_kind is SchedulerPassKind.ORIENTATION and (
-            len(self.tasks) != 1
-            or self.tasks[0].scope.kind is not SchedulerScopeKind.GLOBAL
-            or self.tasks[0].task_kind is not SchedulerTaskKind.MODEL_REQUEST
-            or self.tasks[0].role != "threat_model"
+            len(primary_tasks) != 1
+            or primary_tasks[0].scope.kind is not SchedulerScopeKind.GLOBAL
+            or primary_tasks[0].task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or primary_tasks[0].role != "threat_model"
         ):
             raise ValueError("orientation requires exactly one global threat-model request")
         if self.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
-            for task in self.tasks:
+            for task in primary_tasks:
                 if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
                     raise ValueError(
                         "blind review requires only single-shard model requests or "
@@ -2724,7 +3327,7 @@ class SchedulerPassPlan(StrictModel):
                 ):
                     raise ValueError("blind review role or scope is not permitted")
             reviewed_shards = {
-                task.scope.shard_ids[0] for task in self.tasks if task.role == "source_audit"
+                task.scope.shard_ids[0] for task in primary_tasks if task.role == "source_audit"
             }
             if reviewed_shards != manifest_shards:
                 raise ValueError("blind source-audit requests must cover the exact shard inventory")
@@ -2747,11 +3350,11 @@ class SchedulerPassPlan(StrictModel):
         }.get(self.pass_kind)
         if required_host_role is not None and not any(
             task.task_kind is SchedulerTaskKind.HOST_COMPUTATION and task.role == required_host_role
-            for task in self.tasks
+            for task in primary_tasks
         ):
             raise ValueError(f"scheduler pass requires {required_host_role} host computation")
         if self.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION:
-            for task in self.tasks:
+            for task in primary_tasks:
                 if task.role != "business_logic":
                     continue
                 if (
@@ -2771,7 +3374,7 @@ class SchedulerPassPlan(StrictModel):
             task.task_kind is SchedulerTaskKind.MODEL_REQUEST
             and task.role == "judge"
             and not task.candidate_ids
-            for task in self.tasks
+            for task in primary_tasks
         ):
             raise ValueError("judge model task requires an exact non-empty candidate-group set")
         values = self.model_dump(
@@ -2796,6 +3399,8 @@ class SchedulerPassPlan(StrictModel):
             candidate_id: {} for candidate_id in candidate_ids
         }
         for task in self.tasks:
+            if task.purpose is not SchedulerTaskPurpose.PRIMARY:
+                continue
             if (
                 task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
                 or len(task.candidate_ids) != 1
@@ -2838,7 +3443,10 @@ class SchedulerPassPlan(StrictModel):
         reviewer_tasks = tuple(
             task
             for task in self.tasks
-            if task.task_key in expected_roles or task.role in {"verifier", "candidate_falsifier"}
+            if task.purpose is SchedulerTaskPurpose.PRIMARY
+            and (
+                task.task_key in expected_roles or task.role in {"verifier", "candidate_falsifier"}
+            )
         )
         if (
             len(reviewer_tasks) != len(expected_roles)
@@ -2870,6 +3478,23 @@ class SchedulerPassPlan(StrictModel):
             raise ValueError(
                 "pass six reviewer lineages, tasks, and logical requests must be pairwise distinct"
             )
+
+
+def _retrieval_planning_child(
+    plan: SchedulerPassPlan,
+    parent: SchedulerTaskPlan,
+) -> SchedulerTaskPlan | None:
+    """Return the sole exact retrieval-planning child of one primary task."""
+
+    matches = tuple(
+        task
+        for task in plan.tasks
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        and task.parent_task_id == parent.task_id
+    )
+    if len(matches) > 1:
+        raise ValueError("scheduler primary task has multiple retrieval children")
+    return matches[0] if matches else None
 
 
 class SchedulerTaskActivation(StrictModel):
@@ -2910,10 +3535,45 @@ class SchedulerTaskActivation(StrictModel):
         response_schema_sha256: str | None = None,
         delivered_source_descriptor_sha256s: Iterable[str] = (),
         upstream_task_result_sha256s: Iterable[str] = (),
+        retrieval_planning_result: SchedulerTaskResult | None = None,
     ) -> SchedulerTaskActivation:
         if not plan.has_exact_task(task):
             raise ValueError("scheduler activation task is not in the sealed pass plan")
+        if (
+            plan.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+            and _task_uses_candidate_review_contract(task)
+            and task.model_surface_review_request_manifest_sha256 is None
+        ):
+            raise ValueError(
+                "scheduler-v2 candidate-review activation lacks sealed surface authority"
+            )
         upstream = tuple(sorted(set(upstream_task_result_sha256s)))
+        retrieval_child = _retrieval_planning_child(plan, task)
+        if retrieval_child is not None:
+            if retrieval_planning_result is None or (
+                retrieval_planning_result.campaign_id != plan.manifest.campaign_id
+                or retrieval_planning_result.manifest_sha256 != plan.manifest.manifest_sha256
+                or retrieval_planning_result.pass_kind is not plan.pass_kind
+                or retrieval_planning_result.pass_id != plan.pass_id
+                or retrieval_planning_result.pass_plan_id != plan.pass_plan_id
+                or retrieval_planning_result.pass_plan_sha256 != plan.pass_plan_sha256
+                or retrieval_planning_result.task_id != retrieval_child.task_id
+                or retrieval_planning_result.task_plan_sha256 != retrieval_child.task_plan_sha256
+                or retrieval_planning_result.logical_request_id
+                != retrieval_child.logical_request_id
+                or retrieval_planning_result.scope != retrieval_child.scope
+            ):
+                raise ValueError(
+                    "scheduler primary activation lacks its exact retrieval-child result"
+                )
+            expected_upstream = (retrieval_planning_result.result_sha256,)
+            if upstream and upstream != expected_upstream:
+                raise ValueError("scheduler retrieval result must be the sole primary upstream")
+            upstream = expected_upstream
+        elif retrieval_planning_result is not None:
+            raise ValueError("scheduler activation supplied an unrelated retrieval result")
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING and upstream:
+            raise ValueError("scheduler retrieval-planning child cannot have an upstream task")
         delivered_sources = tuple(sorted(set(delivered_source_descriptor_sha256s)))
         values: dict[str, Any] = {
             "schema_version": "1.0",
@@ -3028,6 +3688,14 @@ class SchedulerTaskActivation(StrictModel):
             or self.system_prompt_sha256 != task.system_prompt_sha256
         ):
             raise ValueError("scheduler activation provider material differs from its plan")
+        retrieval_child = _retrieval_planning_child(plan, task)
+        if retrieval_child is not None and len(self.upstream_task_result_sha256s) != 1:
+            raise ValueError("scheduler primary activation lacks its sole retrieval upstream")
+        if (
+            task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            and self.upstream_task_result_sha256s
+        ):
+            raise ValueError("scheduler retrieval-planning activation cannot chain upstream")
         known_source_descriptors = {
             source.source_descriptor_sha256
             for shard in plan.manifest.shard_inventory.shards
@@ -3365,7 +4033,7 @@ class SchedulerModelCompletionEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
     logical_request_id: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
@@ -3495,7 +4163,11 @@ class SchedulerModelCompletionEvidence(StrictModel):
     provider_response_sha256: str = Field(pattern=_SHA256_PATTERN)
     validated_response_sha256: str = Field(pattern=_SHA256_PATTERN)
     response_schema_sha256: str = Field(pattern=_SHA256_PATTERN)
-    normalizer_sha256: str = Field(pattern=_SHA256_PATTERN)
+    normalizer_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     normalized_output_sha256: str = Field(pattern=_SHA256_PATTERN)
     normalization_evidence: CandidateReviewNormalizationEvidence | None = Field(
         default=None,
@@ -3514,9 +4186,10 @@ class SchedulerModelCompletionEvidence(StrictModel):
         audit_model_selection: SchedulerAuditModelSelectionBinding | None,
         audit_model_refresh: SchedulerAuditModelRefreshBinding | None,
         audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
-        normalizer_sha256: str,
+        normalizer_sha256: str | None,
         normalized_output_sha256: str,
         normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        algorithm_version: str = SCHEDULER_ALGORITHM_VERSION,
     ) -> SchedulerModelCompletionEvidence:
         if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
             raise ValueError("scheduler model completion evidence requires a model task")
@@ -3598,13 +4271,19 @@ class SchedulerModelCompletionEvidence(StrictModel):
         candidate_review_contract = _task_uses_candidate_review_contract(task)
         framed_candidate_review = (
             candidate_review_contract
-            and activation.response_schema_sha256 == candidate_review_frame_wire_schema_sha256()
+            and activation.response_schema_sha256
+            == candidate_review_frame_wire_schema_sha256(
+                algorithm_version=algorithm_version,
+            )
         )
-        legacy_candidate_review = (
+        unframed_candidate_review = (
             candidate_review_contract
-            and activation.response_schema_sha256 == candidate_review_batch_schema_sha256()
+            and activation.response_schema_sha256
+            == candidate_review_batch_schema_sha256(
+                algorithm_version=algorithm_version,
+            )
         )
-        if candidate_review_contract and not (framed_candidate_review or legacy_candidate_review):
+        if candidate_review_contract and not (framed_candidate_review or unframed_candidate_review):
             raise ValueError("scheduler candidate review uses an unknown wire schema")
         if framed_candidate_review != (frozen_normalization is not None):
             raise ValueError(
@@ -3614,13 +4293,18 @@ class SchedulerModelCompletionEvidence(StrictModel):
             raise ValueError(
                 "non-candidate scheduler completion cannot carry normalization evidence"
             )
-        if task.normalizer_sha256 is None or normalizer_sha256 != task.normalizer_sha256:
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+            if normalizer_sha256 is not None or frozen_normalization is not None:
+                raise ValueError("retrieval-planning completion cannot claim normalization")
+        elif task.normalizer_sha256 is None or normalizer_sha256 != task.normalizer_sha256:
             raise ValueError("scheduler completion normalizer differs from its sealed task")
         if frozen_normalization is not None and (
             frozen_normalization.request_id != task.logical_request_id
             or frozen_normalization.wire_schema_sha256 != activation.response_schema_sha256
             or frozen_normalization.normalized_batch_schema_sha256
-            != candidate_review_batch_schema_sha256()
+            != candidate_review_batch_schema_sha256(
+                algorithm_version=algorithm_version,
+            )
             or frozen_normalization.wire_validated_response_sha256
             != frozen_usage.validated_response_sha256
             or frozen_normalization.normalized_batch_sha256 != normalized_output_sha256
@@ -3652,7 +4336,11 @@ class SchedulerModelCompletionEvidence(StrictModel):
         ):
             raise ValueError("scheduler model output is not the exact provider-validated response")
         values: dict[str, Any] = {
-            "schema_version": "1.1" if frozen_normalization is not None else "1.0",
+            "schema_version": (
+                "1.2"
+                if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                else ("1.1" if frozen_normalization is not None else "1.0")
+            ),
             "evidence_authority": "comparison_required",
             "task_id": task.task_id,
             "logical_request_id": task.logical_request_id,
@@ -3735,8 +4423,8 @@ class SchedulerModelCompletionEvidence(StrictModel):
             "provider_response_sha256": frozen_usage.response_sha256,
             "validated_response_sha256": frozen_usage.validated_response_sha256,
             "response_schema_sha256": activation.response_schema_sha256,
-            "normalizer_sha256": normalizer_sha256,
             "normalized_output_sha256": normalized_output_sha256,
+            **({"normalizer_sha256": normalizer_sha256} if normalizer_sha256 is not None else {}),
             **(
                 {"normalization_evidence": frozen_normalization}
                 if frozen_normalization is not None
@@ -3751,22 +4439,48 @@ class SchedulerModelCompletionEvidence(StrictModel):
     @model_validator(mode="after")
     def completion_evidence_is_redacted_and_exact(self) -> Self:
         _reject_sensitive_usage_material(self.usage_record.model_dump(mode="json"))
-        framed_schema = self.response_schema_sha256 == candidate_review_frame_wire_schema_sha256()
+        normalization_algorithm = (
+            candidate_review_schema_algorithm_version(
+                wire_schema_sha256=self.normalization_evidence.wire_schema_sha256,
+                normalized_batch_schema_sha256=(
+                    self.normalization_evidence.normalized_batch_schema_sha256
+                ),
+            )
+            if self.normalization_evidence is not None
+            else None
+        )
+        framed_schema = normalization_algorithm is not None and (
+            self.response_schema_sha256
+            == candidate_review_frame_wire_schema_sha256(
+                algorithm_version=normalization_algorithm,
+            )
+        )
         if self.schema_version == "1.0":
-            if self.normalization_evidence is not None or framed_schema:
+            if (
+                self.normalizer_sha256 is None
+                or self.normalization_evidence is not None
+                or framed_schema
+            ):
                 raise ValueError("legacy scheduler completion cannot carry framed custody")
-        elif (
-            self.normalization_evidence is None
+        elif self.schema_version == "1.1" and (
+            self.normalizer_sha256 is None
+            or self.normalization_evidence is None
             or not framed_schema
             or not candidate_review_protocol_implementation_is_pristine()
             or type(self.normalization_evidence) is not CandidateReviewNormalizationEvidence
         ):
             raise ValueError("framed scheduler completion lacks exact normalization custody")
+        elif self.schema_version == "1.2" and (
+            self.normalizer_sha256 is not None or self.normalization_evidence is not None
+        ):
+            raise ValueError("retrieval scheduler completion cannot carry normalization")
         if self.normalization_evidence is not None and (
             self.normalization_evidence.request_id != self.logical_request_id
             or self.normalization_evidence.wire_schema_sha256 != self.response_schema_sha256
             or self.normalization_evidence.normalized_batch_schema_sha256
-            != candidate_review_batch_schema_sha256()
+            != candidate_review_batch_schema_sha256(
+                algorithm_version=normalization_algorithm or SCHEDULER_ALGORITHM_VERSION,
+            )
             or self.normalization_evidence.wire_validated_response_sha256
             != self.validated_response_sha256
             or self.normalization_evidence.normalized_batch_sha256 != self.normalized_output_sha256
@@ -4169,13 +4883,30 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             raise ValueError("scheduler typed truncation custody is all-or-none")
         frozen_envelope: CandidateReviewTruncatedEnvelopeEvidence | None = None
         frozen_projection: CandidateReviewTruncationProjection | None = None
+        truncation_algorithm_version: str | None = None
         if truncated_envelope_evidence is not None and truncation_projection is not None:
+            try:
+                truncation_algorithm_version = candidate_review_schema_algorithm_version(
+                    wire_schema_sha256=truncation_projection.wire_schema_sha256,
+                    normalized_batch_schema_sha256=(
+                        truncation_projection.normalized_batch_schema_sha256
+                    ),
+                )
+            except ValueError:
+                raise ValueError(
+                    "scheduler typed truncation custody has an invalid schema pair"
+                ) from None
             if (
                 type(truncated_envelope_evidence) is not CandidateReviewTruncatedEnvelopeEvidence
                 or type(truncation_projection) is not CandidateReviewTruncationProjection
                 or not candidate_review_protocol_implementation_is_pristine()
                 or not _task_uses_candidate_review_contract(task)
-                or activation.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or activation.response_schema_sha256
+                != candidate_review_frame_wire_schema_sha256(
+                    algorithm_version=truncation_algorithm_version,
+                )
+                or truncated_envelope_evidence.wire_schema_sha256
+                != activation.response_schema_sha256
             ):
                 raise ValueError("scheduler typed truncation custody has an invalid boundary")
             frozen_envelope = CandidateReviewTruncatedEnvelopeEvidence.model_validate_json(
@@ -4340,7 +5071,15 @@ class SchedulerProviderAttemptEvidence(StrictModel):
                 else {}
             ),
         }
-        return cls(**values, attempt_evidence_sha256=scheduler_canonical_sha256(values))
+        hash_values = (
+            _scheduler_value_projection(
+                values,
+                algorithm_version=truncation_algorithm_version,
+            )
+            if truncation_algorithm_version is not None
+            else values
+        )
+        return cls(**values, attempt_evidence_sha256=scheduler_canonical_sha256(hash_values))
 
     @classmethod
     def build_truncated(
@@ -4388,6 +5127,15 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             raise ValueError("typed scheduler provider attempt lacks truncation custody")
         if envelope is not None and projection is not None:
             usage = self.usage_record
+            try:
+                truncation_algorithm_version = candidate_review_schema_algorithm_version(
+                    wire_schema_sha256=projection.wire_schema_sha256,
+                    normalized_batch_schema_sha256=projection.normalized_batch_schema_sha256,
+                )
+            except ValueError:
+                raise ValueError(
+                    "scheduler typed provider attempt uses an invalid schema pair"
+                ) from None
             envelope_routing = _scheduler_truncated_envelope_routing(envelope)
             projection_routing = _scheduler_truncation_projection_routing(projection)
             actual_envelope_keys = {
@@ -4397,7 +5145,11 @@ class SchedulerProviderAttemptEvidence(StrictModel):
                 key for key in usage.routing if key.startswith("candidate_review_truncation_")
             }
             if (
-                self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                self.response_schema_sha256
+                != candidate_review_frame_wire_schema_sha256(
+                    algorithm_version=truncation_algorithm_version,
+                )
+                or envelope.wire_schema_sha256 != self.response_schema_sha256
                 or usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
                 or usage.identity_strength is not ModelIdentityStrength.UNBOUND
                 or usage.status != "rejected_truncated_response"
@@ -4563,6 +5315,16 @@ class SchedulerProviderAttemptEvidence(StrictModel):
                         else set()
                     ),
                 },
+                algorithm_version=(
+                    candidate_review_schema_algorithm_version(
+                        wire_schema_sha256=self.truncation_projection.wire_schema_sha256,
+                        normalized_batch_schema_sha256=(
+                            self.truncation_projection.normalized_batch_schema_sha256
+                        ),
+                    )
+                    if self.truncation_projection is not None
+                    else SCHEDULER_ALGORITHM_VERSION
+                ),
             )
         ):
             raise ValueError("scheduler provider-attempt evidence is inconsistent")
@@ -4594,6 +5356,7 @@ def _validated_model_surface_custody(
     parsed_payload: BaseModel | None,
     requests: Iterable[ModelSurfaceReviewRequest],
     artifact: ModelSurfaceReviewArtifact | None,
+    algorithm_version: str,
 ) -> tuple[tuple[ModelSurfaceReviewRequest, ...], ModelSurfaceReviewArtifact | None]:
     frozen_requests = tuple(
         ModelSurfaceReviewRequest.model_validate(item.model_dump(mode="python"))
@@ -4614,6 +5377,20 @@ def _validated_model_surface_custody(
     if surface_ids != tuple(sorted(set(surface_ids))):
         raise ValueError("scheduler requested model surfaces must be unique and sorted")
     frozen_artifact.require_exact_requested_surface_manifest(frozen_requests)
+    planned_surface_manifest_sha256 = task.model_surface_review_request_manifest_sha256
+    if (
+        algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+        and planned_surface_manifest_sha256 is None
+    ):
+        raise ValueError("scheduler-v2 candidate-review output lacks sealed surface authority")
+    if planned_surface_manifest_sha256 is not None and (
+        frozen_artifact.requested_surface_manifest_sha256 != planned_surface_manifest_sha256
+        or completion.context_request_evidence.requested_surface_manifest_sha256
+        != planned_surface_manifest_sha256
+    ):
+        raise ValueError(
+            "model-surface artifact differs from its sealed pre-dispatch request manifest"
+        )
     if (
         frozen_artifact.request_id != task.logical_request_id
         or frozen_artifact.review_role != task.role
@@ -5335,6 +6112,9 @@ def _review_projection(
         return (), ()
     if completion is None:
         raise ValueError("scheduler model output lacks provider completion evidence")
+    if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+        _parse_retrieval_request_batch_payload(payload)
+        return (), ()
     if task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW and (
         task.role == "source_audit" or _WHOLE_PROTOCOL_REVIEW_ROLE.fullmatch(task.role) is not None
     ):
@@ -5427,28 +6207,18 @@ def _model_review_origin_candidate_id(
     request_role: str,
     request_id: str,
     candidate: CandidateFinding,
+    algorithm_version: str,
 ) -> str:
     """Recompute the trusted host identity for one raw model candidate."""
 
-    raw_candidate = candidate.model_dump(
-        mode="json",
-        exclude={
-            "execution_provenance",
-            "model_family",
-            "model_votes",
-            "origin_kind",
-            "role",
-        },
+    # Validate the scheduler algorithm even though neutral actor defaults are
+    # intentionally identity-transparent in this legacy-stable origin domain.
+    scheduler_typed_payload_projection(candidate, algorithm_version=algorithm_version)
+    return model_review_origin_candidate_id(
+        request_role=request_role,
+        request_id=request_id,
+        candidate=candidate,
     )
-    digest = scheduler_canonical_sha256(
-        {
-            "domain": "mmaudit.model-review-origin-candidate.v1",
-            "request_id": request_id,
-            "request_role": request_role,
-            "raw_candidate": raw_candidate,
-        }
-    )
-    return f"cand-{digest[:24]}"
 
 
 def _accepted_candidate_projection_is_exact(
@@ -5456,6 +6226,7 @@ def _accepted_candidate_projection_is_exact(
     batch: CandidateReviewBatch,
     candidates: Sequence[CandidateFinding],
     usage_record: UsageRecord,
+    algorithm_version: str,
 ) -> bool:
     """Verify the complete deterministic host stamping of one candidate batch."""
 
@@ -5464,6 +6235,7 @@ def _accepted_candidate_projection_is_exact(
             request_role=usage_record.role,
             request_id=usage_record.request_id,
             candidate=raw,
+            algorithm_version=algorithm_version,
         ): raw
         for raw in batch.findings
     }
@@ -5524,12 +6296,298 @@ def _accepted_candidate_projection_is_exact(
     return True
 
 
+class SchedulerRetrievalCustody(StrictModel):
+    """Hash-only public projection of one bounded retrieval transcript."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    planner_task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
+    planner_task_result_id: str = Field(pattern=r"^scheduler-result-[0-9a-f]{64}$")
+    planner_task_result_sha256: str = Field(pattern=_SHA256_PATTERN)
+    planner_output_id: str = Field(pattern=r"^scheduler-output-[0-9a-f]{64}$")
+    planner_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    role_budget_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    role_budget_allocation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+    corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
+    transcript_sha256: str = Field(pattern=_SHA256_PATTERN)
+    request_sha256s: tuple[str, ...] = Field(max_length=SOLIDITY_RETRIEVAL_MAX_EXCHANGES)
+    result_sha256s: tuple[str, ...] = Field(max_length=SOLIDITY_RETRIEVAL_MAX_EXCHANGES)
+    exchange_sha256s: tuple[str, ...] = Field(max_length=SOLIDITY_RETRIEVAL_MAX_EXCHANGES)
+    retrieval_exhausted: bool
+    single_shot_fallback_required: bool
+    custody_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def from_binding(cls, binding: SchedulerRetrievalBinding) -> SchedulerRetrievalCustody:
+        frozen = SchedulerRetrievalBinding.model_validate(binding.model_dump(mode="python"))
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "planner_task_id": frozen.planner_task_id,
+            "planner_task_result_id": frozen.planner_task_result_id,
+            "planner_task_result_sha256": frozen.planner_task_result_sha256,
+            "planner_output_id": frozen.planner_output_id,
+            "planner_output_artifact_sha256": frozen.planner_output_artifact_sha256,
+            "role_budget_plan_sha256": frozen.role_budget_plan_sha256,
+            "role_budget_allocation_sha256": frozen.role_budget_allocation_sha256,
+            "policy_sha256": frozen.transcript.policy_sha256,
+            "corpus_sha256": frozen.transcript.corpus_sha256,
+            "transcript_sha256": frozen.transcript.transcript_sha256,
+            "request_sha256s": tuple(
+                exchange.request.request_sha256 for exchange in frozen.transcript.exchanges
+            ),
+            "result_sha256s": tuple(
+                exchange.result.result_sha256 for exchange in frozen.transcript.exchanges
+            ),
+            "exchange_sha256s": tuple(
+                exchange.exchange_sha256 for exchange in frozen.transcript.exchanges
+            ),
+            "retrieval_exhausted": frozen.transcript.retrieval_exhausted,
+            "single_shot_fallback_required": (frozen.transcript.single_shot_fallback_required),
+        }
+        return cls(**values, custody_sha256=scheduler_canonical_sha256(values))
+
+    @model_validator(mode="after")
+    def custody_inventory_and_hash_are_exact(self) -> Self:
+        inventories = (
+            self.request_sha256s,
+            self.result_sha256s,
+            self.exchange_sha256s,
+        )
+        if (
+            len({len(inventory) for inventory in inventories}) != 1
+            or any(len(inventory) != len(set(inventory)) for inventory in inventories)
+            or any(
+                re.fullmatch(_SHA256_PATTERN, value) is None
+                for inventory in inventories
+                for value in inventory
+            )
+        ):
+            raise ValueError("scheduler retrieval custody hash inventories are inconsistent")
+        expected_single_shot = self.retrieval_exhausted or not self.exchange_sha256s
+        if self.single_shot_fallback_required is not expected_single_shot:
+            raise ValueError("scheduler retrieval custody fallback state is inconsistent")
+        if self.custody_sha256 != _model_sha256(self, exclude={"custody_sha256"}):
+            raise ValueError("scheduler retrieval custody hash is inconsistent")
+        return self
+
+
+class SchedulerRetrievalBinding(StrictModel):
+    """Private full transcript bound to one exact planning child lifecycle."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    planner_task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
+    planner_task_result_id: str = Field(pattern=r"^scheduler-result-[0-9a-f]{64}$")
+    planner_task_result_sha256: str = Field(pattern=_SHA256_PATTERN)
+    planner_output_id: str = Field(pattern=r"^scheduler-output-[0-9a-f]{64}$")
+    planner_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    role_budget_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    role_budget_allocation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    transcript: SolidityRetrievalTranscript
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build_pre_activation(
+        cls,
+        *,
+        plan: SchedulerPassPlan,
+        primary_task: SchedulerTaskPlan,
+        planner_task: SchedulerTaskPlan,
+        planner_output: SchedulerTaskOutput,
+        planner_result: SchedulerTaskResult,
+        transcript: SolidityRetrievalTranscript,
+    ) -> SchedulerRetrievalBinding:
+        role_budget_plan = plan.retrieval_role_budget_plan_for_task(primary_task.task_id)
+        role_budget_allocation = role_budget_plan.allocation_for_task(primary_task.task_id)
+        planner_completion = planner_output.model_completion_evidence
+        planner_context = (
+            None if planner_completion is None else planner_completion.context_request_evidence
+        )
+        if (
+            not plan.has_exact_task(primary_task)
+            or not plan.has_exact_task(planner_task)
+            or primary_task.purpose is not SchedulerTaskPurpose.PRIMARY
+            or planner_task.purpose is not SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            or planner_task.parent_task_id != primary_task.task_id
+            or planner_result.pass_plan_id != plan.pass_plan_id
+            or planner_result.task_id != planner_task.task_id
+            or planner_result.task_plan_sha256 != planner_task.task_plan_sha256
+            or planner_result.logical_request_id != planner_task.logical_request_id
+            or planner_result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            or planner_result.output_sha256 != planner_output.output_sha256
+            or planner_result.output_artifact_sha256 != planner_output.output_artifact_sha256
+            or planner_result.activation_id != planner_output.activation_id
+            or planner_result.activation_sha256 != planner_output.activation_sha256
+            or planner_output.pass_plan_id != plan.pass_plan_id
+            or planner_output.task_id != planner_task.task_id
+            or planner_output.logical_request_id != planner_task.logical_request_id
+            or planner_completion is None
+            or planner_completion.schema_version != "1.2"
+            or planner_context is None
+            or planner_context.schema_version != "1.1"
+            or planner_context.request_id != planner_task.logical_request_id
+            or planner_context.request_role != planner_task.role
+            or planner_context.retrieval_policy_sha256
+            != role_budget_allocation.policy.policy_sha256
+            or planner_context.retrieval_corpus_sha256 != transcript.corpus_sha256
+            or planner_context.retrieval_transcript_sha256 is not None
+            or bool(planner_context.retrieval_request_sha256s)
+            or bool(planner_context.retrieval_result_sha256s)
+            or bool(planner_context.retrieval_exchange_sha256s)
+            or planner_context.retrieval_exhausted is not None
+            or planner_context.retrieval_single_shot_fallback_required is not None
+            or transcript.role != primary_task.role
+            or transcript.policy_sha256 != role_budget_allocation.policy.policy_sha256
+        ):
+            raise ValueError("scheduler retrieval binding differs from its planner lifecycle")
+        frozen_transcript = SolidityRetrievalTranscript.model_validate(
+            transcript.model_dump(mode="python")
+        )
+        require_solidity_retrieval_transcript_within_policy(
+            role_budget_allocation.policy,
+            frozen_transcript,
+        )
+        planned_requests = _parse_retrieval_request_batch_payload(
+            planner_output.payload
+        ).to_host_requests()
+        if planned_requests != tuple(exchange.request for exchange in frozen_transcript.exchanges):
+            raise ValueError(
+                "scheduler retrieval transcript differs from its planner request batch"
+            )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "planner_task_id": planner_task.task_id,
+            "planner_task_result_id": planner_result.result_id,
+            "planner_task_result_sha256": planner_result.result_sha256,
+            "planner_output_id": planner_output.output_id,
+            "planner_output_artifact_sha256": planner_output.output_artifact_sha256,
+            "role_budget_plan_sha256": role_budget_plan.plan_sha256,
+            "role_budget_allocation_sha256": role_budget_allocation.allocation_sha256,
+            "transcript": frozen_transcript,
+        }
+        return cls(**values, binding_sha256=scheduler_canonical_sha256(values))
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        plan: SchedulerPassPlan,
+        primary_task: SchedulerTaskPlan,
+        primary_activation: SchedulerTaskActivation,
+        planner_task: SchedulerTaskPlan,
+        planner_output: SchedulerTaskOutput,
+        planner_result: SchedulerTaskResult,
+        transcript: SolidityRetrievalTranscript,
+    ) -> SchedulerRetrievalBinding:
+        """Build custody and bind it to an already durable primary activation."""
+
+        binding = cls.build_pre_activation(
+            plan=plan,
+            primary_task=primary_task,
+            planner_task=planner_task,
+            planner_output=planner_output,
+            planner_result=planner_result,
+            transcript=transcript,
+        )
+        binding.require_exact_primary(
+            plan=plan,
+            task=primary_task,
+            activation=primary_activation,
+        )
+        return binding
+
+    @model_validator(mode="after")
+    def binding_hash_is_exact(self) -> Self:
+        if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
+            raise ValueError("scheduler retrieval binding hash is inconsistent")
+        return self
+
+    def require_exact_primary(
+        self,
+        *,
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+        activation: SchedulerTaskActivation,
+    ) -> None:
+        activation.require_exact_task(plan=plan, task=task)
+        self.require_exact_planned_primary(plan=plan, task=task)
+        if activation.upstream_task_result_sha256s != (self.planner_task_result_sha256,):
+            raise ValueError("scheduler retrieval binding differs from its primary activation")
+
+    def require_exact_planned_primary(
+        self,
+        *,
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+    ) -> None:
+        """Bind pre-activation custody to one exact planned primary through its child."""
+
+        child = _retrieval_planning_child(plan, task)
+        role_budget_plan = plan.retrieval_role_budget_plan_for_task(task.task_id)
+        role_budget_allocation = role_budget_plan.allocation_for_task(task.task_id)
+        if (
+            not plan.has_exact_task(task)
+            or task.purpose is not SchedulerTaskPurpose.PRIMARY
+            or child is None
+            or child.task_id != self.planner_task_id
+            or self.transcript.role != task.role
+            or self.role_budget_plan_sha256 != role_budget_plan.plan_sha256
+            or self.role_budget_allocation_sha256 != role_budget_allocation.allocation_sha256
+            or self.transcript.policy_sha256 != role_budget_allocation.policy.policy_sha256
+        ):
+            raise ValueError("scheduler retrieval binding differs from its planned primary")
+
+
+def _require_context_retrieval_projection(
+    context: ContextRequestEvidence,
+    custody: SchedulerRetrievalCustody,
+) -> None:
+    """Require the exact context branch selected by retrieval exhaustion."""
+
+    retrieval_fields = (
+        context.retrieval_policy_sha256,
+        context.retrieval_corpus_sha256,
+        context.retrieval_transcript_sha256,
+        context.retrieval_request_sha256s,
+        context.retrieval_result_sha256s,
+        context.retrieval_exchange_sha256s,
+        context.retrieval_exhausted,
+        context.retrieval_single_shot_fallback_required,
+    )
+    if custody.single_shot_fallback_required:
+        if context.schema_version != "1.0" or any(retrieval_fields):
+            raise ValueError("scheduler exhausted retrieval requires unchanged single-shot context")
+        return
+
+    expected = {
+        "retrieval_policy_sha256": custody.policy_sha256,
+        "retrieval_corpus_sha256": custody.corpus_sha256,
+        "retrieval_transcript_sha256": custody.transcript_sha256,
+        "retrieval_request_sha256s": custody.request_sha256s,
+        "retrieval_result_sha256s": custody.result_sha256s,
+        "retrieval_exchange_sha256s": custody.exchange_sha256s,
+        "retrieval_exhausted": custody.retrieval_exhausted,
+        "retrieval_single_shot_fallback_required": (custody.single_shot_fallback_required),
+    }
+    if context.schema_version != "1.1" or any(
+        getattr(context, field) != value for field, value in expected.items()
+    ):
+        raise ValueError("scheduler retrieval transcript differs from context custody")
+
+
 class SchedulerTaskOutput(StrictModel):
     """Private normalized JSON output required for deterministic result recovery."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.2"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     pass_plan_id: str = Field(pattern=r"^scheduler-plan-[0-9a-f]{64}$")
@@ -5550,6 +6608,10 @@ class SchedulerTaskOutput(StrictModel):
     accepted_candidates: tuple[CandidateFinding, ...] = Field(
         default=(),
         max_length=100_000,
+    )
+    retrieval_binding: SchedulerRetrievalBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     payload: Any
     payload_utf8_bytes: int = Field(ge=1, le=_MAX_TASK_OUTPUT_BYTES)
@@ -5572,9 +6634,30 @@ class SchedulerTaskOutput(StrictModel):
         accepted_candidates: Iterable[CandidateFinding] = (),
         normalizer_sha256: str | None = None,
         normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
-        schema_version: Literal["1.0", "1.1"] = "1.1",
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
+        schema_version: Literal["1.0", "1.1", "1.2", "1.3"] | None = None,
     ) -> SchedulerTaskOutput:
         activation.require_exact_task(plan=plan, task=task)
+        algorithm_version = plan.manifest.algorithm_version
+        effective_schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = (
+            "1.3"
+            if schema_version is None and retrieval_binding is not None
+            else (
+                "1.2"
+                if schema_version is None and algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+                else ("1.1" if schema_version is None else schema_version)
+            )
+        )
+        if (
+            algorithm_version == "mmaudit.seven-pass-scheduler.v1"
+            and effective_schema_version not in {"1.0", "1.1"}
+        ) or (
+            algorithm_version == "mmaudit.seven-pass-scheduler.v2"
+            and effective_schema_version not in {"1.2", "1.3"}
+        ):
+            raise ValueError("scheduler task-output schema differs from its algorithm")
+        if (effective_schema_version == "1.3") != (retrieval_binding is not None):
+            raise ValueError("scheduler task-output retrieval schema differs from its binding")
         encoded = json.dumps(
             payload,
             sort_keys=True,
@@ -5593,7 +6676,15 @@ class SchedulerTaskOutput(StrictModel):
                 task=task,
                 activation=activation,
                 payload=normalized,
+                algorithm_version=algorithm_version,
             )
+            if normalized != scheduler_typed_payload_projection(
+                parsed_payload,
+                algorithm_version=algorithm_version,
+            ):
+                raise ValueError(
+                    "scheduler task output does not use its algorithm's typed serialization"
+                )
         elif task.task_kind is SchedulerTaskKind.HOST_COMPUTATION:
             parsed_payload = _parse_scheduler_host_payload(
                 plan=plan,
@@ -5601,7 +6692,15 @@ class SchedulerTaskOutput(StrictModel):
                 activation=activation,
                 payload=normalized,
             )
-        effective_normalizer_sha256 = normalizer_sha256 or task.normalizer_sha256
+        if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING and (
+            normalizer_sha256 is not None or normalization_evidence is not None
+        ):
+            raise ValueError("retrieval-planning output cannot claim normalization")
+        effective_normalizer_sha256 = (
+            None
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            else (normalizer_sha256 or task.normalizer_sha256)
+        )
         if (
             normalizer_sha256 is not None
             and task.normalizer_sha256 is not None
@@ -5620,11 +6719,18 @@ class SchedulerTaskOutput(StrictModel):
                 normalizer_sha256=effective_normalizer_sha256,
                 normalized_output_sha256=output_sha256,
                 normalization_evidence=normalization_evidence,
+                algorithm_version=algorithm_version,
             )
-            if usage_record is not None and effective_normalizer_sha256 is not None
+            if usage_record is not None
+            and (
+                effective_normalizer_sha256 is not None
+                or task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            )
             else None
         )
-        if (usage_record is None) != (effective_normalizer_sha256 is None):
+        if task.purpose is SchedulerTaskPurpose.PRIMARY and (
+            (usage_record is None) != (effective_normalizer_sha256 is None)
+        ):
             raise ValueError("scheduler model normalization evidence is all-or-none")
         if normalization_evidence is not None:
             if type(parsed_payload) is not CandidateReviewBatch:
@@ -5641,7 +6747,7 @@ class SchedulerTaskOutput(StrictModel):
             if specialist_accepted_outcome is not None
             else None
         )
-        is_specialist = scheduler_role_requires_specialist_accepted_outcome(task.role)
+        is_specialist = scheduler_task_requires_specialist_accepted_outcome(task)
         if is_specialist != (accepted_outcome is not None):
             raise ValueError(
                 "scheduler specialist success requires one exact host-accepted outcome"
@@ -5662,6 +6768,7 @@ class SchedulerTaskOutput(StrictModel):
             parsed_payload=parsed_payload,
             requests=model_surface_review_requests,
             artifact=model_surface_review_artifact,
+            algorithm_version=algorithm_version,
         )
         if accepted_outcome is not None:
             if isinstance(parsed_payload, CandidateReviewBatch):
@@ -5703,13 +6810,14 @@ class SchedulerTaskOutput(StrictModel):
         if len(accepted_candidate_ids) != len(set(accepted_candidate_ids)):
             raise ValueError("scheduler accepted candidate projection repeats an identity")
         if isinstance(parsed_payload, CandidateReviewBatch):
-            if schema_version == "1.0":
+            if effective_schema_version == "1.0":
                 if canonical_accepted_candidates:
                     raise ValueError("scheduler task output 1.0 cannot bind accepted candidates")
             elif completion is None or not _accepted_candidate_projection_is_exact(
                 batch=parsed_payload,
                 candidates=canonical_accepted_candidates,
                 usage_record=completion.usage_record,
+                algorithm_version=algorithm_version,
             ):
                 raise ValueError(
                     "scheduler accepted candidate projection differs from the review batch"
@@ -5717,9 +6825,29 @@ class SchedulerTaskOutput(StrictModel):
         elif canonical_accepted_candidates:
             raise ValueError("non-candidate scheduler output cannot accept candidate payloads")
         accepted_candidate_payload_sha256s = {
-            candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+            candidate.candidate_id: scheduler_candidate_payload_sha256(
+                candidate,
+                algorithm_version=algorithm_version,
+            )
             for candidate in canonical_accepted_candidates
         }
+        frozen_retrieval_binding = (
+            SchedulerRetrievalBinding.model_validate(retrieval_binding.model_dump(mode="python"))
+            if retrieval_binding is not None
+            else None
+        )
+        if frozen_retrieval_binding is not None:
+            frozen_retrieval_binding.require_exact_primary(
+                plan=plan,
+                task=task,
+                activation=activation,
+            )
+            if completion is None:
+                raise ValueError("scheduler retrieval transcript requires provider completion")
+            _require_context_retrieval_projection(
+                completion.context_request_evidence,
+                SchedulerRetrievalCustody.from_binding(frozen_retrieval_binding),
+            )
         output_id = "scheduler-output-" + scheduler_canonical_sha256(
             {
                 "domain": "mmaudit.scheduler.task-output-identity.v1",
@@ -5728,7 +6856,7 @@ class SchedulerTaskOutput(StrictModel):
             }
         )
         values: dict[str, Any] = {
-            "schema_version": schema_version,
+            "schema_version": effective_schema_version,
             "evidence_authority": "comparison_required",
             "campaign_id": plan.manifest.campaign_id,
             "pass_plan_id": plan.pass_plan_id,
@@ -5744,6 +6872,11 @@ class SchedulerTaskOutput(StrictModel):
             "reviewed_candidate_ids": reviewed_candidates,
             "accepted_candidate_payload_sha256s": accepted_candidate_payload_sha256s,
             "accepted_candidates": canonical_accepted_candidates,
+            **(
+                {"retrieval_binding": frozen_retrieval_binding}
+                if frozen_retrieval_binding is not None
+                else {}
+            ),
             "payload": normalized,
             "payload_utf8_bytes": len(encoded),
             "output_sha256": output_sha256,
@@ -5751,7 +6884,7 @@ class SchedulerTaskOutput(StrictModel):
         }
         hash_values = (
             values
-            if schema_version == "1.1"
+            if effective_schema_version != "1.0"
             else {
                 key: value
                 for key, value in values.items()
@@ -5764,11 +6897,21 @@ class SchedulerTaskOutput(StrictModel):
         )
         return cls(
             **values,
-            output_artifact_sha256=scheduler_canonical_sha256(hash_values),
+            output_artifact_sha256=scheduler_canonical_sha256(
+                _scheduler_value_projection(
+                    hash_values,
+                    algorithm_version=algorithm_version,
+                )
+            ),
         )
 
     @model_validator(mode="after")
     def output_identity_payload_and_hash_are_exact(self) -> Self:
+        algorithm_version = (
+            "mmaudit.seven-pass-scheduler.v2"
+            if self.schema_version in {"1.2", "1.3"}
+            else "mmaudit.seven-pass-scheduler.v1"
+        )
         encoded = json.dumps(
             self.payload,
             sort_keys=True,
@@ -5797,7 +6940,10 @@ class SchedulerTaskOutput(StrictModel):
         if accepted_candidate_ids != tuple(sorted(set(accepted_candidate_ids))):
             raise ValueError("scheduler accepted candidate projection is not canonical")
         observed_accepted_hashes = {
-            candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+            candidate.candidate_id: scheduler_candidate_payload_sha256(
+                candidate,
+                algorithm_version=algorithm_version,
+            )
             for candidate in self.accepted_candidates
         }
         if self.accepted_candidate_payload_sha256s != observed_accepted_hashes:
@@ -5806,6 +6952,22 @@ class SchedulerTaskOutput(StrictModel):
             candidate_batch = CandidateReviewBatch.model_validate(self.payload)
         except ValueError:
             candidate_batch = None
+        try:
+            judge_batch = JudgeDecisionBatch.model_validate(self.payload)
+        except ValueError:
+            judge_batch = None
+        try:
+            retrieval_batch = _parse_retrieval_request_batch_payload(self.payload)
+        except ValueError:
+            retrieval_batch = None
+        actor_typed_payload = candidate_batch if candidate_batch is not None else judge_batch
+        if actor_typed_payload is not None and self.payload != scheduler_typed_payload_projection(
+            actor_typed_payload,
+            algorithm_version=algorithm_version,
+        ):
+            raise ValueError(
+                "scheduler task output does not use its algorithm's typed serialization"
+            )
         if self.schema_version == "1.0":
             if self.accepted_candidates or self.accepted_candidate_payload_sha256s:
                 raise ValueError("scheduler task output 1.0 cannot bind accepted candidates")
@@ -5816,6 +6978,7 @@ class SchedulerTaskOutput(StrictModel):
             batch=candidate_batch,
             candidates=self.accepted_candidates,
             usage_record=self.model_completion_evidence.usage_record,
+            algorithm_version=algorithm_version,
         ):
             raise ValueError(
                 "scheduler accepted candidate projection differs from retained provider evidence"
@@ -5828,6 +6991,11 @@ class SchedulerTaskOutput(StrictModel):
         ):
             raise ValueError("scheduler model completion evidence differs from its output")
         if self.model_completion_evidence is not None:
+            completion_algorithm = _actor_sensitive_response_schema_algorithm(
+                self.model_completion_evidence.response_schema_sha256
+            )
+            if completion_algorithm is not None and completion_algorithm != algorithm_version:
+                raise ValueError("scheduler output algorithm differs from its response schema")
             normalization = self.model_completion_evidence.normalization_evidence
             if normalization is not None:
                 if candidate_batch is None:
@@ -5836,6 +7004,24 @@ class SchedulerTaskOutput(StrictModel):
                     candidate_batch,
                     request_id=self.logical_request_id,
                 )
+        if retrieval_batch is not None and (
+            self.retrieval_binding is not None
+            or self.specialist_accepted_outcome is not None
+            or self.model_surface_review_requests
+            or self.model_surface_review_artifact is not None
+            or self.reviewed_source_descriptor_sha256s
+            or self.reviewed_candidate_ids
+            or self.accepted_candidate_payload_sha256s
+            or self.accepted_candidates
+            or (
+                self.model_completion_evidence is not None
+                and (
+                    self.model_completion_evidence.normalizer_sha256 is not None
+                    or self.model_completion_evidence.normalization_evidence is not None
+                )
+            )
+        ):
+            raise ValueError("retrieval-planning output cannot claim substantive review credit")
         if self.specialist_accepted_outcome is not None:
             completion = self.model_completion_evidence
             if (
@@ -5876,10 +7062,18 @@ class SchedulerTaskOutput(StrictModel):
         )
         if self.output_id != expected_id:
             raise ValueError("scheduler output ID is inconsistent")
+        if (self.schema_version == "1.3") != (self.retrieval_binding is not None):
+            raise ValueError("scheduler output retrieval schema differs from its binding")
         hash_exclusions = {"output_artifact_sha256"}
         if self.schema_version == "1.0":
             hash_exclusions.update({"accepted_candidate_payload_sha256s", "accepted_candidates"})
-        if self.output_artifact_sha256 != _model_sha256(self, exclude=hash_exclusions):
+        hash_payload = scheduler_typed_payload_projection(
+            self,
+            algorithm_version=algorithm_version,
+        )
+        for field_name in hash_exclusions:
+            hash_payload.pop(field_name, None)
+        if self.output_artifact_sha256 != scheduler_canonical_sha256(hash_payload):
             raise ValueError("scheduler output artifact hash is inconsistent")
         return self
 
@@ -5900,7 +7094,7 @@ class SchedulerTaskResult(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -5984,6 +7178,10 @@ class SchedulerTaskResult(StrictModel):
     model_surface_review_request_count: int = Field(default=0, ge=0, le=10_000)
     reviewed_source_descriptor_sha256s: tuple[str, ...] = Field(max_length=100_000)
     reviewed_candidate_ids: tuple[str, ...] = Field(max_length=100_000)
+    retrieval_custody: SchedulerRetrievalCustody | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     terminal_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     result_id: str = Field(pattern=r"^scheduler-result-[0-9a-f]{64}$")
     result_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -5998,6 +7196,7 @@ class SchedulerTaskResult(StrictModel):
         terminal_status: SchedulerTerminalStatus,
         terminal_evidence_sha256: str,
         output: SchedulerTaskOutput | None = None,
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
     ) -> SchedulerTaskResult:
         activation.require_exact_task(plan=plan, task=task)
         if output is not None:
@@ -6052,6 +7251,7 @@ class SchedulerTaskResult(StrictModel):
             terminal_status=terminal_status,
             terminal_evidence_sha256=terminal_evidence_sha256,
             output=output,
+            retrieval_binding=retrieval_binding,
         )
 
     @classmethod
@@ -6062,6 +7262,7 @@ class SchedulerTaskResult(StrictModel):
         task: SchedulerTaskPlan,
         terminal_status: SchedulerTerminalStatus,
         terminal_evidence_sha256: str,
+        retrieval_binding: SchedulerRetrievalBinding | None = None,
     ) -> SchedulerTaskResult:
         """Create a terminal local abort when request activation never occurred."""
 
@@ -6080,6 +7281,7 @@ class SchedulerTaskResult(StrictModel):
             terminal_status=terminal_status,
             terminal_evidence_sha256=terminal_evidence_sha256,
             output=None,
+            retrieval_binding=retrieval_binding,
         )
 
     @classmethod
@@ -6093,11 +7295,37 @@ class SchedulerTaskResult(StrictModel):
         terminal_status: SchedulerTerminalStatus,
         terminal_evidence_sha256: str,
         output: SchedulerTaskOutput | None,
+        retrieval_binding: SchedulerRetrievalBinding | None,
     ) -> SchedulerTaskResult:
         if not plan.has_exact_task(task):
             raise ValueError("scheduler result task is not in the sealed pass plan")
+        output_binding = output.retrieval_binding if output is not None else None
+        frozen_retrieval_binding = (
+            SchedulerRetrievalBinding.model_validate(retrieval_binding.model_dump(mode="python"))
+            if retrieval_binding is not None
+            else output_binding
+        )
+        if (
+            output_binding is not None
+            and frozen_retrieval_binding is not None
+            and output_binding != frozen_retrieval_binding
+        ):
+            raise ValueError("scheduler result retrieval custody differs from its private output")
+        if frozen_retrieval_binding is not None:
+            frozen_retrieval_binding.require_exact_planned_primary(plan=plan, task=task)
+            if activation is not None:
+                frozen_retrieval_binding.require_exact_primary(
+                    plan=plan,
+                    task=task,
+                    activation=activation,
+                )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": (
+                "1.1"
+                if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                or frozen_retrieval_binding is not None
+                else "1.0"
+            ),
             "evidence_authority": "comparison_required",
             "campaign_id": plan.manifest.campaign_id,
             "manifest_sha256": plan.manifest.manifest_sha256,
@@ -6198,6 +7426,15 @@ class SchedulerTaskResult(StrictModel):
                 output.reviewed_source_descriptor_sha256s if output is not None else ()
             ),
             "reviewed_candidate_ids": output.reviewed_candidate_ids if output is not None else (),
+            **(
+                {
+                    "retrieval_custody": SchedulerRetrievalCustody.from_binding(
+                        frozen_retrieval_binding
+                    )
+                }
+                if frozen_retrieval_binding is not None
+                else {}
+            ),
             "terminal_evidence_sha256": terminal_evidence_sha256,
         }
         result_id = "scheduler-result-" + scheduler_canonical_sha256(
@@ -6244,7 +7481,6 @@ class SchedulerTaskResult(StrictModel):
             self.context_request_evidence_sha256,
             self.provider_response_sha256,
             self.validated_response_sha256,
-            self.normalizer_sha256,
         )
         audit_policy_hashes = (
             self.audit_policy_selection_binding_sha256,
@@ -6289,12 +7525,28 @@ class SchedulerTaskResult(StrictModel):
             item is not None for item in provider_hashes
         ):
             raise ValueError("scheduler model completion hashes are all-or-none")
+        if self.terminal_status is SchedulerTerminalStatus.SUCCEEDED and any(
+            item is not None for item in provider_hashes
+        ):
+            if self.schema_version == "1.0" and self.normalizer_sha256 is None:
+                raise ValueError("primary scheduler result lacks its normalizer hash")
+            if self.retrieval_custody is not None and self.normalizer_sha256 is None:
+                raise ValueError("retrieval-bearing primary result lacks its normalizer hash")
+            if (
+                self.schema_version == "1.1"
+                and self.retrieval_custody is None
+                and self.normalizer_sha256 is not None
+            ):
+                raise ValueError("retrieval-planning result cannot claim normalization")
         if self.terminal_status is not SchedulerTerminalStatus.SUCCEEDED and (
             any(item is not None for item in provider_hashes)
+            or self.normalizer_sha256 is not None
             or self.reviewed_source_descriptor_sha256s
             or self.reviewed_candidate_ids
         ):
             raise ValueError("non-success scheduler result cannot claim model review credit")
+        if self.schema_version == "1.0" and self.retrieval_custody is not None:
+            raise ValueError("legacy scheduler task result cannot carry retrieval custody")
         if self.reviewed_source_descriptor_sha256s != tuple(
             sorted(set(self.reviewed_source_descriptor_sha256s))
         ):
@@ -6320,7 +7572,7 @@ class SchedulerModelRequestEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -6333,6 +7585,15 @@ class SchedulerModelRequestEvidence(StrictModel):
     logical_request_id: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
     scope_sha256: str = Field(pattern=_SHA256_PATTERN)
     role: str = Field(pattern=_ROLE_PATTERN)
+    purpose: SchedulerTaskPurpose = Field(
+        default=SchedulerTaskPurpose.PRIMARY,
+        exclude_if=lambda value: value is SchedulerTaskPurpose.PRIMARY,
+    )
+    parent_task_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-task-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
     requested_model: str = Field(pattern=_MODEL_ID_PATTERN)
     root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     activation_status: SchedulerActivationStatus
@@ -6416,6 +7677,10 @@ class SchedulerModelRequestEvidence(StrictModel):
     model_surface_review_request_count: int = Field(default=0, ge=0, le=10_000)
     reviewed_source_descriptor_sha256s: tuple[str, ...] = Field(max_length=100_000)
     reviewed_candidate_ids: tuple[str, ...] = Field(max_length=100_000)
+    retrieval_custody: SchedulerRetrievalCustody | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -6459,7 +7724,12 @@ class SchedulerModelRequestEvidence(StrictModel):
         else:
             activation_status = SchedulerActivationStatus.NOT_ACTIVATED
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": (
+                "1.1"
+                if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                or (result is not None and result.retrieval_custody is not None)
+                else "1.0"
+            ),
             "evidence_authority": "comparison_required",
             "campaign_id": plan.manifest.campaign_id,
             "manifest_sha256": plan.manifest.manifest_sha256,
@@ -6472,6 +7742,14 @@ class SchedulerModelRequestEvidence(StrictModel):
             "logical_request_id": task.logical_request_id,
             "scope_sha256": task.scope.scope_sha256,
             "role": task.role,
+            **(
+                {
+                    "purpose": task.purpose,
+                    "parent_task_id": task.parent_task_id,
+                }
+                if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+                else {}
+            ),
             "requested_model": task.requested_model,
             "root_lineage": task.root_lineage,
             "activation_status": activation_status,
@@ -6555,11 +7833,27 @@ class SchedulerModelRequestEvidence(StrictModel):
                 result.reviewed_source_descriptor_sha256s if result is not None else ()
             ),
             "reviewed_candidate_ids": (result.reviewed_candidate_ids if result is not None else ()),
+            **(
+                {"retrieval_custody": result.retrieval_custody}
+                if result is not None and result.retrieval_custody is not None
+                else {}
+            ),
         }
         return cls(**values, request_evidence_sha256=scheduler_canonical_sha256(values))
 
     @model_validator(mode="after")
     def public_request_shape_and_hash_are_exact(self) -> Self:
+        if self.purpose is SchedulerTaskPurpose.PRIMARY:
+            if self.parent_task_id is not None or (self.schema_version == "1.1") != (
+                self.retrieval_custody is not None
+            ):
+                raise ValueError("primary public model request shape is not exact")
+        elif (
+            self.schema_version != "1.1"
+            or self.parent_task_id is None
+            or self.retrieval_custody is not None
+        ):
+            raise ValueError("retrieval-planning public request shape is not exact")
         activation_fields = (
             self.activation_id,
             self.activation_sha256,
@@ -6617,13 +7911,24 @@ class SchedulerModelRequestEvidence(StrictModel):
             self.context_request_evidence_sha256,
             self.provider_response_sha256,
             self.validated_response_sha256,
-            self.normalizer_sha256,
         )
         if self.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
             if any(item is None for item in completion_fields):
                 raise ValueError("successful public model request lacks completion hashes")
+            if self.schema_version == "1.0" and self.normalizer_sha256 is None:
+                raise ValueError("successful primary request lacks its normalizer hash")
+            if self.retrieval_custody is not None and self.normalizer_sha256 is None:
+                raise ValueError("retrieval-bearing primary request lacks its normalizer hash")
+            if (
+                self.schema_version == "1.1"
+                and self.retrieval_custody is None
+                and self.normalizer_sha256 is not None
+            ):
+                raise ValueError("retrieval-planning request cannot claim normalization")
         elif any(item is not None for item in completion_fields):
             raise ValueError("non-success public model request cannot claim completion hashes")
+        elif self.normalizer_sha256 is not None:
+            raise ValueError("non-success public request cannot claim a normalizer hash")
         audit_policy_fields = (
             self.audit_policy_selection_binding_sha256,
             self.audit_model_selection_bundle_sha256,
@@ -6666,6 +7971,8 @@ class SchedulerModelRequestEvidence(StrictModel):
             self.reviewed_source_descriptor_sha256s or self.reviewed_candidate_ids
         ):
             raise ValueError("non-success public request cannot claim substantive review")
+        if self.schema_version == "1.0" and self.retrieval_custody is not None:
+            raise ValueError("legacy public request cannot carry retrieval custody")
         if self.request_evidence_sha256 != _model_sha256(self, exclude={"request_evidence_sha256"}):
             raise ValueError("scheduler model-request evidence hash is inconsistent")
         return self
@@ -7734,9 +9041,13 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 )
                 exact_origin_count = 0
                 for raw_finding, stamped_finding in stamped_pairs:
-                    raw_sha256 = scheduler_canonical_sha256(raw_finding.model_dump(mode="json"))
-                    stamped_sha256 = scheduler_canonical_sha256(
-                        stamped_finding.model_dump(mode="json")
+                    raw_sha256 = scheduler_candidate_payload_sha256(
+                        raw_finding,
+                        algorithm_version=exact_manifest.algorithm_version,
+                    )
+                    stamped_sha256 = scheduler_candidate_payload_sha256(
+                        stamped_finding,
+                        algorithm_version=exact_manifest.algorithm_version,
                     )
                     frames = tuple(
                         frame
@@ -7927,7 +9238,10 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or exact_result.family_id != exact_family.family_id
             or exact_result.family_root_sha256 != exact_family.entry_sha256
             or exact_parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
-            or exact_parent.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or exact_parent.response_schema_sha256
+            != candidate_review_frame_wire_schema_sha256(
+                algorithm_version=exact_manifest.algorithm_version,
+            )
             or exact_activation.campaign_id != exact_manifest.campaign_id
             or exact_activation.child_task_id != exact_result.child_task_id
             or exact_activation.child_logical_request_id != exact_result.child_logical_request_id
@@ -8235,7 +9549,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 canonical_accounted_cost = "0"
             if (
                 self.terminal_status is not SchedulerTerminalStatus.FAILED
-                or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or not _candidate_review_wire_schema_is_supported(self.response_schema_sha256)
                 or self.request_limit_count_after <= self.request_limit_count_before
                 or self.request_limit_count_after > self.request_limit_maximum
                 or self.accounted_provider_attempts is None
@@ -8295,7 +9609,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             self.terminal_status is SchedulerTerminalStatus.FAILED
             or self.request_limit_count_after <= self.request_limit_count_before
             or self.request_limit_count_after > self.request_limit_maximum
-            or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or not _candidate_review_wire_schema_is_supported(self.response_schema_sha256)
             or self.provider_response_sha256 is None
             or self.child_plan_sha256 is not None
             or self.dispatch_id is not None
@@ -8610,16 +9924,24 @@ def build_scheduler_truncation_recovery_model_request_evidence(
 def _derived_pass_status(
     results: tuple[SchedulerTaskResult, ...],
     *,
+    primary_task_ids: frozenset[str] | None = None,
     recovered_task_ids: frozenset[str] = frozenset(),
 ) -> SchedulerPassStatus:
+    substantive_results = (
+        results
+        if primary_task_ids is None
+        else tuple(result for result in results if result.task_id in primary_task_ids)
+    )
     statuses = {
         (
             SchedulerTerminalStatus.SUCCEEDED
             if result.task_id in recovered_task_ids
             else result.terminal_status
         )
-        for result in results
+        for result in substantive_results
     }
+    if not statuses:
+        return SchedulerPassStatus.INCOMPLETE
     if statuses <= {
         SchedulerTerminalStatus.SUCCEEDED,
         SchedulerTerminalStatus.EXPLICIT_EMPTY,
@@ -8702,6 +10024,11 @@ class SchedulerPassResult(StrictModel):
             ),
             "status": _derived_pass_status(
                 canonical_results,
+                primary_task_ids=frozenset(
+                    task.task_id
+                    for task in validated_plan.tasks
+                    if task.purpose is SchedulerTaskPurpose.PRIMARY
+                ),
                 recovered_task_ids=recovered_task_ids,
             ),
         }
@@ -8753,8 +10080,12 @@ class SchedulerPassResult(StrictModel):
             if (
                 task is None
                 or original is None
+                or task.purpose is not SchedulerTaskPurpose.PRIMARY
                 or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
-                or task.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or task.response_schema_sha256
+                != candidate_review_frame_wire_schema_sha256(
+                    algorithm_version=self.plan.manifest.algorithm_version,
+                )
                 or original.terminal_status is not SchedulerTerminalStatus.TRUNCATED
                 or promotion.original_truncated_result_sha256 != original.result_sha256
                 or (
@@ -8781,6 +10112,23 @@ class SchedulerPassResult(StrictModel):
                 or result.scope != task.scope
             ):
                 raise ValueError("scheduler task result differs from its exact planned identity")
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING:
+                if (
+                    result.schema_version != "1.1"
+                    or result.retrieval_custody is not None
+                    or result.normalizer_sha256 is not None
+                    or result.specialist_accepted_outcome_sha256 is not None
+                    or result.model_surface_review_artifact_sha256 is not None
+                    or result.model_surface_review_request_manifest_sha256 is not None
+                    or result.model_surface_review_request_count != 0
+                    or result.reviewed_source_descriptor_sha256s
+                    or result.reviewed_candidate_ids
+                ):
+                    raise ValueError(
+                        "scheduler retrieval child result cannot claim substantive review credit"
+                    )
+            elif (result.schema_version == "1.1") != (result.retrieval_custody is not None):
+                raise ValueError("scheduler primary result schema differs from retrieval custody")
             if (task.task_kind is SchedulerTaskKind.EMPTY_COMPLETION) != (
                 result.terminal_status is SchedulerTerminalStatus.EXPLICIT_EMPTY
             ):
@@ -8792,7 +10140,7 @@ class SchedulerPassResult(StrictModel):
             ):
                 raise ValueError("successful scheduler model result lacks provider evidence")
             if result.terminal_status is SchedulerTerminalStatus.SUCCEEDED and (
-                scheduler_role_requires_specialist_accepted_outcome(task.role)
+                scheduler_task_requires_specialist_accepted_outcome(task)
                 != (result.specialist_accepted_outcome_sha256 is not None)
             ):
                 raise ValueError(
@@ -8800,6 +10148,7 @@ class SchedulerPassResult(StrictModel):
                 )
             if (
                 self.plan.pass_kind is SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION
+                and task.purpose is SchedulerTaskPurpose.PRIMARY
                 and task.task_kind is SchedulerTaskKind.MODEL_REQUEST
                 and result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
                 and result.reviewed_candidate_ids != task.candidate_ids
@@ -8807,6 +10156,7 @@ class SchedulerPassResult(StrictModel):
                 raise ValueError("pass-five result omitted an exact candidate review")
             if (
                 self.plan.pass_kind is SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION
+                and task.purpose is SchedulerTaskPurpose.PRIMARY
                 and task.role
                 in {
                     "verifier",
@@ -8820,13 +10170,46 @@ class SchedulerPassResult(StrictModel):
                 raise ValueError("pass-six result omitted an exact candidate decision")
             if (
                 self.plan.pass_kind is SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT
+                and task.purpose is SchedulerTaskPurpose.PRIMARY
                 and task.role == "judge"
                 and result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
                 and result.reviewed_candidate_ids != task.candidate_ids
             ):
                 raise ValueError("judge result omitted an exact candidate-group decision")
+        child_result_by_parent_id = {
+            task.parent_task_id: result_by_task[task.task_id]
+            for task in self.plan.tasks
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        }
+        for primary in (
+            task for task in self.plan.tasks if task.purpose is SchedulerTaskPurpose.PRIMARY
+        ):
+            primary_result = result_by_task[primary.task_id]
+            child_result = child_result_by_parent_id.get(primary.task_id)
+            custody = primary_result.retrieval_custody
+            if child_result is None:
+                if custody is not None:
+                    raise ValueError("scheduler primary result claims an unrelated retrieval child")
+                continue
+            if child_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+                if custody is None or (
+                    custody.planner_task_id != child_result.task_id
+                    or custody.planner_task_result_id != child_result.result_id
+                    or custody.planner_task_result_sha256 != child_result.result_sha256
+                    or custody.planner_output_artifact_sha256 != child_result.output_artifact_sha256
+                ):
+                    raise ValueError(
+                        "scheduler primary result lacks its successful retrieval-child custody"
+                    )
+            elif custody is not None:
+                raise ValueError("scheduler retrieval custody requires a successful linked child")
         expected_status = _derived_pass_status(
             self.task_results,
+            primary_task_ids=frozenset(
+                task.task_id
+                for task in self.plan.tasks
+                if task.purpose is SchedulerTaskPurpose.PRIMARY
+            ),
             recovered_task_ids=frozenset(promotion_task_ids),
         )
         if self.status is not expected_status:
@@ -8846,7 +10229,7 @@ class SchedulerPassResult(StrictModel):
             }
             for result in self.task_results:
                 task = planned_by_id[result.task_id]
-                if task.role != "source_audit":
+                if task.purpose is not SchedulerTaskPurpose.PRIMARY or task.role != "source_audit":
                     continue
                 expected_task_sources = {
                     source.source_descriptor_sha256
@@ -9452,11 +10835,11 @@ class SchedulerJournalEvidence(StrictModel):
     summary_sha256: str = Field(pattern=_SHA256_PATTERN)
     analysis_input_sha256: str = Field(pattern=_SHA256_PATTERN)
     analysis_input_descriptor_sha256s: tuple[str, ...] = Field(
-        min_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
+        min_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS_V1),
         max_length=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
     )
     analysis_input_descriptor_count: int = Field(
-        ge=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
+        ge=len(SCHEDULER_ANALYSIS_INPUT_LABELS_V1),
         le=len(SCHEDULER_ANALYSIS_INPUT_LABELS),
     )
     shard_inventory_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -9465,6 +10848,11 @@ class SchedulerJournalEvidence(StrictModel):
     model_request_evidence_sha256s: tuple[str, ...] = Field(max_length=700_000)
     task_activation_sha256s: tuple[str, ...] = Field(max_length=700_000)
     task_output_artifact_sha256s: tuple[str, ...] = Field(max_length=700_000)
+    retrieval_binding_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=700_000,
+        exclude_if=lambda value: not value,
+    )
     provider_attempt_evidence_sha256s: tuple[str, ...] = Field(max_length=700_000)
     task_result_sha256s: tuple[str, ...] = Field(max_length=700_000)
     result_observation_sha256s: tuple[str, ...] = Field(max_length=1_400_000)
@@ -9491,6 +10879,12 @@ class SchedulerJournalEvidence(StrictModel):
     model_request_count: int = Field(ge=0, le=700_000)
     task_activation_count: int = Field(ge=0, le=700_000)
     task_output_count: int = Field(ge=0, le=700_000)
+    retrieval_binding_count: int = Field(
+        default=0,
+        ge=0,
+        le=700_000,
+        exclude_if=lambda value: value == 0,
+    )
     provider_attempt_count: int = Field(ge=0, le=700_000)
     task_result_count: int = Field(ge=0, le=700_000)
     result_observation_count: int = Field(ge=0, le=1_400_000)
@@ -9520,6 +10914,7 @@ class SchedulerJournalEvidence(StrictModel):
         "model_request_evidence_sha256s",
         "task_activation_sha256s",
         "task_output_artifact_sha256s",
+        "retrieval_binding_sha256s",
         "provider_attempt_evidence_sha256s",
         "task_result_sha256s",
         "result_observation_sha256s",
@@ -9546,6 +10941,7 @@ class SchedulerJournalEvidence(StrictModel):
         model_requests: tuple[SchedulerModelRequestEvidence, ...],
         activations: tuple[SchedulerTaskActivation, ...],
         outputs: tuple[SchedulerTaskOutput, ...],
+        retrieval_bindings: tuple[SchedulerRetrievalBinding, ...],
         provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
         task_results: tuple[SchedulerTaskResult, ...],
         result_observations: tuple[SchedulerTaskResult, ...],
@@ -9587,6 +10983,16 @@ class SchedulerJournalEvidence(StrictModel):
             ),
             "task_activation_sha256s": tuple(item.activation_sha256 for item in activations),
             "task_output_artifact_sha256s": tuple(item.output_artifact_sha256 for item in outputs),
+            **(
+                {
+                    "retrieval_binding_sha256s": tuple(
+                        item.binding_sha256 for item in retrieval_bindings
+                    ),
+                    "retrieval_binding_count": len(retrieval_bindings),
+                }
+                if retrieval_bindings
+                else {}
+            ),
             "provider_attempt_evidence_sha256s": tuple(
                 item.attempt_evidence_sha256 for item in provider_attempts
             ),
@@ -9648,6 +11054,7 @@ class SchedulerJournalEvidence(StrictModel):
         model_requests: Iterable[SchedulerModelRequestEvidence],
         activations: Iterable[SchedulerTaskActivation],
         outputs: Iterable[SchedulerTaskOutput],
+        retrieval_bindings: Iterable[SchedulerRetrievalBinding] = (),
         provider_attempts: Iterable[SchedulerProviderAttemptEvidence] = (),
         task_results: Iterable[SchedulerTaskResult],
         result_observations: Iterable[SchedulerTaskResult],
@@ -9677,6 +11084,9 @@ class SchedulerJournalEvidence(StrictModel):
             model_requests=tuple(sorted(model_requests, key=lambda item: item.task_id)),
             activations=tuple(sorted(activations, key=lambda item: item.task_id)),
             outputs=tuple(sorted(outputs, key=lambda item: item.task_id)),
+            retrieval_bindings=tuple(
+                sorted(retrieval_bindings, key=lambda item: item.planner_task_id)
+            ),
             provider_attempts=tuple(sorted(provider_attempts, key=lambda item: item.task_id)),
             task_results=tuple(sorted(task_results, key=lambda item: item.task_id)),
             result_observations=tuple(
@@ -9698,6 +11108,7 @@ class SchedulerJournalEvidence(StrictModel):
         model_requests: Iterable[SchedulerModelRequestEvidence],
         activations: Iterable[SchedulerTaskActivation],
         outputs: Iterable[SchedulerTaskOutput],
+        retrieval_bindings: Iterable[SchedulerRetrievalBinding] = (),
         provider_attempts: Iterable[SchedulerProviderAttemptEvidence] = (),
         task_results: Iterable[SchedulerTaskResult],
         result_observations: Iterable[SchedulerTaskResult],
@@ -9753,6 +11164,15 @@ class SchedulerJournalEvidence(StrictModel):
                     for item in outputs
                 ),
                 key=lambda item: item.task_id,
+            )
+        )
+        canonical_retrieval_bindings = tuple(
+            sorted(
+                (
+                    SchedulerRetrievalBinding.model_validate(item.model_dump(mode="python"))
+                    for item in retrieval_bindings
+                ),
+                key=lambda item: item.planner_task_id,
             )
         )
         canonical_provider_attempts = tuple(
@@ -9818,6 +11238,7 @@ class SchedulerJournalEvidence(StrictModel):
             plans=canonical_plans,
             activations=canonical_activations,
             outputs=canonical_outputs,
+            retrieval_bindings=canonical_retrieval_bindings,
             provider_attempts=canonical_provider_attempts,
             task_results=canonical_results,
             result_observations=canonical_observations,
@@ -9838,6 +11259,7 @@ class SchedulerJournalEvidence(StrictModel):
             model_requests=canonical_model_requests,
             activations=canonical_activations,
             outputs=canonical_outputs,
+            retrieval_bindings=canonical_retrieval_bindings,
             provider_attempts=canonical_provider_attempts,
             task_results=canonical_results,
             result_observations=canonical_observations,
@@ -9872,6 +11294,7 @@ class SchedulerJournalEvidence(StrictModel):
             (self.model_request_count, len(self.model_request_evidence_sha256s)),
             (self.task_activation_count, len(self.task_activation_sha256s)),
             (self.task_output_count, len(self.task_output_artifact_sha256s)),
+            (self.retrieval_binding_count, len(self.retrieval_binding_sha256s)),
             (
                 self.provider_attempt_count,
                 len(self.provider_attempt_evidence_sha256s),
@@ -9921,6 +11344,7 @@ class SchedulerJournalEvidence(StrictModel):
             self.model_request_count > self.task_plan_count
             or self.task_activation_count + self.preflight_failure_count > self.task_plan_count
             or self.task_output_count > self.task_activation_count
+            or self.retrieval_binding_count > self.task_plan_count
             or self.provider_attempt_count > self.task_activation_count
             or self.task_output_count + self.provider_attempt_count > self.task_activation_count
             or self.task_result_count > self.task_plan_count
@@ -10035,6 +11459,20 @@ class SchedulerArtifact(StrictModel):
         )
         promotion_by_sha256 = {item.promotion_entry_sha256: item for item in recovery_promotions}
         recovery_chain_sha256s = set(evidence.truncation_recovery_entry_sha256s)
+        retrieval_preflight_failures = tuple(
+            result
+            for pass_result in self.summary.pass_results
+            for task in pass_result.plan.tasks
+            for result in pass_result.task_results
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            and result.task_id == task.task_id
+            and result.result_origin is SchedulerResultOrigin.LOCAL_PREFLIGHT
+        )
+        expected_analysis_input_descriptor_count = (
+            len(SCHEDULER_ANALYSIS_INPUT_LABELS_V1)
+            if self.summary.manifest.algorithm_version == "mmaudit.seven-pass-scheduler.v1"
+            else len(SCHEDULER_ANALYSIS_INPUT_LABELS)
+        )
         if (
             self.schema_version != evidence.schema_version
             or (self.schema_version in {"1.1", "1.3"})
@@ -10044,7 +11482,7 @@ class SchedulerArtifact(StrictModel):
             or evidence.summary_sha256 != self.summary.summary_sha256
             or evidence.analysis_input_sha256
             != self.summary.manifest.bindings.analysis_input_sha256
-            or evidence.analysis_input_descriptor_count != len(SCHEDULER_ANALYSIS_INPUT_LABELS)
+            or evidence.analysis_input_descriptor_count != expected_analysis_input_descriptor_count
             or evidence.shard_inventory_sha256
             != self.summary.manifest.shard_inventory.inventory_sha256
             or evidence.pass_result_sha256s
@@ -10339,11 +11777,20 @@ class SchedulerArtifact(StrictModel):
             evidence.pass_plan_count != 7
             or evidence.pass_result_count != 7
             or evidence.task_plan_count != evidence.task_result_count
-            or evidence.preflight_failure_count
-            or evidence.task_activation_count != evidence.task_plan_count
+            or evidence.preflight_failure_count != len(retrieval_preflight_failures)
+            or evidence.task_activation_count + len(retrieval_preflight_failures)
+            != evidence.task_plan_count
             or evidence.task_output_count != evidence.succeeded_count
             or evidence.result_observation_count != evidence.task_result_count
-            or evidence.event_count != 4 * evidence.task_plan_count
+            or evidence.event_count
+            != (
+                evidence.task_plan_count
+                + evidence.task_activation_count
+                + evidence.task_result_count
+                + evidence.task_output_count
+                + evidence.provider_attempt_count
+                + evidence.explicit_empty_count
+            )
         ):
             raise ValueError("complete scheduler artifact lacks full journal lifecycle evidence")
         if self.artifact_sha256 != _model_sha256(self, exclude={"artifact_sha256"}):
@@ -10453,7 +11900,7 @@ class SchedulerReportBinding(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -10487,6 +11934,24 @@ class SchedulerReportBinding(StrictModel):
     task_result_count: int = Field(ge=0, le=700_000)
     result_observation_count: int = Field(ge=0, le=1_400_000)
     preflight_failure_count: int = Field(ge=0, le=700_000)
+    retrieval_planning_task_count: int = Field(
+        default=0,
+        ge=0,
+        le=700_000,
+        exclude_if=lambda value: value == 0,
+    )
+    retrieval_planning_preflight_failure_count: int = Field(
+        default=0,
+        ge=0,
+        le=700_000,
+        exclude_if=lambda value: value == 0,
+    )
+    retrieval_planning_non_success_count: int = Field(
+        default=0,
+        ge=0,
+        le=700_000,
+        exclude_if=lambda value: value == 0,
+    )
     task_output_count: int = Field(ge=0, le=700_000)
     request_result_mapping_count: int = Field(ge=0, le=700_000)
     event_count: int = Field(ge=0, le=2_800_000)
@@ -10515,8 +11980,27 @@ class SchedulerReportBinding(StrictModel):
         recovered_count = sum(
             len(pass_result.recovery_promotion_bindings) for pass_result in summary.pass_results
         )
+        retrieval_tasks = tuple(
+            task
+            for pass_result in summary.pass_results
+            for task in pass_result.plan.tasks
+            if task.purpose is SchedulerTaskPurpose.RETRIEVAL_PLANNING
+        )
+        retrieval_task_ids = frozenset(task.task_id for task in retrieval_tasks)
+        retrieval_preflight_failure_count = sum(
+            result.task_id in retrieval_task_ids
+            and result.result_origin is SchedulerResultOrigin.LOCAL_PREFLIGHT
+            for pass_result in summary.pass_results
+            for result in pass_result.task_results
+        )
+        retrieval_non_success_count = sum(
+            result.task_id in retrieval_task_ids
+            and result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            for pass_result in summary.pass_results
+            for result in pass_result.task_results
+        )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if retrieval_tasks else "1.0",
             "evidence_authority": "comparison_required",
             "campaign_id": summary.manifest.campaign_id,
             "manifest_sha256": summary.manifest.manifest_sha256,
@@ -10543,6 +12027,17 @@ class SchedulerReportBinding(StrictModel):
             "task_result_count": evidence.task_result_count,
             "result_observation_count": evidence.result_observation_count,
             "preflight_failure_count": evidence.preflight_failure_count,
+            **({"retrieval_planning_task_count": len(retrieval_tasks)} if retrieval_tasks else {}),
+            **(
+                {"retrieval_planning_preflight_failure_count": (retrieval_preflight_failure_count)}
+                if retrieval_preflight_failure_count
+                else {}
+            ),
+            **(
+                {"retrieval_planning_non_success_count": retrieval_non_success_count}
+                if retrieval_non_success_count
+                else {}
+            ),
             "task_output_count": evidence.task_output_count,
             "request_result_mapping_count": evidence.task_result_count,
             "event_count": evidence.event_count,
@@ -10575,7 +12070,12 @@ class SchedulerReportBinding(StrictModel):
             + self.uncertain_count
         )
         if (
-            self.terminal_task_count != self.task_result_count
+            (self.schema_version == "1.1") != (self.retrieval_planning_task_count > 0)
+            or self.retrieval_planning_preflight_failure_count > self.retrieval_planning_task_count
+            or self.retrieval_planning_non_success_count > self.retrieval_planning_task_count
+            or self.retrieval_planning_preflight_failure_count
+            > self.retrieval_planning_non_success_count
+            or self.terminal_task_count != self.task_result_count
             or self.task_result_count != terminal_status_total
             or self.logical_request_count
             != self.planned_task_count + self.recovery_model_request_count
@@ -10588,13 +12088,20 @@ class SchedulerReportBinding(StrictModel):
             self.completed_pass_count != 7
             or self.pass_result_count != 7
             or self.planned_task_count != self.terminal_task_count
+            or self.activated_task_count + self.retrieval_planning_preflight_failure_count
+            != self.planned_task_count
+            or self.preflight_failure_count != self.retrieval_planning_preflight_failure_count
             or self.task_output_count != self.succeeded_count
-            or self.failed_count
-            or self.truncated_count != self.recovered_count
-            or self.invalid_count
-            or self.unbound_count
-            or self.inconclusive_count
-            or self.uncertain_count
+            or (
+                self.failed_count
+                + self.invalid_count
+                + self.unbound_count
+                + self.inconclusive_count
+                + self.uncertain_count
+                + self.truncated_count
+                - self.recovered_count
+            )
+            != self.retrieval_planning_non_success_count
         ):
             raise ValueError("complete scheduler report binding contains incomplete evidence")
         if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
@@ -10947,6 +12454,7 @@ def _validate_scheduler_journal_evidence(
     plans: tuple[SchedulerPassPlan, ...],
     activations: tuple[SchedulerTaskActivation, ...],
     outputs: tuple[SchedulerTaskOutput, ...],
+    retrieval_bindings: tuple[SchedulerRetrievalBinding, ...],
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     task_results: tuple[SchedulerTaskResult, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
@@ -11017,6 +12525,53 @@ def _validate_scheduler_journal_evidence(
     if not {item.result_sha256 for item in task_results} <= set(observation_hashes):
         raise ValueError("credited scheduler results must be retained as exact observations")
 
+    retrieval_binding_by_primary: dict[str, SchedulerRetrievalBinding] = {}
+    for binding in retrieval_bindings:
+        planner_pair = task_by_id.get(binding.planner_task_id)
+        if planner_pair is None:
+            raise ValueError("scheduler retrieval binding references an unknown planner")
+        planner_plan, planner_task = planner_pair
+        primary_pair = (
+            task_by_id.get(planner_task.parent_task_id)
+            if planner_task.parent_task_id is not None
+            else None
+        )
+        planner_result = result_by_task.get(planner_task.task_id)
+        planner_output = output_by_task.get(planner_task.task_id)
+        if (
+            primary_pair is None
+            or primary_pair[0] != planner_plan
+            or planner_result is None
+            or planner_output is None
+            or planner_task.purpose is not SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            or planner_task.parent_task_id in retrieval_binding_by_primary
+        ):
+            raise ValueError("scheduler retrieval binding lacks an exact primary lifecycle")
+        primary_task = primary_pair[1]
+        expected_binding = SchedulerRetrievalBinding.build_pre_activation(
+            plan=planner_plan,
+            primary_task=primary_task,
+            planner_task=planner_task,
+            planner_output=planner_output,
+            planner_result=planner_result,
+            transcript=binding.transcript,
+        )
+        if binding != expected_binding:
+            raise ValueError("scheduler retrieval binding differs from exact planner custody")
+        primary_activation = activation_by_task.get(primary_task.task_id)
+        if primary_activation is not None:
+            binding.require_exact_primary(
+                plan=planner_plan,
+                task=primary_task,
+                activation=primary_activation,
+            )
+        primary_output = output_by_task.get(primary_task.task_id)
+        if primary_output is not None and (
+            primary_output.retrieval_binding is None or primary_output.retrieval_binding != binding
+        ):
+            raise ValueError("scheduler primary output differs from standalone retrieval custody")
+        retrieval_binding_by_primary[primary_task.task_id] = binding
+
     if terminal_report_authority is not None:
         if len(task_results) != len(task_pairs) or len(summary.pass_results) != len(plans):
             raise ValueError(
@@ -11081,6 +12636,7 @@ def _validate_scheduler_journal_evidence(
             normalizer_sha256=completion.normalizer_sha256,
             normalized_output_sha256=completion.normalized_output_sha256,
             normalization_evidence=completion.normalization_evidence,
+            algorithm_version=manifest.algorithm_version,
         ):
             raise ValueError("scheduler journal output differs from exact completion custody")
     if set(provider_attempt_by_task).intersection(output_by_task):
@@ -11133,6 +12689,16 @@ def _validate_scheduler_journal_evidence(
             or result.output_artifact_sha256 != observed_output.output_artifact_sha256
         ):
             raise ValueError("scheduler successful result differs from its normalized output")
+        standalone_binding = retrieval_binding_by_primary.get(task_id)
+        output_binding = observed_output.retrieval_binding if observed_output is not None else None
+        effective_binding = standalone_binding or output_binding
+        expected_custody = (
+            SchedulerRetrievalCustody.from_binding(effective_binding)
+            if effective_binding is not None
+            else None
+        )
+        if result.retrieval_custody != expected_custody:
+            raise ValueError("scheduler result differs from private retrieval custody")
     succeeded_observation_tasks = {
         item.task_id
         for item in result_observations

@@ -1,0 +1,482 @@
+{
+  "$defs": {
+    "OpenRouterEndpointInventoryEntry": {
+      "additionalProperties": false,
+      "description": "One current exact-model endpoint and its nonauthorizing selection hints.",
+      "properties": {
+        "effective_high_reasoning_effort_supported": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Effective High Reasoning Effort Supported"
+        },
+        "effective_reasoning_effort_inventory_source": {
+          "enum": [
+            "ENDPOINT",
+            "MODEL",
+            "UNAVAILABLE"
+          ],
+          "title": "Effective Reasoning Effort Inventory Source",
+          "type": "string"
+        },
+        "effective_reasoning_effort_inventory_state": {
+          "enum": [
+            "UNAVAILABLE",
+            "EMPTY",
+            "PUBLISHED",
+            "CONTRADICTORY"
+          ],
+          "title": "Effective Reasoning Effort Inventory State",
+          "type": "string"
+        },
+        "effective_supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Effective Supported Reasoning Efforts"
+        },
+        "endpoint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Sha256",
+          "type": "string"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "high_reasoning_effort_supported": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "High Reasoning Effort Supported"
+        },
+        "native_structured_output_supported": {
+          "title": "Native Structured Output Supported",
+          "type": "boolean"
+        },
+        "operational": {
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": -2147483647,
+              "type": "integer"
+            },
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "title": "Operational Status"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "provider_name_occurrences": {
+          "maximum": 2048,
+          "minimum": 1,
+          "title": "Provider Name Occurrences",
+          "type": "integer"
+        },
+        "reasoning_effort_inventory_present": {
+          "title": "Reasoning Effort Inventory Present",
+          "type": "boolean"
+        },
+        "reasoning_effort_inventory_state": {
+          "enum": [
+            "UNAVAILABLE",
+            "EMPTY",
+            "PUBLISHED"
+          ],
+          "title": "Reasoning Effort Inventory State",
+          "type": "string"
+        },
+        "route_addressable": {
+          "title": "Route Addressable",
+          "type": "boolean"
+        },
+        "routing_identity_unambiguous": {
+          "title": "Routing Identity Unambiguous",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection_arguments": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "title": "Selection Arguments",
+          "type": "array"
+        },
+        "structured_outputs_marker_present": {
+          "title": "Structured Outputs Marker Present",
+          "type": "boolean"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "supported_reasoning_efforts": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Supported Reasoning Efforts"
+        },
+        "zdr_eligible": {
+          "title": "Zdr Eligible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "exact_model_id",
+        "endpoint_tag",
+        "endpoint_slug",
+        "provider_name",
+        "provider_name_occurrences",
+        "routing_identity_unambiguous",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "supported_parameters",
+        "supported_output_modes",
+        "native_structured_output_supported",
+        "structured_outputs_marker_present",
+        "reasoning_effort_inventory_state",
+        "reasoning_effort_inventory_present",
+        "supported_reasoning_efforts",
+        "high_reasoning_effort_supported",
+        "effective_reasoning_effort_inventory_source",
+        "effective_reasoning_effort_inventory_state",
+        "effective_supported_reasoning_efforts",
+        "effective_high_reasoning_effort_supported",
+        "selection_arguments",
+        "route_addressable",
+        "endpoint_sha256"
+      ],
+      "title": "OpenRouterEndpointInventoryEntry",
+      "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/openrouter_endpoint_inventory_diagnostic.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Authenticated metadata diagnostic that grants no execution authority.",
+  "properties": {
+    "authenticated_control_plane_metadata": {
+      "const": true,
+      "title": "Authenticated Control Plane Metadata",
+      "type": "boolean"
+    },
+    "completion_authority": {
+      "const": false,
+      "title": "Completion Authority",
+      "type": "boolean"
+    },
+    "completion_requested": {
+      "const": false,
+      "title": "Completion Requested",
+      "type": "boolean"
+    },
+    "cost_ledger_mutated": {
+      "const": false,
+      "title": "Cost Ledger Mutated",
+      "type": "boolean"
+    },
+    "cost_ledger_opened": {
+      "const": false,
+      "title": "Cost Ledger Opened",
+      "type": "boolean"
+    },
+    "diagnostic_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Diagnostic Sha256",
+      "type": "string"
+    },
+    "egress_authority": {
+      "const": false,
+      "title": "Egress Authority",
+      "type": "boolean"
+    },
+    "endpoint_count": {
+      "maximum": 2048,
+      "minimum": 1,
+      "title": "Endpoint Count",
+      "type": "integer"
+    },
+    "endpoints": {
+      "items": {
+        "$ref": "#/$defs/OpenRouterEndpointInventoryEntry"
+      },
+      "maxItems": 2048,
+      "minItems": 1,
+      "title": "Endpoints",
+      "type": "array"
+    },
+    "exact_model_id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+      "title": "Exact Model Id",
+      "type": "string"
+    },
+    "metadata_only": {
+      "const": true,
+      "title": "Metadata Only",
+      "type": "boolean"
+    },
+    "model_high_reasoning_effort_supported": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Model High Reasoning Effort Supported"
+    },
+    "model_native_structured_output_supported": {
+      "title": "Model Native Structured Output Supported",
+      "type": "boolean"
+    },
+    "model_reasoning_effort_inventory_present": {
+      "title": "Model Reasoning Effort Inventory Present",
+      "type": "boolean"
+    },
+    "model_reasoning_effort_inventory_state": {
+      "enum": [
+        "UNAVAILABLE",
+        "EMPTY",
+        "PUBLISHED"
+      ],
+      "title": "Model Reasoning Effort Inventory State",
+      "type": "string"
+    },
+    "model_structured_outputs_marker_present": {
+      "title": "Model Structured Outputs Marker Present",
+      "type": "boolean"
+    },
+    "model_supported_output_modes": {
+      "items": {
+        "$ref": "#/$defs/StructuredOutputMode"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Model Supported Output Modes",
+      "type": "array"
+    },
+    "model_supported_parameters": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Model Supported Parameters",
+      "type": "array"
+    },
+    "model_supported_reasoning_efforts": {
+      "anyOf": [
+        {
+          "items": {
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "type": "string"
+          },
+          "maxItems": 7,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Model Supported Reasoning Efforts"
+    },
+    "provider_authority": {
+      "const": false,
+      "title": "Provider Authority",
+      "type": "boolean"
+    },
+    "qualification_authority": {
+      "const": false,
+      "title": "Qualification Authority",
+      "type": "boolean"
+    },
+    "release_authority": {
+      "const": false,
+      "title": "Release Authority",
+      "type": "boolean"
+    },
+    "retrieved_at": {
+      "format": "date-time",
+      "title": "Retrieved At",
+      "type": "string"
+    },
+    "runner_authority": {
+      "const": false,
+      "title": "Runner Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "secret_persisted": {
+      "const": false,
+      "title": "Secret Persisted",
+      "type": "boolean"
+    },
+    "selection_authority": {
+      "const": false,
+      "title": "Selection Authority",
+      "type": "boolean"
+    },
+    "source_api_identity": {
+      "const": "https://openrouter.ai/api/v1",
+      "title": "Source Api Identity",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "exact_model_id",
+    "retrieved_at",
+    "source_api_identity",
+    "authenticated_control_plane_metadata",
+    "metadata_only",
+    "completion_requested",
+    "cost_ledger_opened",
+    "cost_ledger_mutated",
+    "secret_persisted",
+    "provider_authority",
+    "runner_authority",
+    "qualification_authority",
+    "selection_authority",
+    "egress_authority",
+    "completion_authority",
+    "release_authority",
+    "model_supported_parameters",
+    "model_supported_output_modes",
+    "model_native_structured_output_supported",
+    "model_structured_outputs_marker_present",
+    "model_reasoning_effort_inventory_state",
+    "model_reasoning_effort_inventory_present",
+    "model_supported_reasoning_efforts",
+    "model_high_reasoning_effort_supported",
+    "endpoint_count",
+    "endpoints",
+    "diagnostic_sha256"
+  ],
+  "title": "mmaudit non-authorizing OpenRouter endpoint inventory diagnostic",
+  "type": "object"
+}

@@ -72,6 +72,11 @@ from mmaudit.orchestration.verification import (
     verify_run_evidence,
 )
 from mmaudit.reporting.json_report import stable_json
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    observe_unlinked_directory,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.repository.workspace import audited_workspace_exclusion_root
@@ -488,6 +493,7 @@ class OfflineReplayOrchestrator:
         config: AuditConfig | None = None,
         *,
         file_config: AuditConfig | None = None,
+        configuration_root: Path | None = None,
         scanner_runner: ScannerReplayRunner | None = None,
         invariant_runner: InvariantReplayRunner | None = None,
         reproduction_runner: ReproductionReplayRunner | None = None,
@@ -495,6 +501,7 @@ class OfflineReplayOrchestrator:
     ) -> None:
         self.config = config
         self.file_config = file_config
+        self.configuration_root = configuration_root
         self._injected_scanner_runner = scanner_runner
         self._injected_invariant_runner = invariant_runner
         self._injected_reproduction_runner = reproduction_runner
@@ -515,21 +522,37 @@ class OfflineReplayOrchestrator:
     ) -> OfflineReplay:
         """Verify then replay sealed evidence without constructing a model provider."""
 
+        work_parent = _safe_work_directory(work_dir)
+        run_root_observation = _safe_directory(run_dir, "run")
+        repository_root_observation = _safe_directory(repository_root, "repository")
+        configuration_root_observation = (
+            None
+            if self.configuration_root is None
+            else _safe_directory(self.configuration_root, "configuration")
+        )
+        root = run_root_observation.path
+        repository = repository_root_observation.path
+        trusted_configuration_root = (
+            None if configuration_root_observation is None else configuration_root_observation.path
+        )
         manifest = load_run_evidence_manifest(manifest_path)
         effective_config, verification_file_config = self._resolve_effective_config(manifest)
         self.config = effective_config
         verification = verify_run_evidence(
             manifest_path=manifest_path,
-            run_dir=run_dir,
-            repository_root=repository_root,
+            run_dir=root,
+            repository_root=repository,
+            configuration_root=trusted_configuration_root,
             config=effective_config,
             file_config=verification_file_config,
         )
         if verification.status is not RunVerificationStatus.CURRENT:
             raise ValueError("offline replay refused stale run evidence")
-        root = _safe_directory(run_dir, "run")
-        repository = _safe_directory(repository_root, "repository")
-        work_parent = _safe_work_directory(work_dir)
+        _require_replay_root_custody(
+            run_root_observation,
+            repository_root_observation,
+            configuration_root_observation,
+        )
         artifacts = _load_replay_artifacts(root, config=effective_config)
 
         scanner_required = bool(artifacts.scanners.runs)
@@ -655,6 +678,11 @@ class OfflineReplayOrchestrator:
             components=ordered,
             applicable_kinds=applicable,
             missing_kinds=missing,
+        )
+        _require_replay_root_custody(
+            run_root_observation,
+            repository_root_observation,
+            configuration_root_observation,
         )
         serialized = payload.model_dump(mode="json")
         return OfflineReplay.model_validate(
@@ -1510,13 +1538,22 @@ def _load_artifact[ModelT: BaseModel](
     return model.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def _safe_directory(path: Path, label: str) -> Path:
-    if path.is_symlink() or path.is_junction():
-        raise ValueError(f"offline replay {label} root may not be a link")
-    resolved = path.resolve(strict=True)
-    if not resolved.is_dir():
-        raise ValueError(f"offline replay {label} root must be a directory")
-    return resolved
+def _safe_directory(path: Path, label: str) -> DirectoryCustodyObservation:
+    return observe_unlinked_directory(path, label=f"offline replay {label}")
+
+
+def _require_replay_root_custody(
+    run_root: DirectoryCustodyObservation,
+    repository_root: DirectoryCustodyObservation,
+    configuration_root: DirectoryCustodyObservation | None,
+) -> None:
+    require_unchanged_unlinked_directory(repository_root, label="offline replay repository")
+    if configuration_root is not None:
+        require_unchanged_unlinked_directory(
+            configuration_root,
+            label="offline replay configuration",
+        )
+    require_unchanged_unlinked_directory(run_root, label="offline replay run")
 
 
 def _safe_work_directory(path: Path) -> Path:
@@ -1714,8 +1751,10 @@ def _applicable_replay_components(
 def expected_replay_kinds_for_run(run_dir: Path) -> set[ReplayComponentKind]:
     """Derive replay obligations from bounded sealed run artifacts."""
 
-    root = _safe_directory(run_dir, "run")
-    return set(_applicable_replay_kinds(_load_replay_artifacts(root)))
+    root_observation = _safe_directory(run_dir, "run")
+    applicable = set(_applicable_replay_kinds(_load_replay_artifacts(root_observation.path)))
+    require_unchanged_unlinked_directory(root_observation, label="offline replay run")
+    return applicable
 
 
 def expected_replay_components_for_run(
@@ -1723,8 +1762,10 @@ def expected_replay_components_for_run(
 ) -> set[tuple[ReplayComponentKind, str]]:
     """Derive exact replay member obligations from bounded sealed run artifacts."""
 
-    root = _safe_directory(run_dir, "run")
-    return _applicable_replay_components(_load_replay_artifacts(root))
+    root_observation = _safe_directory(run_dir, "run")
+    applicable = _applicable_replay_components(_load_replay_artifacts(root_observation.path))
+    require_unchanged_unlinked_directory(root_observation, label="offline replay run")
+    return applicable
 
 
 def _configured_differential_projection(

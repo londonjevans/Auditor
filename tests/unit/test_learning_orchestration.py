@@ -14,11 +14,18 @@ from pydantic import ValidationError
 import mmaudit.orchestration.learning as learning_orchestration
 from mmaudit.config import AuditRunOptions, LearningCaptureScope
 from mmaudit.constants import ANALYSIS_ROLES
+from mmaudit.models.actor_model import (
+    ActorModelEvaluation,
+    ActorModelInputEvidence,
+    ActorModelInputState,
+)
 from mmaudit.models.learning import (
+    LearningSurfaceKind,
     TerminalAuditLearningRecord,
     learning_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    ActorModelBaselineArtifact,
     AnalysisState,
     AuditReport,
     CandidateFindingArtifact,
@@ -34,6 +41,7 @@ from mmaudit.models.schemas import (
     ModelReviewSurfaceKind,
     ModelSurfaceReviewStatus,
     ModelVote,
+    QualityGateResult,
 )
 from mmaudit.orchestration.learning import (
     TERMINAL_AUDIT_LEARNING_ARTIFACT_PATH,
@@ -51,6 +59,10 @@ from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.run_authority import (
     RUN_TERMINAL_REPORT_AUTHORITY_PATH,
     RunTerminalReportAuthority,
+)
+from mmaudit.solidity.taxonomy import (
+    build_known_issue_taxonomy_coverage,
+    load_known_issue_taxonomy,
 )
 from tests.unit.test_client_forensic_reporting import _candidate, _finding
 from tests.unit.test_run_status import (
@@ -154,6 +166,33 @@ def _complete_report(*, extra_usage_roles: tuple[str, ...] = ()) -> AuditReport:
     return AuditReport.model_validate(payload)
 
 
+def _successor_report(report: AuditReport) -> AuditReport:
+    actor_input = ActorModelInputEvidence.build(
+        evaluated_at=report.generated_at,
+        state=ActorModelInputState.MISSING,
+        configured=False,
+        configured_path=None,
+        limitations=(
+            "operator actor model was not configured for this synthetic successor report",
+        ),
+    )
+    actor_evaluation = ActorModelEvaluation.build(
+        evaluated_at=report.generated_at,
+        input_evidence=actor_input,
+        governance_findings=(),
+        finding_assessments=(),
+    )
+    return AuditReport.model_validate(
+        {
+            **report.model_dump(mode="python"),
+            "schema_version": "1.3",
+            "actor_model_baseline": ActorModelBaselineArtifact.build(()),
+            "actor_model_evaluation": actor_evaluation,
+            "judge_decisions": [],
+        }
+    )
+
+
 def test_terminal_projection_binds_completed_report_surfaces_and_role_resources() -> None:
     report = _complete_report()
     authority = RunTerminalReportAuthority.build(report)
@@ -178,6 +217,86 @@ def test_terminal_projection_binds_completed_report_surfaces_and_role_resources(
     assert sum(item.request_count for item in record.role_usage) == len(report.usage)
     assert record.external_misses == ()
     assert record.authority == "NONAUTHORIZING"
+
+
+def test_known_issue_review_surface_maps_to_non_finding_learning_kind() -> None:
+    assert (
+        learning_orchestration._surface_kind(ModelReviewSurfaceKind.KNOWN_ISSUE_CLASS)
+        is LearningSurfaceKind.OTHER
+    )
+
+
+def test_terminal_projection_accepts_successor_report_schema() -> None:
+    report = _successor_report(_complete_report())
+    authority = RunTerminalReportAuthority.build(report)
+
+    assert terminal_learning_capture_is_eligible(
+        report=report,
+        scanner_only=False,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        tenant_scope_id=_TENANT_SCOPE.tenant_scope_id,
+    )
+    record = build_terminal_learning_capture(
+        tenant_id=_TENANT_SCOPE.tenant_scope_id,
+        report=report,
+        candidate_projection=(),
+        terminal_report_authority=authority,
+        scheduler_artifact=None,
+        captured_at=report.generated_at,
+    )
+
+    assert report.schema_version == "1.3"
+    assert record.audit_id == report.run_id
+    assert record.report_payload_sha256 == authority.report_payload_sha256
+
+
+def test_terminal_projection_accepts_current_taxonomy_report_schema() -> None:
+    predecessor = _successor_report(_complete_report())
+    coverage = build_known_issue_taxonomy_coverage(
+        load_known_issue_taxonomy(),
+        invariants=None,
+        model_review_coverage=None,
+    )
+    report = AuditReport.model_validate(
+        {
+            **predecessor.model_dump(mode="python"),
+            "schema_version": "1.4",
+            "taxonomy_coverage": coverage,
+            "quality_gates": [
+                *predecessor.quality_gates,
+                QualityGateResult(
+                    gate="known_issue_taxonomy_critical_disposition",
+                    required=False,
+                    passed=False,
+                    detail="Synthetic standard-profile taxonomy gaps remain explicit.",
+                    state=AnalysisState.NOT_ANALYZED,
+                    artifacts=[
+                        "known-issue-taxonomy-coverage.json",
+                        "known-issue-taxonomy.json",
+                    ],
+                ),
+            ],
+        }
+    )
+    authority = RunTerminalReportAuthority.build(report)
+
+    assert terminal_learning_capture_is_eligible(
+        report=report,
+        scanner_only=False,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        tenant_scope_id=_TENANT_SCOPE.tenant_scope_id,
+    )
+    record = build_terminal_learning_capture(
+        tenant_id=_TENANT_SCOPE.tenant_scope_id,
+        report=report,
+        candidate_projection=(),
+        terminal_report_authority=authority,
+        scheduler_artifact=None,
+        captured_at=report.generated_at,
+    )
+
+    assert report.schema_version == "1.4"
+    assert record.report_payload_sha256 == authority.report_payload_sha256
 
 
 def test_terminal_projection_ceil_capture_prevents_same_second_precision_race(
@@ -503,6 +622,32 @@ def test_latest_projection_excludes_and_purges_private_learning_payload(tmp_path
     assert retained.is_file()
     assert (latest / "audit-report.md").read_text(encoding="utf-8") == ("synthetic report\n")
     assert not (latest / "private").exists()
+
+
+def test_latest_projection_copies_and_purges_actor_model_artifacts(tmp_path) -> None:
+    run_dir = tmp_path / "run-with-actor-model"
+    latest = tmp_path / "latest"
+    run_dir.mkdir()
+    latest.mkdir()
+    actor_artifacts = {
+        "actor-model-baseline.json": b'{"baseline":"current"}\n',
+        "actor-model-evaluation.json": b'{"evaluation":"current"}\n',
+    }
+    for filename, payload in actor_artifacts.items():
+        (run_dir / filename).write_bytes(payload)
+        (latest / filename).write_bytes(b'{"stale":true}\n')
+
+    _refresh_latest_artifacts(run_dir=run_dir, latest=latest)
+
+    for filename, payload in actor_artifacts.items():
+        assert (latest / filename).read_bytes() == payload
+
+    subsequent_run = tmp_path / "run-without-actor-model"
+    subsequent_run.mkdir()
+    _refresh_latest_artifacts(run_dir=subsequent_run, latest=latest)
+
+    for filename in actor_artifacts:
+        assert not (latest / filename).exists()
 
 
 def test_terminal_learning_rejects_rejection_without_exact_reason() -> None:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import pickle
 import shutil
 import stat
+import threading
 from collections.abc import Iterator
+from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -36,6 +40,7 @@ from mmaudit.models.scheduler import (
     SchedulerAuditModelRefreshRouteBinding,
     SchedulerBindings,
     SchedulerCampaignStatus,
+    SchedulerCampaignSummary,
     SchedulerCandidateWorkset,
     SchedulerConditionalAbsence,
     SchedulerJournalEvidence,
@@ -94,8 +99,15 @@ from mmaudit.orchestration.cost_ledger import (
     ReleaseReason,
     cost_entry_sha256,
 )
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchAuthorization as ExactModelReviewPreDispatchAuthorization,
+)
+from mmaudit.orchestration.model_review_authority import (
+    ModelReviewPreDispatchBinding as ExactModelReviewPreDispatchBinding,
+)
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
+    require_model_review_pre_dispatch_authorization,
 )
 from mmaudit.orchestration.scheduler import (
     create_scheduler_journal as _create_scheduler_journal,
@@ -129,6 +141,7 @@ from tests.scheduler_support import (
     scheduler_test_delivered_source_descriptor_sha256s,
     scheduler_test_host_activation_input_sha256,
     scheduler_test_model_fields,
+    scheduler_test_model_surface_review_request_manifest_sha256,
     scheduler_test_response_schema_sha256,
 )
 
@@ -383,6 +396,84 @@ def open_scheduler_journal_for_verification(
     )
 
 
+def test_legacy_scheduler_journal_is_verification_only_not_mutably_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.test_scheduler_models import (
+        _legacy_analysis_inventory,
+        _legacy_manifest,
+    )
+
+    manifest = _legacy_manifest("mutable-resume-policy")
+    analysis_inputs = _legacy_analysis_inventory()
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    checkpoint = SchedulerJournalEvidence.build(
+        manifest=manifest,
+        analysis_input_inventory=analysis_inputs,
+        summary=summary,
+        plans=(),
+        model_requests=(),
+        activations=(),
+        outputs=(),
+        provider_attempts=(),
+        task_results=(),
+        result_observations=(),
+        events=(),
+    )
+    path = tmp_path / "legacy-verification-only"
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+    for directory in scheduler_module._CONTROL_DIRECTORIES:
+        child = path / directory
+        child.mkdir(mode=0o700)
+        child.chmod(0o700)
+    lock_path = path / scheduler_module._LOCK_FILENAME
+    lock_path.touch(mode=0o600)
+    lock_path.chmod(0o600)
+    for filename, value in (
+        (scheduler_module._MANIFEST_FILENAME, manifest),
+        (scheduler_module._ANALYSIS_INPUT_INVENTORY_FILENAME, analysis_inputs),
+        (scheduler_module._JOURNAL_HEAD_CHECKPOINT_FILENAME, checkpoint),
+    ):
+        artifact_path = path / filename
+        artifact_path.write_text(stable_json(value), encoding="utf-8")
+        artifact_path.chmod(0o600)
+
+    with monkeypatch.context() as resume_guard:
+        resume_guard.setattr(
+            scheduler_module,
+            "_validate_live_scheduler_model_refresh",
+            lambda **_kwargs: pytest.fail("legacy resume reached live refresh validation"),
+        )
+        resume_guard.setattr(
+            scheduler_module,
+            "_open_private_root",
+            lambda _path: pytest.fail("legacy resume opened mutable journal custody"),
+        )
+        with pytest.raises(
+            ValueError,
+            match="verification/replay-only and cannot be resumed mutably",
+        ):
+            _resume_scheduler_journal(
+                path,
+                expected_bindings=manifest.bindings,
+                expected_analysis_input_inventory=analysis_inputs,
+                expected_shard_inventory=manifest.shard_inventory,
+            )
+
+    verified = _open_scheduler_journal_for_verification(
+        path,
+        expected_bindings=manifest.bindings,
+        expected_analysis_input_inventory=analysis_inputs,
+        expected_shard_inventory=manifest.shard_inventory,
+        expected_privacy_evidence_custody=manifest.privacy_evidence_custody,
+        expected_journal_evidence=checkpoint,
+    )
+    assert verified.manifest == manifest
+    verified.close()
+
+
 def _task(
     journal: SchedulerJournal,
     pass_kind: SchedulerPassKind,
@@ -404,14 +495,22 @@ def _task(
         resolved_role = role or _MODEL_ROLES[pass_kind]
     else:
         resolved_role = role or _HOST_ROLES.get(pass_kind, "host:computation")
+    scope = (
+        SchedulerScope.single_shard(shard_id)
+        if shard_id is not None
+        else SchedulerScope.global_scope()
+    )
+    candidate_review_contract = resolved_kind is SchedulerTaskKind.MODEL_REQUEST and (
+        pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+        or (
+            pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+            and resolved_role == "business_logic"
+        )
+    )
     return SchedulerTaskPlan.build(
         manifest=journal.manifest,
         pass_kind=pass_kind,
-        scope=(
-            SchedulerScope.single_shard(shard_id)
-            if shard_id is not None
-            else SchedulerScope.global_scope()
-        ),
+        scope=scope,
         task_kind=resolved_kind,
         task_key=key,
         role=resolved_role,
@@ -430,6 +529,18 @@ def _task(
             else None
         ),
         candidate_ids=candidate_ids,
+        model_surface_review_request_manifest_sha256=(
+            scheduler_test_model_surface_review_request_manifest_sha256(
+                manifest=journal.manifest,
+                pass_kind=pass_kind,
+                scope=scope,
+                task_key=key,
+                role=resolved_role,
+                candidate_ids=candidate_ids,
+            )
+            if candidate_review_contract
+            else None
+        ),
         input_sha256="9" * 64,
         prompt_sha256="a" * 64,
         response_schema_sha256=(
@@ -639,7 +750,11 @@ def _complete_pass(
                     candidate_ids=candidate_ids,
                 )
                 if task.task_kind is SchedulerTaskKind.HOST_COMPUTATION
-                else task.input_sha256
+                else (
+                    "1" * 64
+                    if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
+                    else task.input_sha256
+                )
             ),
             system_prompt_sha256=(
                 task.system_prompt_sha256
@@ -738,6 +853,7 @@ def test_all_seven_exact_passes_derive_complete_campaign(tmp_path: Path) -> None
         "pass-plans",
         "pass-results",
         "provider-attempts",
+        "retrieval-bindings",
         "task-outputs",
         "task-results",
         "truncation-recovery",
@@ -763,6 +879,19 @@ def test_all_seven_exact_passes_derive_complete_campaign(tmp_path: Path) -> None
     assert evidence.result_observation_count == 11
     assert evidence.event_count == 44
     assert evidence.terminal_event_chain_head_sha256 == journal.events[-1].event_sha256
+    review_bindings = tuple(
+        require_model_review_pre_dispatch_authorization(authorization)
+        for authorization in journal.model_review_pre_dispatch_authorizations
+    )
+    expected_review_tasks = tuple(
+        task
+        for plan in journal.plans
+        if plan.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+        for task in plan.tasks
+    )
+    assert {(binding.task_id, binding.request_id) for binding in review_bindings} == {
+        (task.task_id, task.logical_request_id) for task in expected_review_tasks
+    }
     histories: dict[str, list[SchedulerTaskEventKind]] = {}
     for event in journal.events:
         histories.setdefault(event.task_id, []).append(event.kind)
@@ -780,6 +909,221 @@ def test_all_seven_exact_passes_derive_complete_campaign(tmp_path: Path) -> None
     for candidate in journal.path.rglob("*"):
         mode = stat.S_IMODE(candidate.lstat().st_mode)
         assert mode == (0o700 if candidate.is_dir() else 0o600)
+    journal.close()
+
+
+def test_dispatch_uses_lexically_captured_review_authority_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert not hasattr(scheduler_module, "_requires_model_review_pre_dispatch_authority")
+    blind_journal = create_scheduler_journal(
+        tmp_path / "captured-blind",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    _complete_pass(blind_journal, SchedulerPassKind.ORIENTATION)
+    blind_plan = blind_journal.seal_pass_plan(
+        _plan(
+            blind_journal,
+            SchedulerPassKind.BLIND_SHARD_REVIEW,
+            task_count=len(SHARDS),
+        )
+    )
+    blind_task = blind_plan.tasks[0]
+    rendered_sha256 = "1" * 64
+    blind_journal.activate_task(
+        blind_task.task_id,
+        actual_input_sha256=rendered_sha256,
+        system_prompt_sha256=blind_task.system_prompt_sha256,
+        user_prompt_sha256=rendered_sha256,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=blind_task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(blind_plan, blind_task)
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "_requires_model_review_pre_dispatch_authority",
+        lambda *_args: False,
+        raising=False,
+    )
+    blind_dispatch = blind_journal.mark_dispatched(blind_task.task_id)
+    blind_bindings = tuple(
+        require_model_review_pre_dispatch_authorization(authorization)
+        for authorization in blind_journal.model_review_pre_dispatch_authorizations
+    )
+    assert len(blind_bindings) == 1
+    assert (
+        blind_bindings[0].task_id,
+        blind_bindings[0].request_id,
+        blind_bindings[0].dispatched_event_sha256,
+    ) == (
+        blind_task.task_id,
+        blind_task.logical_request_id,
+        blind_dispatch.event_sha256,
+    )
+    blind_journal.close()
+
+    orientation_journal = create_scheduler_journal(
+        tmp_path / "captured-orientation",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    orientation_plan = orientation_journal.seal_pass_plan(
+        _plan(orientation_journal, SchedulerPassKind.ORIENTATION)
+    )
+    orientation_task = orientation_plan.tasks[0]
+    orientation_journal.activate_task(
+        orientation_task.task_id,
+        actual_input_sha256=rendered_sha256,
+        system_prompt_sha256=orientation_task.system_prompt_sha256,
+        user_prompt_sha256=rendered_sha256,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=orientation_task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(
+                orientation_plan,
+                orientation_task,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "_requires_model_review_pre_dispatch_authority",
+        lambda *_args: True,
+    )
+    orientation_journal.mark_dispatched(orientation_task.task_id)
+    assert orientation_journal.model_review_pre_dispatch_authorizations == ()
+    orientation_journal.close()
+
+
+def test_mutable_authority_type_aliases_cannot_replace_ordinary_dispatch_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExplodingBinding:
+        def __init__(self, **_kwargs: object) -> None:
+            pytest.fail("mutable binding alias constructed during ordinary dispatch")
+
+    class ExplodingAuthorization(tuple[object, ...]):
+        pass
+
+    journal = create_scheduler_journal(
+        tmp_path / "captured-authority-types",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    _complete_pass(journal, SchedulerPassKind.ORIENTATION)
+    plan = journal.seal_pass_plan(
+        _plan(
+            journal,
+            SchedulerPassKind.BLIND_SHARD_REVIEW,
+            task_count=len(SHARDS),
+        )
+    )
+    task = plan.tasks[0]
+    rendered_sha256 = "1" * 64
+    provider_prompt_sha256 = "2" * 64
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=rendered_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256=rendered_sha256,
+        provider_prompt_sha256=provider_prompt_sha256,
+        response_schema_sha256=task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerModelReviewPreDispatchBinding",
+        ExplodingBinding,
+    )
+    monkeypatch.setattr(
+        scheduler_module,
+        "SchedulerModelReviewPreDispatchAuthorization",
+        ExplodingAuthorization,
+    )
+
+    dispatched = journal.mark_dispatched(task.task_id)
+    authorizations = journal.model_review_pre_dispatch_authorizations
+    assert len(authorizations) == 1
+    authorization = authorizations[0]
+    assert type(authorization) is ExactModelReviewPreDispatchAuthorization
+    binding = require_model_review_pre_dispatch_authorization(authorization)
+    assert type(binding) is ExactModelReviewPreDispatchBinding
+    assert task.requested_model is not None
+    assert task.root_lineage is not None
+    assert task.model_surface_review_request_manifest_sha256 is not None
+    assert task.response_schema_sha256 is not None
+    assert binding == ExactModelReviewPreDispatchBinding(
+        request_id=task.logical_request_id,
+        task_id=task.task_id,
+        review_role=task.role,
+        requested_model=task.requested_model,
+        root_lineage=task.root_lineage,
+        requested_surface_manifest_sha256=(task.model_surface_review_request_manifest_sha256),
+        rendered_context_sha256=rendered_sha256,
+        provider_prompt_sha256=provider_prompt_sha256,
+        response_schema_sha256=task.response_schema_sha256,
+        task_plan_sha256=task.task_plan_sha256,
+        activation_sha256=activation.activation_sha256,
+        dispatched_event_sha256=dispatched.event_sha256,
+    )
+    journal.close()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "mutated_value"),
+    (
+        ("pass_kind", SchedulerPassKind.ORIENTATION),
+        ("role", "configuration"),
+    ),
+)
+def test_mutated_review_eligibility_cannot_append_a_dispatch(
+    tmp_path: Path,
+    field_name: str,
+    mutated_value: object,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / f"mutated-eligibility-{field_name}",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    _complete_pass(journal, SchedulerPassKind.ORIENTATION)
+    plan = journal.seal_pass_plan(
+        _plan(
+            journal,
+            SchedulerPassKind.BLIND_SHARD_REVIEW,
+            task_count=len(SHARDS),
+        )
+    )
+    task = plan.tasks[0]
+    rendered_sha256 = "1" * 64
+    journal.activate_task(
+        task.task_id,
+        actual_input_sha256=rendered_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256=rendered_sha256,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+    )
+    event_count = len(journal.events)
+    original_value = getattr(task, field_name)
+    object.__setattr__(task, field_name, mutated_value)
+    try:
+        with pytest.raises(ValueError, match="eligibility state is not canonically sealed"):
+            journal.mark_dispatched(task.task_id)
+    finally:
+        object.__setattr__(task, field_name, original_value)
+    assert len(journal.events) == event_count
+    assert journal.model_review_pre_dispatch_authorizations == ()
     journal.close()
 
 
@@ -1201,11 +1545,16 @@ def test_host_output_publication_crash_recovers_exact_success_idempotently(
         expected_shard_inventory=_inventory(),
         expected_journal_evidence=predecessor,
     )
-    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED
-    assert resumed.task_results[0].terminal_evidence_sha256 == scheduler_canonical_sha256(
+    recovered_result = next(
+        result for result in resumed.task_results if result.task_id == task.task_id
+    )
+    recovered_output = next(output for output in resumed.outputs if output.task_id == task.task_id)
+    assert recovered_result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    assert recovered_output.output_sha256 == scheduler_canonical_sha256(payload)
+    assert recovered_result.terminal_evidence_sha256 == scheduler_canonical_sha256(
         {
             "classification": "host_computation_completed",
-            "output_sha256": scheduler_canonical_sha256(payload),
+            "output_sha256": recovered_output.output_sha256,
         }
     )
     recovered = resumed.journal_evidence
@@ -3586,6 +3935,15 @@ def _framed_candidate_review_fixture(path: Path) -> dict[str, Any]:
             root_lineage=selected_root_lineage,
             system_prompt_sha256="a" * 64,
             response_schema_sha256=wire_schema_sha256,
+            model_surface_review_request_manifest_sha256=(
+                scheduler_test_model_surface_review_request_manifest_sha256(
+                    manifest=journal.manifest,
+                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    scope=SchedulerScope.single_shard(shard_id),
+                    task_key=f"framed-source-audit-{shard_id}",
+                    role="source_audit",
+                )
+            ),
         )
         for shard_id in SHARDS
     )
@@ -3594,7 +3952,7 @@ def _framed_candidate_review_fixture(path: Path) -> dict[str, Any]:
     plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, tasks)
     activation = journal.activate_task(
         task.task_id,
-        actual_input_sha256=task.input_sha256,
+        actual_input_sha256="1" * 64,
         system_prompt_sha256=task.system_prompt_sha256,
         user_prompt_sha256="1" * 64,
         provider_prompt_sha256="2" * 64,
@@ -3776,6 +4134,7 @@ def test_new_pipeline_candidate_review_task_rejects_legacy_batch_wire_schema(
                 SchedulerPassKind.BLIND_SHARD_REVIEW,
                 "source_audit",
             ),
+            model_surface_review_request_manifest_sha256="f" * 64,
         )
     runtime.close()
 
@@ -6962,6 +7321,259 @@ def test_concurrent_live_custody_is_rejected_without_releasing_owner(tmp_path: P
     owner.close()
 
 
+def test_exact_journal_owner_rejects_copy_pickle_and_object_new_clone(tmp_path: Path) -> None:
+    path = tmp_path / "journal-owner"
+    owner = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+
+    with pytest.raises(TypeError, match="cannot be copied"):
+        copy(owner)
+    with pytest.raises(TypeError, match="cannot be copied"):
+        deepcopy(owner)
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(owner)
+
+    clone = object.__new__(SchedulerJournal)
+    vars(clone).update(vars(owner))
+    before = _journal_private_file_snapshot(path)
+    with pytest.raises(ValueError, match="exact process-local custody owner"):
+        clone.close()
+    with pytest.raises(ValueError, match="exact process-local custody owner"):
+        clone.seal_pass_plan(_plan(owner, SchedulerPassKind.ORIENTATION))
+    assert _journal_private_file_snapshot(path) == before
+
+    plan = owner.seal_pass_plan(_plan(owner, SchedulerPassKind.ORIENTATION))
+    assert owner.resumable_task_ids == (plan.tasks[0].task_id,)
+    owner.close()
+    owner.close()
+
+
+def test_scheduler_journal_direct_constructor_and_generic_permit_are_absent() -> None:
+    assert not hasattr(scheduler_module, "_reserve_live_custody")
+    assert not hasattr(scheduler_module, "_bind_live_journal_owner")
+    assert not hasattr(scheduler_module, "_admit_scheduler_journal_opening")
+
+    with pytest.raises(TypeError, match="authenticated openers"):
+        SchedulerJournal()
+    raw = object.__new__(SchedulerJournal)
+    with pytest.raises(TypeError, match="authenticated openers"):
+        SchedulerJournal.__init__(raw)
+
+
+def test_opening_and_live_custody_reject_unlocked_exact_lock_file_descriptor(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unlocked-lock"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    metadata = scheduler_module._assert_exact_live_journal_owner(journal)
+    unlocked = os.open(
+        ".scheduler.lock",
+        os.O_RDWR | getattr(os, "O_CLOEXEC", 0),
+        dir_fd=metadata.root_descriptor,
+    )
+    try:
+        with pytest.raises(ValueError, match="exact owner"):
+            scheduler_module._assert_opening_descriptor_custody(
+                replace(metadata, lock_descriptor=unlocked)
+            )
+    finally:
+        os.close(unlocked)
+        journal.close()
+
+    unlocked_path = tmp_path / "unlock-after-open"
+    unlocked_owner = create_scheduler_journal(
+        unlocked_path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = _plan(unlocked_owner, SchedulerPassKind.ORIENTATION)
+    live_metadata = scheduler_module._assert_exact_live_journal_owner(unlocked_owner)
+    before = _journal_private_file_snapshot(unlocked_path)
+    fcntl.flock(live_metadata.lock_descriptor, fcntl.LOCK_UN)
+    with pytest.raises(ValueError, match="lock descriptor is not held"):
+        unlocked_owner.seal_pass_plan(plan)
+    assert _journal_private_file_snapshot(unlocked_path) == before
+    unlocked_owner.close()
+
+
+def test_verification_opening_mode_cannot_be_flipped_writable(tmp_path: Path) -> None:
+    path = tmp_path / "verification-mode"
+    created = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    created.close()
+    verifier = open_scheduler_journal_for_verification(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    plan = _plan(verifier, SchedulerPassKind.ORIENTATION)
+    before = _journal_private_file_snapshot(path)
+    object.__setattr__(verifier, "_read_only", False)
+    with pytest.raises(ValueError, match="instance fields differ from frozen custody"):
+        verifier.seal_pass_plan(plan)
+    assert _journal_private_file_snapshot(path) == before
+    verifier.close()
+
+
+def test_copied_root_cannot_construct_or_rewrap_a_live_owner(tmp_path: Path) -> None:
+    source = tmp_path / "source-journal"
+    copied = tmp_path / "copied-journal"
+    created = create_scheduler_journal(source, bindings=_bindings(), shard_inventory=_inventory())
+    created.close()
+    shutil.copytree(source, copied)
+
+    with pytest.raises(TypeError, match="authenticated openers"):
+        SchedulerJournal(path=copied)
+
+    verifier = open_scheduler_journal_for_verification(
+        copied,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    clone = object.__new__(SchedulerJournal)
+    vars(clone).update(vars(verifier))
+    before = _journal_private_file_snapshot(copied)
+    with pytest.raises(ValueError, match="exact process-local custody owner"):
+        clone.close()
+    assert _journal_private_file_snapshot(copied) == before
+    verifier.close()
+
+
+def test_exact_journal_close_is_thread_safe_and_idempotent(tmp_path: Path) -> None:
+    path = tmp_path / "thread-close"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    barrier = threading.Barrier(3)
+    failures: list[BaseException] = []
+
+    def close_once() -> None:
+        barrier.wait()
+        try:
+            journal.close()
+        except BaseException as exc:  # pragma: no cover - asserted by the parent thread
+            failures.append(exc)
+
+    threads = [threading.Thread(target=close_once) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert failures == []
+    journal.close()
+
+    reopened = open_scheduler_journal_for_verification(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+    )
+    reopened.close()
+
+
+def test_custody_metadata_and_cleanup_claim_are_detached_and_exact(tmp_path: Path) -> None:
+    path = tmp_path / "detached-custody"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    metadata = scheduler_module._assert_exact_live_journal_owner(journal)
+    object.__setattr__(metadata, "root_descriptor", -1)
+    object.__setattr__(metadata, "read_only", True)
+
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    assert journal.resumable_task_ids == (plan.tasks[0].task_id,)
+
+    claim = scheduler_module._claim_live_journal_close(journal)
+    assert claim is not None
+    exact_token = claim.token
+    object.__setattr__(claim, "token", object())
+    with pytest.raises(ValueError, match="cleanup claim is absent or forged"):
+        scheduler_module._resolve_journal_cleanup(claim)
+    object.__setattr__(claim, "token", exact_token)
+    scheduler_module._cleanup_journal_claim(claim)
+    journal.close()
+
+
+def test_close_cleanup_uncertainty_is_orphaned_and_never_reclaimed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "orphaned-close"
+    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    original_flock = fcntl.flock
+    raised = False
+
+    def unlock_then_report_uncertainty(descriptor: int, operation: int) -> None:
+        nonlocal raised
+        original_flock(descriptor, operation)
+        if operation == fcntl.LOCK_UN and not raised:
+            raised = True
+            raise OSError("synthetic post-unlock uncertainty")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fcntl, "flock", unlock_then_report_uncertainty)
+        with pytest.raises(ValueError, match="cleanup failed closed"):
+            journal.close()
+
+    with pytest.raises(ValueError, match="cleanup is orphaned"):
+        journal.close()
+    with pytest.raises(ValueError, match="live in-process custody"):
+        open_scheduler_journal_for_verification(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
+
+
+def test_fork_cannot_close_or_rereserve_inherited_root_but_can_create_fresh_root(
+    tmp_path: Path,
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("process-local fork custody requires os.fork")
+    path = tmp_path / "parent-journal"
+    fresh_path = tmp_path / "child-fresh-journal"
+    owner = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    read_descriptor, write_descriptor = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:  # pragma: no cover - asserted through the parent-side pipe
+        os.close(read_descriptor)
+        outcomes: list[str] = []
+        try:
+            owner.close()
+        except ValueError:
+            outcomes.append("close-rejected")
+        try:
+            resume_scheduler_journal(
+                path,
+                expected_bindings=_bindings(),
+                expected_shard_inventory=_inventory(),
+            )
+        except ValueError:
+            outcomes.append("reserve-rejected")
+        try:
+            fresh = create_scheduler_journal(
+                fresh_path,
+                bindings=_bindings(),
+                shard_inventory=_inventory(),
+            )
+            fresh.close()
+        except BaseException:
+            outcomes.append("fresh-failed")
+        else:
+            outcomes.append("fresh-created")
+        os.write(write_descriptor, ",".join(outcomes).encode())
+        os.close(write_descriptor)
+        os._exit(0)
+    os.close(write_descriptor)
+    try:
+        result = os.read(read_descriptor, 128)
+    finally:
+        os.close(read_descriptor)
+    waited_pid, status = os.waitpid(child_pid, 0)
+    assert waited_pid == child_pid
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert result == b"close-rejected,reserve-rejected,fresh-created"
+
+    plan = owner.seal_pass_plan(_plan(owner, SchedulerPassKind.ORIENTATION))
+    assert owner.resumable_task_ids == (plan.tasks[0].task_id,)
+    owner.close()
+
+
 @pytest.mark.parametrize(
     "changed",
     [
@@ -7064,19 +7676,27 @@ def test_resume_root_swap_after_open_cannot_redirect_custody(
     path = tmp_path / "journal"
     journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
     journal.close()
-    original = scheduler_module._acquire_custody_lock
+    original = scheduler_module._assert_root_path_identity
     swapped = False
 
-    def swap_before_lock(root_descriptor: int, *, create: bool) -> int:
+    def swap_before_identity_check(
+        opened_path: Path,
+        root_descriptor: int,
+        expected: tuple[int, int, int],
+    ) -> None:
         nonlocal swapped
         if not swapped:
             retained = tmp_path / "retained-journal"
             path.rename(retained)
             shutil.copytree(retained, path)
             swapped = True
-        return original(root_descriptor, create=create)
+        original(opened_path, root_descriptor, expected)
 
-    monkeypatch.setattr(scheduler_module, "_acquire_custody_lock", swap_before_lock)
+    monkeypatch.setattr(
+        scheduler_module,
+        "_assert_root_path_identity",
+        swap_before_identity_check,
+    )
     with pytest.raises(ValueError, match="root changed during live custody"):
         resume_scheduler_journal(
             path,
@@ -7158,7 +7778,10 @@ def test_live_root_and_child_swaps_never_receive_descriptor_held_writes(
     monkeypatch.setattr(scheduler_module, "_write_model", swap_before_write)
     with pytest.raises(
         ValueError,
-        match=r"root changed|directories must remain|unmanifested root",
+        match=(
+            r"root changed|directories must remain|unmanifested root|"
+            r"opening control-directory descriptor changed"
+        ),
     ):
         journal.seal_pass_plan(plan)
     assert swapped

@@ -103,6 +103,60 @@ class PriorAuditConfig(ConfigModel):
         return self
 
 
+class ActorModelConfig(ConfigModel):
+    """Bounded repository-relative operator-authored actor-model input."""
+
+    path: str | None = None
+    required: bool = False
+    max_bytes: int = Field(default=1_000_000, ge=1_024, le=1_000_000)
+    expected_subject_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9._:-]{0,159}$",
+    )
+    expected_model_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_source_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @field_validator("path")
+    @classmethod
+    def path_is_repository_relative_json(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().replace("\\", "/")
+        if (
+            not value
+            or value.startswith(("/", "-", ".env"))
+            or re.match(r"^[A-Za-z]:/", value)
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or not value.lower().endswith(".json")
+        ):
+            raise ValueError("actor-model path must be a safe repository-relative JSON path")
+        return value
+
+    @model_validator(mode="after")
+    def configured_input_has_operator_pins(self) -> ActorModelConfig:
+        pins = (
+            self.expected_subject_id,
+            self.expected_model_sha256,
+            self.expected_source_sha256,
+        )
+        if self.path is None:
+            if self.required or any(pin is not None for pin in pins):
+                raise ValueError("required or pinned actor model requires a configured path")
+            return self
+        if self.expected_subject_id is None or self.expected_model_sha256 is None:
+            raise ValueError(
+                "configured actor model requires operator-pinned subject and semantic hash"
+            )
+        return self
+
+
 class PrivacyConfig(ConfigModel):
     profile: PrivacyProfile = PrivacyProfile.STRICT_ZDR
     allow_code_egress: bool = False
@@ -1544,6 +1598,7 @@ class AuditConfig(ConfigModel):
     language_profile: LanguageCapabilityProfile = LanguageCapabilityProfile.SOLIDITY_EVM
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     prior_audit: PriorAuditConfig = Field(default_factory=PriorAuditConfig)
+    actor_model: ActorModelConfig = Field(default_factory=ActorModelConfig)
     repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
@@ -1764,6 +1819,11 @@ class AuditConfig(ConfigModel):
 
 
 _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
+    "actor_model.expected_model_sha256": (str,),
+    "actor_model.expected_source_sha256": (str,),
+    "actor_model.expected_subject_id": (str,),
+    "actor_model.path": (str,),
+    "actor_model.required": (bool,),
     "execution.budget_usd": (float,),
     "execution.concurrency": (int,),
     "execution.cost_ledger_path": (str,),
@@ -1960,8 +2020,14 @@ class LoadedAuditConfig:
 def canonical_audit_config_json(config: AuditConfig) -> str:
     """Serialize a complete AuditConfig using the exact stable-hash encoding."""
 
+    payload = config.model_dump(mode="json", by_alias=True)
+    if config.actor_model == ActorModelConfig():
+        # Preserve pre-actor-model configuration identities when the optional
+        # operator input is wholly absent. Any configured actor policy remains
+        # part of the exact run binding.
+        payload.pop("actor_model", None)
     return json.dumps(
-        config.model_dump(mode="json", by_alias=True),
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     )

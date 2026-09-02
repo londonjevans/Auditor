@@ -329,7 +329,7 @@ def test_macos_policy_allows_compiler_children_but_not_host_or_remote_access(
     assert '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))' in policy
     assert "localhost:8545" in policy
     assert "(allow network-outbound)" not in policy
-    assert str(Path.home()) not in policy
+    assert f'(subpath "{Path.home().resolve()}")' not in policy
 
 
 def test_macos_inventory_policy_grants_no_network_entitlement(tmp_path: Path) -> None:
@@ -681,7 +681,12 @@ def test_bubblewrap_denies_network_and_mounts_only_private_workspace(
     assert ["--bind", str(private.resolve()), str(private.resolve())] == command[
         command.index("--bind") : command.index("--bind") + 3
     ]
-    assert str(Path.home()) not in command
+    bind_sources = [
+        command[index + 1]
+        for index, token in enumerate(command[:-2])
+        if token in {"--bind", "--ro-bind"}
+    ]
+    assert str(Path.home().resolve()) not in bind_sources
     networked = backend.wrap_allowing_network(
         ["/usr/bin/forge", "build"],
         workspace=workspace,

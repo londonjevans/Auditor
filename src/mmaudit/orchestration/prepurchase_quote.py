@@ -76,6 +76,7 @@ class _PlannedRoute:
 
 _EARLY_TASK_CLASS_BY_VALUE = {
     "orientation": PrepurchaseQuoteTaskClass.ORIENTATION,
+    "retrieval_planning": PrepurchaseQuoteTaskClass.RETRIEVAL_PLANNING,
     "compact_coverage": PrepurchaseQuoteTaskClass.COMPACT_COVERAGE,
     "source_audit": PrepurchaseQuoteTaskClass.SOURCE_AUDIT,
     "whole_protocol": PrepurchaseQuoteTaskClass.WHOLE_PROTOCOL,

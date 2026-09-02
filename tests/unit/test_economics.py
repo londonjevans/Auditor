@@ -17,6 +17,7 @@ from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.solidity.economics import (
     ECONOMIC_TEMPLATE_REGISTRY,
+    detected_protocol_profiles,
     plan_economic_simulations,
 )
 from mmaudit.solidity.graphs import build_solidity_graphs
@@ -53,6 +54,12 @@ def test_protocol_facts_select_source_linked_economic_plans(
     build = build_solidity_index(discovery, projects, [])
     graphs = build_solidity_graphs(discovery, build)
     invariants = discover_invariants(discovery, build.index, graphs, config.invariants)
+    assert invariants.protocol_profile_assessment is not None
+    expected_profiles = {
+        profile.value for profile in invariants.protocol_profile_assessment.detected_profiles
+    }
+    invariants.protocol_profiles = sorted({*invariants.protocol_profiles, "bridge"})
+    assert detected_protocol_profiles(invariants) == expected_profiles
     plans = plan_economic_simulations(invariants, graphs)
 
     selected = {plan.kind for plan in plans}

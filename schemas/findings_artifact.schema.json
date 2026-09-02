@@ -1,5 +1,950 @@
 {
   "$defs": {
+    "ActorAssessmentDisposition": {
+      "enum": [
+        "current_role",
+        "not_applicable_nonprivileged",
+        "ordinary_legitimate_behavior",
+        "aligned_action_justified",
+        "aligned_action_unjustified",
+        "admitted_role_unfilled",
+        "role_unmodeled",
+        "context_unverified",
+        "finding_actor_unstated",
+        "actor_model_missing",
+        "actor_model_invalid",
+        "actor_model_future",
+        "actor_model_stale"
+      ],
+      "title": "ActorAssessmentDisposition",
+      "type": "string"
+    },
+    "ActorCapitalMateriality": {
+      "enum": [
+        "material",
+        "immaterial",
+        "unknown"
+      ],
+      "title": "ActorCapitalMateriality",
+      "type": "string"
+    },
+    "ActorCapitalPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_description": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Amount Description",
+          "type": "string"
+        },
+        "amount_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,35})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amount Exact"
+        },
+        "amount_unit": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Amount Unit"
+        },
+        "asset_or_exposure": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Asset Or Exposure",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "loss_absorption_order": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Loss Absorption Order"
+        },
+        "materiality": {
+          "$ref": "#/$defs/ActorCapitalMateriality"
+        },
+        "position_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Position Id",
+          "type": "string"
+        },
+        "seniority": {
+          "$ref": "#/$defs/ActorCapitalSeniority"
+        },
+        "waterfall_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Waterfall Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "position_id",
+        "waterfall_id",
+        "description",
+        "asset_or_exposure",
+        "amount_description",
+        "materiality",
+        "seniority"
+      ],
+      "title": "ActorCapitalPosition",
+      "type": "object"
+    },
+    "ActorCapitalSeniority": {
+      "enum": [
+        "first_loss",
+        "junior",
+        "pari_passu",
+        "senior",
+        "none",
+        "unknown"
+      ],
+      "title": "ActorCapitalSeniority",
+      "type": "string"
+    },
+    "ActorCodeRoleEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "node_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Node Id",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "provenance": {
+          "enum": [
+            "compiler",
+            "fallback",
+            "static_tool",
+            "heuristic",
+            "model_suggested"
+          ],
+          "title": "Provenance",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "transformation": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "label",
+        "path",
+        "start_line",
+        "end_line",
+        "source_sha256",
+        "provenance",
+        "confidence",
+        "transformation",
+        "evidence_sha256"
+      ],
+      "title": "ActorCodeRoleEvidence",
+      "type": "object"
+    },
+    "ActorConstraintEffect": {
+      "enum": [
+        "reduces_opportunistic_execution",
+        "limits_action_frequency",
+        "delays_action",
+        "requires_multiparty_approval",
+        "other"
+      ],
+      "title": "ActorConstraintEffect",
+      "type": "string"
+    },
+    "ActorEconomicExposure": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ActorExposureState"
+        }
+      },
+      "required": [
+        "state",
+        "description"
+      ],
+      "title": "ActorEconomicExposure",
+      "type": "object"
+    },
+    "ActorEconomicExposureKind": {
+      "enum": [
+        "fee_revenue",
+        "protocol_failure_loss"
+      ],
+      "title": "ActorEconomicExposureKind",
+      "type": "string"
+    },
+    "ActorEvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "content_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Sha256"
+        },
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "adr",
+            "governance_record",
+            "operating_record",
+            "operator_assertion"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "kind",
+        "description"
+      ],
+      "title": "ActorEvidenceReference",
+      "type": "object"
+    },
+    "ActorExposureState": {
+      "enum": [
+        "present",
+        "none",
+        "unknown"
+      ],
+      "title": "ActorExposureState",
+      "type": "string"
+    },
+    "ActorFindingAssessmentBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "assessment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Sha256",
+          "type": "string"
+        },
+        "baseline_finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Finding Sha256",
+          "type": "string"
+        },
+        "finding_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "baseline_finding_sha256",
+        "assessment_sha256"
+      ],
+      "title": "ActorFindingAssessmentBinding",
+      "type": "object"
+    },
+    "ActorFindingBaseline": {
+      "additionalProperties": false,
+      "description": "Exact pre-calibration finding retained before actor evidence changes severity.",
+      "properties": {
+        "finding": {
+          "$ref": "#/$defs/Finding"
+        },
+        "finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Finding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding",
+        "finding_sha256"
+      ],
+      "title": "ActorFindingBaseline",
+      "type": "object"
+    },
+    "ActorGovernanceConflictKind": {
+      "enum": [
+        "code_permits_admitted_unfilled_role",
+        "code_role_absent_from_actor_model",
+        "actor_role_binding_absent_from_code",
+        "graph_evidence_incomplete",
+        "finding_references_unmodeled_role",
+        "finding_references_unmodeled_party",
+        "finding_harmed_party_unresolved",
+        "finding_references_unknown_permission",
+        "finding_references_unknown_constraint",
+        "finding_references_unsupported_constraint",
+        "finding_references_unknown_stated_interest",
+        "finding_references_unknown_concentrated_role",
+        "finding_references_unsupported_economic_exposure",
+        "finding_references_unknown_plausibility_evidence",
+        "finding_depends_on_admitted_unfilled_role"
+      ],
+      "title": "ActorGovernanceConflictKind",
+      "type": "string"
+    },
+    "ActorGovernanceFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_model_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Model Sha256"
+        },
+        "code_evidence": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorCodeRoleEvidence"
+          },
+          "maxItems": 1000,
+          "title": "Code Evidence",
+          "type": "array"
+        },
+        "conflict_id": {
+          "pattern": "^actor-governance:[0-9a-f]{64}$",
+          "title": "Conflict Id",
+          "type": "string"
+        },
+        "detail": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Finding Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorGovernanceConflictKind"
+        },
+        "role_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Role Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_finding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Source Finding Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "conflict_id",
+        "kind",
+        "role_id",
+        "detail",
+        "finding_sha256"
+      ],
+      "title": "ActorGovernanceFinding",
+      "type": "object"
+    },
+    "ActorHarmedPartyDisposition": {
+      "enum": [
+        "identified",
+        "not_applicable",
+        "unresolved"
+      ],
+      "title": "ActorHarmedPartyDisposition",
+      "type": "string"
+    },
+    "ActorLikelihoodAdjustment": {
+      "enum": [
+        "increased",
+        "decreased",
+        "unchanged",
+        "unassessed"
+      ],
+      "title": "ActorLikelihoodAdjustment",
+      "type": "string"
+    },
+    "ActorModel": {
+      "additionalProperties": false,
+      "description": "Versioned operator assertion about privileged actors and economic incentives.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "authored_at": {
+          "format": "date-time",
+          "title": "Authored At",
+          "type": "string"
+        },
+        "authorship": {
+          "const": "operator_authored",
+          "title": "Authorship",
+          "type": "string"
+        },
+        "evidence_references": {
+          "items": {
+            "$ref": "#/$defs/ActorEvidenceReference"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Evidence References",
+          "type": "array"
+        },
+        "parties": {
+          "items": {
+            "$ref": "#/$defs/ActorParty"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Parties",
+          "type": "array"
+        },
+        "roles": {
+          "items": {
+            "$ref": "#/$defs/PrivilegedActorRole"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Roles",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "subject_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "subject_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Subject Name",
+          "type": "string"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "title": "Valid From",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "authorship",
+        "subject_id",
+        "subject_name",
+        "authored_at",
+        "valid_from",
+        "valid_until",
+        "evidence_references",
+        "parties",
+        "roles",
+        "artifact_sha256"
+      ],
+      "title": "ActorModel",
+      "type": "object"
+    },
+    "ActorModelApplicability": {
+      "description": "Whether a finding's mechanism depends on privileged actor conduct.",
+      "enum": [
+        "privileged_actor_required",
+        "no_privileged_actor_required",
+        "unstated"
+      ],
+      "title": "ActorModelApplicability",
+      "type": "string"
+    },
+    "ActorModelBaselineArtifact": {
+      "additionalProperties": false,
+      "description": "Canonical upstream finding inventory supplied to actor calibration.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorFindingBaseline"
+          },
+          "maxItems": 100000,
+          "title": "Findings",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_sha256"
+      ],
+      "title": "ActorModelBaselineArtifact",
+      "type": "object"
+    },
+    "ActorModelEvaluation": {
+      "additionalProperties": false,
+      "description": "Run-level custody proving every reported severity received an actor assessment.",
+      "properties": {
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evaluation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evaluation Sha256",
+          "type": "string"
+        },
+        "finding_assessments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorFindingAssessmentBinding"
+          },
+          "maxItems": 100000,
+          "title": "Finding Assessments",
+          "type": "array"
+        },
+        "governance_findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorGovernanceFinding"
+          },
+          "maxItems": 100000,
+          "title": "Governance Findings",
+          "type": "array"
+        },
+        "input_evidence": {
+          "$ref": "#/$defs/ActorModelInputEvidence"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluated_at",
+        "input_evidence",
+        "evaluation_sha256"
+      ],
+      "title": "ActorModelEvaluation",
+      "type": "object"
+    },
+    "ActorModelInputEvidence": {
+      "additionalProperties": false,
+      "description": "Run-start evaluation of one configured operator actor-model input.",
+      "properties": {
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "configured_path": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Configured Path"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "rejected_source_bytes": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejected Source Bytes"
+        },
+        "rejected_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejected Source Sha256"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorModelSourceEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "state": {
+          "$ref": "#/$defs/ActorModelInputState"
+        }
+      },
+      "required": [
+        "evaluated_at",
+        "state",
+        "configured",
+        "configured_path",
+        "evidence_sha256"
+      ],
+      "title": "ActorModelInputEvidence",
+      "type": "object"
+    },
+    "ActorModelInputState": {
+      "enum": [
+        "current",
+        "missing",
+        "invalid",
+        "future",
+        "stale"
+      ],
+      "title": "ActorModelInputState",
+      "type": "string"
+    },
+    "ActorModelSourceEvidence": {
+      "additionalProperties": false,
+      "description": "Raw-file identity plus the exact self-hashed semantic actor model.",
+      "properties": {
+        "actor_model": {
+          "$ref": "#/$defs/ActorModel"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_bytes": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "source_bytes",
+        "actor_model",
+        "evidence_sha256"
+      ],
+      "title": "ActorModelSourceEvidence",
+      "type": "object"
+    },
+    "ActorOperationalConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "applies_to_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Applies To Permissions",
+          "type": "array"
+        },
+        "constraint_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Constraint Id",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "maximum": 31536000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "effect": {
+          "$ref": "#/$defs/ActorConstraintEffect"
+        },
+        "required_approver_role_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Required Approver Role Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "constraint_id",
+        "effect",
+        "description",
+        "applies_to_permissions",
+        "required_approver_role_ids"
+      ],
+      "title": "ActorOperationalConstraint",
+      "type": "object"
+    },
+    "ActorParty": {
+      "additionalProperties": false,
+      "properties": {
+        "capital_positions": {
+          "items": {
+            "$ref": "#/$defs/ActorCapitalPosition"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Capital Positions",
+          "type": "array"
+        },
+        "display_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "evidence_reference_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Reference Ids",
+          "type": "array"
+        },
+        "fee_revenue_exposure": {
+          "$ref": "#/$defs/ActorEconomicExposure"
+        },
+        "party_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Party Id",
+          "type": "string"
+        },
+        "protocol_failure_loss": {
+          "$ref": "#/$defs/ActorEconomicExposure"
+        },
+        "stated_interests": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Stated Interests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "party_id",
+        "display_name",
+        "capital_positions",
+        "fee_revenue_exposure",
+        "protocol_failure_loss",
+        "stated_interests",
+        "evidence_reference_ids"
+      ],
+      "title": "ActorParty",
+      "type": "object"
+    },
+    "ActorRemediationFocus": {
+      "description": "Host-derived remediation framing produced from the actor disposition.",
+      "enum": [
+        "reachable_state_transition",
+        "legitimate_state_transition",
+        "role_activation_control",
+        "economic_plausibility",
+        "actor_context_verification"
+      ],
+      "title": "ActorRemediationFocus",
+      "type": "string"
+    },
+    "ActorRoleOccupancy": {
+      "enum": [
+        "currently_held",
+        "admitted_unfilled"
+      ],
+      "title": "ActorRoleOccupancy",
+      "type": "string"
+    },
+    "ActorSeverity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "ActorSeverity",
+      "type": "string"
+    },
     "AnalysisState": {
       "description": "Evidence-aware state used by engines and coverage reports.",
       "enum": [
@@ -37,6 +982,143 @@
       ],
       "title": "AuditRunStatus",
       "type": "string"
+    },
+    "CandidateActorContext": {
+      "additionalProperties": false,
+      "description": "One finding's explicit actor assumptions; never an assertion of role ownership.",
+      "properties": {
+        "action_against_stated_interest": {
+          "title": "Action Against Stated Interest",
+          "type": "boolean"
+        },
+        "harmed_party_disposition": {
+          "$ref": "#/$defs/ActorHarmedPartyDisposition"
+        },
+        "harmed_party_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harmed Party Id"
+        },
+        "misconduct_required": {
+          "title": "Misconduct Required",
+          "type": "boolean"
+        },
+        "ordinary_legitimate_behavior": {
+          "title": "Ordinary Legitimate Behavior",
+          "type": "boolean"
+        },
+        "permission": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission"
+        },
+        "plausibility_evidence_reference_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Plausibility Evidence Reference Ids",
+          "type": "array"
+        },
+        "plausibility_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plausibility Rationale"
+        },
+        "privileged_action_required": {
+          "title": "Privileged Action Required",
+          "type": "boolean"
+        },
+        "relevant_constraint_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Relevant Constraint Ids",
+          "type": "array"
+        },
+        "relevant_economic_exposures": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorEconomicExposureKind"
+          },
+          "maxItems": 2,
+          "title": "Relevant Economic Exposures",
+          "type": "array"
+        },
+        "required_concentrated_role_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Required Concentrated Role Ids",
+          "type": "array"
+        },
+        "role_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Role Id",
+          "type": "string"
+        },
+        "severity_basis": {
+          "const": "code_mechanism_only",
+          "title": "Severity Basis",
+          "type": "string"
+        },
+        "stated_interest": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stated Interest"
+        }
+      },
+      "required": [
+        "role_id",
+        "severity_basis",
+        "harmed_party_disposition",
+        "privileged_action_required",
+        "misconduct_required",
+        "ordinary_legitimate_behavior",
+        "action_against_stated_interest"
+      ],
+      "title": "CandidateActorContext",
+      "type": "object"
     },
     "CandidateConsensusDecision": {
       "additionalProperties": false,
@@ -209,6 +1291,21 @@
       "additionalProperties": false,
       "description": "Finding proposed by an analysis role before independent verification.",
       "properties": {
+        "actor_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateActorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actor_model_applicability": {
+          "$ref": "#/$defs/ActorModelApplicability",
+          "default": "unstated"
+        },
         "attack_path": {
           "items": {
             "type": "string"
@@ -1023,6 +2120,32 @@
     "Finding": {
       "additionalProperties": false,
       "properties": {
+        "actor_assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingActorAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actor_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateActorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actor_model_applicability": {
+          "$ref": "#/$defs/ActorModelApplicability",
+          "default": "unstated"
+        },
         "attack_path": {
           "items": {
             "type": "string"
@@ -1215,6 +2338,353 @@
         "location_validation"
       ],
       "title": "Finding",
+      "type": "object"
+    },
+    "FindingActorAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "action_against_stated_interest": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Against Stated Interest"
+        },
+        "actor_model_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Model Sha256"
+        },
+        "actor_model_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Model Source Sha256"
+        },
+        "applied_constraint_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Applied Constraint Ids",
+          "type": "array"
+        },
+        "assessment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Sha256",
+          "type": "string"
+        },
+        "baseline_finding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Finding Sha256",
+          "type": "string"
+        },
+        "calibrated_severity": {
+          "$ref": "#/$defs/ActorSeverity"
+        },
+        "capital_consumed_before_harmed_party": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capital Consumed Before Harmed Party"
+        },
+        "concentrated_with_role_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concentrated With Role Ids",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/ActorAssessmentDisposition"
+        },
+        "governance_conflict_id": {
+          "anyOf": [
+            {
+              "pattern": "^actor-governance:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Governance Conflict Id"
+        },
+        "harmed_party_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorHarmedPartyDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "harmed_party_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Harmed Party Id"
+        },
+        "holder_fee_revenue_exposure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorExposureState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "holder_party_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Holder Party Id"
+        },
+        "holder_protocol_failure_loss": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorExposureState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_state": {
+          "$ref": "#/$defs/ActorModelInputState"
+        },
+        "likelihood_adjustment": {
+          "$ref": "#/$defs/ActorLikelihoodAdjustment"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "misconduct_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Misconduct Required"
+        },
+        "ordinary_legitimate_behavior": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinary Legitimate Behavior"
+        },
+        "original_severity": {
+          "$ref": "#/$defs/ActorSeverity"
+        },
+        "permission": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission"
+        },
+        "plausibility_evidence_reference_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Plausibility Evidence Reference Ids",
+          "type": "array"
+        },
+        "plausibility_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plausibility Rationale"
+        },
+        "privileged_action_required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Privileged Action Required"
+        },
+        "relevant_economic_exposures": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorEconomicExposureKind"
+          },
+          "maxItems": 2,
+          "title": "Relevant Economic Exposures",
+          "type": "array"
+        },
+        "remediation_focus": {
+          "$ref": "#/$defs/ActorRemediationFocus"
+        },
+        "required_concentrated_role_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Required Concentrated Role Ids",
+          "type": "array"
+        },
+        "role_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role Id"
+        },
+        "role_occupancy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorRoleOccupancy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "severity_basis": {
+          "anyOf": [
+            {
+              "const": "code_mechanism_only",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity Basis"
+        },
+        "stated_interest": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stated Interest"
+        }
+      },
+      "required": [
+        "input_state",
+        "disposition",
+        "baseline_finding_sha256",
+        "original_severity",
+        "calibrated_severity",
+        "likelihood_adjustment",
+        "remediation_focus",
+        "assessment_sha256"
+      ],
+      "title": "FindingActorAssessment",
       "type": "object"
     },
     "FindingOriginKind": {
@@ -1502,6 +2972,71 @@
       "title": "InvariantExecutionCandidateProvenance",
       "type": "object"
     },
+    "JudgeDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateActorContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actor_model_applicability": {
+          "$ref": "#/$defs/ActorModelApplicability",
+          "default": "unstated"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "cwe": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cwe",
+          "type": "array"
+        },
+        "group_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Group Id",
+          "type": "string"
+        },
+        "owasp": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Owasp",
+          "type": "array"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "status": {
+          "$ref": "#/$defs/FindingStatus"
+        }
+      },
+      "required": [
+        "group_id",
+        "status",
+        "severity",
+        "confidence",
+        "rationale"
+      ],
+      "title": "JudgeDecision",
+      "type": "object"
+    },
     "LanguageCapabilityAssessment": {
       "additionalProperties": false,
       "description": "Deterministic, source-bound authority for the product capability actually available.",
@@ -1780,6 +3315,107 @@
         "verdict"
       ],
       "title": "ModelVote",
+      "type": "object"
+    },
+    "PrivilegedActorRole": {
+      "additionalProperties": false,
+      "properties": {
+        "admitted_holder_class": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Admitted Holder Class"
+        },
+        "code_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Code Identifiers",
+          "type": "array"
+        },
+        "concentrated_with_role_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concentrated With Role Ids",
+          "type": "array"
+        },
+        "display_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "evidence_reference_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Reference Ids",
+          "type": "array"
+        },
+        "holder_party_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Holder Party Id"
+        },
+        "occupancy": {
+          "$ref": "#/$defs/ActorRoleOccupancy"
+        },
+        "operational_constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActorOperationalConstraint"
+          },
+          "maxItems": 100,
+          "title": "Operational Constraints",
+          "type": "array"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Permissions",
+          "type": "array"
+        },
+        "role_id": {
+          "pattern": "^[a-z][a-z0-9._:-]{0,159}$",
+          "title": "Role Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role_id",
+        "display_name",
+        "code_identifiers",
+        "occupancy",
+        "concentrated_with_role_ids",
+        "permissions",
+        "evidence_reference_ids"
+      ],
+      "title": "PrivilegedActorRole",
       "type": "object"
     },
     "QualityGateResult": {
@@ -2785,7 +4421,10 @@
       "if": {
         "properties": {
           "schema_version": {
-            "const": "1.2"
+            "enum": [
+              "1.2",
+              "1.3"
+            ]
           }
         }
       },
@@ -2822,10 +4461,184 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.3"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "actor_model_baseline": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "actor_model_evaluation": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "actor_model_baseline",
+          "actor_model_evaluation",
+          "judge_decisions"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.1",
+              "1.2"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "actor_model_baseline"
+              ]
+            },
+            {
+              "required": [
+                "actor_model_evaluation"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_findings": {
+            "items": {
+              "properties": {
+                "actor_context": {
+                  "type": "null"
+                },
+                "actor_model_applicability": {
+                  "const": "unstated"
+                }
+              }
+            }
+          },
+          "filtered_findings": {
+            "items": {
+              "properties": {
+                "actor_assessment": {
+                  "type": "null"
+                },
+                "actor_context": {
+                  "type": "null"
+                },
+                "actor_model_applicability": {
+                  "const": "unstated"
+                }
+              }
+            }
+          },
+          "findings": {
+            "items": {
+              "properties": {
+                "actor_assessment": {
+                  "type": "null"
+                },
+                "actor_context": {
+                  "type": "null"
+                },
+                "actor_model_applicability": {
+                  "const": "unstated"
+                }
+              }
+            }
+          },
+          "judge_decisions": {
+            "maxItems": 0
+          },
+          "records": {
+            "items": {
+              "properties": {
+                "candidate_findings": {
+                  "items": {
+                    "properties": {
+                      "actor_context": {
+                        "type": "null"
+                      },
+                      "actor_model_applicability": {
+                        "const": "unstated"
+                      }
+                    }
+                  }
+                },
+                "finding": {
+                  "properties": {
+                    "actor_assessment": {
+                      "type": "null"
+                    },
+                    "actor_context": {
+                      "type": "null"
+                    },
+                    "actor_model_applicability": {
+                      "const": "unstated"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "rejected_findings": {
+            "items": {
+              "properties": {
+                "actor_assessment": {
+                  "type": "null"
+                },
+                "actor_context": {
+                  "type": "null"
+                },
+                "actor_model_applicability": {
+                  "const": "unstated"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "description": "Complete final/candidate finding history for the forensic bundle.",
   "properties": {
+    "actor_model_baseline": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorModelBaselineArtifact"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "actor_model_evaluation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorModelEvaluation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "candidate_findings": {
       "items": {
         "$ref": "#/$defs/CandidateFinding"
@@ -2877,6 +4690,14 @@
         "$ref": "#/$defs/Finding"
       },
       "title": "Findings",
+      "type": "array"
+    },
+    "judge_decisions": {
+      "items": {
+        "$ref": "#/$defs/JudgeDecision"
+      },
+      "maxItems": 100000,
+      "title": "Judge Decisions",
       "type": "array"
     },
     "language_capability": {
@@ -2950,10 +4771,11 @@
       "$ref": "#/$defs/AuditRunStatus"
     },
     "schema_version": {
-      "default": "1.2",
+      "default": "1.3",
       "enum": [
         "1.1",
-        "1.2"
+        "1.2",
+        "1.3"
       ],
       "title": "Schema Version",
       "type": "string"

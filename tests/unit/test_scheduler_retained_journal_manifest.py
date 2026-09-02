@@ -67,6 +67,10 @@ def _copy_public_run(owner: Path, consumer: Path) -> None:
     private = consumer / "private"
     private.mkdir(mode=0o700)
     shutil.copy2(
+        owner / "private" / "model-review-artifacts.json",
+        private / "model-review-artifacts.json",
+    )
+    shutil.copy2(
         owner / RUN_TERMINAL_REPORT_AUTHORITY_PATH,
         consumer / RUN_TERMINAL_REPORT_AUTHORITY_PATH,
     )

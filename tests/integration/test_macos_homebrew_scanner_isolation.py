@@ -414,6 +414,7 @@ def test_real_homebrew_slither_emits_validated_machine_output_under_sandbox(
         manifest_path=run_dir / "run-evidence-manifest.json",
         run_dir=run_dir,
         repository_root=target,
+        configuration_root=target,
     )
     assert verification.status is RunVerificationStatus.CURRENT, verification.mismatches
 

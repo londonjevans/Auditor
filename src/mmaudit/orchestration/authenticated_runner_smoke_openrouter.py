@@ -457,6 +457,11 @@ class _SmokeOpenRouterAdapter:
                     judge=judge,
                     candidate_report=item.candidate_report,
                     prepared=item.prepared_adjudication,
+                    route_constraint=(
+                        item.plan.judge_discovery_evidence[
+                            0
+                        ].endpoint_snapshot.exact_route_constraint
+                    ),
                 )
                 clients[item.plan.run_kind] = client
                 await _refresh_and_register_exact_route(
@@ -555,7 +560,17 @@ class _SmokeOpenRouterAdapter:
             self._launch.smoke_corpus,
             now=now,
         )
-        return self._new_client(model=model, source=source, now=now)
+        return self._new_client(
+            model=model,
+            source=source,
+            now=now,
+            expected_role=ExactRouteRole.CANDIDATE,
+            route_constraint=(
+                self._launch.candidate_discovery_evidence[
+                    0
+                ].endpoint_snapshot.exact_route_constraint
+            ),
+        )
 
     def _new_judge_client(
         self,
@@ -563,6 +578,7 @@ class _SmokeOpenRouterAdapter:
         judge: CandidateModel,
         candidate_report: NoncreditingModelBenchmarkSmokeReport,
         prepared: CrossLineageAdjudicationPreparedRun,
+        route_constraint: ExactRouteConstraint | None,
     ) -> OpenRouterClient:
         now = datetime.now(UTC).replace(microsecond=0)
         source = prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source(
@@ -571,7 +587,17 @@ class _SmokeOpenRouterAdapter:
             prepared,
             now=now,
         )
-        return self._new_client(model=judge, source=source, now=now)
+        return self._new_client(
+            model=judge,
+            source=source,
+            now=now,
+            expected_role=(
+                ExactRouteRole.PRIMARY_JUDGE
+                if prepared.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
+                else ExactRouteRole.REPLAY_JUDGE
+            ),
+            route_constraint=route_constraint,
+        )
 
     def _new_client(
         self,
@@ -579,7 +605,18 @@ class _SmokeOpenRouterAdapter:
         model: CandidateModel,
         source: PrivacySourceProvenanceObservation,
         now: datetime,
+        expected_role: ExactRouteRole,
+        route_constraint: ExactRouteConstraint | None,
     ) -> OpenRouterClient:
+        if (
+            type(route_constraint) is not ExactRouteConstraint
+            or route_constraint.role is not expected_role
+            or route_constraint.exact_model_id != model.exact_model_id
+            or route_constraint.provider_endpoint != model.approved_provider_endpoint
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke client revocation custody differs from constrained route"
+            )
         evidence = source.evidence
         policy = resolve_effective_privacy_policy(
             profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
@@ -605,6 +642,7 @@ class _SmokeOpenRouterAdapter:
                 only=(model.approved_provider_endpoint,),
                 allow_fallbacks=False,
             ),
+            candidate_revocation_route_constraint=route_constraint,
             reasoning_policy=build_reasoning_policy(self._launch.config),
             effective_privacy_policy=policy,
             source_provenance_observation=source,
@@ -668,8 +706,14 @@ class _SmokeLiveRouteProbeAdapter:
                 launch.run_plans[1].judge_discovery_manifest,
             ),
         )
-        for _route_role, model, _evidence, _manifest in route_inputs:
-            self._clients.append(self._new_metadata_client(model))
+        for route_role, model, evidence, _manifest in route_inputs:
+            self._clients.append(
+                self._new_metadata_client(
+                    model,
+                    route_role=route_role,
+                    route_constraint=evidence.endpoint_snapshot.exact_route_constraint,
+                )
+            )
         mismatches: list[AuthenticatedRunnerSmokeLiveRouteMismatch] = []
         for client, (route_role, model, evidence, manifest) in zip(
             self._clients,
@@ -714,8 +758,31 @@ class _SmokeLiveRouteProbeAdapter:
                 "one or more smoke live-route metadata transports failed to close"
             )
 
-    def _new_metadata_client(self, model: CandidateModel) -> OpenRouterClient:
+    def _new_metadata_client(
+        self,
+        model: CandidateModel,
+        *,
+        route_role: AuthenticatedRunnerSmokeLiveRouteRole,
+        route_constraint: ExactRouteConstraint | None,
+    ) -> OpenRouterClient:
         """Build an exact paid-control client without any completion-source proof."""
+
+        exact_role = {
+            AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE: ExactRouteRole.CANDIDATE,
+            AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE: ExactRouteRole.PRIMARY_JUDGE,
+            AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE: ExactRouteRole.REPLAY_JUDGE,
+        }.get(route_role)
+        if exact_role is None:
+            raise AuthenticatedRunnerSmokeOpenRouterError("smoke live-route role is invalid")
+        if (
+            type(route_constraint) is not ExactRouteConstraint
+            or route_constraint.role is not exact_role
+            or route_constraint.exact_model_id != model.exact_model_id
+            or route_constraint.provider_endpoint != model.approved_provider_endpoint
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route revocation custody differs from constrained evidence"
+            )
 
         return OpenRouterClient(
             api_key=self._required_api_key(),
@@ -729,6 +796,7 @@ class _SmokeLiveRouteProbeAdapter:
                 only=(model.approved_provider_endpoint,),
                 allow_fallbacks=False,
             ),
+            candidate_revocation_route_constraint=route_constraint,
             reasoning_policy=build_reasoning_policy(self._launch.config),
         )
 

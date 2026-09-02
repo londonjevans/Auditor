@@ -712,6 +712,353 @@
       "title": "InvariantExecutionStatus",
       "type": "string"
     },
+    "KnownIssueApplicability": {
+      "description": "Host-derived applicability state for one taxonomy item.",
+      "enum": [
+        "applicable",
+        "not_applicable",
+        "unknown"
+      ],
+      "title": "KnownIssueApplicability",
+      "type": "string"
+    },
+    "KnownIssueCitation": {
+      "additionalProperties": false,
+      "description": "One immutable reference supporting applicability or review disposition.",
+      "properties": {
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/KnownIssueCitationKind"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "reference": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reference",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reference",
+        "evidence_sha256",
+        "detail"
+      ],
+      "title": "KnownIssueCitation",
+      "type": "object"
+    },
+    "KnownIssueCitationKind": {
+      "description": "Typed evidence references retained with a taxonomy disposition.",
+      "enum": [
+        "corpus",
+        "profile_assessment",
+        "profile_evidence",
+        "model_review"
+      ],
+      "title": "KnownIssueCitationKind",
+      "type": "string"
+    },
+    "KnownIssueCriticality": {
+      "description": "Taxonomy priority used only for coverage gating, never finding creation.",
+      "enum": [
+        "critical",
+        "non_critical"
+      ],
+      "title": "KnownIssueCriticality",
+      "type": "string"
+    },
+    "KnownIssueDisposition": {
+      "description": "The only permitted non-finding disposition outcomes.",
+      "enum": [
+        "REVIEWED",
+        "NOT_APPLICABLE",
+        "GAP"
+      ],
+      "title": "KnownIssueDisposition",
+      "type": "string"
+    },
+    "KnownIssueItemDisposition": {
+      "additionalProperties": false,
+      "description": "One explicit taxonomy outcome; this model is never a candidate or finding.",
+      "properties": {
+        "applicability": {
+          "$ref": "#/$defs/KnownIssueApplicability"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/KnownIssueCitation"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Citations",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/KnownIssueDisposition"
+        },
+        "item_id": {
+          "pattern": "^KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "matched_profiles": {
+          "items": {
+            "$ref": "#/$defs/ProtocolProfileKind"
+          },
+          "maxItems": 20,
+          "title": "Matched Profiles",
+          "type": "array"
+        },
+        "rationale": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reviewed_surface_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Reviewed Surface Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item_id",
+        "applicability",
+        "disposition",
+        "citations",
+        "rationale"
+      ],
+      "title": "KnownIssueItemDisposition",
+      "type": "object"
+    },
+    "KnownIssueTaxonomy": {
+      "additionalProperties": false,
+      "description": "Versioned, semantic-self-hashed defensive known-issue corpus.",
+      "properties": {
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "finding_authority": {
+          "const": false,
+          "default": false,
+          "title": "Finding Authority",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/KnownIssueTaxonomyItem"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "purpose": {
+          "const": "defensive_failure_mode_coverage",
+          "default": "defensive_failure_mode_coverage",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "taxonomy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Taxonomy Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "corpus_sha256"
+      ],
+      "title": "KnownIssueTaxonomy",
+      "type": "object"
+    },
+    "KnownIssueTaxonomyCoverage": {
+      "additionalProperties": false,
+      "description": "Complete taxonomy disposition inventory and coverage denominator.",
+      "properties": {
+        "corpus": {
+          "$ref": "#/$defs/KnownIssueTaxonomy"
+        },
+        "corpus_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Raw Sha256",
+          "type": "string"
+        },
+        "coverage_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Coverage Sha256",
+          "type": "string"
+        },
+        "critical": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "critical_gap_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Critical Gap Ids",
+          "type": "array"
+        },
+        "critical_gate_passed": {
+          "title": "Critical Gate Passed",
+          "type": "boolean"
+        },
+        "dispositions": {
+          "items": {
+            "$ref": "#/$defs/KnownIssueItemDisposition"
+          },
+          "title": "Dispositions",
+          "type": "array"
+        },
+        "finding_authority": {
+          "const": false,
+          "default": false,
+          "title": "Finding Authority",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "overall": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "profile_assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolProfileAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "corpus",
+        "corpus_raw_sha256",
+        "dispositions",
+        "overall",
+        "critical",
+        "critical_gate_passed",
+        "coverage_sha256"
+      ],
+      "title": "KnownIssueTaxonomyCoverage",
+      "type": "object"
+    },
+    "KnownIssueTaxonomyItem": {
+      "additionalProperties": false,
+      "description": "One defensive failure-mode classification with no operational procedure.",
+      "properties": {
+        "applicable_protocol_profiles": {
+          "items": {
+            "$ref": "#/$defs/ProtocolProfileKind"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Applicable Protocol Profiles",
+          "type": "array"
+        },
+        "category": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Category",
+          "type": "string"
+        },
+        "criticality": {
+          "$ref": "#/$defs/KnownIssueCriticality"
+        },
+        "defensive_question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Defensive Question",
+          "type": "string"
+        },
+        "economic_template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EconomicSimulationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "item_id": {
+          "pattern": "^KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "item_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Item Sha256",
+          "type": "string"
+        },
+        "review_surface_subject_id": {
+          "pattern": "^known-issue:KI-[A-Z0-9]+(?:-[A-Z0-9]+)*:[0-9a-f]{64}$",
+          "title": "Review Surface Subject Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "title",
+        "category",
+        "criticality",
+        "applicable_protocol_profiles",
+        "defensive_question",
+        "item_sha256",
+        "review_surface_subject_id"
+      ],
+      "title": "KnownIssueTaxonomyItem",
+      "type": "object"
+    },
     "LanguageCapabilityAssessment": {
       "additionalProperties": false,
       "description": "Deterministic, source-bound authority for the product capability actually available.",
@@ -1150,7 +1497,8 @@
         "call",
         "state",
         "invariant",
-        "template"
+        "template",
+        "known_issue_class"
       ],
       "title": "ModelReviewSurfaceKind",
       "type": "string"
@@ -1164,6 +1512,153 @@
         "NOT_REVIEWED"
       ],
       "title": "ModelSurfaceReviewStatus",
+      "type": "string"
+    },
+    "ProtocolProfileAssessment": {
+      "additionalProperties": false,
+      "description": "Complete, self-hashed result of deterministic protocol-profile detection.",
+      "properties": {
+        "assessment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Sha256",
+          "type": "string"
+        },
+        "classification_complete": {
+          "title": "Classification Complete",
+          "type": "boolean"
+        },
+        "classifications": {
+          "items": {
+            "$ref": "#/$defs/ProtocolProfileEvidence"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Classifications",
+          "type": "array"
+        },
+        "input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_sha256",
+        "classification_complete",
+        "classifications",
+        "assessment_sha256"
+      ],
+      "title": "ProtocolProfileAssessment",
+      "type": "object"
+    },
+    "ProtocolProfileDetectionRule": {
+      "description": "Host-owned rule families that may establish one protocol profile.",
+      "enum": [
+        "contract_symbol_set",
+        "indexed_symbol",
+        "source_marker",
+        "semantic_graph"
+      ],
+      "title": "ProtocolProfileDetectionRule",
+      "type": "string"
+    },
+    "ProtocolProfileEvidence": {
+      "additionalProperties": false,
+      "description": "Source-linked evidence for one host-derived protocol-profile classification.",
+      "properties": {
+        "entity_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Entity Ids",
+          "type": "array"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "matched_facts": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Matched Facts",
+          "type": "array"
+        },
+        "profile": {
+          "$ref": "#/$defs/ProtocolProfileKind"
+        },
+        "rule": {
+          "$ref": "#/$defs/ProtocolProfileDetectionRule"
+        },
+        "status": {
+          "$ref": "#/$defs/ProtocolProfileStatus"
+        }
+      },
+      "required": [
+        "profile",
+        "status",
+        "rule",
+        "matched_facts",
+        "evidence_sha256"
+      ],
+      "title": "ProtocolProfileEvidence",
+      "type": "object"
+    },
+    "ProtocolProfileKind": {
+      "description": "Closed protocol profiles derived only from retained deterministic source facts.",
+      "enum": [
+        "solidity_general",
+        "erc20_token",
+        "erc721",
+        "erc1155",
+        "erc4626_vault",
+        "staking",
+        "lending",
+        "amm",
+        "governance",
+        "bridge",
+        "oracle_consumer",
+        "upgradeable_system",
+        "token_distribution",
+        "state_machine"
+      ],
+      "title": "ProtocolProfileKind",
+      "type": "string"
+    },
+    "ProtocolProfileStatus": {
+      "description": "Evidence-derived outcome for every member of the closed profile inventory.",
+      "enum": [
+        "detected",
+        "not_detected",
+        "indeterminate"
+      ],
+      "title": "ProtocolProfileStatus",
       "type": "string"
     },
     "QualityGateResult": {
@@ -2092,6 +2587,51 @@
   "$id": "https://mmaudit.local/schemas/coverage_artifact.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "taxonomy_coverage": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "taxonomy_coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "taxonomy_coverage"
+          ]
+        }
+      }
+    }
+  ],
   "description": "Compact typed coverage projection with full typed coverage bodies retained.",
   "properties": {
     "completed": {
@@ -2163,8 +2703,11 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.1",
-      "default": "1.1",
+      "default": "1.2",
+      "enum": [
+        "1.1",
+        "1.2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -2187,6 +2730,17 @@
           "type": "null"
         }
       ]
+    },
+    "taxonomy_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KnownIssueTaxonomyCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

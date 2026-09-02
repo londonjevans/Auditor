@@ -135,13 +135,14 @@ from mmaudit.models.candidate_revocation import (
 from mmaudit.models.candidate_selection import (
     CandidateSelectionPlan,
     authenticated_runner_route_constraint,
+    derive_candidate_selection_plan_successor,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
     read_candidate_selection_source,
-    require_candidate_selection_plan_currently_eligible,
     validate_candidate_selection_discovery_capability,
     validate_candidate_selection_plan_sources,
     validate_candidate_selection_routes,
+    write_candidate_selection_plan_successor,
 )
 from mmaudit.models.coverage_planning import ModelPortfolioResourcePreflight
 from mmaudit.models.discovery import (
@@ -152,6 +153,10 @@ from mmaudit.models.discovery import (
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
+from mmaudit.models.endpoint_inventory import (
+    OpenRouterEndpointInventoryDiagnostic,
+    build_openrouter_endpoint_inventory_diagnostic,
+)
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     validate_openrouter_endpoint_snapshot,
@@ -161,7 +166,10 @@ from mmaudit.models.ground_truth_authority import (
     load_frozen_ground_truth_provenance,
     resolve_verified_frozen_ground_truth,
 )
-from mmaudit.models.identifiers import is_exact_openrouter_model_id
+from mmaudit.models.identifiers import (
+    is_exact_openrouter_model_id,
+    require_exact_openrouter_model_id,
+)
 from mmaudit.models.lineage_authority import (
     TrustedModelLineageReviewVerification,
     load_model_lineage_authority_bundle,
@@ -177,6 +185,7 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderUnavailableError,
     OpenRouterRateLimitError,
     OpenRouterTimeoutError,
+    trusted_openrouter_execution_evidence,
 )
 from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.policy_eligibility_refresh import (
@@ -245,7 +254,11 @@ from mmaudit.models.retry_continuity import (
 from mmaudit.models.route_admission import (
     require_authenticated_runner_three_route_admission,
 )
-from mmaudit.models.route_constraints import RouteConstraintPurpose
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
+    RouteConstraintPurpose,
+)
 from mmaudit.models.route_runtime_evidence import (
     VerifiedThreeRouteRuntimeEvidence,
     build_route_runtime_evidence_artifact,
@@ -323,6 +336,7 @@ from mmaudit.privacy import (
 )
 from mmaudit.release_io import read_json_evidence, write_json_evidence
 from mmaudit.reporting.bundle import ModelExecutionArtifact, RunCostLedgerEvidence
+from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
 from mmaudit.repository.privacy_provenance import (
     prove_release_pinned_model_benchmark_source,
@@ -360,6 +374,30 @@ quote_app = typer.Typer(help="Create, accept, and reconcile provider-free bounde
 app.add_typer(quote_app, name="quote")
 console = Console()
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
+_TRUSTED_OPENROUTER_INIT_METHOD = OpenRouterClient.__init__
+_TRUSTED_OPENROUTER_INIT_METHOD_CODE = OpenRouterClient.__init__.__code__
+_TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD = OpenRouterClient._request_metadata
+_TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD_CODE = OpenRouterClient._request_metadata.__code__
+_TRUSTED_OPENROUTER_CLOSE_METHOD = OpenRouterClient.close
+_TRUSTED_OPENROUTER_CLOSE_METHOD_CODE = OpenRouterClient.close.__code__
+_TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD = OpenRouterClient.clear_credentials
+_TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD_CODE = OpenRouterClient.clear_credentials.__code__
+_TRUSTED_OPENROUTER_AUTHENTICATION_METHOD = OpenRouterClient.validate_authentication
+_TRUSTED_OPENROUTER_AUTHENTICATION_METHOD_CODE = OpenRouterClient.validate_authentication.__code__
+_TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD = OpenRouterClient.list_model_endpoint_inventory
+_TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD_CODE = (
+    OpenRouterClient.list_model_endpoint_inventory.__code__
+)
+_TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD = (
+    OpenRouterClient.get_certification_model_metadata
+)
+_TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD_CODE = (
+    OpenRouterClient.get_certification_model_metadata.__code__
+)
+_TRUSTED_OPENROUTER_ZDR_METADATA_METHOD = OpenRouterClient.get_zdr_endpoint_metadata
+_TRUSTED_OPENROUTER_ZDR_METADATA_METHOD_CODE = OpenRouterClient.get_zdr_endpoint_metadata.__code__
+_TRUSTED_OPENROUTER_EXECUTION_EVIDENCE = trusted_openrouter_execution_evidence
+_TRUSTED_OPENROUTER_EXECUTION_EVIDENCE_CODE = trusted_openrouter_execution_evidence.__code__
 
 ConfigOption = Annotated[
     Path,
@@ -887,6 +925,225 @@ def models_list(
     _run_async_cli(execute)
 
 
+@models_app.command("list-endpoints")
+def models_list_endpoints(
+    model_id: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="One exact non-routed OpenRouter author/model identifier.",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit the strict nonauthorizing diagnostic as JSON instead of a table.",
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Enumerate current endpoint metadata without issuing a completion or selecting a route."""
+
+    async def execute() -> None:
+        exact_model_id = require_exact_openrouter_model_id(model_id)
+        config = load_config(config_path)
+        budget, usage = _budget_and_usage(config)
+        diagnostic: OpenRouterEndpointInventoryDiagnostic
+        if (
+            OpenRouterClient is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+            or OpenRouterClient.__init__ is not _TRUSTED_OPENROUTER_INIT_METHOD
+            or OpenRouterClient.__init__.__code__ is not _TRUSTED_OPENROUTER_INIT_METHOD_CODE
+            or OpenRouterClient._request_metadata is not _TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD
+            or OpenRouterClient._request_metadata.__code__
+            is not _TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD_CODE
+            or OpenRouterClient.close is not _TRUSTED_OPENROUTER_CLOSE_METHOD
+            or OpenRouterClient.close.__code__ is not _TRUSTED_OPENROUTER_CLOSE_METHOD_CODE
+            or OpenRouterClient.clear_credentials
+            is not _TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD
+            or OpenRouterClient.clear_credentials.__code__
+            is not _TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD_CODE
+            or OpenRouterClient.validate_authentication
+            is not _TRUSTED_OPENROUTER_AUTHENTICATION_METHOD
+            or OpenRouterClient.validate_authentication.__code__
+            is not _TRUSTED_OPENROUTER_AUTHENTICATION_METHOD_CODE
+            or OpenRouterClient.list_model_endpoint_inventory
+            is not _TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD
+            or OpenRouterClient.list_model_endpoint_inventory.__code__
+            is not _TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD_CODE
+            or OpenRouterClient.get_certification_model_metadata
+            is not _TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD
+            or OpenRouterClient.get_certification_model_metadata.__code__
+            is not _TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD_CODE
+            or OpenRouterClient.get_zdr_endpoint_metadata
+            is not _TRUSTED_OPENROUTER_ZDR_METADATA_METHOD
+            or OpenRouterClient.get_zdr_endpoint_metadata.__code__
+            is not _TRUSTED_OPENROUTER_ZDR_METADATA_METHOD_CODE
+            or trusted_openrouter_execution_evidence is not _TRUSTED_OPENROUTER_EXECUTION_EVIDENCE
+            or trusted_openrouter_execution_evidence.__code__
+            is not _TRUSTED_OPENROUTER_EXECUTION_EVIDENCE_CODE
+        ):
+            raise ConfigError("endpoint enumeration requires the trusted OpenRouter client")
+        with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            client = OpenRouterClient(
+                api_key=operator_secrets.openrouter_api_key,
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=budget,
+                usage=usage,
+            )
+            try:
+                if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+                    raise ConfigError("endpoint enumeration requires the trusted OpenRouter client")
+                if (
+                    type(client).__init__ is not _TRUSTED_OPENROUTER_INIT_METHOD
+                    or type(client).__init__.__code__ is not _TRUSTED_OPENROUTER_INIT_METHOD_CODE
+                    or type(client)._request_metadata
+                    is not _TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD
+                    or type(client)._request_metadata.__code__
+                    is not _TRUSTED_OPENROUTER_REQUEST_METADATA_METHOD_CODE
+                    or type(client).close is not _TRUSTED_OPENROUTER_CLOSE_METHOD
+                    or type(client).close.__code__ is not _TRUSTED_OPENROUTER_CLOSE_METHOD_CODE
+                    or type(client).clear_credentials
+                    is not _TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD
+                    or type(client).clear_credentials.__code__
+                    is not _TRUSTED_OPENROUTER_CLEAR_CREDENTIALS_METHOD_CODE
+                    or type(client).validate_authentication
+                    is not _TRUSTED_OPENROUTER_AUTHENTICATION_METHOD
+                    or type(client).validate_authentication.__code__
+                    is not _TRUSTED_OPENROUTER_AUTHENTICATION_METHOD_CODE
+                    or type(client).list_model_endpoint_inventory
+                    is not _TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD
+                    or type(client).list_model_endpoint_inventory.__code__
+                    is not _TRUSTED_OPENROUTER_ENDPOINT_INVENTORY_METHOD_CODE
+                    or type(client).get_certification_model_metadata
+                    is not _TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD
+                    or type(client).get_certification_model_metadata.__code__
+                    is not _TRUSTED_OPENROUTER_CERTIFICATION_MODEL_METADATA_METHOD_CODE
+                    or type(client).get_zdr_endpoint_metadata
+                    is not _TRUSTED_OPENROUTER_ZDR_METADATA_METHOD
+                    or type(client).get_zdr_endpoint_metadata.__code__
+                    is not _TRUSTED_OPENROUTER_ZDR_METADATA_METHOD_CODE
+                ):
+                    raise ConfigError("endpoint enumeration requires the trusted metadata read")
+                if trusted_openrouter_execution_evidence(client) is not ExecutionEvidenceKind.REAL:
+                    raise ConfigError(
+                        "endpoint enumeration requires a trusted real metadata transport"
+                    )
+                await client.validate_authentication()
+                if trusted_openrouter_execution_evidence(client) is not ExecutionEvidenceKind.REAL:
+                    raise ConfigError(
+                        "endpoint enumeration metadata transport changed after authentication"
+                    )
+                endpoints = await client.list_model_endpoint_inventory(exact_model_id)
+                if not endpoints:
+                    raise ConfigError("endpoint enumeration returned no exact-model endpoints")
+                catalog_payload = await client.get_certification_model_metadata()
+                # The lower-level validated envelope intentionally retains an
+                # authenticated empty ZDR set so every endpoint can be reported
+                # as ineligible instead of turning a valid diagnostic into an error.
+                zdr_payload = await client.get_zdr_endpoint_metadata()
+                if trusted_openrouter_execution_evidence(client) is not ExecutionEvidenceKind.REAL:
+                    raise ConfigError(
+                        "endpoint enumeration metadata transport changed during collection"
+                    )
+                reject_model_refresh_secret_reflection(
+                    catalog_payload,
+                    {"data": endpoints},
+                    zdr_payload,
+                    forbidden_values=(operator_secrets.openrouter_api_key,),
+                )
+                diagnostic = build_openrouter_endpoint_inventory_diagnostic(
+                    exact_model_id=exact_model_id,
+                    retrieved_at=datetime.now(UTC).replace(microsecond=0),
+                    catalog_payload=catalog_payload,
+                    endpoint_records=endpoints,
+                    zdr_payload=zdr_payload,
+                )
+            finally:
+                await client.close()
+        if usage.records:
+            raise ConfigError("endpoint enumeration unexpectedly produced completion usage")
+        if json_output:
+            typer.echo(stable_json(diagnostic), nl=False)
+            return
+        _print_endpoint_inventory(diagnostic, target=Console(no_color=no_color))
+
+    _run_async_cli(execute)
+
+
+@models_app.command("emit-selection-plan-successor")
+def models_emit_selection_plan_successor(
+    predecessor_plan: Annotated[
+        Path,
+        typer.Option(
+            "--predecessor-plan",
+            help="Frozen canonical selection plan to bind as the immediate predecessor.",
+        ),
+    ],
+    candidate: Annotated[
+        str,
+        typer.Option(
+            "--candidate",
+            help="Operator-chosen exact MODEL_ID=PROVIDER_ENDPOINT successor route.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private JSON file for the nonauthorizing successor plan.",
+        ),
+    ],
+    refresh_endpoint_inventory: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-endpoint-inventory",
+            help=(
+                "Explicitly stage a previously unlisted endpoint as unverified; constrained "
+                "discovery remains mandatory and no provider metadata is trusted here."
+            ),
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Derive a provider-free successor plan without selecting or contacting a provider."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        routes = _parse_model_discovery_candidates(
+            [candidate],
+            context="selection-plan successor",
+        )
+        candidate_model_id, provider_endpoint = routes[0]
+        predecessor = load_candidate_selection_plan(predecessor_plan)
+        successor = derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=candidate_model_id,
+            provider_endpoint=provider_endpoint,
+            refresh_endpoint_inventory=refresh_endpoint_inventory,
+        )
+        published = write_candidate_selection_plan_successor(
+            path=output,
+            predecessor=predecessor,
+            successor=successor,
+        )
+    except ValueError as exc:
+        local_console.print(f"[red]Selection-plan successor invalid:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        f"[green]Published NONAUTHORIZING selection-plan successor "
+        f"{published.plan_sha256} at {output}; predecessor "
+        f"{predecessor.plan_sha256}; endpoint inventory "
+        f"{'staged as unverified' if refresh_endpoint_inventory else 'narrowed from predecessor'}; "
+        f"no provider access occurred.[/green]"
+    )
+
+
 @models_app.command("discover")
 def models_discover(
     candidate: Annotated[
@@ -977,15 +1234,17 @@ def models_discover(
                 "template or selection plan"
             )
         candidates = _parse_model_discovery_candidates(candidate)
-        for model_id, provider_endpoint in candidates:
-            _require_cli_candidate_assignments_eligible(
-                model_ids=(model_id,),
-                provider_policy=OpenRouterProviderPolicy(
-                    only=(provider_endpoint,),
-                    allow_fallbacks=False,
-                ),
-                context="candidate discovery",
-            )
+        if not plan_mode:
+            for model_id, provider_endpoint in candidates:
+                _require_cli_candidate_assignments_eligible(
+                    role=ExactRouteRole.CANDIDATE,
+                    model_ids=(model_id,),
+                    provider_policy=OpenRouterProviderPolicy(
+                        only=(provider_endpoint,),
+                        allow_fallbacks=False,
+                    ),
+                    context="candidate discovery",
+                )
         candidate_routes = tuple(
             DiscoveryCandidateRoute(
                 exact_model_id=model_id,
@@ -1040,7 +1299,6 @@ def models_discover(
                 raise ConfigError("candidate selection plan inputs are incomplete")
             try:
                 selection_plan = load_candidate_selection_plan(candidate_selection_plan)
-                require_candidate_selection_plan_currently_eligible(selection_plan)
                 source_names = {
                     binding.kind: binding.filename for binding in selection_plan.source_bindings
                 }
@@ -1075,6 +1333,25 @@ def models_discover(
                 )
             except ValueError as exc:
                 raise ConfigError(f"candidate selection bridge is invalid: {exc}") from exc
+        route_constraints: dict[tuple[str, str], ExactRouteConstraint] = {}
+        if selection_plan is not None:
+            selection = selection_plan.authenticated_runner_selection
+            if selection is not None:
+                route_constraints = {
+                    (constraint.exact_model_id, constraint.provider_endpoint): constraint
+                    for constraint in selection.route_constraints
+                }
+            for model_id, provider_endpoint in candidates:
+                constraint = route_constraints.get((model_id, provider_endpoint))
+                _require_cli_candidate_assignments_eligible(
+                    role=(ExactRouteRole.CANDIDATE if constraint is None else constraint.role),
+                    model_ids=(model_id,),
+                    provider_policy=OpenRouterProviderPolicy(
+                        only=(provider_endpoint,),
+                        allow_fallbacks=False,
+                    ),
+                    context="candidate discovery",
+                )
         _preflight_model_discovery_output_dir(output_dir)
         config = load_config(config_path)
         constrained_controls = (
@@ -1097,6 +1374,21 @@ def models_discover(
                 )
             )
         )
+        selected_route_constraint = (
+            route_constraints.get(candidates[0]) if len(candidates) == 1 else None
+        )
+        if len(candidates) > 1 and any(route in route_constraints for route in candidates):
+            raise ConfigError(
+                "selected constrained discovery requires one exact route per invocation"
+            )
+        discovery_provider_policy = (
+            OpenRouterProviderPolicy(
+                only=(candidates[0][1],),
+                allow_fallbacks=False,
+            )
+            if len(candidates) == 1
+            else (None if constrained_controls is None else constrained_controls.provider_policy)
+        )
         budget, usage = _budget_and_usage(config)
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
@@ -1107,9 +1399,8 @@ def models_discover(
                 privacy=config.privacy,
                 budget=budget,
                 usage=usage,
-                provider_policy=(
-                    None if constrained_controls is None else constrained_controls.provider_policy
-                ),
+                provider_policy=discovery_provider_policy,
+                candidate_revocation_route_constraint=selected_route_constraint,
                 reasoning_policy=(
                     None if constrained_controls is None else constrained_controls.reasoning_policy
                 ),
@@ -1340,6 +1631,7 @@ def models_refresh(
             raise ConfigError("candidate registry is future-dated")
         for candidate in registry.candidates:
             _require_cli_candidate_assignments_eligible(
+                role=ExactRouteRole.CANDIDATE,
                 model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
                 provider_policy=OpenRouterProviderPolicy(
                     only=(candidate.approved_provider_endpoint,),
@@ -2762,13 +3054,22 @@ def models_authenticated_runner_smoke(
         primary_manifest, primary_evidence = load_model_discovery_run(primary_judge_discovery_run)
         replay_judge = load_candidate_registry(replay_judge_registry)
         replay_manifest, replay_evidence = load_model_discovery_run(replay_judge_discovery_run)
-        for label, registry in (
-            ("authenticated runner smoke candidate", candidate),
-            ("authenticated runner smoke primary judge", primary_judge),
-            ("authenticated runner smoke replay judge", replay_judge),
+        for label, role, registry in (
+            ("authenticated runner smoke candidate", ExactRouteRole.CANDIDATE, candidate),
+            (
+                "authenticated runner smoke primary judge",
+                ExactRouteRole.PRIMARY_JUDGE,
+                primary_judge,
+            ),
+            (
+                "authenticated runner smoke replay judge",
+                ExactRouteRole.REPLAY_JUDGE,
+                replay_judge,
+            ),
         ):
             for selected_model in registry.candidates:
                 _require_cli_candidate_assignments_eligible(
+                    role=role,
                     model_ids=(
                         selected_model.exact_model_id,
                         selected_model.canonical_model_slug,
@@ -3112,6 +3413,7 @@ async def _execute_candidate_registry_benchmark(
     registry = load_candidate_registry(candidate_registry_path)
     for candidate in registry.candidates:
         _require_cli_candidate_assignments_eligible(
+            role=ExactRouteRole.CANDIDATE,
             model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
             provider_policy=OpenRouterProviderPolicy(
                 only=(candidate.approved_provider_endpoint,),
@@ -4914,6 +5216,13 @@ def verify_run_command(
             help="Optional current base config; recorded safe overrides are replayed.",
         ),
     ] = None,
+    configuration_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--configuration-root",
+            help="Trusted root for relative paths when replaying embedded configuration.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for normalized verification evidence."),
@@ -4933,6 +5242,10 @@ def verify_run_command(
             manifest_path=manifest,
             run_dir=run_dir,
             repository_root=repository,
+            configuration_root=_verification_configuration_root(
+                config_path=config_path,
+                configuration_root=configuration_root,
+            ),
             config=legacy_config,
             file_config=current_file_config,
         )
@@ -5043,6 +5356,13 @@ def replay_command(
             help="Optional current base config; recorded safe overrides are replayed.",
         ),
     ] = None,
+    configuration_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--configuration-root",
+            help="Trusted root for relative paths when replaying embedded configuration.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for normalized offline replay evidence."),
@@ -5066,6 +5386,10 @@ def replay_command(
             OfflineReplayOrchestrator(
                 legacy_config,
                 file_config=current_file_config,
+                configuration_root=_verification_configuration_root(
+                    config_path=config_path,
+                    configuration_root=configuration_root,
+                ),
             ).replay(
                 manifest_path=manifest,
                 run_dir=run_dir,
@@ -5110,6 +5434,13 @@ def certify_run_command(
             help="Optional current base config; recorded safe overrides are replayed.",
         ),
     ] = None,
+    configuration_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--configuration-root",
+            help="Trusted root for relative paths when replaying embedded configuration.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for post-run certification evidence."),
@@ -5130,6 +5461,10 @@ def certify_run_command(
             run_dir=run_dir,
             repository_root=repository,
             replay_path=replay,
+            configuration_root=_verification_configuration_root(
+                config_path=config_path,
+                configuration_root=configuration_root,
+            ),
             config=legacy_config,
             file_config=current_file_config,
         )
@@ -5158,6 +5493,21 @@ def _verification_config_inputs(
     if sealed_manifest.run_configuration is None:
         return load_config(config_path), None
     return None, load_config_with_provenance(config_path, environ={}).file_config
+
+
+def _verification_configuration_root(
+    *,
+    config_path: Path | None,
+    configuration_root: Path | None,
+) -> Path | None:
+    """Resolve one explicit configuration root without permitting conflicting authority."""
+
+    if config_path is None:
+        return configuration_root
+    expected = config_path.resolve().parent
+    if configuration_root is not None and configuration_root.resolve() != expected:
+        raise ValueError("--configuration-root must equal the parent of --config")
+    return expected
 
 
 @snapshot_app.command("import")
@@ -6556,6 +6906,7 @@ _CLI_CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
 
 def _require_cli_candidate_assignments_eligible(
     *,
+    role: ExactRouteRole | None = None,
     model_ids: tuple[str, ...],
     provider_policy: OpenRouterProviderPolicy,
     context: str,
@@ -6595,32 +6946,40 @@ def _require_cli_candidate_assignments_eligible(
             if type(model_id) is str and not trusted_exact_predicate(model_id):
                 continue
             for endpoint in endpoints:
-                trusted_gate(exact_model_id=model_id, provider_endpoint=endpoint)
+                trusted_gate(
+                    role=role,
+                    exact_model_id=model_id,
+                    provider_endpoint=endpoint,
+                )
     except CandidateSelectionRevocationError as exc:
         raise ConfigError(f"{context} candidate assignment is ineligible: {exc}") from exc
 
 
-def _parse_model_discovery_candidates(values: list[str]) -> tuple[tuple[str, str], ...]:
+def _parse_model_discovery_candidates(
+    values: list[str],
+    *,
+    context: str = "models discover",
+) -> tuple[tuple[str, str], ...]:
     """Parse exact candidate routes before secret loading or provider access."""
 
     if not 1 <= len(values) <= 64:
-        raise ConfigError("models discover requires between 1 and 64 --candidate values")
+        raise ConfigError(f"{context} requires between 1 and 64 --candidate values")
     parsed: list[tuple[str, str]] = []
     endpoint_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
     for value in values:
         if value != value.strip() or value.count("=") != 1:
             raise ConfigError(
-                "models discover candidates must use canonical MODEL_ID=PROVIDER_ENDPOINT form"
+                f"{context} candidates must use canonical MODEL_ID=PROVIDER_ENDPOINT form"
             )
         model_id, provider_endpoint = value.split("=", 1)
         if (
             not is_exact_openrouter_model_id(model_id)
             or endpoint_pattern.fullmatch(provider_endpoint) is None
         ):
-            raise ConfigError("models discover requires exact non-alias model and endpoint IDs")
+            raise ConfigError(f"{context} requires exact non-alias model and endpoint IDs")
         parsed.append((model_id, provider_endpoint))
     if len({model_id for model_id, _endpoint in parsed}) != len(parsed):
-        raise ConfigError("models discover candidate model IDs must be unique")
+        raise ConfigError(f"{context} candidate model IDs must be unique")
     return tuple(sorted(parsed))
 
 
@@ -6908,6 +7267,7 @@ async def _refetch_qualification_generations(
     controls = build_openrouter_runtime_controls(config, certification=False)
     for candidate in registry.candidates:
         _require_cli_candidate_assignments_eligible(
+            role=ExactRouteRole.CANDIDATE,
             model_ids=(candidate.exact_model_id, candidate.canonical_model_slug),
             provider_policy=OpenRouterProviderPolicy(
                 only=(candidate.approved_provider_endpoint,),
@@ -7243,6 +7603,127 @@ def _model_benchmark_report_cost(report: ModelBenchmarkReport) -> str:
     if "." in rendered:
         rendered = rendered.rstrip("0").rstrip(".")
     return rendered if rendered not in {"", "-0"} else "0"
+
+
+def _print_endpoint_inventory(
+    diagnostic: OpenRouterEndpointInventoryDiagnostic,
+    *,
+    target: Console,
+) -> None:
+    """Render only the allowlisted nonauthorizing endpoint diagnostic fields."""
+
+    table = Table(
+        title=Text(f"OpenRouter endpoints for {_terminal_text(diagnostic.exact_model_id)}"),
+        show_lines=True,
+    )
+    table.add_column("Tag")
+    table.add_column("Slug")
+    table.add_column("Provider / injective")
+    table.add_column("Operational")
+    table.add_column("ZDR")
+    table.add_column("Endpoint output")
+    table.add_column("Model output")
+    table.add_column("Endpoint efforts")
+    table.add_column("Model efforts")
+    table.add_column("Effective efforts / source")
+    table.add_column("Successor candidate argument")
+    model_output_capability = (
+        f"{diagnostic.model_supported_output_modes[0].value}; structured_outputs="
+        f"{'yes' if diagnostic.model_structured_outputs_marker_present else 'no'}"
+    )
+    model_reasoning = _endpoint_reasoning_inventory_text(
+        diagnostic.model_reasoning_effort_inventory_state,
+        diagnostic.model_supported_reasoning_efforts,
+    )
+    for endpoint in diagnostic.endpoints:
+        provider = (
+            f"{endpoint.provider_name} / "
+            f"{'yes' if endpoint.routing_identity_unambiguous else 'no'} "
+            f"({endpoint.provider_name_occurrences})"
+        )
+        endpoint_output_capability = (
+            f"{endpoint.supported_output_modes[0].value}; structured_outputs="
+            f"{'yes' if endpoint.structured_outputs_marker_present else 'no'}"
+        )
+        endpoint_reasoning = _endpoint_reasoning_inventory_text(
+            endpoint.reasoning_effort_inventory_state,
+            endpoint.supported_reasoning_efforts,
+        )
+        effective_reasoning = (
+            f"{_endpoint_reasoning_inventory_text(endpoint.effective_reasoning_effort_inventory_state, endpoint.effective_supported_reasoning_efforts)} "
+            f"/ {endpoint.effective_reasoning_effort_inventory_source.lower()}"
+        )
+        table.add_row(
+            Text(_terminal_text(endpoint.endpoint_tag or "-")),
+            Text(_terminal_text(endpoint.endpoint_slug or "-")),
+            Text(_terminal_text(provider)),
+            Text(
+                _terminal_text(
+                    f"{'yes' if endpoint.operational else 'no'} ({endpoint.operational_status})"
+                )
+            ),
+            Text("yes" if endpoint.zdr_eligible else "no"),
+            Text(endpoint_output_capability),
+            Text(model_output_capability),
+            Text(endpoint_reasoning),
+            Text(model_reasoning),
+            Text(effective_reasoning),
+            Text(
+                _terminal_text(
+                    ", ".join(endpoint.selection_arguments)
+                    if endpoint.selection_arguments
+                    else "not uniquely addressable"
+                )
+            ),
+        )
+    target.print(table)
+    for endpoint in diagnostic.endpoints:
+        target.print(
+            f"endpoint={_terminal_text(endpoint.endpoint_tag or endpoint.endpoint_slug or '-')} "
+            f"operational={'yes' if endpoint.operational else 'no'} "
+            f"zdr={'yes' if endpoint.zdr_eligible else 'no'}",
+            markup=False,
+        )
+        target.print(
+            "endpoint_structured_outputs="
+            f"{'yes' if endpoint.structured_outputs_marker_present else 'no'} "
+            "model_structured_outputs="
+            f"{'yes' if diagnostic.model_structured_outputs_marker_present else 'no'}",
+            markup=False,
+        )
+        target.print(
+            "endpoint_reasoning_effort_inventory="
+            f"{endpoint.reasoning_effort_inventory_state} "
+            "model_reasoning_effort_inventory="
+            f"{diagnostic.model_reasoning_effort_inventory_state} "
+            "effective_reasoning_effort_inventory="
+            f"{endpoint.effective_reasoning_effort_inventory_state} "
+            "effective_reasoning_effort_source="
+            f"{endpoint.effective_reasoning_effort_inventory_source}",
+            markup=False,
+        )
+        for argument in endpoint.selection_arguments:
+            target.print(
+                f"successor_candidate={_terminal_text(argument)}",
+                markup=False,
+            )
+    target.print(
+        f"diagnostic_sha256={diagnostic.diagnostic_sha256} metadata_only=true "
+        "completion_requested=false cost_ledger_opened=false selection_authority=false",
+        markup=False,
+    )
+
+
+def _endpoint_reasoning_inventory_text(
+    state: str,
+    efforts: tuple[str, ...] | None,
+) -> str:
+    if efforts is None:
+        return state.lower()
+    if not efforts:
+        return "empty"
+    rendered = ",".join(efforts)
+    return f"{state.lower()}:{rendered}" if state == "CONTRADICTORY" else rendered
 
 
 def _cache_path(config_path: Path) -> Path:

@@ -656,6 +656,10 @@ def _usage_record(
             configured_maximum_source_tokens_per_request=1_000,
             effective_source_byte_ceiling=64,
             rendered_sha256=_sha(f"whole-protocol-context-{request_id}"),
+            requested_surface_manifest_sha256=_sha(f"whole-protocol-surface-manifest-{request_id}"),
+            source_location_proof_sha256s=(
+                _sha(f"whole-protocol-source-location-proof-{request_id}"),
+            ),
         )
     except ValueError:
         context_evidence = None
@@ -1539,7 +1543,10 @@ def test_already_issued_qualification_rejects_current_revoked_route_aliases(
 
     assert type(error.value) is ValueError
     assert isinstance(error.value.__cause__, CandidateSelectionRevocationError)
-    assert str(error.value.__cause__) == "candidate selection assignment is revoked"
+    cause_message = str(error.value.__cause__)
+    assert cause_message.startswith("candidate selection assignment is revoked: role=candidate;")
+    assert "endpoint=parasail/fp8" in cause_message
+    assert "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE" in cause_message
 
 
 def test_current_qualification_does_not_expand_revocation_to_adjacent_endpoint() -> None:
@@ -3037,6 +3044,9 @@ def test_certified_ensemble_rejects_unbound_whole_protocol_review(
         routing.pop("context_request_evidence", None)
         routing.pop("context_request_evidence_sha256", None)
     elif invalid_binding == "source_free_context":
+        original_evidence = ContextRequestEvidence.model_validate(
+            routing["context_request_evidence"]
+        )
         source_free = ContextRequestEvidence.build(
             request_id=original.request_id,
             request_role=original.role,
@@ -3048,6 +3058,8 @@ def test_certified_ensemble_rejects_unbound_whole_protocol_review(
             configured_maximum_source_tokens_per_request=1_000,
             effective_source_byte_ceiling=0,
             rendered_sha256=_sha("source-free-whole-protocol-context"),
+            requested_surface_manifest_sha256=(original_evidence.requested_surface_manifest_sha256),
+            source_location_proof_sha256s=original_evidence.source_location_proof_sha256s,
         )
         routing["context_request_evidence"] = source_free.model_dump(mode="json")
         routing["context_request_evidence_sha256"] = source_free.evidence_sha256
@@ -3070,6 +3082,8 @@ def test_certified_ensemble_rejects_unbound_whole_protocol_review(
             ),
             effective_source_byte_ceiling=(original_evidence.effective_source_byte_ceiling),
             rendered_sha256=_sha("mismatched-whole-protocol-context"),
+            requested_surface_manifest_sha256=(original_evidence.requested_surface_manifest_sha256),
+            source_location_proof_sha256s=original_evidence.source_location_proof_sha256s,
         )
         routing["context_request_evidence"] = mismatched.model_dump(mode="json")
         routing["context_request_evidence_sha256"] = mismatched.evidence_sha256

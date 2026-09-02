@@ -21,6 +21,11 @@ from mmaudit.orchestration.manifest import (
     validate_manifest_artifacts,
 )
 from mmaudit.reporting.json_report import stable_json
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    observe_unlinked_directory,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.traceability import (
     MaximumAssuranceTraceability,
@@ -99,8 +104,13 @@ def observe_release_artifacts(
 ) -> ReleaseArtifactEvidence:
     """Observe and bind a complete emitted run without trusting declared names."""
 
-    root = _require_unlinked_directory(run_dir, label="release run")
-    source_root = _require_unlinked_directory(repository_root, label="release repository")
+    root_observation = _require_unlinked_directory(run_dir, label="release run")
+    source_root_observation = _require_unlinked_directory(
+        repository_root,
+        label="release repository",
+    )
+    root = root_observation.path
+    source_root = source_root_observation.path
     manifest_path = root / _MANIFEST_NAME
     manifest_before = _read_unique_regular_file(
         manifest_path,
@@ -117,9 +127,10 @@ def observe_release_artifacts(
     )
     if manifest_before != manifest_after:
         raise ValueError("run evidence manifest changed while release artifacts were observed")
-    if manifest.schema_version != "1.2" or manifest.run_configuration is None:
+    if manifest.schema_version not in {"1.2", "1.3", "1.4"} or manifest.run_configuration is None:
         raise ValueError(
-            "release artifact evidence requires manifest schema 1.2 and its report bundle"
+            "release artifact evidence requires manifest schema 1.2, 1.3, or 1.4 and its "
+            "report bundle"
         )
 
     validate_manifest_artifacts(manifest, root)
@@ -158,6 +169,7 @@ def observe_release_artifacts(
         traceability,
         repository_root=source_root,
         runtime_artifacts=runtime_artifacts,
+        runtime_schema_version=manifest.schema_version,
     )
 
     manifest_final = _read_unique_regular_file(
@@ -177,6 +189,14 @@ def observe_release_artifacts(
         or artifacts_final != observed_artifacts
     ):
         raise ValueError("release evidence changed while it was being observed")
+    require_unchanged_unlinked_directory(
+        root_observation,
+        label="release run",
+    )
+    require_unchanged_unlinked_directory(
+        source_root_observation,
+        label="release repository",
+    )
 
     inventory_sha256 = canonical_sha256(
         [binding.model_dump(mode="json") for binding in observed_artifacts]
@@ -208,15 +228,23 @@ def load_release_artifact_evidence(path: Path) -> ReleaseArtifactEvidence:
 
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing to read a sensitive release-evidence filename")
-    parent = _require_unlinked_directory(path.parent, label="release-evidence parent")
+    parent_observation = _require_unlinked_directory(
+        path.parent,
+        label="release-evidence parent",
+    )
     data = _read_unique_regular_file(
-        parent / path.name,
+        parent_observation.path / path.name,
         max_bytes=_MAX_EVIDENCE_BYTES,
         label="release artifact evidence",
     )
-    return ReleaseArtifactEvidence.model_validate(
+    evidence = ReleaseArtifactEvidence.model_validate(
         _decode_json_object(data, label="release artifact evidence")
     )
+    require_unchanged_unlinked_directory(
+        parent_observation,
+        label="release-evidence parent",
+    )
+    return evidence
 
 
 def write_release_artifact_evidence(
@@ -227,7 +255,11 @@ def write_release_artifact_evidence(
 
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing to write a sensitive release-evidence filename")
-    parent = _require_unlinked_directory(path.parent, label="release-evidence parent")
+    parent_observation = _require_unlinked_directory(
+        path.parent,
+        label="release-evidence parent",
+    )
+    parent = parent_observation.path
     destination = parent / path.name
     serialized = stable_json(evidence).encode("utf-8")
     if len(serialized) > _MAX_EVIDENCE_BYTES:
@@ -295,6 +327,15 @@ def write_release_artifact_evidence(
     if verified_metadata is None or _stat_identity(metadata) != _stat_identity(verified_metadata):
         _unlink_matching_file(destination, created_identity)
         raise ValueError("release artifact evidence output is not a unique regular file")
+    try:
+        require_unchanged_unlinked_directory(
+            parent_observation,
+            label="release-evidence parent",
+            allow_root_metadata_change=True,
+        )
+    except ValueError:
+        _unlink_matching_file(destination, created_identity)
+        raise
 
 
 def _unlink_matching_file(path: Path, identity: tuple[int, int] | None) -> None:
@@ -310,21 +351,12 @@ def _unlink_matching_file(path: Path, identity: tuple[int, int] | None) -> None:
         path.unlink(missing_ok=True)
 
 
-def _require_unlinked_directory(path: Path, *, label: str) -> Path:
-    absolute = Path(os.path.abspath(path))
-    current = Path(absolute.anchor)
-    try:
-        for part in absolute.parts[1:]:
-            current /= part
-            metadata = current.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or current.is_junction():
-                raise ValueError(f"{label} path may not traverse a link")
-        metadata = absolute.lstat()
-    except OSError as exc:
-        raise ValueError(f"{label} directory is unavailable") from exc
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError(f"{label} must be a directory")
-    return absolute.resolve(strict=True)
+def _require_unlinked_directory(
+    path: Path,
+    *,
+    label: str,
+) -> DirectoryCustodyObservation:
+    return observe_unlinked_directory(path, label=label)
 
 
 def _read_unique_regular_file(path: Path, *, max_bytes: int, label: str) -> bytes:

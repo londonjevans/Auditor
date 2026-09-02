@@ -382,9 +382,7 @@ def test_quote_hash_binds_equal_total_split_retry_policy(
     assert fixture.quote.retry_policy.transient_retry_scope == "NETWORK_OR_STATUS"
     assert fixture.quote.retry_policy.schema_retry_failure_code == "SCHEMA_VALIDATION_FAILED"
     assert fixture.quote.retry_policy.schema_retry_route == "SAME_ROUTE"
-    assert fixture.quote.retry_policy.exhaustion_disposition == (
-        "EXPLICIT_FALLBACK_OR_TERMINATE"
-    )
+    assert fixture.quote.retry_policy.exhaustion_disposition == ("EXPLICIT_FALLBACK_OR_TERMINATE")
     assert changed.retry_policy == swapped_policy
     assert changed.retry_policy.policy_sha256 != fixture.quote.retry_policy.policy_sha256
     assert changed.quote_sha256 != fixture.quote.quote_sha256

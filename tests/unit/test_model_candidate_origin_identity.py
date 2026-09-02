@@ -48,6 +48,7 @@ from mmaudit.orchestration.manifest import (
     _scheduler_accepted_candidate_authority,
     _scheduler_report_authority_snapshot,
 )
+from mmaudit.orchestration.model_review_evidence import model_surface_context_source_custody
 from tests.fake_openrouter import _candidate
 from tests.scheduler_support import (
     build_complete_scheduler_fixture,
@@ -91,10 +92,39 @@ def _raw_candidate(
     )
 
 
-def _bound_usage(batch: CandidateReviewBatch, *, role: str) -> UsageRecord:
-    context = _context((_request(),))
-    rendered_sha256 = hashlib.sha256(render_context(context).encode("utf-8")).hexdigest()
-    return _usage(batch, role=role).model_copy(update={"user_prompt_sha256": rendered_sha256})
+def _bound_usage(batch: CandidateReviewBatch, *, context: ContextPackage) -> UsageRecord:
+    rendered = render_context(context)
+    rendered_sha256 = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(context)
+    )
+    usage = _usage(batch, role=context.role)
+    context_evidence = ContextRequestEvidence.build(
+        request_id=usage.request_id,
+        request_role=usage.role,
+        context_role=context.role,
+        byte_budget=context.byte_budget,
+        declared_bytes_used=context.bytes_used,
+        rendered_bytes=len(rendered.encode("utf-8")),
+        source_bytes=sum(len(item.content.encode("utf-8")) for item in context.excerpts),
+        configured_maximum_source_tokens_per_request=(
+            context.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=context.effective_source_byte_ceiling,
+        rendered_sha256=rendered_sha256,
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
+    )
+    return usage.model_copy(
+        update={
+            "user_prompt_sha256": rendered_sha256,
+            "routing": {
+                **usage.routing,
+                "context_request_evidence": context_evidence.model_dump(mode="json"),
+                "context_request_evidence_sha256": context_evidence.evidence_sha256,
+            },
+        }
+    )
 
 
 def _structural_truncated_usage(
@@ -122,9 +152,8 @@ def _accountable_truncated_usage(
     batch: CandidateReviewBatch,
     *,
     context: ContextPackage,
-    role: str,
 ) -> UsageRecord:
-    usage = _bound_usage(batch, role=role)
+    usage = _bound_usage(batch, context=context)
     plan = request_token_plan_from_usage(usage)
     assert plan is not None
     request_limit = AtomicRequestLimitReservationEvidence.build(
@@ -136,20 +165,8 @@ def _accountable_truncated_usage(
         request_limit_count_before=0,
         request_limit_maximum=10,
     )
-    rendered = render_context(context)
-    context_evidence = ContextRequestEvidence.build(
-        request_id=usage.request_id,
-        request_role=usage.role,
-        context_role=context.role,
-        byte_budget=context.byte_budget,
-        declared_bytes_used=context.bytes_used,
-        rendered_bytes=len(rendered.encode("utf-8")),
-        source_bytes=sum(len(item.content.encode("utf-8")) for item in context.excerpts),
-        configured_maximum_source_tokens_per_request=(
-            context.configured_maximum_source_tokens_per_request
-        ),
-        effective_source_byte_ceiling=context.effective_source_byte_ceiling,
-        rendered_sha256=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+    context_evidence = ContextRequestEvidence.model_validate(
+        usage.routing["context_request_evidence"]
     )
     payload = usage.model_dump(mode="json")
     payload.update(
@@ -402,6 +419,8 @@ def test_detached_manifest_restamps_scanner_evidence_against_trusted_inventory()
     class DetachedJournal:
         outputs = (output,)
         pass_results = (pass_result,)
+        plans = (plan,)
+        activations = (activation,)
 
         def reconstruct_output(self, task_id: str, output_type: type[Any]) -> Any:
             assert task_id == task.task_id
@@ -426,7 +445,6 @@ def test_structurally_accountable_truncated_usage_stamps_without_granting_credit
     truncated_usage = _accountable_truncated_usage(
         batch,
         context=context,
-        role="source_audit",
     )
 
     assert is_structurally_accountable_usage_record(truncated_usage)
@@ -501,7 +519,7 @@ def test_generic_and_specialist_binders_use_request_bound_origin_identity(
         findings=[raw_candidate],
         surface_reviews=(_record(request, role="source_audit"),),
     )
-    source_usage = _bound_usage(source_batch, role="source_audit")
+    source_usage = _bound_usage(source_batch, context=source_context)
     source_result = SourceAuditAgent(config, inert_client).bind_completed_review(
         source_context,
         raw_response=source_batch,
@@ -512,7 +530,7 @@ def test_generic_and_specialist_binders_use_request_bound_origin_identity(
         findings=[raw_candidate],
         surface_reviews=(_record(request, role=_SPECIALIST_ROLE),),
     )
-    specialist_usage = _bound_usage(specialist_batch, role=_SPECIALIST_ROLE)
+    specialist_usage = _bound_usage(specialist_batch, context=specialist_context)
     specialist_result = SpecialistFindingAgent(
         config,
         inert_client,

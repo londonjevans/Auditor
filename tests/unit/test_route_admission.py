@@ -371,8 +371,8 @@ async def test_route_admission_rejects_tombstoned_candidate_under_new_plan(
 
     with pytest.raises(
         AuthenticatedRunnerRouteAdmissionError,
-        match="candidate assignment is revoked",
-    ):
+        match="route assignment is revoked",
+    ) as raised:
         require_authenticated_runner_route_admission(
             model=registry.candidates[0],
             evidence=evidence[0],
@@ -380,6 +380,12 @@ async def test_route_admission_rejects_tombstoned_candidate_under_new_plan(
             purpose=RouteConstraintPurpose.REGISTRY_PUBLICATION,
             discovery_manifest=manifest,
         )
+    assert (
+        str(raised.value)
+        == "authenticated runner route assignment is revoked: candidate selection assignment "
+        f"is revoked: role=candidate; model={model_id}; endpoint=parasail/fp8; "
+        "reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE"
+    )
 
 
 @pytest.mark.asyncio

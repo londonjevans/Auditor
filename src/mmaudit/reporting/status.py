@@ -96,7 +96,7 @@ def effective_report_status(report: AuditReport) -> ReportStatusProjection:
     """Project current evidence exactly and fail legacy no-floor reports closed."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
-    if report.schema_version == "1.2":
+    if report.schema_version in {"1.2", "1.3", "1.4"}:
         assert report.run_status is not None
         return ReportStatusProjection(
             run_status=report.run_status,

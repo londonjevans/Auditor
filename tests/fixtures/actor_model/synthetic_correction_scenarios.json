@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "fixture_kind": "synthetic_actor_correction_scenarios",
+  "scenarios": [
+    {
+      "scenario_id": "anchor-first-loss-scope",
+      "finding_id": "synthetic-finding-anchor-scope",
+      "original_severity": "high",
+      "actor_context": {
+        "role_id": "anchor_curator",
+        "severity_basis": "code_mechanism_only",
+        "harmed_party_disposition": "identified",
+        "harmed_party_id": "end-user-pool",
+        "privileged_action_required": true,
+        "permission": "review synthetic allocation",
+        "misconduct_required": true,
+        "ordinary_legitimate_behavior": false,
+        "action_against_stated_interest": true,
+        "stated_interest": "protect synthetic first-loss capital",
+        "relevant_constraint_ids": [],
+        "required_concentrated_role_ids": [],
+        "relevant_economic_exposures": [
+          "protocol_failure_loss"
+        ],
+        "plausibility_rationale": null,
+        "plausibility_evidence_reference_ids": []
+      },
+      "admitted_alternative_actor_context": {
+        "role_id": "third_party_curator",
+        "severity_basis": "code_mechanism_only",
+        "harmed_party_disposition": "identified",
+        "harmed_party_id": "end-user-pool",
+        "privileged_action_required": true,
+        "permission": "review synthetic allocation",
+        "misconduct_required": true,
+        "ordinary_legitimate_behavior": false,
+        "action_against_stated_interest": false,
+        "stated_interest": null,
+        "relevant_constraint_ids": [],
+        "required_concentrated_role_ids": [],
+        "relevant_economic_exposures": [],
+        "plausibility_rationale": "A future approved synthetic curator may not share the anchor's first-loss position.",
+        "plausibility_evidence_reference_ids": [
+          "adr-roles"
+        ]
+      },
+      "expected_with_actor_model": {
+        "calibrated_severity": "medium",
+        "likelihood_adjustment": "decreased",
+        "current_holder_is_first_loss": true,
+        "alternative_role_occupancy": "admitted_unfilled"
+      },
+      "expected_without_actor_model": {
+        "calibrated_severity": "high",
+        "likelihood_adjustment": "unassessed",
+        "requires_limitation": true
+      }
+    },
+    {
+      "scenario_id": "ordinary-servicer-forbearance",
+      "finding_id": "synthetic-finding-forbearance",
+      "original_severity": "medium",
+      "actor_context": {
+        "role_id": "servicer",
+        "severity_basis": "code_mechanism_only",
+        "harmed_party_disposition": "identified",
+        "harmed_party_id": "end-user-pool",
+        "privileged_action_required": true,
+        "permission": "defer synthetic past-due mark",
+        "misconduct_required": false,
+        "ordinary_legitimate_behavior": true,
+        "action_against_stated_interest": false,
+        "stated_interest": null,
+        "relevant_constraint_ids": [],
+        "required_concentrated_role_ids": [],
+        "relevant_economic_exposures": [
+          "fee_revenue",
+          "protocol_failure_loss"
+        ],
+        "plausibility_rationale": "Ordinary synthetic forbearance can defer a mark while pursuing repayment.",
+        "plausibility_evidence_reference_ids": [
+          "operator-operations"
+        ]
+      },
+      "expected_with_actor_model": {
+        "calibrated_severity": "medium",
+        "likelihood_adjustment": "increased",
+        "ordinary_legitimate_behavior": true,
+        "remediation_focus": "legitimate_state_transition"
+      },
+      "expected_without_actor_model": {
+        "calibrated_severity": "medium",
+        "likelihood_adjustment": "unassessed",
+        "requires_limitation": true
+      }
+    },
+    {
+      "scenario_id": "request-cooldown-severity",
+      "finding_id": "synthetic-finding-cooldown",
+      "original_severity": "high",
+      "actor_context": {
+        "role_id": "anchor_curator",
+        "severity_basis": "code_mechanism_only",
+        "harmed_party_disposition": "identified",
+        "harmed_party_id": "end-user-pool",
+        "privileged_action_required": true,
+        "permission": "request synthetic redemption",
+        "misconduct_required": true,
+        "ordinary_legitimate_behavior": false,
+        "action_against_stated_interest": false,
+        "stated_interest": null,
+        "relevant_constraint_ids": [
+          "request-anchored-cooldown"
+        ],
+        "required_concentrated_role_ids": [],
+        "relevant_economic_exposures": [],
+        "plausibility_rationale": null,
+        "plausibility_evidence_reference_ids": []
+      },
+      "expected_with_actor_model": {
+        "calibrated_severity": "medium",
+        "likelihood_adjustment": "decreased",
+        "applied_constraint_ids": [
+          "request-anchored-cooldown"
+        ]
+      },
+      "expected_without_actor_model": {
+        "calibrated_severity": "high",
+        "likelihood_adjustment": "unassessed",
+        "requires_limitation": true
+      }
+    }
+  ]
+}

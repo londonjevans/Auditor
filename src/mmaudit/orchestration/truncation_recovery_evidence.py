@@ -80,6 +80,8 @@ from mmaudit.orchestration.model_review_evidence import (
 )
 
 _WHOLE_PROTOCOL_REQUEST_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
+_DIRECT_PROMOTION_PRE_DISPATCH_BINDING_COUNT = 3
+_RECURSIVE_PROMOTION_PRE_DISPATCH_BINDING_COUNT = 5
 
 
 class TruncationRecoveryEvidenceError(ValueError):
@@ -341,15 +343,6 @@ class _VerifiedTruncationRecoveryState:
 
 
 @dataclass(frozen=True, slots=True)
-class _VerifiedPromotedTruncationRecoverySurfaceCoverageState:
-    process_id: int
-    journal_reference: weakref.ReferenceType[object]
-    family_id: str
-    closure_capability: VerifiedTruncationRecoveryClosure
-    promotion_json: str
-
-
-@dataclass(frozen=True, slots=True)
 class _VerifiedRecursiveTruncationRecoveryMaterial:
     root_family: SchedulerTruncationRecoveryFamilyRoot
     nested_family: SchedulerTruncationRecoveryFamilyRoot
@@ -394,15 +387,6 @@ class _VerifiedRecursiveTruncationRecoveryState:
     request_jsons: tuple[str, ...]
     artifact_json: str
     scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState:
-    process_id: int
-    journal_reference: weakref.ReferenceType[object]
-    family_id: str
-    tree_capability: VerifiedRecursiveTruncationRecoveryTree
-    promotion_json: str
 
 
 class _VerifyTruncationRecoveryClosure(Protocol):
@@ -2440,131 +2424,6 @@ def _validated_promoted_surface_projection(
     )
 
 
-def _build_promoted_truncation_recovery_surface_coverage_authority() -> tuple[
-    _IssuePromotedTruncationRecoverySurfaceCoverage,
-    _RequirePromotedTruncationRecoverySurfaceCoverage,
-]:
-    """Bind one live closure to a promotion retained by its exact journal."""
-
-    capability_type = VerifiedPromotedTruncationRecoverySurfaceCoverage
-    state_type = _VerifiedPromotedTruncationRecoverySurfaceCoverageState
-    canonical_model_json = _canonical_model_json
-    require_closure = _require_truncation_recovery_closure
-    validate_projection = _validated_promoted_surface_projection
-    current_process_id = os.getpid
-    owner_process_id = current_process_id()
-    make_weakref = weakref.ref
-    registry: dict[
-        int,
-        tuple[
-            weakref.ReferenceType[VerifiedPromotedTruncationRecoverySurfaceCoverage],
-            _VerifiedPromotedTruncationRecoverySurfaceCoverageState,
-        ],
-    ] = {}
-    lock = threading.RLock()
-
-    def current_promotion(
-        journal: object, family_id: str
-    ) -> SchedulerTruncationRecoveryFamilyPromotion:
-        # Imported lazily because the scheduler owns this module's closure verifier.
-        from mmaudit.orchestration.scheduler import SchedulerJournal
-
-        if type(journal) is not SchedulerJournal:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage lacks exact scheduler custody"
-            )
-        try:
-            return journal._require_current_promoted_truncation_recovery_family(family_id)
-        except ValueError as exc:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage lacks a retained journal promotion"
-            ) from exc
-
-    def issue(
-        *,
-        journal: object,
-        family_id: str,
-        closure_capability: VerifiedTruncationRecoveryClosure,
-    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverage:
-        if current_process_id() != owner_process_id:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage cannot cross a process fork"
-            )
-        promotion = current_promotion(journal, family_id)
-        closure = require_closure(closure_capability)
-        validate_projection(closure=closure, promotion=promotion)
-        capability = object.__new__(capability_type)
-        try:
-            journal_reference = make_weakref(journal)
-        except TypeError as exc:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage journal cannot be retained"
-            ) from exc
-        state = state_type(
-            process_id=current_process_id(),
-            journal_reference=journal_reference,
-            family_id=family_id,
-            closure_capability=closure_capability,
-            promotion_json=canonical_model_json(promotion),
-        )
-        key = id(capability)
-
-        def discard(
-            reference: weakref.ReferenceType[VerifiedPromotedTruncationRecoverySurfaceCoverage],
-        ) -> None:
-            with lock:
-                current = registry.get(key)
-                if current is not None and current[0] is reference:
-                    registry.pop(key, None)
-
-        reference = make_weakref(capability, discard)
-        with lock:
-            registry[key] = (reference, state)
-        return capability
-
-    def require(
-        capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
-    ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
-        process_id = current_process_id()
-        if process_id != owner_process_id:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage cannot cross a process fork"
-            )
-        with lock:
-            registered = registry.get(id(capability))
-        state = (
-            registered[1]
-            if type(capability) is capability_type
-            and registered is not None
-            and registered[0]() is capability
-            else None
-        )
-        if state is None:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage is absent or forged"
-            )
-        journal = state.journal_reference()
-        if state.process_id != process_id or journal is None:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage lost live journal custody"
-            )
-        promotion = current_promotion(journal, state.family_id)
-        if canonical_model_json(promotion) != state.promotion_json:
-            raise TruncationRecoveryEvidenceError(
-                "promoted truncation surface coverage journal state changed"
-            )
-        closure = require_closure(state.closure_capability)
-        return validate_projection(closure=closure, promotion=promotion)
-
-    return issue, require
-
-
-(
-    _issue_verified_promoted_truncation_recovery_surface_coverage,
-    _require_verified_promoted_truncation_recovery_surface_coverage,
-) = _build_promoted_truncation_recovery_surface_coverage_authority()
-
-
 def _validated_promoted_recursive_surface_projection(
     *,
     tree: VerifiedRecursiveTruncationRecoveryTreeProjection,
@@ -2646,139 +2505,6 @@ def _validated_promoted_recursive_surface_projection(
         bridge_context=tree.bridge_context,
         leaf_contexts=tree.leaf_contexts,
     )
-
-
-def _build_promoted_recursive_truncation_recovery_surface_coverage_authority() -> tuple[
-    _IssuePromotedRecursiveTruncationRecoverySurfaceCoverage,
-    _RequirePromotedRecursiveTruncationRecoverySurfaceCoverage,
-]:
-    """Bind one live recursive tree to the exact retained v1.1 promotion."""
-
-    capability_type = VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
-    state_type = _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState
-    canonical_model_json = _canonical_model_json
-    require_tree = _require_recursive_truncation_recovery_tree
-    validate_projection = _validated_promoted_recursive_surface_projection
-    current_process_id = os.getpid
-    owner_process_id = current_process_id()
-    make_weakref = weakref.ref
-    registry: dict[
-        int,
-        tuple[
-            weakref.ReferenceType[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
-            _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState,
-        ],
-    ] = {}
-    lock = threading.RLock()
-
-    def current_promotion(
-        journal: object,
-        family_id: str,
-    ) -> SchedulerTruncationRecoveryFamilyPromotion:
-        # Imported lazily because the scheduler owns this module's tree verifier.
-        from mmaudit.orchestration.scheduler import SchedulerJournal
-
-        if type(journal) is not SchedulerJournal:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage lacks exact scheduler custody"
-            )
-        try:
-            promotion = journal._require_current_promoted_truncation_recovery_family(family_id)
-        except ValueError as exc:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage lacks a retained promotion"
-            ) from exc
-        if type(promotion) is not SchedulerTruncationRecoveryFamilyPromotion:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage has invalid promotion custody"
-            )
-        return promotion
-
-    def issue(
-        *,
-        journal: object,
-        family_id: str,
-        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
-    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
-        if current_process_id() != owner_process_id:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage cannot cross a process fork"
-            )
-        promotion = current_promotion(journal, family_id)
-        tree = require_tree(tree_capability)
-        validate_projection(tree=tree, promotion=promotion)
-        capability = object.__new__(capability_type)
-        try:
-            journal_reference = make_weakref(journal)
-        except TypeError as exc:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage journal cannot be retained"
-            ) from exc
-        state = state_type(
-            process_id=current_process_id(),
-            journal_reference=journal_reference,
-            family_id=family_id,
-            tree_capability=tree_capability,
-            promotion_json=canonical_model_json(promotion),
-        )
-        key = id(capability)
-
-        def discard(
-            reference: weakref.ReferenceType[
-                VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
-            ],
-        ) -> None:
-            with lock:
-                current = registry.get(key)
-                if current is not None and current[0] is reference:
-                    registry.pop(key, None)
-
-        reference = make_weakref(capability, discard)
-        with lock:
-            registry[key] = (reference, state)
-        return capability
-
-    def require(
-        capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
-    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
-        process_id = current_process_id()
-        if process_id != owner_process_id:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage cannot cross a process fork"
-            )
-        with lock:
-            registered = registry.get(id(capability))
-        state = (
-            registered[1]
-            if type(capability) is capability_type
-            and registered is not None
-            and registered[0]() is capability
-            else None
-        )
-        if state is None:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage is absent or forged"
-            )
-        journal = state.journal_reference()
-        if state.process_id != process_id or journal is None:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage lost live journal custody"
-            )
-        promotion = current_promotion(journal, state.family_id)
-        if canonical_model_json(promotion) != state.promotion_json:
-            raise TruncationRecoveryEvidenceError(
-                "promoted recursive truncation surface coverage journal state changed"
-            )
-        tree = require_tree(state.tree_capability)
-        return validate_projection(tree=tree, promotion=promotion)
-
-    return issue, require
-
-
-(
-    _issue_verified_promoted_recursive_truncation_recovery_surface_coverage,
-    _require_verified_promoted_recursive_truncation_recovery_surface_coverage,
-) = _build_promoted_recursive_truncation_recovery_surface_coverage_authority()
 
 
 def verify_truncation_recovery_closure(
@@ -2907,19 +2633,3 @@ def require_verified_recursive_truncation_recovery_tree_projection(
                 "recursive truncation recovery artifact differs from verified tree state"
             )
     return fresh
-
-
-def require_verified_promoted_truncation_recovery_surface_coverage(
-    capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
-) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
-    """Replay one journal-owned promoted surface union without serialized authority."""
-
-    return _require_verified_promoted_truncation_recovery_surface_coverage(capability)
-
-
-def require_verified_promoted_recursive_truncation_recovery_surface_coverage(
-    capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
-) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
-    """Replay one journal-owned recursive promotion without serialized authority."""
-
-    return _require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)

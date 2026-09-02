@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -41,7 +42,53 @@ def test_current_implemented_rows_have_repository_and_runtime_evidence() -> None
         matrix,
         repository_root=ROOT,
         runtime_artifacts=artifacts,
+        runtime_schema_version="1.4",
     )
+
+
+@pytest.mark.parametrize("runtime_schema_version", ["1.2", "1.3"])
+def test_legacy_runtime_does_not_retroactively_require_taxonomy_artifacts(
+    runtime_schema_version: Literal["1.2", "1.3"],
+) -> None:
+    matrix = build_traceability_matrix("test-commit")
+    artifacts = {
+        artifact
+        for requirement in matrix.requirements
+        if requirement.implementation_status is ImplementationStatus.IMPLEMENTED
+        for artifact in requirement.runtime_artifacts
+        if artifact
+        not in {
+            "known-issue-taxonomy.json",
+            "known-issue-taxonomy-coverage.json",
+        }
+    }
+
+    validate_traceability_evidence(
+        matrix,
+        repository_root=None,
+        runtime_artifacts=artifacts,
+        runtime_schema_version=runtime_schema_version,
+    )
+
+    with pytest.raises(ValueError, match="known-issue-taxonomy"):
+        validate_traceability_evidence(
+            matrix,
+            repository_root=None,
+            runtime_artifacts=artifacts,
+            runtime_schema_version="1.4",
+        )
+
+
+def test_unknown_runtime_schema_cannot_disable_current_artifact_requirements() -> None:
+    matrix = build_traceability_matrix("test-commit")
+
+    with pytest.raises(ValueError, match="unsupported traceability runtime schema version"):
+        validate_traceability_evidence(
+            matrix,
+            repository_root=None,
+            runtime_artifacts=set(),
+            runtime_schema_version="9.9",  # type: ignore[arg-type]
+        )
 
 
 def test_model_ensemble_traceability_names_qualification_runtime_evidence() -> None:
@@ -191,6 +238,7 @@ def test_validator_rejects_each_missing_evidence_form(
             matrix,
             repository_root=tmp_path,
             runtime_artifacts=artifacts,
+            runtime_schema_version="1.4",
         )
 
 
@@ -222,6 +270,7 @@ def test_documentation_cannot_count_as_implemented_code(tmp_path: Path) -> None:
             matrix,
             repository_root=tmp_path,
             runtime_artifacts={"claim.json"},
+            runtime_schema_version="1.4",
         )
 
 
@@ -255,6 +304,7 @@ def test_symlinked_evidence_is_rejected(tmp_path: Path) -> None:
             matrix,
             repository_root=tmp_path,
             runtime_artifacts={"capability.json"},
+            runtime_schema_version="1.4",
         )
 
 

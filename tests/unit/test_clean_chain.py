@@ -5,8 +5,9 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -155,11 +156,25 @@ def _config(
     )
 
 
-def _roots(tmp_path: Path) -> tuple[Path, Path]:
+@pytest.fixture
+def clean_chain_private_root() -> Iterator[Path]:
+    physical_tmp = Path("/private/tmp")
+    if not physical_tmp.is_dir():
+        physical_tmp = Path("/tmp")
+    with tempfile.TemporaryDirectory(
+        prefix="mmaudit-clean-chain-",
+        dir=physical_tmp,
+    ) as temporary_root:
+        physical_root = Path(temporary_root).resolve(strict=True)
+        physical_root.chmod(0o700)
+        private = physical_root / "private"
+        private.mkdir(mode=0o700)
+        yield private
+
+
+def _roots(tmp_path: Path, private: Path) -> tuple[Path, Path]:
     repository = tmp_path / "repository"
     repository.mkdir(mode=0o755)
-    private = tmp_path / "private"
-    private.mkdir(mode=0o700)
     private.chmod(0o700)
     return repository.resolve(strict=True), private.resolve(strict=True)
 
@@ -198,9 +213,10 @@ def test_trusted_clean_anvil_launcher_is_importable() -> None:
 
 def test_trusted_clean_anvil_uses_fixed_argv_sanitized_environment_and_sealed_stop(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     observer = _ObservationSequence(default=_observation())
     launcher = _launcher(executable, factory=factory, observer=observer)
@@ -331,9 +347,12 @@ def test_trusted_clean_anvil_uses_fixed_argv_sanitized_environment_and_sealed_st
     assert evidence.attestation_sha256 == evidence.expected_attestation_sha256()
 
 
-def test_trusted_clean_anvil_never_falls_back_to_path(tmp_path: Path) -> None:
+def test_trusted_clean_anvil_never_falls_back_to_path(
+    tmp_path: Path,
+    clean_chain_private_root: Path,
+) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = TrustedCleanAnvilLauncher(
         environment={"PATH": str(executable.parent)},
@@ -351,9 +370,10 @@ def test_trusted_clean_anvil_never_falls_back_to_path(tmp_path: Path) -> None:
 @pytest.mark.parametrize("unsafe_kind", ["repository", "symlink", "hardlink", "writable"])
 def test_trusted_clean_anvil_rejects_unsafe_executable_identity(
     tmp_path: Path,
+    clean_chain_private_root: Path,
     unsafe_kind: str,
 ) -> None:
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     external = _fake_anvil_source(tmp_path)
     candidate = external
     if unsafe_kind == "repository":
@@ -385,9 +405,10 @@ def test_trusted_clean_anvil_rejects_unsafe_executable_identity(
 
 def test_trusted_clean_anvil_rejects_hash_and_exact_version_mismatches(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = TrustedCleanAnvilLauncher(
         environment={"MMAUDIT_ANVIL_EXECUTABLE": str(executable)},
@@ -404,7 +425,7 @@ def test_trusted_clean_anvil_rejects_hash_and_exact_version_mismatches(
             time.monotonic() + 2,
         )
 
-    second_private = tmp_path / "second-private"
+    second_private = clean_chain_private_root / "second-private"
     second_private.mkdir(mode=0o700)
     second_private.chmod(0o700)
     factory = _RecordingProcessFactory()
@@ -429,9 +450,10 @@ def test_trusted_clean_anvil_rejects_hash_and_exact_version_mismatches(
 
 def test_trusted_clean_anvil_rejects_changing_genesis_and_cleans_process(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     observer = _ObservationSequence(
         _observation(),
@@ -457,9 +479,10 @@ def test_trusted_clean_anvil_rejects_changing_genesis_and_cleans_process(
 
 def test_trusted_clean_anvil_retries_one_early_port_race_with_a_new_port(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path, first_port_exit=19_345)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
 
     class _PortAwareObserver:
@@ -501,9 +524,12 @@ def test_trusted_clean_anvil_retries_one_early_port_race_with_a_new_port(
     assert lease.attestation().process_group_absent is True
 
 
-def test_trusted_clean_anvil_escalates_to_bounded_group_kill(tmp_path: Path) -> None:
+def test_trusted_clean_anvil_escalates_to_bounded_group_kill(
+    tmp_path: Path,
+    clean_chain_private_root: Path,
+) -> None:
     executable = _fake_anvil_source(tmp_path, ignore_term=True)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -528,9 +554,10 @@ def test_trusted_clean_anvil_escalates_to_bounded_group_kill(tmp_path: Path) -> 
 
 def test_trusted_clean_anvil_rejects_and_cleans_excess_process_output(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path, emit_excess_output=True)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -546,9 +573,10 @@ def test_trusted_clean_anvil_rejects_and_cleans_excess_process_output(
 
 def test_failed_reobservation_prevents_attestation_but_still_cleans_process(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     observer = _ObservationSequence(
         _observation(),
@@ -582,9 +610,12 @@ def test_failed_reobservation_prevents_attestation_but_still_cleans_process(
         lease.attestation()
 
 
-def test_spawned_process_must_own_the_observed_loopback_listener(tmp_path: Path) -> None:
+def test_spawned_process_must_own_the_observed_loopback_listener(
+    tmp_path: Path,
+    clean_chain_private_root: Path,
+) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = TrustedCleanAnvilLauncher(
         environment={"MMAUDIT_ANVIL_EXECUTABLE": str(executable)},
@@ -609,9 +640,10 @@ def test_spawned_process_must_own_the_observed_loopback_listener(tmp_path: Path)
 
 def test_mutated_current_head_cannot_seal_pristine_clean_attestation(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     heads = iter((_head(), _head(), _head(1, block_hash=_OTHER_GENESIS_HASH)))
     launcher = TrustedCleanAnvilLauncher(
@@ -638,9 +670,10 @@ def test_mutated_current_head_cannot_seal_pristine_clean_attestation(
 
 def test_version_probe_descendant_is_killed_and_cannot_hold_collectors(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path, leave_version_descendant=True)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -668,9 +701,10 @@ def test_version_probe_descendant_is_killed_and_cannot_hold_collectors(
 
 def test_context_manager_stops_and_removes_workspace_on_caller_exception(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -702,11 +736,15 @@ def test_context_manager_stops_and_removes_workspace_on_caller_exception(
 @pytest.mark.parametrize("ancestor_name", [".env.synthetic", "foundry.toml"])
 def test_clean_anvil_rejects_ancestor_control_files(
     tmp_path: Path,
+    clean_chain_private_root: Path,
     ancestor_name: str,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
-    (tmp_path / ancestor_name).write_text("SYNTHETIC_CANARY=untrusted\n", encoding="utf-8")
+    repository, private = _roots(tmp_path, clean_chain_private_root)
+    (private.parent / ancestor_name).write_text(
+        "SYNTHETIC_CANARY=untrusted\n",
+        encoding="utf-8",
+    )
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -727,9 +765,12 @@ def test_clean_anvil_rejects_ancestor_control_files(
             lease.stop(time.monotonic() + 1)
 
 
-def test_clean_stop_removes_private_executable_and_workspace(tmp_path: Path) -> None:
+def test_clean_stop_removes_private_executable_and_workspace(
+    tmp_path: Path,
+    clean_chain_private_root: Path,
+) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -750,10 +791,13 @@ def test_clean_stop_removes_private_executable_and_workspace(tmp_path: Path) -> 
     assert not (private / "clean-anvil").exists()
 
 
-def test_late_ancestor_control_file_prevents_clean_attestation(tmp_path: Path) -> None:
+def test_late_ancestor_control_file_prevents_clean_attestation(
+    tmp_path: Path,
+    clean_chain_private_root: Path,
+) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
-    injected_control = tmp_path / "foundry.toml"
+    repository, private = _roots(tmp_path, clean_chain_private_root)
+    injected_control = private.parent / "foundry.toml"
 
     class _InjectingProcessFactory(_RecordingProcessFactory):
         def __call__(self, args: Sequence[str], **kwargs: Any) -> subprocess.Popen[bytes]:
@@ -792,9 +836,10 @@ def test_late_ancestor_control_file_prevents_clean_attestation(tmp_path: Path) -
 
 def test_ancestor_control_file_added_during_lease_prevents_attestation(
     tmp_path: Path,
+    clean_chain_private_root: Path,
 ) -> None:
     executable = _fake_anvil_source(tmp_path)
-    repository, private = _roots(tmp_path)
+    repository, private = _roots(tmp_path, clean_chain_private_root)
     factory = _RecordingProcessFactory()
     launcher = _launcher(
         executable,
@@ -807,7 +852,7 @@ def test_ancestor_control_file_added_during_lease_prevents_attestation(
         private,
         time.monotonic() + 2,
     )
-    injected_control = tmp_path / ".env.synthetic"
+    injected_control = private.parent / ".env.synthetic"
     injected_control.write_text("SYNTHETIC_CANARY=untrusted\n", encoding="utf-8")
     try:
         with pytest.raises(CleanAnvilIdentityError, match="unchanged pre/post"):

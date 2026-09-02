@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from mmaudit.models.retrieval import SolidityRetrievalRequestBatch
 from mmaudit.models.schemas import CandidateReviewBatch
 from mmaudit.models.truncation import CandidateReviewFramePhase, frame_candidate_review_batch
 from tests.conftest import MODEL_IDS
@@ -193,6 +194,8 @@ def _candidate(
         "role": role,
         "model_family": "caller-overwrites-this",
         "model_votes": [],
+        "actor_model_applicability": "unstated",
+        "actor_context": None,
     }
 
 
@@ -791,12 +794,15 @@ def _surface_review_path(
             (
                 edge
                 for edge in edges
-                if edge["target_id"] == subject["id"] and edge["source_id"] in entry_by_id
+                if edge["target_id"] == subject["id"]
+                and edge["source_id"] in entry_by_id
+                and edge["source_id"] != edge["target_id"]
             ),
             None,
         )
         if edge is not None:
-            return terminal, [_entity_citation(entry_by_id[edge["source_id"]]), terminal]
+            entry = entry_by_id[edge["source_id"]]
+            return terminal, [_entity_citation(entry), terminal]
 
     if request["kind"] == "call" and allowed_locations:
         location = allowed_locations[0]
@@ -842,6 +848,7 @@ def _surface_review_path(
             for edge in edges
             if edge["source_id"] in entry_by_id
             and edge["target_id"] in entities_by_id
+            and edge["source_id"] != edge["target_id"]
             and edge["target_id"] in exactly_bound_target_ids
         ]
         reachable = exact_reachable or [
@@ -853,6 +860,7 @@ def _surface_review_path(
             if not exactly_bound_target_ids
             and edge["source_id"] in entry_by_id
             and edge["target_id"] in entities_by_id
+            and edge["source_id"] != edge["target_id"]
             and {
                 entities_by_id[edge["target_id"]]["id"],
                 entities_by_id[edge["target_id"]]["name"],
@@ -1093,6 +1101,8 @@ class FakeOpenRouter:
                         "content_hash": None,
                     }
                 ]
+        elif schema_name == "mmaudit_solidity_retrieval_request_batch":
+            content = SolidityRetrievalRequestBatch(requests=()).model_dump(mode="json")
         elif schema_name.startswith("mmaudit_whole_protocol_review_"):
             user = body["messages"][1]["content"]
             metadata = body.get("metadata") or {}
@@ -1408,6 +1418,8 @@ class FakeOpenRouter:
                         "cwe": group["candidates"][0]["cwe"],
                         "owasp": group["candidates"][0]["owasp"],
                         "rationale": "Classification respects the deterministic cap",
+                        "actor_model_applicability": "unstated",
+                        "actor_context": None,
                     }
                     for group in payload["candidate_groups"]
                 ]

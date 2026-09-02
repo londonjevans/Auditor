@@ -17,6 +17,7 @@ from mmaudit.orchestration.manifest import (
     ManifestFileBinding,
     RunEvidenceManifest,
     canonical_sha256,
+    resolve_run_evidence_config,
 )
 from mmaudit.orchestration.verification import (
     RunVerification,
@@ -29,8 +30,19 @@ from mmaudit.release_artifacts import (
     _require_unlinked_directory,
 )
 from mmaudit.release_run import ReleaseRunBinding, observe_release_run_binding
+from mmaudit.repository.configuration_custody import (
+    ConfigurationInputObservation,
+    observe_configuration_input,
+    require_unchanged_configuration_input,
+)
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import (
+    is_sensitive_workspace_name,
+)
 
 _MANIFEST_NAME = "run-evidence-manifest.json"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -84,10 +96,48 @@ class _BoundSourceObservation:
     identity: tuple[int, int, int, int, int, int, int]
 
 
+ReleaseConfigurationInputObservation = ConfigurationInputObservation
+
+
+def observe_release_configuration_input(
+    *,
+    configuration_root: Path,
+    manifest: RunEvidenceManifest,
+) -> ReleaseConfigurationInputObservation:
+    """Observe the exact trusted ignore input selected by a sealed run configuration."""
+
+    if manifest.run_configuration is None:
+        raise ValueError("release configuration observation requires embedded run configuration")
+    config = resolve_run_evidence_config(manifest)
+    return observe_configuration_input(
+        configuration_root=configuration_root,
+        configured_ignore_path=config.repository.ignore_file,
+    )
+
+
+def observe_release_configuration_input_from_run(
+    *,
+    run_dir: Path,
+    configuration_root: Path,
+) -> ReleaseConfigurationInputObservation:
+    """Observe configuration custody using the exact manifest retained by one run."""
+
+    run_root_observation = _require_unlinked_directory(run_dir, label="release run")
+    run_root = run_root_observation.path
+    manifest, _manifest_bytes = _read_manifest_exact(run_root / _MANIFEST_NAME)
+    observation = observe_release_configuration_input(
+        configuration_root=configuration_root,
+        manifest=manifest,
+    )
+    require_unchanged_unlinked_directory(run_root_observation, label="release run")
+    return observation
+
+
 def observe_release_run_verification(
     *,
     run_dir: Path,
     target_repository_root: Path,
+    configuration_root: Path,
     release_repository_root: Path,
     artifact_evidence_path: Path,
     verification_path: Path,
@@ -95,24 +145,44 @@ def observe_release_run_verification(
 ) -> ReleaseRunVerificationBinding:
     """Require a supplied CURRENT result to equal two fresh recomputations."""
 
-    run_root = _require_unlinked_directory(run_dir, label="release run")
-    target_root = _require_unlinked_directory(
+    run_root_observation = _require_unlinked_directory(run_dir, label="release run")
+    target_root_observation = _require_unlinked_directory(
         target_repository_root,
         label="release target repository",
     )
-    release_root = _require_unlinked_directory(
+    configuration_root_observation = _require_unlinked_directory(
+        configuration_root,
+        label="release configuration",
+    )
+    release_root_observation = _require_unlinked_directory(
         release_repository_root,
         label="mmaudit release repository",
     )
+    run_root = run_root_observation.path
+    target_root = target_root_observation.path
+    config_root = configuration_root_observation.path
+    release_root = release_root_observation.path
     supplied_run_binding = _strict_release_run_binding(run_binding)
-    verification_parent = _require_unlinked_directory(
+    verification_parent_observation = _require_unlinked_directory(
         verification_path.parent,
         label="run-verification parent",
     )
+    verification_parent = verification_parent_observation.path
     if _directory_is_within(verification_parent, run_root):
         raise ValueError("run-verification evidence must be outside the emitted run")
     manifest_path = run_root / _MANIFEST_NAME
     manifest_model_before, manifest_before = _read_manifest_exact(manifest_path)
+    configuration_before = observe_release_configuration_input(
+        configuration_root=config_root,
+        manifest=manifest_model_before,
+    )
+    _require_release_verification_root_custody(
+        run_root_observation,
+        target_root_observation,
+        configuration_root_observation,
+        release_root_observation,
+        verification_parent_observation,
+    )
     _require_manifest_run_binding(
         manifest=manifest_model_before,
         manifest_bytes=manifest_before,
@@ -138,11 +208,23 @@ def observe_release_run_verification(
         manifest_path=manifest_path,
         run_dir=run_root,
         repository_root=target_root,
+        configuration_root=config_root,
     )
     _require_current_equal_verification(
         supplied=supplied_before,
         computed=computed_before,
         run_binding=supplied_run_binding,
+    )
+    _require_unchanged_configuration_input(
+        configuration_before,
+        manifest=manifest_model_before,
+    )
+    _require_release_verification_root_custody(
+        run_root_observation,
+        target_root_observation,
+        configuration_root_observation,
+        release_root_observation,
+        verification_parent_observation,
     )
 
     supplied_after, supplied_bytes_after = _read_verification_exact(verification_path)
@@ -150,6 +232,7 @@ def observe_release_run_verification(
         manifest_path=manifest_path,
         run_dir=run_root,
         repository_root=target_root,
+        configuration_root=config_root,
     )
     observed_run_after = _strict_release_run_binding(
         observe_release_run_binding(
@@ -191,6 +274,17 @@ def observe_release_run_verification(
     )
     if final_source_identities != tuple(item.identity for item in sources_after):
         raise ValueError("release target sources changed after verification")
+    _require_unchanged_configuration_input(
+        configuration_before,
+        manifest=manifest_model_before,
+    )
+    _require_release_verification_root_custody(
+        run_root_observation,
+        target_root_observation,
+        configuration_root_observation,
+        release_root_observation,
+        verification_parent_observation,
+    )
     supplied_final, supplied_bytes_final = _read_verification_exact(verification_path)
     manifest_model_final, manifest_final = _read_manifest_exact(manifest_path)
     if (
@@ -200,6 +294,17 @@ def observe_release_run_verification(
         or manifest_final != manifest_before
     ):
         raise ValueError("run-verification evidence changed after verification")
+    _require_unchanged_configuration_input(
+        configuration_before,
+        manifest=manifest_model_before,
+    )
+    _require_release_verification_root_custody(
+        run_root_observation,
+        target_root_observation,
+        configuration_root_observation,
+        release_root_observation,
+        verification_parent_observation,
+    )
 
     payload = ReleaseRunVerificationBindingPayload(
         schema_version="1.0",
@@ -223,6 +328,23 @@ def observe_release_run_verification(
             **serialized,
             "binding_sha256": canonical_sha256(serialized),
         }
+    )
+
+
+def _require_release_verification_root_custody(
+    run_root: DirectoryCustodyObservation,
+    target_root: DirectoryCustodyObservation,
+    configuration_root: DirectoryCustodyObservation,
+    release_root: DirectoryCustodyObservation,
+    verification_parent: DirectoryCustodyObservation,
+) -> None:
+    require_unchanged_unlinked_directory(target_root, label="release target repository")
+    require_unchanged_unlinked_directory(configuration_root, label="release configuration")
+    require_unchanged_unlinked_directory(run_root, label="release run")
+    require_unchanged_unlinked_directory(release_root, label="mmaudit release repository")
+    require_unchanged_unlinked_directory(
+        verification_parent,
+        label="run-verification parent",
     )
 
 
@@ -266,8 +388,10 @@ def _require_manifest_run_binding(
     run_binding: ReleaseRunBinding,
 ) -> None:
     run_configuration = manifest.run_configuration
-    if manifest.schema_version != "1.2" or run_configuration is None:
-        raise ValueError("release verification requires report-bundle manifest schema 1.2")
+    if manifest.schema_version not in {"1.2", "1.3", "1.4"} or run_configuration is None:
+        raise ValueError(
+            "release verification requires report-bundle manifest schema 1.2, 1.3, or 1.4"
+        )
     expected = (
         manifest.run_id,
         manifest.repository_root_name,
@@ -454,19 +578,39 @@ def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, i
     )
 
 
+def _require_unchanged_configuration_input(
+    expected: ReleaseConfigurationInputObservation,
+    *,
+    manifest: RunEvidenceManifest,
+) -> None:
+    config = resolve_run_evidence_config(manifest)
+    require_unchanged_configuration_input(
+        expected,
+        configured_ignore_path=config.repository.ignore_file,
+    )
+
+
 def _read_verification_exact(path: Path) -> tuple[RunVerification, bytes]:
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing to read a sensitive run-verification filename")
-    parent = _require_unlinked_directory(path.parent, label="run-verification parent")
+    parent_observation = _require_unlinked_directory(
+        path.parent,
+        label="run-verification parent",
+    )
     data = _read_unique_regular_file(
-        parent / path.name,
+        parent_observation.path / path.name,
         max_bytes=_MAX_VERIFICATION_BYTES,
         label="run verification",
     )
-    return (
+    result = (
         RunVerification.model_validate(_decode_json_object(data, label="run verification")),
         data,
     )
+    require_unchanged_unlinked_directory(
+        parent_observation,
+        label="run-verification parent",
+    )
+    return result
 
 
 def _require_current_equal_verification(

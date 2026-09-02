@@ -84,3 +84,6 @@ Desktop.ini
 *.log
 *.pid
 *.pid.lock
+
+# Claude Code local settings (machine-specific, never commit)
+.claude/settings.local.json

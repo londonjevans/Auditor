@@ -710,14 +710,10 @@ async def test_transport_lock_delay_cannot_cross_refresh_expiry_before_post(
         "_TRUSTED_VALIDATE_TRANSPORT_PROVENANCE",
         preserve_closed_mock_transport,
     )
-    openrouter_module._register_trusted_transport_binding(
-        harness.client,
-        replace(
-            binding,
-            execution_evidence=ExecutionEvidenceKind.REAL,
-            request_lock=request_lock,
-        ),
-    )
+    original_execution_evidence = binding.execution_evidence
+    original_request_lock = binding.request_lock
+    object.__setattr__(binding, "execution_evidence", ExecutionEvidenceKind.REAL)
+    object.__setattr__(binding, "request_lock", request_lock)
     completion_task = asyncio.create_task(_complete(harness))
     try:
         async with request_lock:
@@ -726,6 +722,8 @@ async def test_transport_lock_delay_cannot_cross_refresh_expiry_before_post(
         with pytest.raises(OpenRouterModelRefreshError, match="future-dated or expired"):
             await completion_task
     finally:
+        object.__setattr__(binding, "execution_evidence", original_execution_evidence)
+        object.__setattr__(binding, "request_lock", original_request_lock)
         if not completion_task.done():
             completion_task.cancel()
         with suppress(asyncio.CancelledError, OpenRouterModelRefreshError):
@@ -2246,7 +2244,7 @@ def test_routing_max_price_rejects_cache_read_above_same_endpoint_prompt() -> No
 
     with pytest.raises(
         OpenRouterCostControlError,
-        match="input-cache-read endpoint price exceeds its provider-capped prompt price",
+        match="endpoint pricing cannot produce the shared provider price cap",
     ):
         openrouter_module._routing_max_price((registered,))
 
@@ -2337,7 +2335,7 @@ def test_routing_max_price_rejects_missing_nonfinite_or_negative_prices(
 
     with pytest.raises(
         OpenRouterCostControlError,
-        match="exact finite nonnegative decimal string",
+        match="endpoint pricing cannot produce the shared provider price cap",
     ):
         openrouter_module._routing_max_price((registered,))
 

@@ -37,7 +37,7 @@ OPERATOR_RESULTS_REVOCATION_EVIDENCE_SHA256 = (
 )
 
 type CandidateSelectionRouteKey = tuple[ExactRouteRole, str, str, str]
-type _CandidateSelectionRevocationProjectionEntry = tuple[str, str, str, str, str, str]
+type _CandidateSelectionRevocationProjectionEntry = tuple[str, str, str, str, str, str, str]
 CANDIDATE_SELECTION_REVOCATION_PROJECTION: tuple[
     _CandidateSelectionRevocationProjectionEntry, ...
 ] = (
@@ -48,6 +48,7 @@ CANDIDATE_SELECTION_REVOCATION_PROJECTION: tuple[
         "deepseek/deepseek-v4-pro-20260813",
         "parasail/fp8",
         "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
+        "EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE",
     ),
 )
 type _FunctionState = tuple[
@@ -297,6 +298,7 @@ def _load_candidate_selection_revocation_registry_unchecked() -> (
             entry.canonical_model_slug,
             entry.provider_endpoint,
             entry.exact_route_constraint_sha256,
+            entry.reason.value,
         )
         for entry in registry.entries
     )
@@ -313,6 +315,7 @@ def _load_candidate_selection_revocation_registry_unchecked() -> (
 
 def _require_candidate_assignment_eligible_unchecked(
     *,
+    role: ExactRouteRole | None = None,
     exact_model_id: str,
     provider_endpoint: str | None,
     selection_plan_sha256: str | None = None,
@@ -321,12 +324,15 @@ def _require_candidate_assignment_eligible_unchecked(
     """Refuse a revoked requested/canonical model before a new execution.
 
     Qualified runtime capabilities may no longer retain selection-plan custody, so
-    model and endpoint are sufficient for a fail-closed negative match.  When plan
-    custody is available, both hashes must be supplied together and are validated.
-    This negative gate never establishes positive discovery or execution authority.
+    role, model, and endpoint are sufficient for a fail-closed negative match.  A
+    caller without exact role custody remains conservative across every role.  When
+    plan custody is available, both hashes must be supplied together and are
+    validated.  This negative gate never establishes positive discovery or execution
+    authority.
     """
 
     _validate_assignment_fields(
+        role=role,
         exact_model_id=exact_model_id,
         provider_endpoint=provider_endpoint,
         selection_plan_sha256=selection_plan_sha256,
@@ -335,17 +341,23 @@ def _require_candidate_assignment_eligible_unchecked(
     active_alias_entries = tuple(
         entry
         for entry in CANDIDATE_SELECTION_REVOCATION_PROJECTION
-        if exact_model_id in {entry[2], entry[3]}
+        if (role is None or role.value == entry[1]) and exact_model_id in {entry[2], entry[3]}
     )
     if active_alias_entries and provider_endpoint is None:
+        entry = active_alias_entries[0]
         raise CandidateSelectionRevocationError(
-            "candidate selection model endpoint is unpinned and cannot exclude its revocation"
+            "candidate selection model endpoint is unpinned and cannot exclude its revocation: "
+            f"role={entry[1]}; model={exact_model_id}; endpoint=UNPINNED; reason={entry[6]}"
         )
     if provider_endpoint is None:
         return
     for entry in active_alias_entries:
         if provider_endpoint.casefold() == entry[4].casefold():
-            raise CandidateSelectionRevocationError("candidate selection assignment is revoked")
+            raise CandidateSelectionRevocationError(
+                "candidate selection assignment is revoked: "
+                f"role={entry[1]}; model={exact_model_id}; endpoint={entry[4]}; "
+                f"reason={entry[6]}"
+            )
 
 
 def _require_candidate_route_eligible_unchecked(
@@ -388,6 +400,7 @@ def _require_selection_plan_routes_eligible_unchecked(
                 "candidate selection route role has the wrong exact type"
             )
         _validate_assignment_fields(
+            role=role,
             exact_model_id=exact_model_id,
             provider_endpoint=provider_endpoint,
             selection_plan_sha256=selection_plan_sha256,
@@ -409,16 +422,25 @@ def _require_selection_plan_routes_eligible_unchecked(
                 and exact_model_id in {entry[2], entry[3]}
                 and provider_endpoint.casefold() == entry[4].casefold()
             ):
-                raise CandidateSelectionRevocationError("candidate selection route is revoked")
+                raise CandidateSelectionRevocationError(
+                    "candidate selection route is revoked: "
+                    f"role={role.value}; model={exact_model_id}; "
+                    f"endpoint={provider_endpoint.casefold()}; reason={entry[6]}"
+                )
 
 
 def _validate_assignment_fields(
     *,
+    role: ExactRouteRole | None,
     exact_model_id: str,
     provider_endpoint: str | None,
     selection_plan_sha256: str | None,
     exact_route_constraint_sha256: str | None,
 ) -> None:
+    if role is not None and type(role) is not ExactRouteRole:
+        raise CandidateSelectionRevocationError(
+            "candidate selection assignment role has the wrong exact type"
+        )
     if type(exact_model_id) is not str:
         raise CandidateSelectionRevocationError(
             "candidate selection assignment model ID has the wrong exact type"
@@ -493,6 +515,7 @@ class _CandidateAssignmentEligibilityGate(Protocol):
     def __call__(
         self,
         *,
+        role: ExactRouteRole | None = None,
         exact_model_id: str,
         provider_endpoint: str | None,
         selection_plan_sha256: str | None = None,
@@ -542,6 +565,7 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
         for guarded_type in (
             CandidateSelectionRevocationEntry,
             CandidateSelectionRevocationRegistry,
+            ExactRouteRole,
         )
     )
     mutable_class_bindings = tuple(
@@ -683,8 +707,7 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
             if any(module_globals.get(name) is not expected for name, expected in fixed_globals):
                 return False
             if any(
-                vars(BaseModel).get(name) is not expected
-                for name, expected in base_model_bindings
+                vars(BaseModel).get(name) is not expected for name, expected in base_model_bindings
             ):
                 return False
             for guarded_type, expected_bindings in class_bindings:
@@ -731,6 +754,7 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
 
     def require_candidate_assignment_eligible(
         *,
+        role: ExactRouteRole | None = None,
         exact_model_id: str,
         provider_endpoint: str | None,
         selection_plan_sha256: str | None = None,
@@ -740,7 +764,9 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
 
         if pristine.__code__ is not pristine_code or not pristine():
             raise error_type("candidate revocation callable boundary is not pristine")
+        loader_implementation()
         assignment_implementation(
+            role=role,
             exact_model_id=exact_model_id,
             provider_endpoint=provider_endpoint,
             selection_plan_sha256=selection_plan_sha256,
@@ -759,6 +785,7 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
 
         if pristine.__code__ is not pristine_code or not pristine():
             raise error_type("candidate revocation callable boundary is not pristine")
+        loader_implementation()
         route_implementation(
             selection_plan_sha256=selection_plan_sha256,
             role=role,
@@ -775,6 +802,7 @@ def _build_candidate_revocation_callable_boundary() -> tuple[
 
         if pristine.__code__ is not pristine_code or not pristine():
             raise error_type("candidate revocation callable boundary is not pristine")
+        loader_implementation()
         plan_routes_implementation(selection_plan_sha256, routes)
 
     aliases = (

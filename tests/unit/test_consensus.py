@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from itertools import permutations
 
+from mmaudit.models.scheduler import scheduler_candidate_payload_sha256
 from mmaudit.models.schemas import (
     CONSENSUS_REVIEWER_SLOTS,
     CandidateCrossExaminationDecision,
@@ -132,6 +133,8 @@ def _decision(
 def _review_evidence(
     candidates: Sequence[CandidateFinding],
     verdicts_by_candidate: Mapping[str, VoteTriple],
+    *,
+    algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
 ) -> tuple[ConsensusReviewArtifact, tuple[CandidateCrossExaminationDecision, ...]]:
     """Build the exact three-review artifact and its two falsifier projections."""
 
@@ -140,7 +143,10 @@ def _review_evidence(
     if candidate_ids != tuple(sorted(verdicts_by_candidate)):
         raise ValueError("test review evidence requires one vote triple per exact candidate")
     payload_hashes = {
-        candidate.candidate_id: _canonical_sha256(candidate.model_dump(mode="json"))
+        candidate.candidate_id: scheduler_candidate_payload_sha256(
+            candidate,
+            algorithm_version=algorithm_version,
+        )
         for candidate in ordered_candidates
     }
     reviewers: list[ConsensusReviewerBatch] = []
@@ -210,10 +216,13 @@ def _uniform_review_evidence(
         VerificationVerdict.VERIFIED,
         VerificationVerdict.VERIFIED,
     ),
+    *,
+    algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
 ) -> tuple[ConsensusReviewArtifact, tuple[CandidateCrossExaminationDecision, ...]]:
     return _review_evidence(
         candidates,
         {candidate.candidate_id: verdicts for candidate in candidates},
+        algorithm_version=algorithm_version,
     )
 
 
@@ -1397,6 +1406,37 @@ def test_judge_cannot_reject_candidate_retained_by_quorum(
 
     assert finding.status is FindingStatus.NEEDS_REVIEW
     assert finding.confidence == 0.2
+
+
+def test_actor_annotation_pass_cannot_change_primary_classification(
+    candidate_factory: CandidateFactory,
+) -> None:
+    candidate = _with_reproduction_evidence(candidate_factory())
+    group = group_candidates([candidate])[0]
+    review, cross_examinations = _uniform_review_evidence([candidate])
+    judge = JudgeDecision(
+        group_id=group.group_id,
+        status=FindingStatus.REJECTED,
+        severity=Severity.CRITICAL,
+        confidence=0.01,
+        rationale="Synthetic actor annotation attempted to change classification.",
+    )
+
+    finding = merge_group(
+        group,
+        decisions={},
+        validations={candidate.candidate_id: LocationValidation(valid=True)},
+        scanner_findings=[_scanner()],
+        judge=judge,
+        consensus_review=review,
+        cross_examinations=cross_examinations,
+        apply_judge_classification=False,
+    )
+
+    assert finding.status is FindingStatus.CONFIRMED
+    assert finding.severity is candidate.severity
+    assert finding.confidence == candidate.confidence
+    assert "judge:" in finding.disagreement
 
 
 def test_every_dissenting_review_is_retained(candidate_factory: CandidateFactory) -> None:

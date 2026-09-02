@@ -28,6 +28,7 @@ from mmaudit.models.qualification import (
     seal_candidate_registry,
     validate_candidate_registry_discovery,
 )
+from mmaudit.models.route_constraints import ExactRouteRole
 from mmaudit.reporting.json_report import stable_json
 
 _MAX_CANDIDATE_REGISTRY_BYTES = 50_000_000
@@ -51,9 +52,10 @@ def validate_candidate_registry_template_selection(
     """Validate one exact selected subset without trusting stale discovery fields."""
 
     function_defaults = validate_candidate_registry_template_selection.__kwdefaults__
-    if type(_candidate_revocation_call_roots) is not tuple or len(
-        _candidate_revocation_call_roots
-    ) != 2:
+    if (
+        type(_candidate_revocation_call_roots) is not tuple
+        or len(_candidate_revocation_call_roots) != 2
+    ):
         raise ValueError("candidate registry revocation boundary changed")
     trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
     if (
@@ -87,6 +89,7 @@ def validate_candidate_registry_template_selection(
         )
     for route in canonical_routes:
         trusted_assignment_gate(
+            role=ExactRouteRole.CANDIDATE,
             exact_model_id=route.exact_model_id,
             provider_endpoint=route.approved_provider_endpoint,
         )
@@ -111,6 +114,7 @@ def validate_candidate_registry_template_selection(
             template_candidate.canonical_model_slug,
         }:
             trusted_assignment_gate(
+                role=ExactRouteRole.CANDIDATE,
                 exact_model_id=model_id,
                 provider_endpoint=route.approved_provider_endpoint,
             )
@@ -146,9 +150,10 @@ def derive_candidate_registry_from_discovery(
     """Seal a pending registry from fresh facts plus exact operator policy metadata."""
 
     function_defaults = derive_candidate_registry_from_discovery.__kwdefaults__
-    if type(_candidate_revocation_call_roots) is not tuple or len(
-        _candidate_revocation_call_roots
-    ) != 2:
+    if (
+        type(_candidate_revocation_call_roots) is not tuple
+        or len(_candidate_revocation_call_roots) != 2
+    ):
         raise ValueError("candidate registry revocation boundary changed")
     trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
     if (
@@ -175,6 +180,7 @@ def derive_candidate_registry_from_discovery(
     for item in records:
         for model_id in {item.exact_model_id, item.canonical_slug}:
             trusted_assignment_gate(
+                role=ExactRouteRole.CANDIDATE,
                 exact_model_id=model_id,
                 provider_endpoint=item.approved_provider_endpoint,
             )

@@ -111,6 +111,9 @@ from mmaudit.orchestration.budgets import (
     EndpointPriceComponent,
     EndpointRequestCostBound,
 )
+from mmaudit.orchestration.model_review_evidence import (
+    model_surface_source_location_proof_sha256,
+)
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
@@ -538,6 +541,7 @@ def build_scheduler_test_usage(
     seed: str = "scheduler-test-usage",
     validated_output: object,
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    model_surface_review_requests: Sequence[ModelSurfaceReviewRequest] = (),
 ) -> UsageRecord:
     """Build redacted typed local provider evidence for scheduler unit tests."""
 
@@ -554,6 +558,23 @@ def build_scheduler_test_usage(
         }
         else activation.user_prompt_sha256
     )
+    exact_surface_requests = tuple(model_surface_review_requests)
+    source_location_proof_sha256s = tuple(
+        sorted(
+            {
+                model_surface_source_location_proof_sha256(location)
+                for request in exact_surface_requests
+                for location in request.allowed_locations
+            }
+        )
+    )
+    if exact_surface_requests and (
+        task.model_surface_review_request_manifest_sha256
+        != ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+            exact_surface_requests
+        )
+    ):
+        raise ValueError("synthetic context surfaces differ from the sealed task manifest")
     context = ContextRequestEvidence.build(
         request_id=task.logical_request_id,
         request_role=task.role,
@@ -565,6 +586,8 @@ def build_scheduler_test_usage(
         configured_maximum_source_tokens_per_request=256,
         effective_source_byte_ceiling=256,
         rendered_sha256=rendered_context_sha256,
+        requested_surface_manifest_sha256=(task.model_surface_review_request_manifest_sha256),
+        source_location_proof_sha256s=source_location_proof_sha256s,
     )
     started_at = datetime(2025, 1, 1, tzinfo=UTC)
     privacy_routing: dict[str, object] = {}
@@ -1206,6 +1229,7 @@ def build_scheduler_test_real_usage(
     audit_model_refresh: SchedulerAuditModelRefreshBinding | None = None,
     audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
     include_audit_model_refresh_pricing: bool = True,
+    model_surface_review_requests: Sequence[ModelSurfaceReviewRequest] = (),
 ) -> UsageRecord:
     """Build runtime-attested but wholly synthetic REAL-shaped scheduler evidence."""
 
@@ -1215,6 +1239,7 @@ def build_scheduler_test_real_usage(
         seed=seed,
         validated_output=validated_output,
         privacy_evidence_custody=privacy_evidence_custody,
+        model_surface_review_requests=model_surface_review_requests,
     )
     assert provisional.started_at is not None
     assert provisional.ended_at is not None
@@ -1325,16 +1350,59 @@ def scheduler_test_model_surface_review_requests(
 ) -> tuple[ModelSurfaceReviewRequest, ...]:
     """Build the exact deterministic review surfaces supplied to a candidate-review task."""
 
-    scoped_shards = (
-        set(plan.manifest.shard_ids) if not task.scope.shard_ids else set(task.scope.shard_ids)
+    return _scheduler_test_model_surface_review_requests(
+        manifest=plan.manifest,
+        pass_kind=task.pass_kind,
+        scope=task.scope,
+        task_key=task.task_key,
+        role=task.role,
+        candidate_ids=task.candidate_ids,
     )
+
+
+def scheduler_test_model_surface_review_request_manifest_sha256(
+    *,
+    manifest: SchedulerCampaignManifest,
+    pass_kind: SchedulerPassKind,
+    scope: SchedulerScope,
+    task_key: str,
+    role: str,
+    candidate_ids: tuple[str, ...] = (),
+) -> str:
+    """Precompute the exact synthetic request manifest sealed into a v2 task."""
+
+    requests = _scheduler_test_model_surface_review_requests(
+        manifest=manifest,
+        pass_kind=pass_kind,
+        scope=scope,
+        task_key=task_key,
+        role=role,
+        candidate_ids=candidate_ids,
+    )
+    if not requests:
+        raise ValueError("synthetic task does not use the candidate-review contract")
+    return ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(requests)
+
+
+def _scheduler_test_model_surface_review_requests(
+    *,
+    manifest: SchedulerCampaignManifest,
+    pass_kind: SchedulerPassKind,
+    scope: SchedulerScope,
+    task_key: str,
+    role: str,
+    candidate_ids: tuple[str, ...],
+) -> tuple[ModelSurfaceReviewRequest, ...]:
+    """Build synthetic requests from task recipe values available before plan sealing."""
+
+    scoped_shards = set(manifest.shard_ids) if not scope.shard_ids else set(scope.shard_ids)
     sources = tuple(
         source
-        for shard in plan.manifest.shard_inventory.shards
+        for shard in manifest.shard_inventory.shards
         if shard.shard_id in scoped_shards
         for source in shard.sources
     )
-    if task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
+    if pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW:
         requests = tuple(
             ModelSurfaceReviewRequest(
                 surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
@@ -1346,18 +1414,22 @@ def scheduler_test_model_surface_review_requests(
                 contract=source.path,
                 function_or_state_surface="synthetic file surface",
                 critical=True,
-                allowed_locations=(Location(path=source.path, start_line=1, end_line=1),),
+                allowed_locations=(
+                    Location(
+                        path=source.path,
+                        start_line=1,
+                        end_line=1,
+                        content_hash=source.sha256,
+                    ),
+                ),
                 invariant_considered="Synthetic state transitions remain within scope.",
             )
             for source in sources
         )
-    elif (
-        task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
-        and task.role == "business_logic"
-    ):
+    elif pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic":
         if not sources:
             raise ValueError("synthetic boundary review requires one scoped source")
-        subject_id = f"cross-shard:{task.task_key}"
+        subject_id = f"cross-shard:{task_key}"
         source = sources[0]
         request = ModelSurfaceReviewRequest(
             surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
@@ -1369,10 +1441,17 @@ def scheduler_test_model_surface_review_requests(
             contract=source.path,
             function_or_state_surface="synthetic cross-shard boundary",
             critical=True,
-            allowed_locations=(Location(path=source.path, start_line=1, end_line=1),),
+            allowed_locations=(
+                Location(
+                    path=source.path,
+                    start_line=1,
+                    end_line=1,
+                    content_hash=source.sha256,
+                ),
+            ),
             invariant_considered="Cross-shard state and accounting remain coherent.",
         )
-        if task.candidate_ids != (request.surface_id,):
+        if candidate_ids != (request.surface_id,):
             raise ValueError("synthetic boundary task differs from its deterministic surface")
         requests = (request,)
     else:
@@ -1876,6 +1955,10 @@ def _task_plans(
             else:
                 requested_model = requested_model or "synthetic/auditor-v1"
                 root_lineage = root_lineage or "sha256:" + _sha256(f"{seed}:lineage:{task_key}")
+        candidate_review_contract = task_kind is SchedulerTaskKind.MODEL_REQUEST and (
+            pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+            or (pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic")
+        )
         tasks.append(
             SchedulerTaskPlan.build(
                 manifest=manifest,
@@ -1893,6 +1976,18 @@ def _task_plans(
                     scheduler_test_response_schema_sha256(pass_kind, role)
                     if task_kind is SchedulerTaskKind.MODEL_REQUEST
                     else _sha256(f"{seed}:schema:{task_key}")
+                ),
+                model_surface_review_request_manifest_sha256=(
+                    scheduler_test_model_surface_review_request_manifest_sha256(
+                        manifest=manifest,
+                        pass_kind=pass_kind,
+                        scope=scope,
+                        task_key=task_key,
+                        role=role,
+                        candidate_ids=candidate_ids,
+                    )
+                    if candidate_review_contract
+                    else None
                 ),
                 **(
                     scheduler_test_model_fields(f"{seed}:{task_key}")
@@ -2035,8 +2130,10 @@ def build_complete_scheduler_fixture(
             activations.append(activation)
             payload: object
             usage = None
+            planned_surface_requests: tuple[ModelSurfaceReviewRequest, ...] = ()
             if task.task_kind is SchedulerTaskKind.MODEL_REQUEST:
                 payload = build_scheduler_test_model_payload(plan, task)
+                planned_surface_requests = scheduler_test_model_surface_review_requests(plan, task)
                 if real_usage:
                     usage = build_scheduler_test_real_usage(
                         task,
@@ -2052,6 +2149,7 @@ def build_complete_scheduler_fixture(
                         include_audit_model_refresh_pricing=(
                             not usage_transform_owns_refresh_pricing
                         ),
+                        model_surface_review_requests=planned_surface_requests,
                     )
                 else:
                     usage = build_scheduler_test_usage(
@@ -2060,6 +2158,7 @@ def build_complete_scheduler_fixture(
                         seed=seed,
                         validated_output=payload,
                         privacy_evidence_custody=exact_manifest.privacy_evidence_custody,
+                        model_surface_review_requests=planned_surface_requests,
                     )
                 if usage_transform is not None:
                     transformed_usage = usage_transform(task, activation, usage)
@@ -2086,6 +2185,8 @@ def build_complete_scheduler_fixture(
                 if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
                 else ((), None)
             )
+            if surface_requests != planned_surface_requests:
+                raise ValueError("synthetic model-surface requests changed after context sealing")
             recorded_surface_requests.extend(surface_requests)
             if surface_artifact is not None:
                 recorded_surface_artifacts.append(surface_artifact)

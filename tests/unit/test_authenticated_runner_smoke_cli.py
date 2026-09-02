@@ -327,6 +327,46 @@ def test_authenticated_runner_smoke_preflight_is_provider_free_and_does_not_muta
     assert "full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in normalized
 
 
+def test_authenticated_runner_smoke_revocation_gate_preserves_exact_route_roles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    _patch_launch_inputs(monkeypatch, tmp_path)
+    candidate_model = SimpleNamespace(
+        exact_model_id="alpha/candidate-20260828",
+        canonical_model_slug="alpha/candidate-20260828",
+        approved_provider_endpoint="provider-alpha",
+    )
+    revoked_candidate_identity_as_judge = SimpleNamespace(
+        exact_model_id="deepseek/deepseek-v4-pro-0813",
+        canonical_model_slug="deepseek/deepseek-v4-pro-20260813",
+        approved_provider_endpoint="parasail/fp8",
+    )
+
+    def registry(path: Path) -> SimpleNamespace:
+        selected = (
+            candidate_model
+            if path.name == "candidate-registry.json"
+            else revoked_candidate_identity_as_judge
+        )
+        return SimpleNamespace(candidates=(selected,))
+
+    monkeypatch.setattr(cli_module, "load_candidate_registry", registry)
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_openrouter_launch",
+        lambda _launch: _inventory(),
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, preflight_only=True, include_secret=False),
+    )
+
+    assert result.exit_code == 0, result.stdout
+
+
 @pytest.mark.parametrize(
     ("message", "expected"),
     (

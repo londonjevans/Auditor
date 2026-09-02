@@ -2919,13 +2919,12 @@ class VerifiedProductionQualification:
         """Revalidate capability integrity and freshness before authority is consumed."""
 
         method_defaults = VerifiedProductionQualification.require_current.__kwdefaults__
-        if type(_candidate_revocation_call_roots) is not tuple or len(
-            _candidate_revocation_call_roots
-        ) != 2:
+        if (
+            type(_candidate_revocation_call_roots) is not tuple
+            or len(_candidate_revocation_call_roots) != 2
+        ):
             raise ValueError("verified production candidate revocation boundary changed")
-        trusted_revocation_pristine, trusted_assignment_gate = (
-            _candidate_revocation_call_roots
-        )
+        trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
         if (
             type(method_defaults) is not dict
             or method_defaults.get("_candidate_revocation_call_roots")

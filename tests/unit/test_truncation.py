@@ -595,6 +595,8 @@ def test_complete_decode_rejects_sequence_phase_and_end_count_drift(mutation: ob
         decode_complete_candidate_review_frames(_document(frames))
 
     assert raised.value.code is CandidateReviewTruncationFailureCode.INVALID_COMPLETE_DOCUMENT
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 def test_prefix_recovery_requires_exact_envelope_and_length_finish_reason() -> None:

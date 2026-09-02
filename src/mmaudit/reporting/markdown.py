@@ -8,6 +8,7 @@ import unicodedata
 from collections import Counter
 
 from mmaudit.constants import ALL_MODEL_ROLES
+from mmaudit.models.actor_model import ActorRemediationFocus, actor_remediation_guidance
 from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
     AuditReport,
@@ -16,6 +17,8 @@ from mmaudit.models.schemas import (
     ExecutionOriginDispositionKind,
     Finding,
     FindingStatus,
+    KnownIssueCitation,
+    KnownIssueTaxonomyCoverage,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     MaximumAssuranceStatus,
@@ -35,6 +38,8 @@ from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
 _MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS = 20
 _MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS = 20
 _MAX_FILTERED_FINDING_ROWS = 50
+_MAX_TAXONOMY_CITATIONS_PER_ITEM = 5
+_MAX_TAXONOMY_CITATION_LOCATIONS = 3
 
 
 def _neutralize_untrusted_controls(value: str, *, retain_newlines: bool = True) -> str:
@@ -67,6 +72,119 @@ def _text(value: str) -> str:
 
 def _inline(value: str) -> str:
     return "`" + _clean(value).replace("`", "'").replace("|", "\\|") + "`"
+
+
+def _taxonomy_ratio(numerator: int, denominator: int, percentage: float | None) -> str:
+    rendered_percentage = "not applicable" if percentage is None else f"{percentage:g}%"
+    return f"{numerator}/{denominator} ({rendered_percentage})"
+
+
+def _taxonomy_citation_text(citation: KnownIssueCitation) -> str:
+    """Render one bounded typed citation without trusting any corpus-authored text."""
+
+    locations = citation.locations
+    rendered_locations = ", ".join(
+        f"{location.path}:{location.start_line}-{location.end_line}"
+        for location in locations[:_MAX_TAXONOMY_CITATION_LOCATIONS]
+    )
+    if len(locations) > _MAX_TAXONOMY_CITATION_LOCATIONS:
+        rendered_locations += f", +{len(locations) - _MAX_TAXONOMY_CITATION_LOCATIONS} retained"
+    parts = [
+        f"{citation.kind.value}: {citation.reference}",
+        f"sha256:{citation.evidence_sha256}",
+        citation.detail,
+    ]
+    if rendered_locations:
+        parts.append(rendered_locations)
+    return _text("; ".join(parts))
+
+
+def _taxonomy_coverage_lines(coverage: KnownIssueTaxonomyCoverage | None) -> list[str]:
+    """Render taxonomy custody as review coverage, never as finding authority."""
+
+    if coverage is None:
+        return []
+    item_by_id = {item.item_id: item for item in coverage.corpus.items}
+    disposition_counts = Counter(item.disposition.value for item in coverage.dispositions)
+    profile = coverage.profile_assessment
+    lines = [
+        "## Known-issue taxonomy coverage — not vulnerability findings",
+        "",
+        "> **NON-FINDING COVERAGE:** these host-bound dispositions record whether defensive "
+        "failure-mode review evidence exists. A `GAP` is missing review evidence, not a "
+        "vulnerability finding; `REVIEWED` is not proof that the class is absent.",
+        "",
+        f"- Taxonomy version: {_inline(coverage.corpus.taxonomy_version)}",
+        f"- Taxonomy semantic SHA-256: {_inline(coverage.corpus.corpus_sha256)}",
+        f"- Taxonomy raw-byte SHA-256: {_inline(coverage.corpus_raw_sha256)}",
+        f"- Taxonomy coverage SHA-256: {_inline(coverage.coverage_sha256)}",
+        "- Protocol-profile classification complete: "
+        f"{bool(profile is not None and profile.classification_complete)}",
+        f"- Applicable or unresolved classes reviewed: "
+        f"{_taxonomy_ratio(coverage.overall.numerator, coverage.overall.denominator, coverage.overall.percentage)}",
+        f"- Critical applicable or unresolved classes reviewed: "
+        f"{_taxonomy_ratio(coverage.critical.numerator, coverage.critical.denominator, coverage.critical.percentage)}",
+        f"- Explicit dispositions: REVIEWED={disposition_counts['REVIEWED']}, "
+        f"NOT_APPLICABLE={disposition_counts['NOT_APPLICABLE']}, "
+        f"GAP={disposition_counts['GAP']}",
+        f"- Critical taxonomy gate passed: {coverage.critical_gate_passed}",
+        "",
+    ]
+    if coverage.critical_gap_ids:
+        lines.extend(
+            [
+                "> **CRITICAL TAXONOMY GAP:** required review evidence is absent for "
+                + ", ".join(_inline(item_id) for item_id in coverage.critical_gap_ids)
+                + ". Under maximum assurance this blocks `COMPLETE`; it does not create a "
+                "finding.",
+                "",
+            ]
+        )
+    elif not coverage.critical_gate_passed:
+        lines.extend(
+            [
+                "> **CRITICAL TAXONOMY GATE NOT PASSED:** complete critical-class review "
+                "coverage was not established. Under maximum assurance this blocks `COMPLETE`; "
+                "it does not create a finding.",
+                "",
+            ]
+        )
+    if coverage.limitations:
+        lines.extend(
+            [
+                "Taxonomy coverage limitations:",
+                "",
+                *[f"- {_text(limitation)}" for limitation in coverage.limitations],
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "| Class | Title | Criticality | Applicability | Disposition | Citations | Rationale |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for disposition in coverage.dispositions:
+        item = item_by_id[disposition.item_id]
+        rendered_citations = [
+            _taxonomy_citation_text(citation)
+            for citation in disposition.citations[:_MAX_TAXONOMY_CITATIONS_PER_ITEM]
+        ]
+        if len(disposition.citations) > _MAX_TAXONOMY_CITATIONS_PER_ITEM:
+            rendered_citations.append(
+                _text(
+                    f"+{len(disposition.citations) - _MAX_TAXONOMY_CITATIONS_PER_ITEM} "
+                    "citation(s) retained in known-issue-taxonomy-coverage.json"
+                )
+            )
+        lines.append(
+            f"| {_inline(disposition.item_id)} | {_text(item.title)} | "
+            f"{_text(item.criticality.value)} | {_text(disposition.applicability.value)} | "
+            f"{_text(disposition.disposition.value)} | "
+            f"{'<br>'.join(rendered_citations)} | {_text(disposition.rationale)} |"
+        )
+    lines.append("")
+    return lines
 
 
 def _capability_report_title(report: AuditReport) -> str:
@@ -549,8 +667,45 @@ def _finding(
     record: ForensicFindingRecord | None = None,
 ) -> list[str]:
     qualification = _finding_qualification(finding, record)
+    ordinary_behavior = bool(
+        finding.actor_assessment is not None
+        and finding.actor_assessment.remediation_focus
+        is ActorRemediationFocus.LEGITIMATE_STATE_TRANSITION
+    )
+    effective_title = "Ordinary legitimate behavior finding" if ordinary_behavior else finding.title
+    effective_summary = (
+        "The calibrated actor context, citing operator evidence, classifies the recorded conduct "
+        "as an ordinary authorized state transition whose safety properties require defensive "
+        "validation."
+        if ordinary_behavior
+        else finding.summary
+    )
+    effective_impact = (
+        "The defensive concern is whether this authorized transition preserves the recorded "
+        "safety invariants and affected-party protections."
+        if ordinary_behavior
+        else finding.impact
+    )
+    effective_path = (
+        (
+            "The modeled role exercises the recorded authorized permission as ordinary "
+            "legitimate behavior.",
+            "The implementation must preserve declared safety invariants throughout that "
+            "legitimate state transition.",
+        )
+        if ordinary_behavior
+        else tuple(finding.attack_path)
+    )
+    effective_preconditions = (
+        (
+            "The recorded authorized role and permission are available under the calibrated "
+            "actor context.",
+        )
+        if ordinary_behavior
+        else tuple(finding.preconditions)
+    )
     lines = [
-        f"### {_text(finding.title)} ({_inline(finding.id)})",
+        f"### {_text(effective_title)} ({_inline(finding.id)})",
         "",
         f"{qualification} · Severity: **{finding.severity.value}** · "
         f"Confidence: **{finding.confidence:.2f}**",
@@ -579,11 +734,72 @@ def _finding(
         "",
     ]
     lines.extend(_execution_origin_lines(finding))
+    if finding.actor_assessment is not None:
+        actor = finding.actor_assessment
+        lines.extend(
+            [
+                "Actor-model calibration:",
+                "",
+                f"- Input state: {_inline(actor.input_state.value)}",
+                f"- Disposition: {_inline(actor.disposition.value)}",
+                f"- Severity: {_inline(actor.original_severity.value)} → "
+                f"{_inline(actor.calibrated_severity.value)}",
+                f"- Likelihood effect: {_inline(actor.likelihood_adjustment.value)}",
+                f"- Role: {_inline(actor.role_id or 'not stated')}",
+                f"- Severity basis: {_inline(actor.severity_basis or 'not applicable')}",
+                "- Harmed party: "
+                + _inline(
+                    actor.harmed_party_disposition.value
+                    if actor.harmed_party_disposition is not None
+                    else "not applicable"
+                )
+                + (
+                    f" / {_inline(actor.harmed_party_id)}"
+                    if actor.harmed_party_id is not None
+                    else ""
+                ),
+                f"- Remediation focus: {_inline(actor.remediation_focus.value)}",
+                f"- Remediation guidance: {_text(actor_remediation_guidance(actor.remediation_focus))}",
+            ]
+        )
+        if actor.concentrated_with_role_ids:
+            lines.append(
+                "- Concentrated roles: "
+                + ", ".join(_inline(value) for value in actor.concentrated_with_role_ids)
+            )
+        if actor.required_concentrated_role_ids:
+            lines.append(
+                "- Required co-held roles: "
+                + ", ".join(_inline(value) for value in actor.required_concentrated_role_ids)
+            )
+        if actor.relevant_economic_exposures:
+            lines.append(
+                "- Relevant economic exposures: "
+                + ", ".join(_inline(value.value) for value in actor.relevant_economic_exposures)
+            )
+        if actor.holder_fee_revenue_exposure is not None:
+            lines.append(
+                f"- Holder fee/revenue exposure: {_inline(actor.holder_fee_revenue_exposure.value)}"
+            )
+        if actor.holder_protocol_failure_loss is not None:
+            lines.append(
+                "- Holder protocol-failure loss: "
+                f"{_inline(actor.holder_protocol_failure_loss.value)}"
+            )
+        if actor.plausibility_rationale:
+            lines.append(f"- Plausibility rationale: {_text(actor.plausibility_rationale)}")
+            lines.append(
+                "- Plausibility evidence: "
+                + ", ".join(_inline(value) for value in actor.plausibility_evidence_reference_ids)
+            )
+        if actor.limitation:
+            lines.append(f"- Limitation: {_text(actor.limitation)}")
+        lines.append("")
     lines.extend(
         [
-            _text(finding.summary),
+            _text(effective_summary),
             "",
-            f"Impact: {_text(finding.impact)}",
+            f"Impact: {_text(effective_impact)}",
             "",
             "Locations:",
             "",
@@ -594,10 +810,10 @@ def _finding(
         + (f" ({_inline(location.symbol)})" if location.symbol else "")
         for location in finding.locations
     )
-    lines.extend(["", "Attack path:", ""])
-    lines.extend(f"{index}. {_text(step)}" for index, step in enumerate(finding.attack_path, 1))
+    lines.extend(["", "Legitimate behavior path:" if ordinary_behavior else "Attack path:", ""])
+    lines.extend(f"{index}. {_text(step)}" for index, step in enumerate(effective_path, 1))
     lines.extend(["", "Preconditions:", ""])
-    lines.extend(f"- {_text(value)}" for value in finding.preconditions)
+    lines.extend(f"- {_text(value)}" for value in effective_preconditions)
     if finding.source is not None:
         lines.extend(
             [
@@ -708,7 +924,34 @@ def _finding(
     if finding.compensating_controls:
         lines.extend(["", "Compensating controls:", ""])
         lines.extend(f"- {_text(value)}" for value in finding.compensating_controls)
-    lines.extend(["", f"Recommended remediation: {_text(finding.recommendation)}", ""])
+    effective_remediation = (
+        actor_remediation_guidance(finding.actor_assessment.remediation_focus)
+        if ordinary_behavior and finding.actor_assessment is not None
+        else finding.recommendation
+    )
+    lines.extend(["", f"Recommended remediation: {_text(effective_remediation)}"])
+    if ordinary_behavior:
+        lines.append("Submitted model title (superseded): " + _text(finding.title))
+        lines.append(
+            "Submitted model recommendation (superseded, retained as evidence): "
+            + _text(finding.recommendation)
+        )
+        lines.append(
+            "Submitted model summary (superseded, retained as evidence): " + _text(finding.summary)
+        )
+        lines.append(
+            "Submitted model impact (superseded, retained as evidence): " + _text(finding.impact)
+        )
+        lines.extend(
+            f"Submitted model path step {index} (superseded, retained as evidence): {_text(step)}"
+            for index, step in enumerate(finding.attack_path, 1)
+        )
+        lines.extend(
+            "Submitted model precondition "
+            f"{index} (superseded, retained as evidence): {_text(value)}"
+            for index, value in enumerate(finding.preconditions, 1)
+        )
+    lines.append("")
     if finding.verification_test:
         lines.extend(
             [
@@ -943,6 +1186,46 @@ def render_markdown(
         ]
     )
     lines.extend(_audit_model_selection_report_lines(report))
+    if report.actor_model_evaluation is not None:
+        actor_evaluation = report.actor_model_evaluation
+        lines.extend(
+            [
+                "## Operator actor and incentive evidence",
+                "",
+                f"- Input state: {_inline(actor_evaluation.input_evidence.state.value)}",
+                f"- Evaluation SHA-256: {_inline(actor_evaluation.evaluation_sha256)}",
+                f"- Finding assessments: {len(actor_evaluation.finding_assessments)}",
+                f"- Governance disagreements: {len(actor_evaluation.governance_findings)}",
+                "",
+            ]
+        )
+        if actor_evaluation.input_evidence.limitations:
+            lines.extend(
+                [
+                    "Actor-model limitations:",
+                    "",
+                    *[
+                        f"- {_text(limitation)}"
+                        for limitation in actor_evaluation.input_evidence.limitations
+                    ],
+                    "",
+                ]
+            )
+        if actor_evaluation.governance_findings:
+            lines.extend(
+                [
+                    "| Governance ID | Kind | Role | Code evidence | Detail |",
+                    "| --- | --- | --- | --- | --- |",
+                    *[
+                        f"| {_inline(item.conflict_id)} | {_inline(item.kind.value)} | "
+                        f"{_inline(item.role_id)} | "
+                        f"{_text(', '.join(f'{evidence.path}:{evidence.start_line}-{evidence.end_line}' for evidence in item.code_evidence) or 'none')} | "
+                        f"{_text(item.detail)} |"
+                        for item in actor_evaluation.governance_findings
+                    ],
+                    "",
+                ]
+            )
     if report.scope_assessment is not None:
         scope = report.scope_assessment
         lines.extend(
@@ -1279,6 +1562,7 @@ def render_markdown(
                 f"{_text(', '.join(surface.root_lineages) or 'none')} |"
             )
         lines.append("")
+    lines.extend(_taxonomy_coverage_lines(report.taxonomy_coverage))
     if projection.quality_gates:
         lines.extend(
             [

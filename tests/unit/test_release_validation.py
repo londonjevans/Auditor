@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
@@ -38,6 +40,7 @@ from mmaudit.release_run import ReleaseRunBinding, ReleaseRunBindingPayload
 from mmaudit.release_static import StaticReleaseEvidence, StaticReleaseEvidencePayload
 from mmaudit.release_validation import (
     MAX_REPORT_AGE,
+    ValidatedReleaseReportSnapshot,
     require_complete_release_report,
     validate_release_report,
     validate_release_report_integrity,
@@ -434,6 +437,9 @@ def _install_fresh_observers(
     run_observer = Mock(return_value=fresh_run)
     verification_observer = Mock(return_value=fresh_verification)
     static_observer = Mock(return_value=fresh_static)
+    configuration_observer = Mock(
+        return_value=SimpleNamespace(root=workspace.target_repository_root.resolve())
+    )
     local_gate_validator = Mock(return_value=())
     bound_gate_validator = Mock(return_value=())
     monkeypatch.setattr(validation_module, "observe_release_candidate", candidate_observer)
@@ -447,6 +453,11 @@ def _install_fresh_observers(
         validation_module,
         "collect_static_release_evidence",
         static_observer,
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "observe_release_configuration_input_from_run",
+        configuration_observer,
     )
     monkeypatch.setattr(
         validation_module,
@@ -477,9 +488,24 @@ def _validate(workspace: _Workspace, *, require_complete: bool = False) -> Relea
         release_repository_root=workspace.release_repository_root,
         emitted_run_dir=workspace.run_dir,
         target_repository_root=workspace.target_repository_root,
+        configuration_root=workspace.target_repository_root,
         artifact_evidence_path=workspace.artifact_evidence_path,
         run_verification_path=workspace.run_verification_path,
         require_complete=require_complete,
+    )
+
+
+def _validate_snapshot(workspace: _Workspace) -> ValidatedReleaseReportSnapshot:
+    return validate_release_report_integrity(
+        report_root=workspace.report_root,
+        report_relative_path="release-report.json",
+        evidence_root=workspace.evidence_root,
+        release_repository_root=workspace.release_repository_root,
+        emitted_run_dir=workspace.run_dir,
+        target_repository_root=workspace.target_repository_root,
+        configuration_root=workspace.target_repository_root,
+        artifact_evidence_path=workspace.artifact_evidence_path,
+        run_verification_path=workspace.run_verification_path,
     )
 
 
@@ -518,6 +544,7 @@ def test_integrity_validation_accepts_coherent_blocked_release_and_uses_explicit
         call(
             run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             release_repository_root=workspace.release_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             verification_path=workspace.run_verification_path,
@@ -526,6 +553,7 @@ def test_integrity_validation_accepts_coherent_blocked_release_and_uses_explicit
         call(
             run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             release_repository_root=workspace.release_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             verification_path=workspace.run_verification_path,
@@ -565,6 +593,220 @@ def test_integrity_validation_accepts_coherent_blocked_release_and_uses_explicit
         expected_bound_call,
         expected_bound_call,
     ]
+
+
+def test_validator_rejects_configuration_input_changed_across_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _install_fresh_observers(workspace, monkeypatch)
+    resolved_configuration = workspace.target_repository_root.resolve()
+    observe_configuration = Mock(
+        side_effect=[
+            SimpleNamespace(root=resolved_configuration, identity="before"),
+            SimpleNamespace(root=resolved_configuration, identity="after"),
+        ]
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "observe_release_configuration_input_from_run",
+        observe_configuration,
+    )
+
+    with pytest.raises(ValueError, match="validation roots changed"):
+        _validate(workspace)
+
+    assert observe_configuration.call_count == 2
+
+
+def test_validator_rejects_report_root_swap_and_restore_after_first_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _install_fresh_observers(workspace, monkeypatch)
+    valid_replacement = tmp_path / "valid-report-replacement"
+    held_original = tmp_path / "held-original-report"
+    displaced_replacement = tmp_path / "displaced-valid-report"
+    shutil.copytree(workspace.report_root, valid_replacement)
+    (workspace.report_root / "release-report.json").write_text(
+        '{"invalid_original":true}\n',
+        encoding="utf-8",
+    )
+    real_observe_roots = validation_module._observe_validation_roots
+    real_require_roots = validation_module._require_validation_directories_unchanged
+    initial_observed = False
+    restored = False
+
+    def swap_after_initial_observation(**kwargs):
+        nonlocal initial_observed
+        observed = real_observe_roots(**kwargs)
+        if not initial_observed:
+            initial_observed = True
+            workspace.report_root.rename(held_original)
+            valid_replacement.rename(workspace.report_root)
+        return observed
+
+    def restore_before_continuity_check(roots) -> None:
+        nonlocal restored
+        if not restored:
+            restored = True
+            workspace.report_root.rename(displaced_replacement)
+            held_original.rename(workspace.report_root)
+        real_require_roots(roots)
+
+    monkeypatch.setattr(
+        validation_module,
+        "_observe_validation_roots",
+        swap_after_initial_observation,
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "_require_validation_directories_unchanged",
+        restore_before_continuity_check,
+    )
+
+    with pytest.raises(ValueError, match="root changed during custody"):
+        _validate(workspace)
+
+    assert initial_observed
+    assert restored
+    assert json.loads(
+        (workspace.report_root / "release-report.json").read_text(encoding="utf-8")
+    ) == {"invalid_original": True}
+
+
+def test_validator_rejects_transient_coherent_report_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _install_fresh_observers(workspace, monkeypatch)
+    report_path = workspace.report_root / "release-report.json"
+    valid_content = report_path.read_bytes()
+    invalid_content = b'{"invalid_original":true}'
+    report_path.write_bytes(invalid_content)
+    real_observe_roots = validation_module._observe_validation_roots
+    real_require_roots = validation_module._require_validation_directories_unchanged
+    staged = False
+    custody_checks = 0
+    restored = False
+
+    def stage_after_initial_root_observation(**kwargs):
+        nonlocal staged
+        observed = real_observe_roots(**kwargs)
+        if not staged:
+            staged = True
+            report_path.write_bytes(valid_content)
+        return observed
+
+    def restore_after_final_report_read(roots) -> None:
+        nonlocal custody_checks, restored
+        custody_checks += 1
+        if custody_checks == 2:
+            restored = True
+            report_path.write_bytes(invalid_content)
+        real_require_roots(roots)
+
+    monkeypatch.setattr(
+        validation_module,
+        "_observe_validation_roots",
+        stage_after_initial_root_observation,
+    )
+    monkeypatch.setattr(
+        validation_module,
+        "_require_validation_directories_unchanged",
+        restore_after_final_report_read,
+    )
+
+    with pytest.raises(ValueError, match="report file changed during custody"):
+        _validate(workspace)
+
+    assert staged
+    assert restored
+    assert report_path.read_bytes() == invalid_content
+
+
+def test_validator_returns_bound_snapshot_when_earlier_path_changes_during_later_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _install_fresh_observers(workspace, monkeypatch)
+    report_path = workspace.report_root / "release-report.json"
+    original = report_path.read_bytes()
+    tampered = b'{"changed_after_snapshot":true}'
+    real_require = validation_module.require_regular_file_custody_unchanged
+    rechecks = 0
+
+    def mutate_report_during_later_recheck(expected, *, label: str, max_bytes=100_000_000):
+        nonlocal rechecks
+        real_require(expected, label=label, max_bytes=max_bytes)
+        rechecks += 1
+        if rechecks == 2:
+            report_path.write_bytes(tampered)
+
+    monkeypatch.setattr(
+        validation_module,
+        "require_regular_file_custody_unchanged",
+        mutate_report_during_later_recheck,
+    )
+
+    snapshot = _validate_snapshot(workspace)
+
+    assert rechecks > 2
+    assert report_path.read_bytes() == tampered
+    assert snapshot.report_content == original
+    assert snapshot.report == workspace.report
+    assert snapshot.report_file.sha256 == hashlib.sha256(original).hexdigest()
+
+
+@pytest.mark.parametrize("target_kind", ("report", "input", "gate_artifact"))
+def test_validator_rejects_file_mutation_restored_before_final_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+) -> None:
+    workspace = _workspace(tmp_path)
+    (
+        _candidate_observer,
+        run_observer,
+        _verification_observer,
+        _static_observer,
+        _local_gate_validator,
+        _bound_gate_validator,
+    ) = _install_fresh_observers(workspace, monkeypatch)
+    if target_kind == "report":
+        target = workspace.report_root / "release-report.json"
+    elif target_kind == "input":
+        target = workspace.evidence_root / "candidate-observation.json"
+    else:
+        artifact = next(
+            binding for receipt in workspace.gates.receipts for binding in receipt.artifact_bindings
+        )
+        target = workspace.evidence_root / artifact.path
+    original = target.read_bytes()
+    original_inode = target.stat().st_ino
+    fresh_run = run_observer.return_value
+    mutated = False
+
+    def mutate_and_restore_file(*_args, **_kwargs):
+        nonlocal mutated
+        if not mutated:
+            mutated = True
+            target.write_bytes(original + b" ")
+            target.write_bytes(original)
+        return fresh_run
+
+    run_observer.side_effect = mutate_and_restore_file
+
+    with pytest.raises(ValueError, match=r"file .*changed during custody"):
+        _validate(workspace)
+
+    assert mutated
+    assert target.read_bytes() == original
+    assert target.stat().st_ino == original_inode
 
 
 def test_complete_policy_requires_all_real_gates_and_achieved_maximum_assurance(
@@ -724,6 +966,7 @@ def test_validator_rejects_linked_control_plane_root(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )
@@ -777,6 +1020,7 @@ def test_validator_rejects_control_plane_roots_inside_candidate_run_or_target(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )
@@ -799,6 +1043,7 @@ def test_validator_rejects_control_plane_root_that_contains_source_roots(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )
@@ -819,6 +1064,7 @@ def test_validator_requires_distinct_report_and_evidence_roots(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )
@@ -1074,6 +1320,7 @@ def test_validator_rejects_report_path_traversal(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )
@@ -1094,6 +1341,7 @@ def test_validator_requires_explicit_existing_report_path(
             release_repository_root=workspace.release_repository_root,
             emitted_run_dir=workspace.run_dir,
             target_repository_root=workspace.target_repository_root,
+            configuration_root=workspace.target_repository_root,
             artifact_evidence_path=workspace.artifact_evidence_path,
             run_verification_path=workspace.run_verification_path,
         )

@@ -217,6 +217,23 @@ at `schemas/prior_audit.schema.json`; runtime parsing additionally enforces orde
 line ranges, normalized local paths, unique IDs/locations, and distinct historical
 and remediated hashes.
 
+`[actor_model].path` optionally names a repository-relative, operator-authored JSON model of
+privileged roles, current holders, admitted-but-unfilled roles, economic exposure, and operational
+constraints. Author it from reviewed governance and economic evidence; do not use model output to
+invent actors or incentives. The contract is `schemas/actor_model.schema.json`, and the provider-free
+example is `tests/fixtures/actor_model/synthetic_orchard_actor_model.json`.
+
+The JSON is self-hashed: `artifact_sha256` is the lowercase SHA-256 of compact, key-sorted UTF-8 JSON
+for the validated typed payload excluding `artifact_sha256`. When `path` is set, copy its
+`subject_id` and `artifact_sha256` into `expected_subject_id` and `expected_model_sha256`. Set
+`expected_source_sha256` as well to pin the exact source bytes rather than only their parsed semantic
+content. The configured file is read within `max_bytes`, rejected on any pin mismatch, and withheld
+from ordinary repository discovery. At run start it is current only while
+`valid_from <= run_started_at < valid_until`; future or stale evidence is not used for calibration.
+Set `required = true` when missing, invalid, future, or stale input must make the run incomplete.
+Once current actor evidence is configured, unresolved actor assessments are a required quality gate
+even when `required = false`.
+
 Useful environment overrides are `MMAUDIT_BUDGET_USD`, `MMAUDIT_CONCURRENCY`,
 `MMAUDIT_MAX_FILES`, `MMAUDIT_MAX_WALK_ENTRIES`, `MMAUDIT_MAX_FILE_BYTES`,
 `MMAUDIT_MAX_DISCOVERY_BYTES`, `MMAUDIT_MAX_CONTEXT_BYTES`, `MMAUDIT_MAX_REQUEST_BYTES`,
@@ -728,30 +745,34 @@ coverage, or missing per-repository maximum-assurance semantic/economic coverage
 
 ## Candidate-bound release evidence
 
-Release reporting is derived from an explicit emitted run and a clean exact mmaudit commit. The
-generator accepts only pre-existing empty private output directories outside the product candidate,
-audited target, and emitted run. It executes the four fixed provider-free quality commands, validates
-typed artifact/manifest/schema observations, and preserves unavailable benchmark, model, doctor,
-maximum-assurance, and replay prerequisites as blockers.
+Automatic release collection and publication currently fail closed before reading inputs, creating
+directories, writing evidence, or executing gates. Portable POSIX pathname APIs cannot prove that a
+directory opened after `mkdir` is the exact object created when another same-UID process may replace
+the name. `scripts/generate_release_report.py` and `make release-generate` therefore terminate with
+the explicit technical blocker until evidence construction is descriptor-native or in-memory and
+publication can use one exact regular-file handoff.
+
+Standalone validation remains available for an externally prepared report and evidence bundle. It
+returns a cryptographic snapshot of the exact bytes observed and does not claim that mutable source
+paths stay unchanged after validation:
 
 ```bash
-mkdir -m 700 /private/tmp/mmaudit-release-evidence /private/tmp/mmaudit-release-report
-python scripts/generate_release_report.py \
-  --release-id candidate-commit-short-id \
+python scripts/validate_release_evidence.py --full \
+  --report-root /path/to/report/root \
+  --report-path release-gate-report.json \
+  --evidence-root /path/to/evidence/root \
   --release-repository /path/to/clean/mmaudit \
   --target-repository /path/to/audited/source \
+  --configuration-root /path/to/configuration/root \
   --run-dir /path/to/emitted/run \
   --artifact-evidence-file /path/to/artifact-evidence.json \
-  --run-verification-file /path/to/current-run-verification.json \
-  --evidence-root /private/tmp/mmaudit-release-evidence \
-  --report-root /private/tmp/mmaudit-release-report
+  --run-verification-file /path/to/current-run-verification.json
 ```
 
-Generation includes authoritative integrity validation but does not imply completeness. Apply
-`scripts/validate_release_evidence.py --full --require-complete` to the explicit report and evidence
-paths when all twelve real maximum-assurance prerequisites are expected to pass. A committed copy of
-a report is historical evidence; changing the candidate commit requires a newly generated external
-report.
+`--configuration-root` is the exact directory against which the sealed run's relative ignore-file
+path was resolved. Add `--require-complete` only when all twelve real maximum-assurance prerequisites
+are expected to pass. A committed copy of a report is historical evidence; changing the candidate
+commit requires a newly prepared and validated external report.
 
 ## CI
 

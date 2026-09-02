@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
 import unicodedata
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
@@ -31,6 +32,11 @@ from mmaudit.release_io import (
     write_json_evidence,
 )
 from mmaudit.reporting.json_report import stable_json
+from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
+    reobserve_same_unlinked_directory,
+    require_unchanged_unlinked_directory,
+)
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
@@ -48,8 +54,10 @@ _MAX_DESCRIPTOR_BYTES = DEFAULT_MAX_EVIDENCE_BYTES
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY_FLAG = getattr(os, "O_DIRECTORY", 0)
 _CLOEXEC_FLAG = getattr(os, "O_CLOEXEC", 0)
+_INCOMPLETE_EXPORT_VERIFICATION_AUTHORITY = object()
 
-type _DirectoryIdentity = tuple[int, int, int, int]
+type _DirectoryIdentity = tuple[int, int, int, int, int]
+type _FileIdentity = tuple[int, int, int, int, int, int, int]
 
 
 class RetainedJournalDependency(StrictModel):
@@ -255,16 +263,55 @@ class ForensicDeliveryDescriptor(ForensicDeliveryDescriptorPayload):
 
 
 @dataclass(frozen=True, slots=True)
+class _SourceDirectoryAuthority:
+    path: str
+    identity: _DirectoryIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceDirectoryCustodyObservation:
+    root_observation: DirectoryCustodyObservation
+    directories: tuple[_SourceDirectoryAuthority, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _ObservedDependency:
     descriptor: RetainedJournalDependency
-    source_journal_root: Path
+    source_journal_custody: _SourceDirectoryCustodyObservation
     source_artifacts: list[ManifestFileBinding]
     source_directories: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _DestinationCandidate:
+    path: Path
+    parent_observation: DirectoryCustodyObservation
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveryDirectoryAuthority:
+    path: str
+    identity: _DirectoryIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveryFileAuthority:
+    path: str
+    sha256: str
+    size: int
+    identity: _FileIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveryCustodyObservation:
+    directories: tuple[_DeliveryDirectoryAuthority, ...]
+    files: tuple[_DeliveryFileAuthority, ...]
 
 
 @dataclass(slots=True)
 class _CreatedWrapper:
     root: Path
+    parent_observation: DirectoryCustodyObservation
     parent_descriptor: int
     wrapper_descriptor: int
     device: int
@@ -281,6 +328,7 @@ class _DeliveryAnchors:
     runs_descriptor: int
     wrapper_identity: _DirectoryIdentity
     runs_identity: _DirectoryIdentity
+    includes_incomplete_marker: bool = False
     primary_descriptor: int | None = None
     primary_identity: _DirectoryIdentity | None = None
     dependency_anchors: list[tuple[int, _DirectoryIdentity]] = field(default_factory=list)
@@ -300,13 +348,19 @@ def export_complete_forensic_bundle(
     destination: Path,
     acknowledge_sensitive_evidence: bool,
 ) -> ForensicDeliveryDescriptor:
-    """Copy one exact manifest-bound run into a fresh complete forensic wrapper."""
+    """Publish a fresh bundle and return its bound snapshot; the returned path stays mutable."""
 
     _require_sensitive_acknowledgement(acknowledge_sensitive_evidence)
-    source_root = _validated_source_root(source_run)
+    source_root_observation = _validated_source_root(source_run)
+    source_root = source_root_observation.path
     source_directory_name = _require_safe_run_directory_name(source_root.name)
     manifest, manifest_content, source_inventory = _observe_complete_run(source_root)
     source_directories = _observe_directory_inventory(source_root)
+    source_custody = _observe_source_directory_custody(
+        source_root_observation,
+        source_directories,
+        label="forensic source run",
+    )
     dependency = _observe_retained_journal_dependency(
         source_root=source_root,
         source_directory_name=source_directory_name,
@@ -321,18 +375,47 @@ def export_complete_forensic_bundle(
         dependency=dependency,
     )
     _require_descriptor_fits_output_bound(descriptor)
-    destination_path = _validated_destination_candidate(destination, source_root=source_root)
+    destination_candidate = _validated_destination_candidate(
+        destination,
+        source_root=source_root,
+    )
+    _require_source_directory_custody_unchanged(
+        source_custody,
+        label="forensic source run",
+    )
 
-    created = _create_fresh_wrapper(destination_path)
+    created = _create_fresh_wrapper(destination_candidate)
     marker_written = False
     try:
         try:
+            source_custody = replace(
+                source_custody,
+                root_observation=_rebaseline_after_destination_creation(
+                    source_custody.root_observation,
+                    destination_parent=created.parent_observation.path,
+                    label="forensic source run",
+                ),
+            )
+            source_root = source_custody.root_observation.path
+            if dependency is not None:
+                dependency = replace(
+                    dependency,
+                    source_journal_custody=replace(
+                        dependency.source_journal_custody,
+                        root_observation=_rebaseline_after_destination_creation(
+                            dependency.source_journal_custody.root_observation,
+                            destination_parent=created.parent_observation.path,
+                            label="forensic retained scheduler journal",
+                        ),
+                    ),
+                )
             _write_incomplete_marker(created.wrapper_descriptor)
             marker_written = True
         except BaseException:
             _remove_created_empty_wrapper(created)
             raise
 
+        _require_export_source_custody(source_custody, dependency)
         _create_direct_directory(created.root, _RUNS_DIRECTORY_NAME)
         for directory in descriptor.directories:
             _create_directory_path(created.root, directory)
@@ -343,13 +426,15 @@ def export_complete_forensic_bundle(
             destination_root=created.root,
             destination_prefix=primary_prefix,
         )
+        _require_export_source_custody(source_custody, dependency)
         if dependency is not None:
             _copy_bound_inventory(
-                source_root=dependency.source_journal_root,
+                source_root=dependency.source_journal_custody.root_observation.path,
                 source_inventory=dependency.source_artifacts,
                 destination_root=created.root,
                 destination_prefix=dependency.descriptor.journal_directory,
             )
+            _require_export_source_custody(source_custody, dependency)
 
         final_manifest, final_manifest_content, final_source_inventory = _observe_complete_run(
             source_root
@@ -370,6 +455,7 @@ def export_complete_forensic_bundle(
         )
         if not _dependencies_are_equal(dependency, final_dependency):
             raise ValueError("forensic retained-journal dependency changed during export")
+        _require_export_source_custody(source_custody, dependency)
 
         _validate_delivery_contents(created.root, descriptor)
         write_json_evidence(
@@ -378,32 +464,44 @@ def export_complete_forensic_bundle(
             value=descriptor,
             max_bytes=_MAX_DESCRIPTOR_BYTES,
         )
+        publication_custody = _observe_delivery_custody(
+            created.wrapper_descriptor,
+            descriptor,
+            include_incomplete_marker=True,
+        )
+        verified = verify_complete_forensic_bundle(
+            delivery_root=created.root,
+            acknowledge_sensitive_evidence=True,
+            _publication_authority=_INCOMPLETE_EXPORT_VERIFICATION_AUTHORITY,
+        )
+        if verified != descriptor:
+            raise ValueError("forensic verifier returned a different delivery authority")
+        _require_created_wrapper_unchanged(created)
+        _require_export_source_custody(source_custody, dependency)
+        require_unchanged_unlinked_directory(
+            created.parent_observation,
+            label="forensic destination parent",
+        )
+        _require_delivery_custody_unchanged(
+            created.wrapper_descriptor,
+            descriptor,
+            publication_custody,
+            include_incomplete_marker=True,
+        )
+        _require_delivery_custody_unchanged(
+            created.wrapper_descriptor,
+            descriptor,
+            publication_custody,
+            include_incomplete_marker=True,
+        )
+        _require_created_wrapper_unchanged(created)
+        _require_export_source_custody(source_custody, dependency)
+        require_unchanged_unlinked_directory(
+            created.parent_observation,
+            label="forensic destination parent",
+        )
+        # Marker removal publishes the verified snapshot; path consumers must reverify on use.
         _remove_incomplete_marker(created.wrapper_descriptor)
-        try:
-            verified = verify_complete_forensic_bundle(
-                delivery_root=created.root,
-                acknowledge_sensitive_evidence=True,
-            )
-            current = os.stat(
-                created.root.name,
-                dir_fd=created.parent_descriptor,
-                follow_symlinks=False,
-            )
-            held = os.fstat(created.wrapper_descriptor)
-            if (
-                _directory_identity(current) != _directory_identity(held)
-                or (held.st_dev, held.st_ino) != (created.device, created.inode)
-                or stat.S_IMODE(held.st_mode) != 0o700
-            ):
-                raise ValueError("forensic destination changed before publication completed")
-        except BaseException:
-            try:
-                _write_incomplete_marker(created.wrapper_descriptor)
-            except (OSError, ValueError) as restore_exc:
-                raise ValueError(
-                    "forensic export failed after finalization and its marker could not be restored"
-                ) from restore_exc
-            raise
         marker_written = False
         return verified
     finally:
@@ -418,12 +516,26 @@ def verify_complete_forensic_bundle(
     *,
     delivery_root: Path,
     acknowledge_sensitive_evidence: bool,
+    _publication_authority: object | None = None,
 ) -> ForensicDeliveryDescriptor:
-    """Verify a complete forensic delivery without its original run or source repository."""
+    """Return a bound snapshot; callers must reverify the mutable delivery path before use."""
 
     _require_sensitive_acknowledgement(acknowledge_sensitive_evidence)
-    wrapper_root = _require_unlinked_directory(delivery_root, label="forensic delivery")
-    anchors = _open_delivery_base_anchors(wrapper_root)
+    if (
+        _publication_authority is not None
+        and _publication_authority is not _INCOMPLETE_EXPORT_VERIFICATION_AUTHORITY
+    ):
+        raise ValueError("forensic publication verification authority is invalid")
+    include_incomplete_marker = _publication_authority is _INCOMPLETE_EXPORT_VERIFICATION_AUTHORITY
+    wrapper_root_observation = _require_unlinked_directory(
+        delivery_root,
+        label="forensic delivery",
+    )
+    wrapper_root = wrapper_root_observation.path
+    anchors = _open_delivery_base_anchors(
+        wrapper_root,
+        include_incomplete_marker=include_incomplete_marker,
+    )
     try:
         descriptor_observation = read_json_evidence(
             evidence_root=wrapper_root,
@@ -438,6 +550,11 @@ def verify_complete_forensic_bundle(
             raise ValueError("forensic delivery descriptor differs from its held wrapper")
         descriptor = ForensicDeliveryDescriptor.model_validate(descriptor_observation.value)
         _anchor_primary_run(wrapper_root, descriptor, anchors)
+        delivery_custody = _observe_delivery_custody(
+            anchors.wrapper_descriptor,
+            descriptor,
+            include_incomplete_marker=include_incomplete_marker,
+        )
         manifest, manifest_content, source_inventory = _observe_complete_run(
             wrapper_root / descriptor.primary_run_directory
         )
@@ -485,6 +602,27 @@ def verify_complete_forensic_bundle(
         ):
             raise ValueError("forensic delivery changed during verification")
         _revalidate_delivery_anchors(wrapper_root, descriptor, anchors)
+        require_unchanged_unlinked_directory(
+            wrapper_root_observation,
+            label="forensic delivery",
+        )
+        _require_delivery_custody_unchanged(
+            anchors.wrapper_descriptor,
+            descriptor,
+            delivery_custody,
+            include_incomplete_marker=include_incomplete_marker,
+        )
+        _revalidate_delivery_anchors(wrapper_root, descriptor, anchors)
+        require_unchanged_unlinked_directory(
+            wrapper_root_observation,
+            label="forensic delivery",
+        )
+        _require_delivery_custody_unchanged(
+            anchors.wrapper_descriptor,
+            descriptor,
+            delivery_custody,
+            include_incomplete_marker=include_incomplete_marker,
+        )
         return descriptor
     finally:
         anchors.close()
@@ -497,16 +635,22 @@ def _require_sensitive_acknowledgement(acknowledged: bool) -> None:
         )
 
 
-def _validated_source_root(source_run: Path) -> Path:
+def _validated_source_root(source_run: Path) -> DirectoryCustodyObservation:
     if ".." in PurePath(source_run).parts:
         raise ValueError("forensic source path may not contain parent traversal")
-    root = _require_unlinked_directory(source_run, label="forensic source run")
+    observation = _require_unlinked_directory(source_run, label="forensic source run")
+    root = observation.path
     if _directory_has_entry(root, _PUBLIC_SUBSET_MANIFEST_NAME):
         raise ValueError("a CI public subset is not a complete forensic source run")
-    return root
+    require_unchanged_unlinked_directory(observation, label="forensic source run")
+    return observation
 
 
-def _validated_destination_candidate(destination: Path, *, source_root: Path) -> Path:
+def _validated_destination_candidate(
+    destination: Path,
+    *,
+    source_root: Path,
+) -> _DestinationCandidate:
     if ".." in PurePath(destination).parts:
         raise ValueError("forensic destination path may not contain parent traversal")
     absolute = Path(os.path.abspath(destination))
@@ -520,7 +664,11 @@ def _validated_destination_candidate(destination: Path, *, source_root: Path) ->
         or is_sensitive_workspace_name(name)
     ):
         raise ValueError("forensic destination name is unsafe")
-    parent = _require_unlinked_directory(absolute.parent, label="forensic destination parent")
+    parent_observation = _require_unlinked_directory(
+        absolute.parent,
+        label="forensic destination parent",
+    )
+    parent = parent_observation.path
     candidate = parent / name
     try:
         candidate.lstat()
@@ -532,7 +680,14 @@ def _validated_destination_candidate(destination: Path, *, source_root: Path) ->
         raise ValueError("forensic destination must not already exist")
     if _directory_is_within(parent, source_root):
         raise ValueError("forensic source and destination may not overlap")
-    return candidate
+    require_unchanged_unlinked_directory(
+        parent_observation,
+        label="forensic destination parent",
+    )
+    return _DestinationCandidate(
+        path=candidate,
+        parent_observation=parent_observation,
+    )
 
 
 def _observe_complete_run(
@@ -545,8 +700,8 @@ def _observe_complete_run(
         relative_path=_RUN_MANIFEST_NAME,
     )
     manifest = RunEvidenceManifest.model_validate(manifest_observation.value)
-    if manifest.schema_version != "1.2":
-        raise ValueError("complete forensic delivery requires run-manifest schema 1.2")
+    if manifest.schema_version not in {"1.2", "1.3", "1.4"}:
+        raise ValueError("complete forensic delivery requires run-manifest schema 1.2, 1.3, or 1.4")
     validate_manifest_artifacts(manifest, run_root)
     inventory = sorted(
         [*manifest.artifacts, manifest_observation.binding],
@@ -584,10 +739,11 @@ def _observe_retained_journal_dependency(
     if reference.consumer_run_id != source_directory_name:
         raise ValueError("forensic source basename differs from retained-journal custody")
 
-    journal_root = _require_unlinked_directory(
+    journal_root_observation = _require_unlinked_directory(
         source_root.parent / reference.owner_run_id / "private" / "scheduler-journal",
         label="forensic retained scheduler journal",
     )
+    journal_root = journal_root_observation.path
     source_artifacts = collect_run_artifacts(journal_root)
     source_directories = _observe_directory_inventory(journal_root)
     journal_directory = f"{_RUNS_DIRECTORY_NAME}/{reference.owner_run_id}/private/scheduler-journal"
@@ -626,9 +782,18 @@ def _observe_retained_journal_dependency(
     )
     # The full semantic validation above is the authority tying these bytes to this reference.
     validate_manifest_artifacts(manifest, source_root)
+    require_unchanged_unlinked_directory(
+        journal_root_observation,
+        label="forensic retained scheduler journal",
+    )
+    journal_custody = _observe_source_directory_custody(
+        journal_root_observation,
+        source_directories,
+        label="forensic retained scheduler journal",
+    )
     return _ObservedDependency(
         descriptor=dependency,
-        source_journal_root=journal_root,
+        source_journal_custody=journal_custody,
         source_artifacts=source_artifacts,
         source_directories=source_directories,
     )
@@ -844,18 +1009,113 @@ def _dependencies_are_equal(
         return before is after
     return (
         before.descriptor == after.descriptor
-        and before.source_journal_root == after.source_journal_root
+        and before.source_journal_custody == after.source_journal_custody
         and before.source_artifacts == after.source_artifacts
         and before.source_directories == after.source_directories
     )
 
 
-def _create_fresh_wrapper(destination: Path) -> _CreatedWrapper:
-    parent = _require_unlinked_directory(destination.parent, label="forensic destination parent")
+def _rebaseline_after_destination_creation(
+    observation: DirectoryCustodyObservation,
+    *,
+    destination_parent: Path,
+    label: str,
+) -> DirectoryCustodyObservation:
+    allowed_paths = frozenset(
+        path for path, _identity in observation.component_identities if path == destination_parent
+    )
+    return reobserve_same_unlinked_directory(
+        observation,
+        label=label,
+        allowed_metadata_change_paths=allowed_paths,
+    )
+
+
+def _observe_source_directory_custody(
+    root_observation: DirectoryCustodyObservation,
+    directory_paths: list[str],
+    *,
+    label: str,
+) -> _SourceDirectoryCustodyObservation:
+    if directory_paths != sorted(set(directory_paths)):
+        raise ValueError(f"{label} descendant directory inventory is not exact")
+    require_unchanged_unlinked_directory(root_observation, label=label)
+    root_descriptor = _open_directory_descriptor(root_observation.path)
+    try:
+        root_identity = _directory_identity(os.fstat(root_descriptor))
+        if root_identity != root_observation.component_identities[-1][1]:
+            raise ValueError(f"{label} root differs from its descendant directory authority")
+        observed = [_SourceDirectoryAuthority(path=".", identity=root_identity)]
+        for relative_path in directory_paths:
+            child_descriptor = _open_source_relative_directory_descriptor(
+                root_descriptor,
+                relative_path,
+                label=f"{label} descendant directory",
+            )
+            try:
+                observed.append(
+                    _SourceDirectoryAuthority(
+                        path=relative_path,
+                        identity=_directory_identity(os.fstat(child_descriptor)),
+                    )
+                )
+            finally:
+                os.close(child_descriptor)
+    finally:
+        os.close(root_descriptor)
+    require_unchanged_unlinked_directory(root_observation, label=label)
+    return _SourceDirectoryCustodyObservation(
+        root_observation=root_observation,
+        directories=tuple(observed),
+    )
+
+
+def _require_source_directory_custody_unchanged(
+    expected: _SourceDirectoryCustodyObservation,
+    *,
+    label: str,
+) -> None:
+    observed = _observe_source_directory_custody(
+        expected.root_observation,
+        [authority.path for authority in expected.directories if authority.path != "."],
+        label=label,
+    )
+    if observed != expected:
+        raise ValueError(f"{label} descendant directory authority changed during custody")
+
+
+def _require_export_source_custody(
+    source: _SourceDirectoryCustodyObservation,
+    dependency: _ObservedDependency | None,
+) -> None:
+    _require_source_directory_custody_unchanged(source, label="forensic source run")
+    if dependency is not None:
+        _require_source_directory_custody_unchanged(
+            dependency.source_journal_custody,
+            label="forensic retained scheduler journal",
+        )
+
+
+def _create_fresh_wrapper(candidate: _DestinationCandidate) -> _CreatedWrapper:
+    destination = candidate.path
+    parent_observation = candidate.parent_observation
+    require_unchanged_unlinked_directory(
+        parent_observation,
+        label="forensic destination parent",
+    )
+    parent = parent_observation.path
     parent_descriptor = _open_directory_descriptor(parent)
     wrapper_descriptor: int | None = None
     created_identity: tuple[int, int] | None = None
     try:
+        opened_parent = os.fstat(parent_descriptor)
+        expected_parent_identity = parent_observation.component_identities[-1][1]
+        if _directory_identity(opened_parent) != expected_parent_identity:
+            raise ValueError("forensic destination parent changed before creation")
+        require_unchanged_unlinked_directory(
+            parent_observation,
+            label="forensic destination parent",
+        )
         try:
             os.mkdir(destination.name, mode=0o700, dir_fd=parent_descriptor)
             entry = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -877,8 +1137,28 @@ def _create_fresh_wrapper(destination: Path) -> _CreatedWrapper:
             ):
                 raise ValueError("forensic destination changed while it was created")
             os.fsync(parent_descriptor)
+            require_unchanged_unlinked_directory(
+                parent_observation,
+                label="forensic destination parent",
+                allow_root_metadata_change=True,
+            )
+            stabilized_parent = reobserve_same_unlinked_directory(
+                parent_observation,
+                label="forensic destination parent",
+                allowed_metadata_change_paths=frozenset({parent}),
+            )
+            if (
+                _directory_identity(os.fstat(parent_descriptor))
+                != (stabilized_parent.component_identities[-1][1])
+            ):
+                raise ValueError("forensic destination parent changed during creation")
+            require_unchanged_unlinked_directory(
+                stabilized_parent,
+                label="forensic destination parent",
+            )
             return _CreatedWrapper(
                 root=destination,
+                parent_observation=stabilized_parent,
                 parent_descriptor=parent_descriptor,
                 wrapper_descriptor=wrapper_descriptor,
                 device=opened.st_dev,
@@ -897,6 +1177,24 @@ def _create_fresh_wrapper(destination: Path) -> _CreatedWrapper:
             os.close(wrapper_descriptor)
         os.close(parent_descriptor)
         raise
+
+
+def _require_created_wrapper_unchanged(created: _CreatedWrapper) -> None:
+    try:
+        current = os.stat(
+            created.root.name,
+            dir_fd=created.parent_descriptor,
+            follow_symlinks=False,
+        )
+        held = os.fstat(created.wrapper_descriptor)
+    except OSError as exc:
+        raise ValueError("forensic destination changed before publication completed") from exc
+    if (
+        _directory_identity(current) != _directory_identity(held)
+        or (held.st_dev, held.st_ino) != (created.device, created.inode)
+        or stat.S_IMODE(held.st_mode) != 0o700
+    ):
+        raise ValueError("forensic destination changed before publication completed")
 
 
 def _remove_created_empty_wrapper(created: _CreatedWrapper) -> None:
@@ -1072,7 +1370,10 @@ def _create_direct_directory(root: Path, name: str) -> Path:
         if child_descriptor is not None:
             os.close(child_descriptor)
         os.close(root_descriptor)
-    return _require_unlinked_directory(root / name, label="forensic child directory")
+    return _require_unlinked_directory(
+        root / name,
+        label="forensic child directory",
+    ).path
 
 
 def _create_directory_path(root: Path, relative_path: str) -> None:
@@ -1134,11 +1435,18 @@ def _create_parent_directories(root: Path, relative_path: str) -> None:
         os.close(descriptor)
 
 
-def _open_delivery_base_anchors(wrapper_root: Path) -> _DeliveryAnchors:
+def _open_delivery_base_anchors(
+    wrapper_root: Path,
+    *,
+    include_incomplete_marker: bool = False,
+) -> _DeliveryAnchors:
     wrapper_descriptor = _open_directory_descriptor(wrapper_root)
     runs_descriptor: int | None = None
     try:
-        if set(os.listdir(wrapper_descriptor)) != {_DESCRIPTOR_NAME, _RUNS_DIRECTORY_NAME}:
+        expected_entries = {_DESCRIPTOR_NAME, _RUNS_DIRECTORY_NAME}
+        if include_incomplete_marker:
+            expected_entries.add(_INCOMPLETE_MARKER_NAME)
+        if set(os.listdir(wrapper_descriptor)) != expected_entries:
             raise ValueError("forensic delivery wrapper inventory is not exact")
         wrapper_metadata = os.fstat(wrapper_descriptor)
         descriptor_metadata = os.stat(
@@ -1163,6 +1471,7 @@ def _open_delivery_base_anchors(wrapper_root: Path) -> _DeliveryAnchors:
             runs_descriptor=runs_descriptor,
             wrapper_identity=_directory_identity(wrapper_metadata),
             runs_identity=_directory_identity(os.fstat(runs_descriptor)),
+            includes_incomplete_marker=include_incomplete_marker,
         )
     except BaseException:
         if runs_descriptor is not None:
@@ -1216,8 +1525,13 @@ def _anchor_primary_run(
 def _open_delivery_anchors(
     wrapper_root: Path,
     descriptor: ForensicDeliveryDescriptor,
+    *,
+    include_incomplete_marker: bool = False,
 ) -> _DeliveryAnchors:
-    anchors = _open_delivery_base_anchors(wrapper_root)
+    anchors = _open_delivery_base_anchors(
+        wrapper_root,
+        include_incomplete_marker=include_incomplete_marker,
+    )
     try:
         _anchor_primary_run(wrapper_root, descriptor, anchors)
         return anchors
@@ -1243,7 +1557,11 @@ def _revalidate_delivery_anchors(
         )
     ):
         raise ValueError("forensic delivery directory authority changed during verification")
-    current = _open_delivery_anchors(wrapper_root, descriptor)
+    current = _open_delivery_anchors(
+        wrapper_root,
+        descriptor,
+        include_incomplete_marker=anchors.includes_incomplete_marker,
+    )
     try:
         if (
             current.wrapper_identity != anchors.wrapper_identity
@@ -1255,6 +1573,266 @@ def _revalidate_delivery_anchors(
             raise ValueError("forensic delivery directory identity changed during verification")
     finally:
         current.close()
+
+
+def _observe_delivery_custody(
+    wrapper_descriptor: int,
+    descriptor: ForensicDeliveryDescriptor,
+    *,
+    include_incomplete_marker: bool = False,
+) -> _DeliveryCustodyObservation:
+    directories_before = _observe_delivery_directory_authorities(
+        wrapper_descriptor,
+        descriptor,
+    )
+    files = _observe_delivery_file_authorities(
+        wrapper_descriptor,
+        descriptor,
+        include_incomplete_marker=include_incomplete_marker,
+    )
+    directories_after = _observe_delivery_directory_authorities(
+        wrapper_descriptor,
+        descriptor,
+    )
+    if directories_after != directories_before:
+        raise ValueError("forensic delivery directories changed during custody observation")
+    return _DeliveryCustodyObservation(
+        directories=directories_after,
+        files=files,
+    )
+
+
+def _require_delivery_custody_unchanged(
+    wrapper_descriptor: int,
+    descriptor: ForensicDeliveryDescriptor,
+    expected: _DeliveryCustodyObservation,
+    *,
+    include_incomplete_marker: bool = False,
+) -> None:
+    observed = _observe_delivery_custody(
+        wrapper_descriptor,
+        descriptor,
+        include_incomplete_marker=include_incomplete_marker,
+    )
+    if observed != expected:
+        raise ValueError("forensic delivery file or directory custody changed")
+
+
+def _observe_delivery_directory_authorities(
+    wrapper_descriptor: int,
+    descriptor: ForensicDeliveryDescriptor,
+) -> tuple[_DeliveryDirectoryAuthority, ...]:
+    try:
+        wrapper_metadata = os.fstat(wrapper_descriptor)
+    except OSError as exc:
+        raise ValueError("forensic delivery wrapper authority is unavailable") from exc
+    if (
+        not stat.S_ISDIR(wrapper_metadata.st_mode)
+        or stat.S_IMODE(wrapper_metadata.st_mode) != 0o700
+    ):
+        raise ValueError("forensic delivery wrapper authority is unsafe")
+    observed = [
+        _DeliveryDirectoryAuthority(path=".", identity=_directory_identity(wrapper_metadata))
+    ]
+    for relative_path in descriptor.directories:
+        child_descriptor = _open_relative_directory_descriptor(
+            wrapper_descriptor,
+            relative_path,
+            label="forensic delivery directory authority",
+        )
+        try:
+            observed.append(
+                _DeliveryDirectoryAuthority(
+                    path=relative_path,
+                    identity=_directory_identity(os.fstat(child_descriptor)),
+                )
+            )
+        finally:
+            os.close(child_descriptor)
+    return tuple(observed)
+
+
+def _observe_delivery_file_authorities(
+    wrapper_descriptor: int,
+    descriptor: ForensicDeliveryDescriptor,
+    *,
+    include_incomplete_marker: bool = False,
+) -> tuple[_DeliveryFileAuthority, ...]:
+    descriptor_content = stable_json(descriptor).encode("utf-8")
+    bindings = [
+        ManifestFileBinding(
+            path=_DESCRIPTOR_NAME,
+            sha256=hashlib.sha256(descriptor_content).hexdigest(),
+            size=len(descriptor_content),
+        ),
+        *(
+            [
+                ManifestFileBinding(
+                    path=_INCOMPLETE_MARKER_NAME,
+                    sha256=hashlib.sha256(_INCOMPLETE_MARKER_CONTENT).hexdigest(),
+                    size=len(_INCOMPLETE_MARKER_CONTENT),
+                )
+            ]
+            if include_incomplete_marker
+            else []
+        ),
+        *descriptor.artifacts,
+    ]
+    forward = tuple(
+        _observe_bound_delivery_file(wrapper_descriptor, binding) for binding in bindings
+    )
+    # Reversing the second pass rechecks every canonical-earlier file after all later files.
+    reverse_pass = tuple(
+        _observe_bound_delivery_file(wrapper_descriptor, binding) for binding in reversed(bindings)
+    )
+    reverse = tuple(reversed(reverse_pass))
+    if reverse != forward:
+        raise ValueError("forensic delivery files changed across bounded custody observation")
+    return reverse
+
+
+def _observe_bound_delivery_file(
+    wrapper_descriptor: int,
+    binding: ManifestFileBinding,
+) -> _DeliveryFileAuthority:
+    normalized = normalize_relative_path(binding.path)
+    if normalized != binding.path or normalized in {"", "."}:
+        raise ValueError("forensic delivery artifact file authority path is unsafe")
+    if binding.size > _MAX_TOTAL_BYTES:
+        raise ValueError("forensic delivery artifact file authority exceeds its byte bound")
+    parts = PurePosixPath(normalized).parts
+    parent_descriptor = os.dup(wrapper_descriptor)
+    file_descriptor: int | None = None
+    try:
+        for part in parts[:-1]:
+            child = _open_direct_child_directory(
+                parent_descriptor,
+                part,
+                label="forensic delivery file parent",
+            )
+            os.close(parent_descriptor)
+            parent_descriptor = child
+        leaf = parts[-1]
+        _require_safe_component(leaf)
+        before = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size != binding.size
+        ):
+            raise ValueError("forensic delivery artifact file authority is unsafe")
+        file_descriptor = os.open(
+            leaf,
+            os.O_RDONLY | _CLOEXEC_FLAG | _NOFOLLOW_FLAG,
+            dir_fd=parent_descriptor,
+        )
+        opened = os.fstat(file_descriptor)
+        digest = hashlib.sha256()
+        observed_size = 0
+        while observed_size <= binding.size:
+            chunk = os.read(
+                file_descriptor,
+                min(1024 * 1024, binding.size + 1 - observed_size),
+            )
+            if not chunk:
+                break
+            observed_size += len(chunk)
+            digest.update(chunk)
+        finished = os.fstat(file_descriptor)
+        after = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        identities = {
+            _file_identity(before),
+            _file_identity(opened),
+            _file_identity(finished),
+            _file_identity(after),
+        }
+        if (
+            len(identities) != 1
+            or observed_size != binding.size
+            or digest.hexdigest() != binding.sha256
+        ):
+            raise ValueError(
+                "forensic delivery artifact file authority changed or differs from its binding"
+            )
+        return _DeliveryFileAuthority(
+            path=binding.path,
+            sha256=binding.sha256,
+            size=binding.size,
+            identity=_file_identity(finished),
+        )
+    except OSError as exc:
+        raise ValueError("forensic delivery artifact file authority is unavailable") from exc
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        os.close(parent_descriptor)
+
+
+def _open_relative_directory_descriptor(
+    root_descriptor: int,
+    relative_path: str,
+    *,
+    label: str,
+) -> int:
+    normalized = normalize_relative_path(relative_path)
+    if normalized != relative_path or normalized in {"", "."}:
+        raise ValueError(f"{label} path is unsafe")
+    descriptor = os.dup(root_descriptor)
+    try:
+        for part in PurePosixPath(normalized).parts:
+            child = _open_direct_child_directory(descriptor, part, label=label)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_source_relative_directory_descriptor(
+    root_descriptor: int,
+    relative_path: str,
+    *,
+    label: str,
+) -> int:
+    normalized = normalize_relative_path(relative_path)
+    if normalized != relative_path or normalized in {"", "."}:
+        raise ValueError(f"{label} path is unsafe")
+    descriptor = os.dup(root_descriptor)
+    try:
+        for part in PurePosixPath(normalized).parts:
+            child = _open_source_child_directory(descriptor, part, label=label)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_source_child_directory(parent_descriptor: int, name: str, *, label: str) -> int:
+    _require_safe_component(name)
+    descriptor: int | None = None
+    try:
+        entry = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | _DIRECTORY_FLAG | _CLOEXEC_FLAG | _NOFOLLOW_FLAG,
+            dir_fd=parent_descriptor,
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(entry.st_mode)
+            or not stat.S_ISDIR(opened.st_mode)
+            or _directory_identity(entry) != _directory_identity(opened)
+        ):
+            raise ValueError(f"{label} is unsafe")
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
 
 
 def _open_direct_child_directory(parent_descriptor: int, name: str, *, label: str) -> int:
@@ -1490,7 +2068,13 @@ def _is_run_evidence_class(path: str, directory: Literal["private", "logs"]) -> 
 
 
 def _directory_identity(metadata: os.stat_result) -> _DirectoryIdentity:
-    return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_nlink
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_ctime_ns,
+    )
 
 
 def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:

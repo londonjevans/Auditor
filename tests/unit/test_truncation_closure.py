@@ -74,6 +74,7 @@ from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     build_source_file_review_request,
+    model_surface_context_source_custody,
     seal_model_surface_review_artifact,
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
@@ -234,6 +235,9 @@ def _context(requests: tuple[ModelSurfaceReviewRequest, ...]) -> ContextPackage:
 
 def _context_evidence(context: ContextPackage, request_id: str) -> ContextRequestEvidence:
     rendered = render_context(context)
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(context)
+    )
     return ContextRequestEvidence.build(
         request_id=request_id,
         request_role=_ROLE,
@@ -247,6 +251,8 @@ def _context_evidence(context: ContextPackage, request_id: str) -> ContextReques
         ),
         effective_source_byte_ceiling=context.effective_source_byte_ceiling,
         rendered_sha256=hashlib.sha256(rendered.encode()).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
     )
 
 

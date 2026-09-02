@@ -6,6 +6,7 @@ import hashlib
 import json
 import ssl
 import sys
+import threading
 import traceback
 import weakref
 from collections.abc import Callable
@@ -109,7 +110,10 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
     TokenDetailAccountingEvidence,
 )
+from mmaudit.models.retrieval import SolidityRetrievalRolePolicy
 from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
     normalize_exact_route_pricing,
     project_provider_price_cap,
     project_route_emitted_request_parameters,
@@ -196,6 +200,7 @@ from mmaudit.repository.privacy_provenance import (
     prove_release_pinned_model_benchmark_source,
 )
 from tests.qualification_support import synthetic_production_qualification
+from tests.unit import test_candidate_benchmark as candidate_benchmark_fixtures
 
 _MODEL_BENCHMARK_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus/manifest.json"
 _MODEL_BENCHMARK_SMOKE_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus_smoke"
@@ -2071,6 +2076,7 @@ def _client(
     api_key: str = "synthetic-key",
     run_dir: Path | None = None,
     provider_policy: OpenRouterProviderPolicy | None = None,
+    candidate_revocation_route_constraint: ExactRouteConstraint | None = None,
     reasoning: OpenRouterReasoning | None = None,
     reasoning_policy: ReasoningPolicyArtifact | None = None,
     qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
@@ -2109,6 +2115,7 @@ def _client(
         base_url="https://fake.test/api/v1/",
         run_dir=run_dir,
         provider_policy=policy,
+        candidate_revocation_route_constraint=candidate_revocation_route_constraint,
         reasoning=reasoning,
         reasoning_policy=reasoning_policy,
         token_budgets=config.token_budgets,
@@ -2164,7 +2171,12 @@ async def _paid_control_client_with_mock_transport(
     return client, usage, client._client
 
 
-def _owned_client(config, *, base_url: str) -> OpenRouterClient:
+def _owned_client(
+    config,
+    *,
+    base_url: str,
+    provider_policy: OpenRouterProviderPolicy | None = None,
+) -> OpenRouterClient:
     return OpenRouterClient(
         api_key="synthetic-key",
         execution=config.execution,
@@ -2179,6 +2191,7 @@ def _owned_client(config, *, base_url: str) -> OpenRouterClient:
         ),
         usage=UsageLedger(),
         base_url=base_url,
+        provider_policy=provider_policy,
     )
 
 
@@ -2324,6 +2337,280 @@ async def test_direct_completion_rejects_tombstoned_route_before_dispatch_or_res
     assert usage.records == []
     assert client._claimed_request_ids == set()
     assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_role",
+    (ExactRouteRole.PRIMARY_JUDGE, ExactRouteRole.REPLAY_JUDGE),
+)
+async def test_direct_completion_allows_candidate_tombstone_identity_for_exact_judge_role(
+    config_factory,
+    tmp_path: Path,
+    route_role: ExactRouteRole,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    canonical_model_id = "deepseek/deepseek-v4-pro-20260813"
+    config = config_factory(
+        execution={"max_json_repair_attempts": 0},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
+    manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / route_role.value,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id=canonical_model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=route_role,
+    )
+    route_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _completion_response(
+            '{"answer":"exact judge route remained eligible"}',
+            model=model_id,
+            selected_model=model_id,
+            provider="parasail/fp8",
+        )
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=route_constraint,
+        privacy_models=(model_id,),
+    )
+    try:
+        client.register_model_discovery(evidence=evidence[0], manifest=manifest)
+        completion = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=[model_id],
+            system_prompt="synthetic judge system",
+            user_prompt="synthetic local judge input",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id=f"{route_role.value}-candidate-tombstone-isolation",
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert completion.value.answer == "exact judge route remained eligible"
+    assert len(requests) == 1
+    assert len(usage.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_scoped_completion_requires_matching_registered_route_constraint(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(
+        execution={"max_json_repair_attempts": 0},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "primary-constraint",
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.PRIMARY_JUDGE,
+    )
+    route_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _completion_response('{"answer":"unexpected"}', model=model_id)
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=route_constraint,
+        privacy_models=(model_id,),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="custody differs from registered"):
+            await client.complete_with_evidence(
+                role="model_benchmark",
+                models=[model_id],
+                system_prompt="synthetic judge system",
+                user_prompt="synthetic local judge input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert requests == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_scoped_completion_rejects_constraint_projection_code_retarget_before_transport(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(
+        execution={"max_json_repair_attempts": 0},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
+    manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.PRIMARY_JUDGE,
+    )
+    route_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _completion_response('{"answer":"unexpected"}', model=model_id)
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=route_constraint,
+        privacy_models=(model_id,),
+    )
+    client.register_model_discovery(evidence=evidence[0], manifest=manifest)
+    projector = openrouter_module._validated_candidate_revocation_constraint_projection
+    original_code = projector.__code__
+
+    def forged_projector(_constraint: ExactRouteConstraint) -> tuple[str, ...]:
+        return (
+            "1.0",
+            "primary_judge",
+            "deepseek/deepseek-v4-pro-0813",
+            "parasail/fp8",
+            "a" * 64,
+            "b" * 64,
+        )
+
+    projector.__code__ = forged_projector.__code__
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.complete_with_evidence(
+                role="model_benchmark",
+                models=[model_id],
+                system_prompt="synthetic judge system",
+                user_prompt="synthetic local judge input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        projector.__code__ = original_code
+        await client.close()
+        await http_client.aclose()
+
+    assert requests == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_scoped_completion_rejects_mutated_registered_constraint_before_transport(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(
+        execution={"max_json_repair_attempts": 0},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
+    manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.PRIMARY_JUDGE,
+    )
+    route_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _completion_response('{"answer":"unexpected"}', model=model_id)
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=route_constraint,
+        privacy_models=(model_id,),
+    )
+    client.register_model_discovery(evidence=evidence[0], manifest=manifest)
+    registered = client._reasoning_discoveries[model_id]
+    registered_constraint = registered.endpoint_snapshot.exact_route_constraint
+    assert type(registered_constraint) is ExactRouteConstraint
+    object.__setattr__(registered_constraint, "role", ExactRouteRole.CANDIDATE)
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.complete_with_evidence(
+                role="model_benchmark",
+                models=[model_id],
+                system_prompt="synthetic judge system",
+                user_prompt="synthetic local judge input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert requests == []
+    assert usage.records == []
 
 
 @pytest.mark.asyncio
@@ -5628,8 +5915,11 @@ async def test_real_completion_requires_durable_atomic_cost_ledger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = config_factory()
-    client = _owned_client(config, base_url=OPENROUTER_DEFAULT_BASE_URL)
-    client.provider_policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client = _owned_client(
+        config,
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
     policy, observation, user_prompt = _synthetic_prequalification_privacy_context(
         config,
         monkeypatch,
@@ -8113,7 +8403,7 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
 
 
 @pytest.mark.asyncio
-async def test_real_ordinary_provider_fallback_is_preserved_as_unbound(
+async def test_real_ordinary_provider_policy_retarget_fails_before_unbound_fallback(
     config_factory,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8218,7 +8508,7 @@ async def test_real_ordinary_provider_fallback_is_preserved_as_unbound(
     before_usage = real_usage.records
     before_cost = ledger.snapshot()
     try:
-        with pytest.raises(OpenRouterPrivacyError, match="callables changed after validation"):
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
             await client.complete_with_evidence(
                 role="model_benchmark",
                 models=["alpha/atlas-secure"],
@@ -11836,6 +12126,39 @@ async def test_refresh_exact_endpoint_metadata_preserves_withdrawn_empty_set(
 
 
 @pytest.mark.asyncio
+async def test_nonauthorizing_endpoint_inventory_can_observe_tombstoned_model_replacements(
+    config_factory,
+) -> None:
+    exact_model_id = "deepseek/deepseek-v4-pro-0813"
+    observed: list[httpx.Request] = []
+    replacement = {
+        "tag": "provider-replacement/fp8",
+        "provider_name": "Provider Replacement",
+        "status": 0,
+        "supported_parameters": ["max_tokens", "response_format"],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={"data": {"id": exact_model_id, "endpoints": [replacement]}},
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        endpoints = await client.list_model_endpoint_inventory(exact_model_id)
+    finally:
+        await http_client.aclose()
+
+    assert endpoints == [replacement]
+    assert [(request.method, request.url.path, request.content) for request in observed] == [
+        ("GET", "/api/v1/models/deepseek/deepseek-v4-pro-0813/endpoints", b""),
+    ]
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method_name",
     (
@@ -11869,6 +12192,836 @@ async def test_selected_metadata_rejects_tombstoned_route_before_transport(
             await method("deepseek/deepseek-v4-pro-0813")
     finally:
         await http_client.aclose()
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_role",
+    (ExactRouteRole.PRIMARY_JUDGE, ExactRouteRole.REPLAY_JUDGE),
+)
+async def test_selected_metadata_allows_candidate_tombstone_identity_for_exact_judge_role(
+    config_factory,
+    tmp_path: Path,
+    route_role: ExactRouteRole,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    canonical_model_id = "deepseek/deepseek-v4-pro-20260813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / route_role.value,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id=canonical_model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=route_role,
+    )
+    route_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(route_constraint) is ExactRouteConstraint
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": model_id,
+                    "canonical_slug": canonical_model_id,
+                }
+            },
+        )
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=route_constraint,
+        privacy_models=(model_id,),
+    )
+    try:
+        response = await client.get_model_metadata(model_id)
+    finally:
+        await http_client.aclose()
+
+    assert response["data"]["canonical_slug"] == canonical_model_id
+    assert len(observed) == 1
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_ignores_instance_shadow_role_scope(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+    )
+    object.__setattr__(
+        client,
+        "_candidate_revocation_scope",
+        (ExactRouteRole.PRIMARY_JUDGE, client.provider_policy),
+    )
+    object.__setattr__(
+        client,
+        "candidate_revocation_role",
+        ExactRouteRole.PRIMARY_JUDGE,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            await client.get_model_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        object.__delattr__(client, "_candidate_revocation_scope")
+        object.__delattr__(client, "candidate_revocation_role")
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_all_reachable_registry_role_retargets(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    candidate_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    profile = evidence[0].endpoint_snapshot.route_predicate_profile
+    assert type(candidate_constraint) is ExactRouteConstraint
+    assert profile is not None
+    forged_primary = ExactRouteConstraint.build(
+        role=ExactRouteRole.PRIMARY_JUDGE,
+        exact_model_id=model_id,
+        provider_endpoint="parasail/fp8",
+        profile=profile,
+    )
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=candidate_constraint,
+    )
+    binding = openrouter_module._lookup_trusted_transport_binding(client)
+    assert binding is not None
+    forged_projection = (
+        forged_primary.schema_version,
+        forged_primary.role.value,
+        forged_primary.exact_model_id,
+        forged_primary.provider_endpoint,
+        forged_primary.profile_sha256,
+        forged_primary.constraint_sha256,
+    )
+    original_projection = binding.candidate_revocation_constraint_projection
+    assert original_projection is not None
+    original_policy_projection = binding.provider_policy_projection
+    forged_policy_projection = (
+        original_policy_projection[0],
+        tuple([*original_policy_projection[1]]),
+        tuple([*original_policy_projection[2]]),
+        original_policy_projection[3],
+    )
+    forged_binding = replace(
+        binding,
+        candidate_revocation_constraint_projection=forged_projection,
+        provider_policy_projection=forged_policy_projection,
+    )
+    registry_entries: list[tuple[weakref.WeakKeyDictionary[object, object], object]] = []
+    seen_registry_ids: set[int] = set()
+    for function in (
+        openrouter_module._register_trusted_transport_binding,
+        openrouter_module._lookup_trusted_transport_binding,
+        openrouter_module._lookup_trusted_candidate_revocation_constraint,
+        openrouter_module._lookup_trusted_provider_policy_projection,
+        openrouter_module._project_trusted_candidate_revocation_constraint,
+        openrouter_module._resolve_trusted_candidate_revocation_constraint_projection,
+    ):
+        for cell in function.__closure__ or ():
+            value = cell.cell_contents
+            if (
+                isinstance(value, weakref.WeakKeyDictionary)
+                and id(value) not in seen_registry_ids
+                and client in value
+            ):
+                original_value = value[client]
+                assert (
+                    original_value is binding
+                    or original_value is original_projection
+                    or original_value is original_policy_projection
+                )
+                registry_entries.append((value, original_value))
+                seen_registry_ids.add(id(value))
+    assert len(registry_entries) == 3
+    for registry, original_value in registry_entries:
+        if original_value is binding:
+            registry[client] = forged_binding
+        elif original_value is original_projection:
+            registry[client] = forged_projection
+        else:
+            assert original_value is original_policy_projection
+            registry[client] = forged_policy_projection
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        for registry, original_value in registry_entries:
+            registry[client] = original_value
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_missing_unscoped_constraint_canary(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(config_factory(), handler)
+    binding = openrouter_module._lookup_trusted_transport_binding(client)
+    assert binding is not None
+    assert binding.candidate_revocation_constraint_projection is None
+    lookup = openrouter_module._lookup_trusted_candidate_revocation_constraint
+    closure_by_name = dict(zip(lookup.__code__.co_freevars, lookup.__closure__ or (), strict=True))
+    registry = closure_by_name["candidate_revocation_constraints"].cell_contents
+    assert client in registry
+    assert registry[client] is None
+    del registry[client]
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        registry[client] = None
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_constructor_retains_first_validated_constraint_projection_after_input_mutation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    candidate_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    profile = evidence[0].endpoint_snapshot.route_predicate_profile
+    assert type(candidate_constraint) is ExactRouteConstraint
+    assert profile is not None
+    forged_primary = ExactRouteConstraint.build(
+        role=ExactRouteRole.PRIMARY_JUDGE,
+        exact_model_id=model_id,
+        provider_endpoint="parasail/fp8",
+        profile=profile,
+    )
+    sealed_reasoning_policy = _per_role_reasoning_policy()
+
+    class MutatingReasoningPolicy:
+        def model_dump(self, *, mode: str) -> dict[str, Any]:
+            assert mode == "python"
+            for field_name in type(candidate_constraint).model_fields:
+                object.__setattr__(
+                    candidate_constraint,
+                    field_name,
+                    getattr(forged_primary, field_name),
+                )
+            return sealed_reasoning_policy.model_dump(mode="python")
+
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=candidate_constraint,
+        reasoning_policy=cast(ReasoningPolicyArtifact, MutatingReasoningPolicy()),
+    )
+    binding = openrouter_module._lookup_trusted_transport_binding(client)
+    assert binding is not None
+    assert candidate_constraint.role is ExactRouteRole.PRIMARY_JUDGE
+    assert binding.candidate_revocation_constraint_projection is not None
+    assert binding.candidate_revocation_constraint_projection[1] == ExactRouteRole.CANDIDATE.value
+    try:
+        with pytest.raises(OpenRouterModelError, match="route is revoked"):
+            await client.get_model_metadata(model_id)
+    finally:
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_coordinated_policy_and_registry_endpoint_retarget(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    original_endpoint = "parasail/fp8"
+    forged_endpoint = "provider-alpha"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint=original_endpoint,
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=(original_endpoint,),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    binding = openrouter_module._lookup_trusted_transport_binding(client)
+    assert binding is not None
+    assert binding.provider_policy is client.provider_policy
+    assert binding.provider_policy_projection == (False, (original_endpoint,), (), False)
+    lookup = openrouter_module._lookup_trusted_provider_policy_projection
+    closure_by_name = dict(zip(lookup.__code__.co_freevars, lookup.__closure__ or (), strict=True))
+    registry = closure_by_name["provider_policy_projections"].cell_contents
+    original_projection = registry[client]
+    forged_projection = (False, (forged_endpoint,), (), False)
+    original_only = client.provider_policy.only
+    object.__setattr__(client.provider_policy, "only", (forged_endpoint,))
+    registry[client] = forged_projection
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        object.__setattr__(client.provider_policy, "only", original_only)
+        registry[client] = original_projection
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_in_place_provider_policy_mutation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    original_only = client.provider_policy.only
+    object.__setattr__(client.provider_policy, "only", ("provider-alpha",))
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        object.__setattr__(client.provider_policy, "only", original_only)
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_route_outside_scoped_client_seal(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="differs from the sealed route custody"):
+            await client.get_model_metadata("alpha/atlas-secure")
+    finally:
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_exact_route_role_module_alias_replacement(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    monkeypatch.setattr(
+        openrouter_module,
+        "ExactRouteRole",
+        lambda _value: ExactRouteRole.PRIMARY_JUDGE,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_coherent_resolver_alias_replacement(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    profile = evidence[0].endpoint_snapshot.route_predicate_profile
+    assert type(constraint) is ExactRouteConstraint
+    assert profile is not None
+    forged = ExactRouteConstraint.build(
+        role=ExactRouteRole.PRIMARY_JUDGE,
+        exact_model_id=model_id,
+        provider_endpoint="parasail/fp8",
+        profile=profile,
+    )
+    forged_projection = (
+        forged.schema_version,
+        forged.role.value,
+        forged.exact_model_id,
+        forged.provider_endpoint,
+        forged.profile_sha256,
+        forged.constraint_sha256,
+    )
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    def forged_resolver(_subject: object, _binding: object) -> tuple[str, ...]:
+        return forged_projection
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    monkeypatch.setattr(
+        openrouter_module,
+        "_resolve_trusted_candidate_revocation_constraint_projection",
+        forged_resolver,
+    )
+    monkeypatch.setattr(
+        openrouter_module,
+        "_TRUSTED_RESOLVE_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION",
+        forged_resolver,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_register_model_discovery_rejects_mismatched_role_before_registry_mutation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    spec = candidate_benchmark_fixtures._CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+        native_structured_output_parameter="structured_outputs",
+    )
+    _candidate_manifest, candidate_evidence, _candidate_registry = (
+        candidate_benchmark_fixtures._discovery_and_registry(
+            tmp_path=tmp_path / "candidate",
+            config=config,
+            specs=(spec,),
+            route_role=ExactRouteRole.CANDIDATE,
+        )
+    )
+    primary_manifest, primary_evidence, _primary_registry = (
+        candidate_benchmark_fixtures._discovery_and_registry(
+            tmp_path=tmp_path / "primary",
+            config=config,
+            specs=(spec,),
+            route_role=ExactRouteRole.PRIMARY_JUDGE,
+        )
+    )
+    constraint = candidate_evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    client, http_client, usage = _client(
+        config,
+        lambda _request: httpx.Response(500, json={"error": "unexpected"}),
+        provider_policy=OpenRouterProviderPolicy(
+            only=(spec.provider_endpoint,),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="differs from registered discovery"):
+            client.register_model_discovery(
+                evidence=primary_evidence[0],
+                manifest=primary_manifest,
+            )
+    finally:
+        await http_client.aclose()
+
+    assert client._endpoint_pricing == {}
+    assert client._reasoning_capabilities == {}
+    assert client._reasoning_discoveries == {}
+    assert client._model_identities == {}
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_mutated_closure_registry_role_seal(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "deepseek/deepseek-v4-pro-0813"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                canonical_model_id="deepseek/deepseek-v4-pro-20260813",
+                provider_endpoint="parasail/fp8",
+                provider_name="Synthetic Parasail",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    candidate_constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    profile = evidence[0].endpoint_snapshot.route_predicate_profile
+    assert type(candidate_constraint) is ExactRouteConstraint
+    assert profile is not None
+    forged_primary = ExactRouteConstraint.build(
+        role=ExactRouteRole.PRIMARY_JUDGE,
+        exact_model_id=model_id,
+        provider_endpoint="parasail/fp8",
+        profile=profile,
+    )
+    forged_projection = (
+        forged_primary.schema_version,
+        forged_primary.role.value,
+        forged_primary.exact_model_id,
+        forged_primary.provider_endpoint,
+        forged_primary.profile_sha256,
+        forged_primary.constraint_sha256,
+    )
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("parasail/fp8",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=candidate_constraint,
+    )
+    lookup = openrouter_module._lookup_trusted_candidate_revocation_constraint
+    closure_by_name = dict(zip(lookup.__code__.co_freevars, lookup.__closure__ or (), strict=True))
+    registry = closure_by_name["candidate_revocation_constraints"].cell_contents
+    original_projection = registry[client]
+    registry[client] = forged_projection
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata(model_id)
+    finally:
+        registry[client] = original_projection
+        await http_client.aclose()
+
+    assert observed == []
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_transport_binding_registration_is_single_assignment(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "alpha/atlas-secure"
+    config = config_factory(models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}})
+    _manifest, evidence, _registry = candidate_benchmark_fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            candidate_benchmark_fixtures._CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="provider-alpha",
+                provider_name="Provider Alpha",
+                native_structured_output_parameter="structured_outputs",
+            ),
+        ),
+        route_role=ExactRouteRole.CANDIDATE,
+    )
+    constraint = evidence[0].endpoint_snapshot.exact_route_constraint
+    assert type(constraint) is ExactRouteConstraint
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: httpx.Response(500, json={"error": "unexpected"}),
+        provider_policy=OpenRouterProviderPolicy(
+            only=("provider-alpha",),
+            allow_fallbacks=False,
+        ),
+        candidate_revocation_route_constraint=constraint,
+    )
+    binding = openrouter_module._lookup_trusted_transport_binding(client)
+    assert binding is not None
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match="already registered"):
+            openrouter_module._register_trusted_transport_binding(
+                client,
+                binding,
+                binding.candidate_revocation_constraint_projection,
+            )
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_selected_metadata_rejects_constraint_lookup_code_retarget_before_transport(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    client, http_client, usage = _client(config_factory(), handler)
+    lookup = openrouter_module._lookup_trusted_candidate_revocation_constraint
+    original_code = lookup.__code__
+
+    def forged_lookup_factory():
+        candidate_revocation_constraints: dict[object, object] = {}
+        lock = threading.Lock()
+
+        def forged_lookup(subject: object) -> object:
+            with lock:
+                candidate_revocation_constraints.get(subject)
+                return (
+                    "1.0",
+                    "primary_judge",
+                    "deepseek/deepseek-v4-pro-0813",
+                    "parasail/fp8",
+                    "a" * 64,
+                    "b" * 64,
+                )
+
+        return forged_lookup
+
+    forged_lookup = forged_lookup_factory()
+    assert forged_lookup.__code__.co_freevars == lookup.__code__.co_freevars
+    lookup.__code__ = forged_lookup.__code__
+    try:
+        with pytest.raises(OpenRouterModelError, match="candidate revocation boundary changed"):
+            await client.get_model_metadata("deepseek/deepseek-v4-pro-0813")
+    finally:
+        lookup.__code__ = original_code
+        await http_client.aclose()
+
     assert observed == []
     assert usage.records == []
 
@@ -15839,6 +16992,100 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
         usage.records[0].routing["context_request_evidence_sha256"]
         == (context_evidence["evidence_sha256"])
     )
+
+
+def test_prompt_token_allocations_compose_external_and_context_workflow() -> None:
+    policy = SolidityRetrievalRolePolicy.build(role="source_audit")
+    package = _empty_context_package().model_copy(
+        update={
+            "solidity_retrieval_policy": policy,
+            "solidity_retrieval_corpus_sha256": "a" * 64,
+        }
+    )
+    package = package.model_copy(
+        update={"bytes_used": len(render_context(package).encode("utf-8"))}
+    )
+    context_workflow = context_category_measurements(package)[
+        PromptAllocationCategory.WORKFLOW.value
+    ]
+    assert context_workflow.utf8_bytes > 0
+
+    system_prompt = "Review only the supplied synthetic source."
+    workflow_prefix = "Review this synthetic retrieval context.\n"
+    plan = openrouter_module._structured_output_request_plan(
+        mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        system_prompt=system_prompt,
+        user_prompt=workflow_prefix + render_context(package),
+        response_model=Answer,
+        schema_name="answer",
+    )
+    allocations = {
+        allocation.category: allocation
+        for allocation in openrouter_module._prompt_token_allocations(
+            plan=plan,
+            original_system_prompt=system_prompt,
+            response_model=Answer,
+            schema_name="answer",
+            context_package=package,
+        )
+    }
+
+    external_workflow_bytes = workflow_prefix.encode("utf-8")
+    components = (
+        {
+            "component": "external_workflow",
+            "content_sha256": hashlib.sha256(external_workflow_bytes).hexdigest(),
+            "utf8_bytes": len(external_workflow_bytes),
+        },
+        {
+            "component": "context_workflow",
+            "content_sha256": context_workflow.content_sha256,
+            "utf8_bytes": context_workflow.utf8_bytes,
+        },
+    )
+    expected_bytes = len(external_workflow_bytes) + context_workflow.utf8_bytes
+    workflow = allocations[PromptAllocationCategory.WORKFLOW]
+    assert workflow.estimate.content_sha256 == canonical_sha256(
+        {
+            "schema_version": "1.0",
+            "composition": "ordered_workflow_measurements",
+            "components": components,
+        }
+    )
+    assert workflow.estimate.utf8_bytes == expected_bytes
+    assert workflow.estimate.estimated_tokens == (expected_bytes + 2) // 3
+    assert workflow.estimate.byte_upper_bound_tokens == expected_bytes
+
+
+def test_prompt_token_allocations_preserve_empty_context_workflow_legacy_hash() -> None:
+    package = _empty_context_package()
+    workflow_prefix = "Review this ordinary synthetic context.\n"
+    system_prompt = "Review only the supplied synthetic source."
+    plan = openrouter_module._structured_output_request_plan(
+        mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        system_prompt=system_prompt,
+        user_prompt=workflow_prefix + render_context(package),
+        response_model=Answer,
+        schema_name="answer",
+    )
+    workflow = next(
+        allocation
+        for allocation in openrouter_module._prompt_token_allocations(
+            plan=plan,
+            original_system_prompt=system_prompt,
+            response_model=Answer,
+            schema_name="answer",
+            context_package=package,
+        )
+        if allocation.category is PromptAllocationCategory.WORKFLOW
+    )
+
+    assert context_category_measurements(package)["workflow"].utf8_bytes == 0
+    assert (
+        workflow.estimate.content_sha256
+        == hashlib.sha256(workflow_prefix.encode("utf-8")).hexdigest()
+    )
+    assert workflow.estimate.utf8_bytes == len(workflow_prefix.encode("utf-8"))
 
 
 @pytest.mark.asyncio

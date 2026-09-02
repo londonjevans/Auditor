@@ -248,6 +248,7 @@ class ModelPortfolioTaskKind(StrEnum):
     """Closed task classes covered by the pre-orientation spend reservation."""
 
     ORIENTATION = "orientation"
+    RETRIEVAL_PLANNING = "retrieval_planning"
     COMPACT_COVERAGE = "compact_coverage"
     SOURCE_AUDIT = "source_audit"
     WHOLE_PROTOCOL = "whole_protocol"

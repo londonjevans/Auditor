@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import (
     ROUND_HALF_EVEN,
     Context,
@@ -46,8 +46,8 @@ from mmaudit.models.truncation import (
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
-    candidate_review_batch_schema_sha256,
-    candidate_review_frame_wire_schema_sha256,
+    candidate_review_schema_algorithm_version,
+    candidate_review_typed_payload_projection,
 )
 from mmaudit.models.truncation_recovery import (
     TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
@@ -181,8 +181,41 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"unsupported truncation-closure hash value: {type(value).__qualname__}")
 
 
-def _model_sha256(model: BaseModel, *, exclude: set[str]) -> str:
-    return _canonical_sha256(model.model_dump(mode="json", exclude=exclude))
+def _scheduler_projection(value: Any, *, algorithm_version: str) -> Any:
+    if isinstance(value, BaseModel):
+        return candidate_review_typed_payload_projection(
+            value,
+            algorithm_version=algorithm_version,
+        )
+    if isinstance(value, Mapping):
+        return {
+            key: _scheduler_projection(item, algorithm_version=algorithm_version)
+            for key, item in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_scheduler_projection(item, algorithm_version=algorithm_version) for item in value]
+    return value
+
+
+def _scheduler_canonical_sha256(value: Any, *, algorithm_version: str) -> str:
+    return _canonical_sha256(_scheduler_projection(value, algorithm_version=algorithm_version))
+
+
+def _model_sha256(
+    model: BaseModel,
+    *,
+    exclude: set[str],
+    algorithm_version: str = "mmaudit.seven-pass-scheduler.v2",
+) -> str:
+    projection = candidate_review_typed_payload_projection(
+        model,
+        algorithm_version=algorithm_version,
+    )
+    if not isinstance(projection, dict):
+        raise TypeError("truncation closure model projection has an invalid object shape")
+    for field_name in exclude:
+        projection.pop(field_name, None)
+    return _canonical_sha256(projection)
 
 
 def _exact_model[ModelT: BaseModel](value: ModelT, expected: type[ModelT]) -> ModelT:
@@ -342,12 +375,16 @@ def _truncation_projection_routing(
     }
 
 
-def _finding_inventory(findings: Sequence[CandidateFinding]) -> tuple[tuple[str, str], ...]:
+def _finding_inventory(
+    findings: Sequence[CandidateFinding],
+    *,
+    algorithm_version: str,
+) -> tuple[tuple[str, str], ...]:
     pairs = tuple(
         sorted(
             (
                 finding.candidate_id,
-                _canonical_sha256(finding.model_dump(mode="json")),
+                _scheduler_canonical_sha256(finding, algorithm_version=algorithm_version),
             )
             for finding in findings
         )
@@ -377,11 +414,15 @@ class TruncationRecoveryInvariantBinding(_NonAuthorizingModel):
 
     @model_validator(mode="after")
     def schemas_and_hash_are_exact(self) -> Self:
-        if (
-            self.wire_schema_sha256 != candidate_review_frame_wire_schema_sha256()
-            or self.normalized_batch_schema_sha256 != candidate_review_batch_schema_sha256()
-        ):
-            raise ValueError("truncation closure invariant schema hashes are inconsistent")
+        try:
+            candidate_review_schema_algorithm_version(
+                wire_schema_sha256=self.wire_schema_sha256,
+                normalized_batch_schema_sha256=self.normalized_batch_schema_sha256,
+            )
+        except ValueError:
+            raise ValueError(
+                "truncation closure invariant schema hashes are inconsistent"
+            ) from None
         if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
             raise ValueError("truncation closure invariant binding hash is inconsistent")
         return self
@@ -423,11 +464,18 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
         usage = _exact_model(usage_record, UsageRecord)
         exact_envelope = _exact_model(envelope, CandidateReviewTruncatedEnvelopeEvidence)
         exact_projection = _exact_model(projection, CandidateReviewTruncationProjection)
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=exact_projection.wire_schema_sha256,
+            normalized_batch_schema_sha256=exact_projection.normalized_batch_schema_sha256,
+        )
         surfaces = tuple(review.surface_id for review in exact_projection.surface_reviews)
         surface_hashes = tuple(
             _record_sha256(review) for review in exact_projection.surface_reviews
         )
-        findings = _finding_inventory(exact_projection.findings)
+        findings = _finding_inventory(
+            exact_projection.findings,
+            algorithm_version=algorithm_version,
+        )
         values: dict[str, Any] = {
             "evidence_authority": "comparison_required",
             "provider_dispatch_authorized": False,
@@ -451,7 +499,13 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
             "provisional_findings_credit_eligible": False,
             "summary_credit_eligible": False,
         }
-        return cls(**values, parent_attempt_evidence_sha256=_canonical_sha256(values))
+        return cls(
+            **values,
+            parent_attempt_evidence_sha256=_scheduler_canonical_sha256(
+                values,
+                algorithm_version=algorithm_version,
+            ),
+        )
 
     @model_validator(mode="after")
     def parent_is_exact_noncreditable_truncation(self) -> Self:
@@ -476,7 +530,6 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
             or usage.validated_response_sha256 is not None
             or usage.response_sha256 != self.projection.original_response_sha256
             or usage.response_sha256 != self.envelope.response_sha256
-            or usage.schema_sha256 != candidate_review_frame_wire_schema_sha256()
             or usage.schema_sha256 != self.projection.wire_schema_sha256
             or usage.finish_reason != self.projection.finish_reason
             or usage.finish_reason != self.envelope.finish_reason
@@ -503,7 +556,14 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
             raise ValueError("truncation parent usage differs from its envelope or projection")
         surface_ids = tuple(review.surface_id for review in self.projection.surface_reviews)
         surface_hashes = tuple(_record_sha256(review) for review in self.projection.surface_reviews)
-        findings = _finding_inventory(self.projection.findings)
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.projection.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.projection.normalized_batch_schema_sha256,
+        )
+        findings = _finding_inventory(
+            self.projection.findings,
+            algorithm_version=algorithm_version,
+        )
         if (
             self.retained_surface_ids != surface_ids
             or self.retained_surface_ids != tuple(sorted(set(self.retained_surface_ids)))
@@ -513,7 +573,11 @@ class TruncationRecoveryParentAttemptEvidence(_NonAuthorizingModel):
             or self.usage_record_sha256
             != _canonical_sha256(self.usage_record.model_dump(mode="json"))
             or self.parent_attempt_evidence_sha256
-            != _model_sha256(self, exclude={"parent_attempt_evidence_sha256"})
+            != _model_sha256(
+                self,
+                exclude={"parent_attempt_evidence_sha256"},
+                algorithm_version=algorithm_version,
+            )
         ):
             raise ValueError("truncation parent retained inventory is inconsistent")
         return self
@@ -559,7 +623,14 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
         usage = _exact_model(usage_record, UsageRecord)
         exact_envelope = _exact_model(envelope, CandidateReviewTruncatedEnvelopeEvidence)
         exact_projection = _exact_model(projection, CandidateReviewTruncationProjection)
-        findings = _finding_inventory(exact_projection.findings)
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=exact_projection.wire_schema_sha256,
+            normalized_batch_schema_sha256=exact_projection.normalized_batch_schema_sha256,
+        )
+        findings = _finding_inventory(
+            exact_projection.findings,
+            algorithm_version=algorithm_version,
+        )
         values: dict[str, Any] = {
             "evidence_authority": "comparison_required",
             "provider_dispatch_authorized": False,
@@ -585,7 +656,13 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             "provisional_findings_credit_eligible": False,
             "summary_credit_eligible": False,
         }
-        return cls(**values, bridge_attempt_evidence_sha256=_canonical_sha256(values))
+        return cls(
+            **values,
+            bridge_attempt_evidence_sha256=_scheduler_canonical_sha256(
+                values,
+                algorithm_version=algorithm_version,
+            ),
+        )
 
     @model_validator(mode="after")
     def bridge_is_exact_zero_retained_recovery_truncation(self) -> Self:
@@ -614,7 +691,6 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             or usage.validated_response_sha256 is not None
             or usage.response_sha256 != self.projection.original_response_sha256
             or usage.response_sha256 != self.envelope.response_sha256
-            or usage.schema_sha256 != candidate_review_frame_wire_schema_sha256()
             or usage.schema_sha256 != self.projection.wire_schema_sha256
             or usage.finish_reason != self.projection.finish_reason
             or usage.finish_reason != self.envelope.finish_reason
@@ -645,7 +721,14 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             or self.retained_surface_record_sha256s
         ):
             raise ValueError("truncation bridge differs from its envelope or zero-retained plan")
-        findings = _finding_inventory(self.projection.findings)
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.projection.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.projection.normalized_batch_schema_sha256,
+        )
+        findings = _finding_inventory(
+            self.projection.findings,
+            algorithm_version=algorithm_version,
+        )
         child_cost = _usage_decimal(
             usage.accounted_cost_usd_exact or "",
             label="bridge accounted cost",
@@ -659,7 +742,11 @@ class TruncationRecoveryBridgeAttemptEvidence(_NonAuthorizingModel):
             or self.usage_record_sha256
             != _canonical_sha256(self.usage_record.model_dump(mode="json"))
             or self.bridge_attempt_evidence_sha256
-            != _model_sha256(self, exclude={"bridge_attempt_evidence_sha256"})
+            != _model_sha256(
+                self,
+                exclude={"bridge_attempt_evidence_sha256"},
+                algorithm_version=algorithm_version,
+            )
         ):
             raise ValueError("truncation bridge inventory, resources, or hash is inconsistent")
         return self
@@ -710,6 +797,10 @@ class TruncationRecoveryChildCompletionEvidence(_NonAuthorizingModel):
         )
         usage = _exact_model(usage_record, UsageRecord)
         normalized = _exact_model(normalization, CandidateReviewNormalizationEvidence)
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=normalized.wire_schema_sha256,
+            normalized_batch_schema_sha256=normalized.normalized_batch_schema_sha256,
+        )
         batch = _exact_model(normalized_batch, CandidateReviewBatch)
         artifact = _exact_model(surface_artifact, ModelSurfaceReviewArtifact)
         values: dict[str, Any] = {
@@ -732,7 +823,13 @@ class TruncationRecoveryChildCompletionEvidence(_NonAuthorizingModel):
             "surface_artifact": artifact,
             "findings_credit_eligible": False,
         }
-        return cls(**values, child_completion_evidence_sha256=_canonical_sha256(values))
+        return cls(
+            **values,
+            child_completion_evidence_sha256=_scheduler_canonical_sha256(
+                values,
+                algorithm_version=algorithm_version,
+            ),
+        )
 
     @model_validator(mode="after")
     def child_is_complete_bounded_and_exact(self) -> Self:
@@ -766,7 +863,7 @@ class TruncationRecoveryChildCompletionEvidence(_NonAuthorizingModel):
         reservation = _decimal(self.child_plan.reserved_usd_exact, label="child reservation")
         if (
             usage.request_id != self.child_plan.child_logical_request_id
-            or usage.schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or usage.schema_sha256 != self.normalization.wire_schema_sha256
             or usage.validated_response_sha256 != self.normalization.wire_validated_response_sha256
             or usage.validation_status is not ModelRequestValidationStatus.VALID
             or usage.status != "success"
@@ -791,10 +888,16 @@ class TruncationRecoveryChildCompletionEvidence(_NonAuthorizingModel):
             or child_cost > reservation
         ):
             raise ValueError("truncation child completion differs from its exact custody")
+        algorithm_version = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.normalization.wire_schema_sha256,
+            normalized_batch_schema_sha256=self.normalization.normalized_batch_schema_sha256,
+        )
         if self.usage_record_sha256 != _canonical_sha256(
             self.usage_record.model_dump(mode="json")
         ) or self.child_completion_evidence_sha256 != _model_sha256(
-            self, exclude={"child_completion_evidence_sha256"}
+            self,
+            exclude={"child_completion_evidence_sha256"},
+            algorithm_version=algorithm_version,
         ):
             raise ValueError("truncation child completion hash is inconsistent")
         return self
@@ -999,7 +1102,15 @@ class TruncationRecoveredSurfaceReviewArtifact(_NonAuthorizingModel):
         expected_accounting = _attempt_accounting(plan, self.parent, self.children)
         if self.accounting != expected_accounting:
             raise ValueError("truncation closure attempt accounting is inconsistent")
-        if self.artifact_sha256 != _model_sha256(self, exclude={"artifact_sha256"}):
+        scheduler_algorithm = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.invariant_binding.wire_schema_sha256,
+            normalized_batch_schema_sha256=(self.invariant_binding.normalized_batch_schema_sha256),
+        )
+        if self.artifact_sha256 != _model_sha256(
+            self,
+            exclude={"artifact_sha256"},
+            algorithm_version=scheduler_algorithm,
+        ):
             raise ValueError("truncation closure artifact hash is inconsistent")
         return self
 
@@ -1201,7 +1312,15 @@ class TruncationRecoveredRecursiveSurfaceReviewArtifact(_NonAuthorizingModel):
         )
         if self.accounting != expected_accounting:
             raise ValueError("recursive truncation closure accounting is inconsistent")
-        if self.artifact_sha256 != _model_sha256(self, exclude={"artifact_sha256"}):
+        scheduler_algorithm = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=self.invariant_binding.wire_schema_sha256,
+            normalized_batch_schema_sha256=(self.invariant_binding.normalized_batch_schema_sha256),
+        )
+        if self.artifact_sha256 != _model_sha256(
+            self,
+            exclude={"artifact_sha256"},
+            algorithm_version=scheduler_algorithm,
+        ):
             raise ValueError("recursive truncation closure artifact hash is inconsistent")
         return self
 
@@ -1431,9 +1550,16 @@ def build_truncation_recovered_recursive_surface_artifact(
             "accepted_candidates": (),
         }
         with localcontext(_EXACT_DECIMAL_CONTEXT):
+            scheduler_algorithm = candidate_review_schema_algorithm_version(
+                wire_schema_sha256=invariant.wire_schema_sha256,
+                normalized_batch_schema_sha256=invariant.normalized_batch_schema_sha256,
+            )
             return TruncationRecoveredRecursiveSurfaceReviewArtifact(
                 **values,
-                artifact_sha256=_canonical_sha256(values),
+                artifact_sha256=_scheduler_canonical_sha256(
+                    values,
+                    algorithm_version=scheduler_algorithm,
+                ),
             )
     except (TypeError, ValueError) as exc:
         raise TruncationClosureError(
@@ -1499,9 +1625,16 @@ def _build_exact_surface_artifact(
         "accepted_candidates": (),
     }
     with localcontext(_EXACT_DECIMAL_CONTEXT):
+        scheduler_algorithm = candidate_review_schema_algorithm_version(
+            wire_schema_sha256=invariant.wire_schema_sha256,
+            normalized_batch_schema_sha256=invariant.normalized_batch_schema_sha256,
+        )
         return TruncationRecoveredSurfaceReviewArtifact(
             **values,
-            artifact_sha256=_canonical_sha256(values),
+            artifact_sha256=_scheduler_canonical_sha256(
+                values,
+                algorithm_version=scheduler_algorithm,
+            ),
         )
 
 
@@ -1528,8 +1661,8 @@ def _invariant_binding(
         "selected_provider_endpoint": parent.envelope.selected_provider_endpoint,
         "selected_provider_identity": parent.envelope.selected_provider_identity,
         "model_family": parent.usage_record.model_family,
-        "wire_schema_sha256": candidate_review_frame_wire_schema_sha256(),
-        "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(),
+        "wire_schema_sha256": parent.projection.wire_schema_sha256,
+        "normalized_batch_schema_sha256": parent.projection.normalized_batch_schema_sha256,
         "analysis_context_sha256": analysis_context_sha256,
         "routing_invariant_sha256": _routing_invariant_sha256(parent.usage_record),
     }

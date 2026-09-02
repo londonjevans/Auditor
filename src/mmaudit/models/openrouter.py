@@ -142,10 +142,13 @@ from mmaudit.models.reasoning import (
     resolve_reasoning_request_role,
 )
 from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRouteRole,
     RouteConstraintError,
     normalize_exact_route_pricing,
     project_provider_price_cap,
     project_route_emitted_request_parameters,
+    route_constraint_callables_are_pristine,
 )
 
 if TYPE_CHECKING:
@@ -309,6 +312,12 @@ type _ProviderCompositeCallRoots = tuple[
 type _CandidateRevocationCallRoots = tuple[
     Callable[[], bool],
     Callable[..., None],
+]
+type _CandidateRevocationConstraintProjection = tuple[str, str, str, str, str, str]
+type _ProviderPolicyProjection = tuple[bool, tuple[str, ...], tuple[str, ...], bool]
+type _CandidateRevocationTransportScopeProjection = tuple[
+    _CandidateRevocationConstraintProjection | None,
+    _ProviderPolicyProjection,
 ]
 
 _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS: _UsageOriginCallRoots = (
@@ -567,6 +576,47 @@ def _canonical_provider_policy(
         )
     except ValueError as exc:
         raise OpenRouterProviderPolicyError(f"provider routing policy is invalid: {exc}") from None
+
+
+def _validated_transport_provider_policy_projection(
+    policy: OpenRouterProviderPolicy,
+    *,
+    _policy_type: type[OpenRouterProviderPolicy] = OpenRouterProviderPolicy,
+) -> _ProviderPolicyProjection:
+    """Freeze the exact routing fields that scope one trusted transport binding."""
+
+    if OpenRouterProviderPolicy is not _policy_type or type(policy) is not _policy_type:
+        raise OpenRouterPrivacyError("trusted transport provider policy has the wrong exact type")
+    try:
+        certification = object.__getattribute__(policy, "certification")
+        only = object.__getattribute__(policy, "only")
+        order = object.__getattribute__(policy, "order")
+        allow_fallbacks = object.__getattribute__(policy, "allow_fallbacks")
+        if (
+            type(certification) is not bool
+            or type(only) is not tuple
+            or any(type(endpoint) is not str for endpoint in only)
+            or type(order) is not tuple
+            or any(type(endpoint) is not str for endpoint in order)
+            or type(allow_fallbacks) is not bool
+        ):
+            raise TypeError
+        detached = _policy_type(
+            certification=certification,
+            only=only,
+            order=order,
+            allow_fallbacks=allow_fallbacks,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise OpenRouterPrivacyError("trusted transport provider policy is invalid") from exc
+    if detached != policy:
+        raise OpenRouterPrivacyError("trusted transport provider policy changed after validation")
+    return certification, only, order, allow_fallbacks
+
+
+_TRUSTED_VALIDATED_TRANSPORT_PROVIDER_POLICY_PROJECTION = (
+    _validated_transport_provider_policy_projection
+)
 
 
 def _canonical_effective_privacy_policy(
@@ -3136,8 +3186,41 @@ def _prompt_token_allocations(
         PromptAllocationCategory.PROTOCOL: protocol_material,
         PromptAllocationCategory.WORKFLOW: workflow_material,
     }
+    context_workflow_measurement = context_measurements.get(PromptAllocationCategory.WORKFLOW.value)
     allocations: list[PromptTokenAllocation] = []
     for category in PROMPT_ALLOCATION_CATEGORIES:
+        if (
+            category is PromptAllocationCategory.WORKFLOW
+            and context_workflow_measurement is not None
+            and context_workflow_measurement.utf8_bytes > 0
+        ):
+            external_workflow = workflow_material.encode("utf-8")
+            components = (
+                {
+                    "component": "external_workflow",
+                    "content_sha256": hashlib.sha256(external_workflow).hexdigest(),
+                    "utf8_bytes": len(external_workflow),
+                },
+                {
+                    "component": "context_workflow",
+                    "content_sha256": context_workflow_measurement.content_sha256,
+                    "utf8_bytes": context_workflow_measurement.utf8_bytes,
+                },
+            )
+            allocations.append(
+                PromptTokenAllocation.from_measurement(
+                    category,
+                    content_sha256=_canonical_sha256(
+                        {
+                            "schema_version": "1.0",
+                            "composition": "ordered_workflow_measurements",
+                            "components": components,
+                        }
+                    ),
+                    utf8_bytes=(len(external_workflow) + context_workflow_measurement.utf8_bytes),
+                )
+            )
+            continue
         material = exact_material.get(category)
         if material is not None:
             allocations.append(PromptTokenAllocation.from_text(category, material))
@@ -3169,9 +3252,15 @@ def _context_request_evidence(
         render_context,
         revalidate_model_surface_context_package,
     )
+    from mmaudit.orchestration.model_review_evidence import (
+        model_surface_context_source_custody,
+    )
 
     sealed = revalidate_model_surface_context_package(context_package)
     rendered = render_context(sealed).encode("utf-8")
+    requested_surface_manifest_sha256, source_location_proof_sha256s = (
+        model_surface_context_source_custody(sealed)
+    )
     return ContextRequestEvidence.build(
         request_id=request_id,
         request_role=request_role,
@@ -3179,12 +3268,17 @@ def _context_request_evidence(
         byte_budget=sealed.byte_budget,
         declared_bytes_used=sealed.bytes_used,
         rendered_bytes=len(rendered),
-        source_bytes=sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed.excerpts),
+        source_bytes=sealed.delivered_source_bytes(),
         configured_maximum_source_tokens_per_request=(
             sealed.configured_maximum_source_tokens_per_request
         ),
         effective_source_byte_ceiling=sealed.effective_source_byte_ceiling,
         rendered_sha256=hashlib.sha256(rendered).hexdigest(),
+        requested_surface_manifest_sha256=requested_surface_manifest_sha256,
+        source_location_proof_sha256s=source_location_proof_sha256s,
+        retrieval_policy=sealed.solidity_retrieval_policy,
+        retrieval_corpus_sha256=sealed.solidity_retrieval_corpus_sha256,
+        retrieval_transcript=sealed.solidity_retrieval_transcript,
     )
 
 
@@ -4367,6 +4461,9 @@ class _TrustedTransportBinding:
     budget_global_output_token_budget: int | None
     budget_per_model_usd_caps: tuple[tuple[str, Decimal], ...]
     budget_per_role_usd_caps: tuple[tuple[str, Decimal], ...]
+    candidate_revocation_constraint_projection: _CandidateRevocationConstraintProjection | None
+    provider_policy: OpenRouterProviderPolicy
+    provider_policy_projection: _ProviderPolicyProjection
     budget_lock: asyncio.Lock
     atomic_cost_ledger: AtomicCostLedger | None
     atomic_cost_ledger_path: Path | None
@@ -4398,28 +4495,623 @@ class _TrustedTransportBinding:
     max_redirects: int = 0
 
 
+type _TrustedTransportScopeRecord = tuple[
+    weakref.ReferenceType[object],
+    weakref.ReferenceType[_TrustedTransportBinding],
+    weakref.ReferenceType[OpenRouterProviderPolicy],
+    _CandidateRevocationConstraintProjection | None,
+    _ProviderPolicyProjection,
+]
+
+
 def _transport_binding_registry() -> tuple[
-    Callable[[object, _TrustedTransportBinding], None],
+    Callable[
+        [
+            object,
+            _TrustedTransportBinding,
+            _CandidateRevocationConstraintProjection | None,
+        ],
+        None,
+    ],
     Callable[[object], _TrustedTransportBinding | None],
+    Callable[[object], _CandidateRevocationConstraintProjection | None],
+    Callable[[object], _ProviderPolicyProjection | None],
+    Callable[[ExactRouteConstraint | None], _CandidateRevocationConstraintProjection | None],
+    Callable[
+        [object, _TrustedTransportBinding],
+        _CandidateRevocationTransportScopeProjection,
+    ],
 ]:
     bindings: WeakKeyDictionary[object, _TrustedTransportBinding] = WeakKeyDictionary()
+    # These retained lookup views are integrity canaries. Dispatch authority comes only from
+    # the separately retained immutable construction-time scope record.
+    candidate_revocation_constraints: WeakKeyDictionary[
+        object,
+        _CandidateRevocationConstraintProjection | None,
+    ] = WeakKeyDictionary()
+    provider_policy_projections: WeakKeyDictionary[
+        object,
+        _ProviderPolicyProjection,
+    ] = WeakKeyDictionary()
     lock = Lock()
+    trusted_constraint_type = ExactRouteConstraint
+    trusted_binding_type = _TrustedTransportBinding
+    trusted_privacy_error_type = OpenRouterPrivacyError
+    trusted_provider_policy_projector = _validated_transport_provider_policy_projection
 
-    def register(subject: object, binding: _TrustedTransportBinding) -> None:
+    def build_scope_record_authority() -> tuple[
+        Callable[
+            [
+                object,
+                _TrustedTransportBinding,
+                OpenRouterProviderPolicy,
+                _CandidateRevocationConstraintProjection | None,
+                _ProviderPolicyProjection,
+            ],
+            bool,
+        ],
+        Callable[[object], _TrustedTransportScopeRecord | None],
+    ]:
+        scope_records: tuple[_TrustedTransportScopeRecord, ...] = ()
+
+        def append_record(
+            subject: object,
+            binding: _TrustedTransportBinding,
+            provider_policy: OpenRouterProviderPolicy,
+            constraint_projection: _CandidateRevocationConstraintProjection | None,
+            provider_policy_projection: _ProviderPolicyProjection,
+        ) -> bool:
+            """Append one immutable construction record, pruning only expired weak entries."""
+
+            nonlocal scope_records
+            live_records: list[_TrustedTransportScopeRecord] = []
+            for record in scope_records:
+                registered_subject = record[0]()
+                registered_binding = record[1]()
+                registered_policy = record[2]()
+                if (
+                    registered_subject is None
+                    or registered_binding is None
+                    or registered_policy is None
+                ):
+                    continue
+                if registered_subject is subject:
+                    return False
+                live_records.append(record)
+            live_records.append(
+                (
+                    weakref.ref(subject),
+                    weakref.ref(binding),
+                    weakref.ref(provider_policy),
+                    constraint_projection,
+                    provider_policy_projection,
+                )
+            )
+            scope_records = tuple(live_records)
+            return True
+
+        def resolve_record(subject: object) -> _TrustedTransportScopeRecord | None:
+            """Resolve a subject only from the append-only immutable record sequence."""
+
+            matched: _TrustedTransportScopeRecord | None = None
+            for record in scope_records:
+                if record[0]() is subject:
+                    if matched is not None:
+                        return None
+                    matched = record
+            return matched
+
+        return append_record, resolve_record
+
+    append_scope_record, resolve_scope_record = build_scope_record_authority()
+    del build_scope_record_authority
+    append_scope_record_code = append_scope_record.__code__
+    append_scope_record_closure = append_scope_record.__closure__
+    resolve_scope_record_code = resolve_scope_record.__code__
+    resolve_scope_record_closure = resolve_scope_record.__closure__
+
+    def project_constraint(
+        constraint: ExactRouteConstraint | None,
+    ) -> _CandidateRevocationConstraintProjection | None:
+        if constraint is None:
+            return None
+        if (
+            ExactRouteConstraint is not trusted_constraint_type
+            or route_constraints_module.ExactRouteConstraint is not trusted_constraint_type
+            or type(constraint) is not trusted_constraint_type
+        ):
+            raise OpenRouterPrivacyError(
+                "candidate revocation route constraint has the wrong exact type"
+            )
+        try:
+            detached = trusted_constraint_type.model_validate_json(
+                constraint.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise OpenRouterPrivacyError(
+                "candidate revocation route constraint changed after validation"
+            ) from exc
+        if detached != constraint:
+            raise OpenRouterPrivacyError(
+                "candidate revocation route constraint changed after validation"
+            )
+        return (
+            detached.schema_version,
+            detached.role.value,
+            detached.exact_model_id,
+            detached.provider_endpoint,
+            detached.profile_sha256,
+            detached.constraint_sha256,
+        )
+
+    def register(
+        subject: object,
+        binding: _TrustedTransportBinding,
+        candidate_revocation_constraint_projection: (
+            _CandidateRevocationConstraintProjection | None
+        ) = None,
+    ) -> None:
+        if (
+            append_scope_record.__code__ is not append_scope_record_code
+            or append_scope_record.__closure__ is not append_scope_record_closure
+        ):
+            raise trusted_privacy_error_type(
+                "trusted transport scope authority changed before registration"
+            )
+        try:
+            provider_policy = object.__getattribute__(subject, "provider_policy")
+        except AttributeError as exc:
+            raise trusted_privacy_error_type(
+                "trusted transport provider policy is unavailable"
+            ) from exc
+        provider_policy_projection = trusted_provider_policy_projector(provider_policy)
         with lock:
+            if type(binding) is not trusted_binding_type:
+                raise trusted_privacy_error_type(
+                    "trusted transport binding has the wrong exact type"
+                )
+            if (
+                binding.candidate_revocation_constraint_projection
+                is not candidate_revocation_constraint_projection
+            ):
+                raise trusted_privacy_error_type(
+                    "trusted transport constraint projection changed before registration"
+                )
+            if (
+                binding.provider_policy is not provider_policy
+                or binding.provider_policy_projection != provider_policy_projection
+            ):
+                raise trusted_privacy_error_type(
+                    "trusted transport provider policy changed before registration"
+                )
+            if subject in bindings:
+                raise trusted_privacy_error_type("trusted transport binding is already registered")
+            if not append_scope_record(
+                subject,
+                binding,
+                provider_policy,
+                candidate_revocation_constraint_projection,
+                binding.provider_policy_projection,
+            ):
+                raise trusted_privacy_error_type(
+                    "trusted transport scope authority is already registered"
+                )
             bindings[subject] = binding
+            candidate_revocation_constraints[subject] = (
+                binding.candidate_revocation_constraint_projection
+            )
+            provider_policy_projections[subject] = binding.provider_policy_projection
 
     def lookup(subject: object) -> _TrustedTransportBinding | None:
         with lock:
             return bindings.get(subject)
 
-    return register, lookup
+    def lookup_candidate_revocation_constraint(
+        subject: object,
+    ) -> _CandidateRevocationConstraintProjection | None:
+        with lock:
+            return candidate_revocation_constraints.get(subject)
+
+    def lookup_provider_policy_projection(
+        subject: object,
+    ) -> _ProviderPolicyProjection | None:
+        with lock:
+            return provider_policy_projections.get(subject)
+
+    def resolve_scope(
+        subject: object,
+        binding: _TrustedTransportBinding,
+    ) -> _CandidateRevocationTransportScopeProjection:
+        """Resolve immutable construction authority and reject every mutable-index drift."""
+
+        if (
+            resolve_scope_record.__code__ is not resolve_scope_record_code
+            or resolve_scope_record.__closure__ is not resolve_scope_record_closure
+        ):
+            raise trusted_privacy_error_type("candidate revocation scope authority changed")
+        with lock:
+            binding_registered = subject in bindings
+            constraint_registered = subject in candidate_revocation_constraints
+            policy_registered = subject in provider_policy_projections
+            registered_binding = bindings.get(subject)
+            observed_constraint = candidate_revocation_constraints.get(subject)
+            observed_policy_projection = provider_policy_projections.get(subject)
+            scope_record = resolve_scope_record(subject)
+        if scope_record is None:
+            raise trusted_privacy_error_type(
+                "candidate revocation construction scope is unavailable"
+            )
+        authoritative_binding = scope_record[1]()
+        sealed_provider_policy = scope_record[2]()
+        authoritative_constraint = scope_record[3]
+        authoritative_policy_projection = scope_record[4]
+        if (
+            not binding_registered
+            or not constraint_registered
+            or not policy_registered
+            or type(binding) is not trusted_binding_type
+            or authoritative_binding is None
+            or binding is not authoritative_binding
+            or registered_binding is not authoritative_binding
+        ):
+            raise trusted_privacy_error_type("candidate revocation transport binding changed")
+        if sealed_provider_policy is None:
+            raise trusted_privacy_error_type(
+                "candidate revocation provider policy seal is unavailable"
+            )
+        if (
+            observed_constraint is not authoritative_constraint
+            or observed_policy_projection is not authoritative_policy_projection
+            or binding.candidate_revocation_constraint_projection is not authoritative_constraint
+            or binding.provider_policy is not sealed_provider_policy
+            or binding.provider_policy_projection is not authoritative_policy_projection
+        ):
+            raise trusted_privacy_error_type("candidate revocation transport scope canary changed")
+        try:
+            subject_provider_policy = object.__getattribute__(subject, "provider_policy")
+        except AttributeError as exc:
+            raise trusted_privacy_error_type(
+                "candidate revocation provider policy changed"
+            ) from exc
+        if (
+            sealed_provider_policy is not subject_provider_policy
+            or trusted_provider_policy_projector(sealed_provider_policy)
+            != authoritative_policy_projection
+        ):
+            raise trusted_privacy_error_type("candidate revocation provider policy changed")
+        if authoritative_constraint is not None:
+            try:
+                detached_constraint = trusted_constraint_type.model_validate_json(
+                    json.dumps(
+                        {
+                            "schema_version": authoritative_constraint[0],
+                            "role": authoritative_constraint[1],
+                            "exact_model_id": authoritative_constraint[2],
+                            "provider_endpoint": authoritative_constraint[3],
+                            "profile_sha256": authoritative_constraint[4],
+                            "constraint_sha256": authoritative_constraint[5],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    strict=True,
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise trusted_privacy_error_type(
+                    "candidate revocation constraint seal is invalid"
+                ) from exc
+            if project_constraint(detached_constraint) != authoritative_constraint:
+                raise trusted_privacy_error_type("candidate revocation constraint seal is invalid")
+        return authoritative_constraint, authoritative_policy_projection
+
+    return (
+        register,
+        lookup,
+        lookup_candidate_revocation_constraint,
+        lookup_provider_policy_projection,
+        project_constraint,
+        resolve_scope,
+    )
 
 
-_register_trusted_transport_binding, _lookup_trusted_transport_binding = (
-    _transport_binding_registry()
-)
+(
+    _register_trusted_transport_binding,
+    _lookup_trusted_transport_binding,
+    _lookup_trusted_candidate_revocation_constraint,
+    _lookup_trusted_provider_policy_projection,
+    _project_trusted_candidate_revocation_constraint,
+    _resolve_trusted_candidate_revocation_constraint_projection,
+) = _transport_binding_registry()
+_TRUSTED_REGISTER_TRANSPORT_BINDING = _register_trusted_transport_binding
 _TRUSTED_LOOKUP_TRANSPORT_BINDING = _lookup_trusted_transport_binding
+_TRUSTED_LOOKUP_CANDIDATE_REVOCATION_CONSTRAINT = _lookup_trusted_candidate_revocation_constraint
+_TRUSTED_LOOKUP_PROVIDER_POLICY_PROJECTION = _lookup_trusted_provider_policy_projection
+_TRUSTED_PROJECT_CANDIDATE_REVOCATION_CONSTRAINT = _project_trusted_candidate_revocation_constraint
+_TRUSTED_RESOLVE_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION = (
+    _resolve_trusted_candidate_revocation_constraint_projection
+)
+
+
+def _validated_candidate_revocation_constraint_projection(
+    constraint: ExactRouteConstraint,
+    *,
+    _constraint_type: type[ExactRouteConstraint] = ExactRouteConstraint,
+) -> _CandidateRevocationConstraintProjection:
+    """Return an exact self-validated scalar projection of current route evidence."""
+
+    if (
+        ExactRouteConstraint is not _constraint_type
+        or route_constraints_module.ExactRouteConstraint is not _constraint_type
+        or type(constraint) is not _constraint_type
+        or route_constraints_module.route_constraint_callables_are_pristine
+        is not route_constraint_callables_are_pristine
+        or not route_constraint_callables_are_pristine()
+    ):
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    try:
+        detached = _constraint_type.model_validate_json(
+            constraint.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise OpenRouterModelError("candidate revocation boundary changed") from exc
+    if detached != constraint:
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    return (
+        detached.schema_version,
+        detached.role.value,
+        detached.exact_model_id,
+        detached.provider_endpoint,
+        detached.profile_sha256,
+        detached.constraint_sha256,
+    )
+
+
+_TRUSTED_VALIDATED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION = (
+    _validated_candidate_revocation_constraint_projection
+)
+
+
+def _candidate_revocation_constraint_projection_is_valid(
+    projection: object,
+    *,
+    _constraint_type: type[ExactRouteConstraint] = ExactRouteConstraint,
+) -> bool:
+    """Validate every scalar and the embedded self-hash in one role seal."""
+
+    if projection is None:
+        return True
+    if (
+        type(projection) is not tuple
+        or len(projection) != 6
+        or any(type(value) is not str for value in projection)
+    ):
+        return False
+    try:
+        if (
+            ExactRouteConstraint is not _constraint_type
+            or route_constraints_module.ExactRouteConstraint is not _constraint_type
+        ):
+            return False
+        constraint = _constraint_type.model_validate_json(
+            json.dumps(
+                {
+                    "schema_version": projection[0],
+                    "role": projection[1],
+                    "exact_model_id": projection[2],
+                    "provider_endpoint": projection[3],
+                    "profile_sha256": projection[4],
+                    "constraint_sha256": projection[5],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            strict=True,
+        )
+        return (
+            _TRUSTED_VALIDATED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION(constraint) == projection
+        )
+    except (AttributeError, OpenRouterModelError, TypeError, ValueError):
+        return False
+
+
+_TRUSTED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION_IS_VALID = (
+    _candidate_revocation_constraint_projection_is_valid
+)
+
+
+def _exact_route_role_from_candidate_revocation_projection(
+    value: str,
+    *,
+    _role_type: type[ExactRouteRole] = ExactRouteRole,
+    _role_members: tuple[tuple[str, ExactRouteRole], ...] = (
+        ("candidate", ExactRouteRole.CANDIDATE),
+        ("primary_judge", ExactRouteRole.PRIMARY_JUDGE),
+        ("replay_judge", ExactRouteRole.REPLAY_JUDGE),
+    ),
+) -> ExactRouteRole:
+    """Resolve one role through frozen genuine enum members, never a mutable module alias."""
+
+    if (
+        type(value) is not str
+        or ExactRouteRole is not _role_type
+        or route_constraints_module.ExactRouteRole is not _role_type
+        or type(_role_members) is not tuple
+        or len(_role_members) != 3
+    ):
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    matched: ExactRouteRole | None = None
+    for expected_value, member in _role_members:
+        if (
+            type(expected_value) is not str
+            or type(member) is not _role_type
+            or member.value != expected_value
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        if expected_value == value:
+            matched = member
+    if matched is None:
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    return matched
+
+
+_TRUSTED_EXACT_ROUTE_ROLE_FROM_CANDIDATE_REVOCATION_PROJECTION = (
+    _exact_route_role_from_candidate_revocation_projection
+)
+
+
+def _candidate_revocation_transport_scope_function_state(
+    function: FunctionType,
+) -> tuple[object, ...]:
+    closure = function.__closure__
+    closure_values: list[tuple[object, object]] = []
+    for cell in closure or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:
+            value = _CANDIDATE_REVOCATION_EMPTY_CLOSURE_CELL
+        closure_values.append((cell, value))
+    kwdefaults = function.__kwdefaults__
+    attributes = function.__dict__
+    return (
+        function,
+        function.__code__,
+        function.__defaults__,
+        kwdefaults,
+        tuple(sorted((kwdefaults or {}).items())),
+        function.__globals__,
+        closure,
+        tuple(closure_values),
+        attributes,
+        tuple(sorted(attributes.items())),
+    )
+
+
+def _candidate_revocation_transport_scope_states_are_current(
+    states: tuple[tuple[object, ...], ...],
+) -> bool:
+    if type(states) is not tuple or not states:
+        return False
+    for state in states:
+        if type(state) is not tuple or len(state) != 10 or type(state[0]) is not FunctionType:
+            return False
+        function = state[0]
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        current_closure = function.__closure__
+        expected_kwdefaults = cast(tuple[tuple[str, object], ...], state[4])
+        expected_closure = cast(tuple[tuple[object, object], ...], state[7])
+        expected_attributes = cast(tuple[tuple[str, object], ...], state[9])
+        if (
+            function.__code__ is not state[1]
+            or function.__defaults__ is not state[2]
+            or current_kwdefaults is not state[3]
+            or function.__globals__ is not state[5]
+            or current_closure is not state[6]
+            or current_attributes is not state[8]
+            or type(current_kwdefaults) not in {dict, type(None)}
+            or type(current_attributes) is not dict
+            or len(current_kwdefaults or {}) != len(expected_kwdefaults)
+            or any(
+                (current_kwdefaults or {}).get(name) is not value
+                for name, value in expected_kwdefaults
+            )
+            or len(current_attributes) != len(expected_attributes)
+            or any(current_attributes.get(name) is not value for name, value in expected_attributes)
+            or len(current_closure or ()) != len(expected_closure)
+        ):
+            return False
+        for current_cell, (expected_cell, expected_value) in zip(
+            current_closure or (),
+            expected_closure,
+            strict=True,
+        ):
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = _CANDIDATE_REVOCATION_EMPTY_CLOSURE_CELL
+            if current_value is not expected_value:
+                return False
+    return True
+
+
+def _candidate_revocation_transport_scope_aliases_are_current(
+    states: tuple[tuple[object, ...], ...],
+) -> bool:
+    """Anchor every mutable module alias to the exact frozen scope function object."""
+
+    if type(states) is not tuple or len(states) != 12:
+        return False
+    state_guard = states[10][0]
+    if not callable(state_guard) or not cast(
+        Callable[[tuple[tuple[object, ...], ...]], bool], state_guard
+    )(states):
+        return False
+    constraint_kwdefaults = states[6][3]
+    role_kwdefaults = states[8][3]
+    policy_kwdefaults = states[5][3]
+    if (
+        type(constraint_kwdefaults) is not dict
+        or type(role_kwdefaults) is not dict
+        or type(policy_kwdefaults) is not dict
+    ):
+        return False
+    trusted_constraint_type = constraint_kwdefaults.get("_constraint_type")
+    trusted_role_type = role_kwdefaults.get("_role_type")
+    trusted_policy_type = policy_kwdefaults.get("_policy_type")
+    return (
+        _register_trusted_transport_binding is states[0][0]
+        and _TRUSTED_REGISTER_TRANSPORT_BINDING is states[0][0]
+        and _lookup_trusted_transport_binding is states[1][0]
+        and _TRUSTED_LOOKUP_TRANSPORT_BINDING is states[1][0]
+        and _lookup_trusted_candidate_revocation_constraint is states[2][0]
+        and _TRUSTED_LOOKUP_CANDIDATE_REVOCATION_CONSTRAINT is states[2][0]
+        and _lookup_trusted_provider_policy_projection is states[3][0]
+        and _TRUSTED_LOOKUP_PROVIDER_POLICY_PROJECTION is states[3][0]
+        and _project_trusted_candidate_revocation_constraint is states[4][0]
+        and _TRUSTED_PROJECT_CANDIDATE_REVOCATION_CONSTRAINT is states[4][0]
+        and _validated_transport_provider_policy_projection is states[5][0]
+        and _TRUSTED_VALIDATED_TRANSPORT_PROVIDER_POLICY_PROJECTION is states[5][0]
+        and _validated_candidate_revocation_constraint_projection is states[6][0]
+        and _TRUSTED_VALIDATED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION is states[6][0]
+        and _candidate_revocation_constraint_projection_is_valid is states[7][0]
+        and _TRUSTED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION_IS_VALID is states[7][0]
+        and _exact_route_role_from_candidate_revocation_projection is states[8][0]
+        and _TRUSTED_EXACT_ROUTE_ROLE_FROM_CANDIDATE_REVOCATION_PROJECTION is states[8][0]
+        and _resolve_trusted_candidate_revocation_constraint_projection is states[9][0]
+        and _TRUSTED_RESOLVE_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION is states[9][0]
+        and _candidate_revocation_transport_scope_states_are_current is states[10][0]
+        and _candidate_revocation_transport_scope_aliases_are_current is states[11][0]
+        and ExactRouteConstraint is trusted_constraint_type
+        and route_constraints_module.ExactRouteConstraint is trusted_constraint_type
+        and ExactRouteRole is trusted_role_type
+        and route_constraints_module.ExactRouteRole is trusted_role_type
+        and OpenRouterProviderPolicy is trusted_policy_type
+    )
+
+
+_CANDIDATE_REVOCATION_EMPTY_CLOSURE_CELL = object()
+_CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES = tuple(
+    _candidate_revocation_transport_scope_function_state(cast(FunctionType, function))
+    for function in (
+        _register_trusted_transport_binding,
+        _lookup_trusted_transport_binding,
+        _lookup_trusted_candidate_revocation_constraint,
+        _lookup_trusted_provider_policy_projection,
+        _project_trusted_candidate_revocation_constraint,
+        _validated_transport_provider_policy_projection,
+        _validated_candidate_revocation_constraint_projection,
+        _candidate_revocation_constraint_projection_is_valid,
+        _exact_route_role_from_candidate_revocation_projection,
+        _resolve_trusted_candidate_revocation_constraint_projection,
+        _candidate_revocation_transport_scope_states_are_current,
+        _candidate_revocation_transport_scope_aliases_are_current,
+    )
+)
+del _candidate_revocation_transport_scope_function_state
 
 
 def _build_provider_httpx_response_graph_authority() -> tuple[
@@ -9546,6 +10238,7 @@ class OpenRouterClient:
         logger: logging.Logger | None = None,
         random_seed: int = 0,
         provider_policy: OpenRouterProviderPolicy | None = None,
+        candidate_revocation_route_constraint: ExactRouteConstraint | None = None,
         reasoning: OpenRouterReasoning | None = None,
         reasoning_policy: ReasoningPolicyArtifact | None = None,
         token_budgets: TokenBudgetConfig | None = None,
@@ -9572,7 +10265,52 @@ class OpenRouterClient:
         test_only_context_package_budget_observer: (
             _TestOnlyContextPackageBudgetObserver | None
         ) = None,
+        _candidate_revocation_transport_scope_states: tuple[
+            tuple[object, ...], ...
+        ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
     ) -> None:
+        if (
+            type(_candidate_revocation_transport_scope_states) is not tuple
+            or len(_candidate_revocation_transport_scope_states) != 12
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        init_kwdefaults = OpenRouterClient.__init__.__kwdefaults__
+        alias_guard = cast(
+            Callable[[tuple[tuple[object, ...], ...]], bool],
+            _candidate_revocation_transport_scope_states[11][0],
+        )
+        if (
+            type(init_kwdefaults) is not dict
+            or init_kwdefaults.get("_candidate_revocation_transport_scope_states")
+            is not _candidate_revocation_transport_scope_states
+            or _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+            is not _candidate_revocation_transport_scope_states
+            or _candidate_revocation_transport_scope_aliases_are_current is not alias_guard
+            or not alias_guard(_candidate_revocation_transport_scope_states)
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        trusted_transport_register = cast(
+            Callable[
+                [
+                    object,
+                    _TrustedTransportBinding,
+                    _CandidateRevocationConstraintProjection | None,
+                ],
+                None,
+            ],
+            _candidate_revocation_transport_scope_states[0][0],
+        )
+        trusted_constraint_projector = cast(
+            Callable[
+                [ExactRouteConstraint | None],
+                _CandidateRevocationConstraintProjection | None,
+            ],
+            _candidate_revocation_transport_scope_states[4][0],
+        )
+        trusted_provider_policy_projector = cast(
+            Callable[[OpenRouterProviderPolicy], _ProviderPolicyProjection],
+            _candidate_revocation_transport_scope_states[5][0],
+        )
         if http_client is not None and test_only_mock_handler is not None:
             raise OpenRouterPrivacyError(
                 "test-only mock handler cannot be combined with an injected HTTP client"
@@ -9607,6 +10345,20 @@ class OpenRouterClient:
         self.provider_policy = _canonical_provider_policy(
             provider_policy if provider_policy is not None else OpenRouterProviderPolicy()
         )
+        try:
+            candidate_revocation_constraint_projection = trusted_constraint_projector(
+                candidate_revocation_route_constraint
+            )
+            provider_policy_projection = trusted_provider_policy_projector(self.provider_policy)
+        except OpenRouterPrivacyError as exc:
+            raise OpenRouterModelError("candidate revocation route constraint is invalid") from exc
+        if candidate_revocation_constraint_projection is not None and (
+            self.provider_policy.allow_fallbacks
+            or self.provider_policy.only != (candidate_revocation_constraint_projection[3],)
+        ):
+            raise OpenRouterModelError(
+                "candidate revocation route constraint differs from provider policy"
+            )
         if reasoning is not None and reasoning_policy is not None:
             raise OpenRouterRequestLimitError(
                 "legacy global reasoning and per-role reasoning policy are mutually exclusive"
@@ -9855,7 +10607,7 @@ class OpenRouterClient:
             network_backend = (
                 getattr(owned_pool, "_network_backend", None) if owned_pool is not None else None
             )
-            _register_trusted_transport_binding(
+            trusted_transport_register(
                 self,
                 _TrustedTransportBinding(
                     execution_evidence=initial_execution_evidence,
@@ -9873,6 +10625,11 @@ class OpenRouterClient:
                     budget_global_output_token_budget=(self.budget.global_output_token_budget),
                     budget_per_model_usd_caps=tuple(sorted(self.budget.per_model_usd_caps.items())),
                     budget_per_role_usd_caps=tuple(sorted(self.budget.per_role_usd_caps.items())),
+                    candidate_revocation_constraint_projection=(
+                        candidate_revocation_constraint_projection
+                    ),
+                    provider_policy=self.provider_policy,
+                    provider_policy_projection=provider_policy_projection,
                     budget_lock=self.budget._lock,
                     atomic_cost_ledger=self.budget.atomic_ledger,
                     atomic_cost_ledger_path=(
@@ -9975,6 +10732,7 @@ class OpenRouterClient:
                     follow_redirects=self._client.follow_redirects,
                     max_redirects=self._client.max_redirects,
                 ),
+                candidate_revocation_constraint_projection,
             )
 
     async def __aenter__(self) -> OpenRouterClient:
@@ -10241,6 +10999,9 @@ class OpenRouterClient:
         _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
             _CANDIDATE_REVOCATION_CALL_ROOTS
         ),
+        _candidate_revocation_transport_scope_states: tuple[
+            tuple[object, ...], ...
+        ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
     ) -> None:
         """Reject selected tombstones before request construction or mutable state."""
 
@@ -10248,14 +11009,40 @@ class OpenRouterClient:
         if (
             type(_candidate_revocation_call_roots) is not tuple
             or len(_candidate_revocation_call_roots) != 2
+            or type(_candidate_revocation_transport_scope_states) is not tuple
+            or len(_candidate_revocation_transport_scope_states) != 12
         ):
             raise OpenRouterModelError("candidate revocation boundary changed")
         trusted_pristine, trusted_gate = _candidate_revocation_call_roots
+        alias_guard = cast(
+            Callable[[tuple[tuple[object, ...], ...]], bool],
+            _candidate_revocation_transport_scope_states[11][0],
+        )
+        trusted_transport_lookup = cast(
+            Callable[[object], _TrustedTransportBinding | None],
+            _candidate_revocation_transport_scope_states[1][0],
+        )
+        trusted_constraint_resolver = cast(
+            Callable[
+                [object, _TrustedTransportBinding],
+                _CandidateRevocationTransportScopeProjection,
+            ],
+            _candidate_revocation_transport_scope_states[9][0],
+        )
+        trusted_role_parser = cast(
+            Callable[[str], ExactRouteRole],
+            _candidate_revocation_transport_scope_states[8][0],
+        )
+        transport_binding = trusted_transport_lookup(self)
         if (
             type(method_defaults) is not dict
             or method_defaults.get("_candidate_revocation_call_roots")
             is not _candidate_revocation_call_roots
+            or method_defaults.get("_candidate_revocation_transport_scope_states")
+            is not _candidate_revocation_transport_scope_states
             or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+            or _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+            is not _candidate_revocation_transport_scope_states
             or candidate_revocation_callables_are_pristine is not trusted_pristine
             or require_candidate_assignment_eligible is not trusted_gate
             or candidate_revocation_module.candidate_revocation_callables_are_pristine
@@ -10263,9 +11050,29 @@ class OpenRouterClient:
             or candidate_revocation_module.require_candidate_assignment_eligible is not trusted_gate
             or OpenRouterClient._require_candidate_revocation_preflight
             is not _TRUSTED_OPENROUTER_CANDIDATE_REVOCATION_PREFLIGHT
+            or _candidate_revocation_transport_scope_aliases_are_current is not alias_guard
+            or not alias_guard(_candidate_revocation_transport_scope_states)
             or not trusted_pristine()
         ):
             raise OpenRouterModelError("candidate revocation boundary changed")
+        try:
+            transport_scope = (
+                trusted_constraint_resolver(
+                    self,
+                    transport_binding,
+                )
+                if transport_binding is not None
+                else None
+            )
+            constraint_projection = transport_scope[0] if transport_scope is not None else None
+            provider_policy_projection = transport_scope[1] if transport_scope is not None else None
+            constraint_role = (
+                trusted_role_parser(constraint_projection[1])
+                if constraint_projection is not None
+                else None
+            )
+        except (OpenRouterModelError, OpenRouterPrivacyError, ValueError) as exc:
+            raise OpenRouterModelError("candidate revocation boundary changed") from exc
         endpoints: tuple[str | None, ...]
         if provider_endpoints is not None:
             if (
@@ -10278,16 +11085,37 @@ class OpenRouterClient:
             ):
                 raise OpenRouterModelError("candidate revocation endpoint boundary changed")
             endpoints = provider_endpoints
+        elif provider_policy_projection is not None:
+            sealed_configured_endpoints = (
+                provider_policy_projection[1] or provider_policy_projection[2]
+            )
+            endpoints = (
+                (None,)
+                if provider_policy_projection[3] or not sealed_configured_endpoints
+                else sealed_configured_endpoints
+            )
         elif self.provider_policy.allow_fallbacks or not self.provider_policy.configured_endpoints:
             endpoints = (None,)
         else:
             endpoints = tuple(self.provider_policy.configured_endpoints)
         try:
+            if constraint_projection is not None and (
+                constraint_projection[2] not in model_ids
+                or endpoints != (constraint_projection[3],)
+            ):
+                raise OpenRouterModelError(
+                    "candidate revocation request differs from the sealed route custody"
+                )
+            candidate_revocation_role = constraint_role
             for model_id in sorted(set(model_ids)):
                 for endpoint in endpoints:
-                    trusted_gate(exact_model_id=model_id, provider_endpoint=endpoint)
+                    trusted_gate(
+                        role=candidate_revocation_role,
+                        exact_model_id=model_id,
+                        provider_endpoint=endpoint,
+                    )
         except CandidateSelectionRevocationError as exc:
-            raise OpenRouterModelError("selected model route is revoked") from exc
+            raise OpenRouterModelError(f"selected model route is revoked: {exc}") from exc
 
     async def validate_authentication(self) -> None:
         """Validate the current bearer credential without returning key metadata."""
@@ -10319,6 +11147,31 @@ class OpenRouterClient:
         response = await self._request_metadata(OPENROUTER_CATALOG_QUERY)
         _validated_model_catalog(response)
         return response
+
+    async def list_model_endpoint_inventory(self, exact_model_id: str) -> list[dict[str, Any]]:
+        """Return exact-model endpoint metadata without treating it as a route assignment.
+
+        This diagnostic read intentionally does not apply the selected-route revocation
+        preflight: an operator must be able to inventory non-revoked replacements when an
+        older endpoint is tombstoned. The returned metadata grants no selection or execution
+        authority, and callers must independently validate any later route assignment.
+        """
+
+        _require_exact_model_id(exact_model_id)
+        response = await self._request_metadata(openrouter_endpoint_query(exact_model_id))
+        data = response.get("data")
+        if not isinstance(data, dict) or data.get("id") != exact_model_id:
+            raise OpenRouterModelError(
+                "OpenRouter endpoint inventory does not bind the exact requested model"
+            )
+        endpoints = data.get("endpoints")
+        if (
+            not isinstance(endpoints, list)
+            or not endpoints
+            or any(not isinstance(endpoint, dict) for endpoint in endpoints)
+        ):
+            raise OpenRouterModelError("OpenRouter returned invalid endpoint inventory")
+        return list(endpoints)
 
     async def get_model_endpoint_metadata(self, model: str) -> dict[str, Any]:
         """Return the exact-model endpoint response envelope after basic validation."""
@@ -11357,6 +12210,9 @@ class OpenRouterClient:
         *,
         evidence: OpenRouterModelDiscoveryEvidence,
         manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+        _candidate_revocation_transport_scope_states: tuple[
+            tuple[object, ...], ...
+        ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
     ) -> None:
         """Bind one exact requested/canonical identity from frozen REAL discovery."""
 
@@ -11364,6 +12220,56 @@ class OpenRouterClient:
             raise OpenRouterModelError("model discovery evidence has an invalid type")
         if evidence.provenance.execution_evidence is not ExecutionEvidenceKind.REAL:
             raise OpenRouterModelError("model discovery evidence is not REAL")
+        if (
+            type(_candidate_revocation_transport_scope_states) is not tuple
+            or len(_candidate_revocation_transport_scope_states) != 12
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        method_kwdefaults = OpenRouterClient.register_model_discovery.__kwdefaults__
+        alias_guard = cast(
+            Callable[[tuple[tuple[object, ...], ...]], bool],
+            _candidate_revocation_transport_scope_states[11][0],
+        )
+        trusted_transport_lookup = cast(
+            Callable[[object], _TrustedTransportBinding | None],
+            _candidate_revocation_transport_scope_states[1][0],
+        )
+        trusted_constraint_validator = cast(
+            Callable[[ExactRouteConstraint], _CandidateRevocationConstraintProjection],
+            _candidate_revocation_transport_scope_states[6][0],
+        )
+        trusted_constraint_resolver = cast(
+            Callable[
+                [object, _TrustedTransportBinding],
+                _CandidateRevocationTransportScopeProjection,
+            ],
+            _candidate_revocation_transport_scope_states[9][0],
+        )
+        if (
+            type(method_kwdefaults) is not dict
+            or method_kwdefaults.get("_candidate_revocation_transport_scope_states")
+            is not _candidate_revocation_transport_scope_states
+            or _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+            is not _candidate_revocation_transport_scope_states
+            or _candidate_revocation_transport_scope_aliases_are_current is not alias_guard
+            or not alias_guard(_candidate_revocation_transport_scope_states)
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        transport_binding = trusted_transport_lookup(self)
+        constraint_projection = (
+            trusted_constraint_resolver(self, transport_binding)[0]
+            if transport_binding is not None
+            else None
+        )
+        discovery_constraint = evidence.endpoint_snapshot.exact_route_constraint
+        if (constraint_projection is not None or discovery_constraint is not None) and (
+            constraint_projection is None
+            or discovery_constraint is None
+            or trusted_constraint_validator(discovery_constraint) != constraint_projection
+        ):
+            raise OpenRouterModelError(
+                "candidate revocation route custody differs from registered discovery"
+            )
         if manifest is None:
             OpenRouterClient._validate_transport_provenance(self)
             model_binding = next(
@@ -14909,6 +15815,7 @@ class OpenRouterClient:
             SchedulerPassKind,
             SchedulerTaskKind,
             SchedulerTaskPlan,
+            SchedulerTaskPurpose,
         )
 
         if (
@@ -14946,6 +15853,11 @@ class OpenRouterClient:
             if task_kind is ModelPortfolioTaskKind.ORIENTATION
             else SchedulerPassKind.BLIND_SHARD_REVIEW
         )
+        expected_purpose = (
+            SchedulerTaskPurpose.RETRIEVAL_PLANNING
+            if task_kind is ModelPortfolioTaskKind.RETRIEVAL_PLANNING
+            else SchedulerTaskPurpose.PRIMARY
+        )
         if (
             sealed_task != scheduler_task
             or sealed_manifest != campaign_manifest
@@ -14955,6 +15867,7 @@ class OpenRouterClient:
             or sealed_task.pass_kind is not expected_pass
             or sealed_task.pass_id != sealed_manifest.pass_id(expected_pass)
             or sealed_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or sealed_task.purpose is not expected_purpose
             or sealed_task.candidate_ids != ()
         ):
             raise OpenRouterRequestCostPreviewError(
@@ -15402,6 +16315,9 @@ class OpenRouterClient:
         _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
             _CANDIDATE_REVOCATION_CALL_ROOTS
         ),
+        _candidate_revocation_transport_scope_states: tuple[
+            tuple[object, ...], ...
+        ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
@@ -15496,49 +16412,130 @@ class OpenRouterClient:
         if (
             type(_candidate_revocation_call_roots) is not tuple
             or len(_candidate_revocation_call_roots) != 2
+            or type(_candidate_revocation_transport_scope_states) is not tuple
+            or len(_candidate_revocation_transport_scope_states) != 12
         ):
             raise OpenRouterModelError("candidate revocation boundary changed")
         trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+        alias_guard = cast(
+            Callable[[tuple[tuple[object, ...], ...]], bool],
+            _candidate_revocation_transport_scope_states[11][0],
+        )
+        trusted_transport_lookup = cast(
+            Callable[[object], _TrustedTransportBinding | None],
+            _candidate_revocation_transport_scope_states[1][0],
+        )
+        trusted_constraint_validator = cast(
+            Callable[[ExactRouteConstraint], _CandidateRevocationConstraintProjection],
+            _candidate_revocation_transport_scope_states[6][0],
+        )
+        trusted_constraint_resolver = cast(
+            Callable[
+                [object, _TrustedTransportBinding],
+                _CandidateRevocationTransportScopeProjection,
+            ],
+            _candidate_revocation_transport_scope_states[9][0],
+        )
+        trusted_role_parser = cast(
+            Callable[[str], ExactRouteRole],
+            _candidate_revocation_transport_scope_states[8][0],
+        )
+        transport_binding = trusted_transport_lookup(self)
         if (
             type(completion_kwdefaults) is not dict
             or completion_kwdefaults.get("_candidate_revocation_call_roots")
             is not _candidate_revocation_call_roots
+            or completion_kwdefaults.get("_candidate_revocation_transport_scope_states")
+            is not _candidate_revocation_transport_scope_states
             or _CANDIDATE_REVOCATION_CALL_ROOTS is not _candidate_revocation_call_roots
+            or _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+            is not _candidate_revocation_transport_scope_states
             or candidate_revocation_callables_are_pristine is not trusted_revocation_pristine
             or require_candidate_assignment_eligible is not trusted_assignment_gate
             or candidate_revocation_module.candidate_revocation_callables_are_pristine
             is not trusted_revocation_pristine
             or candidate_revocation_module.require_candidate_assignment_eligible
             is not trusted_assignment_gate
+            or _candidate_revocation_transport_scope_aliases_are_current is not alias_guard
+            or not alias_guard(_candidate_revocation_transport_scope_states)
             or not trusted_revocation_pristine()
         ):
             raise OpenRouterModelError("candidate revocation boundary changed")
         try:
-            configured_endpoints = self.provider_policy.configured_endpoints
+            transport_scope = (
+                trusted_constraint_resolver(
+                    self,
+                    transport_binding,
+                )
+                if transport_binding is not None
+                else None
+            )
+            constraint_projection = transport_scope[0] if transport_scope is not None else None
+            provider_policy_projection = transport_scope[1] if transport_scope is not None else None
+            constraint_role = (
+                trusted_role_parser(constraint_projection[1])
+                if constraint_projection is not None
+                else None
+            )
+        except (OpenRouterModelError, OpenRouterPrivacyError, ValueError) as exc:
+            raise OpenRouterModelError("candidate revocation boundary changed") from exc
+        try:
+            configured_endpoints = (
+                provider_policy_projection[1] or provider_policy_projection[2]
+                if provider_policy_projection is not None
+                else self.provider_policy.configured_endpoints
+            )
+            allow_fallbacks = (
+                provider_policy_projection[3]
+                if provider_policy_projection is not None
+                else self.provider_policy.allow_fallbacks
+            )
             for model in models:
                 identity = self._model_identities.get(model)
+                discovery = self._reasoning_discoveries.get(model)
+                candidate_revocation_role: ExactRouteRole | None = None
+                if constraint_projection is not None:
+                    registered_constraint = (
+                        None
+                        if discovery is None
+                        else discovery.endpoint_snapshot.exact_route_constraint
+                    )
+                    if (
+                        model != constraint_projection[2]
+                        or configured_endpoints != (constraint_projection[3],)
+                        or registered_constraint is None
+                        or trusted_constraint_validator(registered_constraint)
+                        != constraint_projection
+                    ):
+                        raise OpenRouterModelError(
+                            "candidate revocation route custody differs from registered discovery"
+                        )
+                    candidate_revocation_role = constraint_role
                 candidate_model_ids = {model}
                 if identity is not None:
                     candidate_model_ids.add(identity.canonical_slug)
                 for candidate_model_id in candidate_model_ids:
-                    if self.provider_policy.allow_fallbacks:
+                    if allow_fallbacks:
                         trusted_assignment_gate(
+                            role=candidate_revocation_role,
                             exact_model_id=candidate_model_id,
                             provider_endpoint=None,
                         )
                     elif configured_endpoints:
                         for endpoint in configured_endpoints:
                             trusted_assignment_gate(
+                                role=candidate_revocation_role,
                                 exact_model_id=candidate_model_id,
                                 provider_endpoint=endpoint,
                             )
                     else:
                         trusted_assignment_gate(
+                            role=candidate_revocation_role,
                             exact_model_id=candidate_model_id,
                             provider_endpoint=None,
                         )
         except CandidateSelectionRevocationError as exc:
-            raise OpenRouterModelError("configured model route is revoked") from exc
+            raise OpenRouterModelError(f"configured model route is revoked: {exc}") from exc
         if self.provider_policy.certification and len(models) != 1:
             raise OpenRouterModelError(
                 "certification requires exactly one explicitly qualified model"
@@ -18445,7 +19442,7 @@ class OpenRouterClient:
                         accounting_method=request_token_plan.token_detail_accounting_method,
                         token_detail_accounting_evidence=(active_token_detail_accounting_evidence),
                     )
-                    if request_token_plan.reasoning_plan is not None and active_network_attempted
+                    if request_token_plan.reasoning_plan is not None
                     else None
                 )
                 if len(attempt_outcomes) < attempts:
@@ -19866,21 +20863,100 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError("operator credential appeared in provider data")
 
 
+def require_trusted_openrouter_candidate_revocation_constraint(
+    client: OpenRouterClient,
+    expected_constraint: ExactRouteConstraint | None,
+    *,
+    _client_type: type[OpenRouterClient] = OpenRouterClient,
+    _candidate_revocation_transport_scope_states: tuple[
+        tuple[object, ...], ...
+    ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
+) -> None:
+    """Require one concrete client's construction-time route-role seal exactly."""
+
+    if (
+        type(_candidate_revocation_transport_scope_states) is not tuple
+        or len(_candidate_revocation_transport_scope_states) != 12
+    ):
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    helper_kwdefaults = require_trusted_openrouter_candidate_revocation_constraint.__kwdefaults__
+    alias_guard = cast(
+        Callable[[tuple[tuple[object, ...], ...]], bool],
+        _candidate_revocation_transport_scope_states[11][0],
+    )
+    trusted_transport_lookup = cast(
+        Callable[[object], _TrustedTransportBinding | None],
+        _candidate_revocation_transport_scope_states[1][0],
+    )
+    trusted_constraint_projector = cast(
+        Callable[
+            [ExactRouteConstraint | None],
+            _CandidateRevocationConstraintProjection | None,
+        ],
+        _candidate_revocation_transport_scope_states[4][0],
+    )
+    trusted_constraint_resolver = cast(
+        Callable[
+            [object, _TrustedTransportBinding],
+            _CandidateRevocationTransportScopeProjection,
+        ],
+        _candidate_revocation_transport_scope_states[9][0],
+    )
+    if (
+        type(helper_kwdefaults) is not dict
+        or helper_kwdefaults.get("_client_type") is not _client_type
+        or helper_kwdefaults.get("_candidate_revocation_transport_scope_states")
+        is not _candidate_revocation_transport_scope_states
+        or OpenRouterClient is not _client_type
+        or type(client) is not _client_type
+        or _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+        is not _candidate_revocation_transport_scope_states
+        or _candidate_revocation_transport_scope_aliases_are_current is not alias_guard
+        or not alias_guard(_candidate_revocation_transport_scope_states)
+    ):
+        raise OpenRouterModelError("candidate revocation boundary changed")
+    binding = trusted_transport_lookup(client)
+    if binding is None:
+        raise OpenRouterModelError("candidate revocation transport binding is unavailable")
+    try:
+        actual_projection = trusted_constraint_resolver(client, binding)[0]
+        expected_projection = trusted_constraint_projector(expected_constraint)
+    except OpenRouterPrivacyError as exc:
+        raise OpenRouterModelError("candidate revocation boundary changed") from exc
+    if actual_projection != expected_projection:
+        raise OpenRouterModelError(
+            "candidate revocation route constraint differs from the concrete client seal"
+        )
+
+
+_TRUSTED_REQUIRE_OPENROUTER_CANDIDATE_REVOCATION_CONSTRAINT = (
+    require_trusted_openrouter_candidate_revocation_constraint
+)
+_TRUSTED_REQUIRE_OPENROUTER_CANDIDATE_REVOCATION_CONSTRAINT_CODE = (
+    require_trusted_openrouter_candidate_revocation_constraint.__code__
+)
+
+
 def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
-    """Seal candidate revocation roots around every selected provider read.
+    """Seal candidate revocation roots and the diagnostic endpoint read surface.
 
     The public wrappers retain their expected preflight in closure custody. A
     coordinated replacement of the class helper, its module pins, and method
     keyword defaults therefore fails before the original method can construct a
-    provider request.
+    provider request. Endpoint inventory remains nonauthorizing and does not run
+    the selected-route preflight, but it shares the same code-integrity boundary.
     """
 
     client_type = OpenRouterClient
     helper = client_type._require_candidate_revocation_preflight
+    authentication_implementation = client_type.validate_authentication
     endpoint_metadata_implementation = client_type.get_model_endpoint_metadata
     refresh_implementation = client_type.get_refresh_model_endpoint_metadata
     model_implementation = client_type.get_model_metadata
+    certification_model_metadata_implementation = client_type.get_certification_model_metadata
+    endpoint_inventory_implementation = client_type.list_model_endpoint_inventory
     list_endpoints_implementation = client_type.list_model_endpoints
+    zdr_metadata_implementation = client_type.get_zdr_endpoint_metadata
     generation_implementation = client_type.get_generation_evidence
     verification_implementation = client_type.create_trusted_generation_verification
     trusted_candidate_pristine = candidate_revocation_callables_are_pristine
@@ -19892,10 +20968,15 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
     trusted_object_getattribute = object.__getattribute__
     selected_instance_names = frozenset(
         {
+            "validate_authentication",
+            "_request_metadata",
             "get_model_endpoint_metadata",
             "get_refresh_model_endpoint_metadata",
             "get_model_metadata",
+            "get_certification_model_metadata",
+            "list_model_endpoint_inventory",
             "list_model_endpoints",
+            "get_zdr_endpoint_metadata",
             "get_generation_evidence",
             "create_trusted_generation_verification",
         }
@@ -20017,10 +21098,14 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
                 and trusted_candidate_module.require_candidate_assignment_eligible
                 is trusted_candidate_gate
                 and client_type._require_candidate_revocation_preflight is helper
+                and client_type.validate_authentication is authentication
                 and client_type.get_model_endpoint_metadata is endpoint_metadata
                 and client_type.get_refresh_model_endpoint_metadata is refresh
                 and client_type.get_model_metadata is model
+                and client_type.get_certification_model_metadata is certification_model_metadata
+                and client_type.list_model_endpoint_inventory is endpoint_inventory
                 and client_type.list_model_endpoints is list_endpoints
+                and client_type.get_zdr_endpoint_metadata is zdr_metadata
                 and client_type.get_generation_evidence is generation
                 and client_type.create_trusted_generation_verification is verification
                 and trusted_candidate_pristine()
@@ -20037,6 +21122,15 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
         return type(instance_state) is dict and not selected_instance_names.intersection(
             instance_state
         )
+
+    async def authentication(self: OpenRouterClient) -> None:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        await authentication_implementation(self)
 
     async def endpoint_metadata(
         self: OpenRouterClient,
@@ -20088,6 +21182,17 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
             _candidate_revocation_preflight=helper,
         )
 
+    async def certification_model_metadata(
+        self: OpenRouterClient,
+    ) -> dict[str, Any]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await certification_model_metadata_implementation(self)
+
     async def list_endpoints(
         self: OpenRouterClient,
         model_id: str,
@@ -20099,6 +21204,27 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
         ):
             raise OpenRouterModelError("candidate revocation boundary changed")
         return await list_endpoints_implementation(self, model_id)
+
+    async def endpoint_inventory(
+        self: OpenRouterClient,
+        exact_model_id: str,
+    ) -> list[dict[str, Any]]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await endpoint_inventory_implementation(self, exact_model_id)
+
+    async def zdr_metadata(self: OpenRouterClient) -> dict[str, Any]:
+        if (
+            not instance_selected_surface_is_pristine(self)
+            or pristine.__code__ is not pristine_code
+            or not pristine()
+        ):
+            raise OpenRouterModelError("candidate revocation boundary changed")
+        return await zdr_metadata_implementation(self)
 
     async def generation(
         self: OpenRouterClient,
@@ -20152,23 +21278,35 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
             _candidate_revocation_preflight=helper,
         )
 
+    authentication.__name__ = "validate_authentication"
+    authentication.__qualname__ = "OpenRouterClient.validate_authentication"
     endpoint_metadata.__name__ = "get_model_endpoint_metadata"
     endpoint_metadata.__qualname__ = "OpenRouterClient.get_model_endpoint_metadata"
     refresh.__name__ = "get_refresh_model_endpoint_metadata"
     refresh.__qualname__ = "OpenRouterClient.get_refresh_model_endpoint_metadata"
     model.__name__ = "get_model_metadata"
     model.__qualname__ = "OpenRouterClient.get_model_metadata"
+    certification_model_metadata.__name__ = "get_certification_model_metadata"
+    certification_model_metadata.__qualname__ = "OpenRouterClient.get_certification_model_metadata"
+    endpoint_inventory.__name__ = "list_model_endpoint_inventory"
+    endpoint_inventory.__qualname__ = "OpenRouterClient.list_model_endpoint_inventory"
     list_endpoints.__name__ = "list_model_endpoints"
     list_endpoints.__qualname__ = "OpenRouterClient.list_model_endpoints"
+    zdr_metadata.__name__ = "get_zdr_endpoint_metadata"
+    zdr_metadata.__qualname__ = "OpenRouterClient.get_zdr_endpoint_metadata"
     generation.__name__ = "get_generation_evidence"
     generation.__qualname__ = "OpenRouterClient.get_generation_evidence"
     verification.__name__ = "create_trusted_generation_verification"
     verification.__qualname__ = "OpenRouterClient.create_trusted_generation_verification"
     wrappers = (
+        authentication,
         endpoint_metadata,
         refresh,
         model,
+        certification_model_metadata,
+        endpoint_inventory,
         list_endpoints,
+        zdr_metadata,
         generation,
         verification,
     )
@@ -20177,17 +21315,25 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
         function_state(cast(FunctionType, function))
         for function in (
             helper,
+            authentication_implementation,
             endpoint_metadata_implementation,
             refresh_implementation,
             model_implementation,
+            certification_model_metadata_implementation,
+            endpoint_inventory_implementation,
             list_endpoints_implementation,
+            zdr_metadata_implementation,
             generation_implementation,
             verification_implementation,
             instance_selected_surface_is_pristine,
+            authentication,
             endpoint_metadata,
             refresh,
             model,
+            certification_model_metadata,
+            endpoint_inventory,
             list_endpoints,
+            zdr_metadata,
             generation,
             verification,
         )
@@ -20195,10 +21341,18 @@ def _install_candidate_selected_read_boundary() -> Callable[[], bool]:
     module_globals_seal = module_globals
     states_seal = states
     wrappers_seal = wrappers
+    type.__setattr__(client_type, "validate_authentication", authentication)
     type.__setattr__(client_type, "get_model_endpoint_metadata", endpoint_metadata)
     type.__setattr__(client_type, "get_refresh_model_endpoint_metadata", refresh)
     type.__setattr__(client_type, "get_model_metadata", model)
+    type.__setattr__(
+        client_type,
+        "get_certification_model_metadata",
+        certification_model_metadata,
+    )
+    type.__setattr__(client_type, "list_model_endpoint_inventory", endpoint_inventory)
     type.__setattr__(client_type, "list_model_endpoints", list_endpoints)
+    type.__setattr__(client_type, "get_zdr_endpoint_metadata", zdr_metadata)
     type.__setattr__(client_type, "get_generation_evidence", generation)
     type.__setattr__(client_type, "create_trusted_generation_verification", verification)
     return pristine
@@ -21111,6 +22265,7 @@ def _build_provider_authority_function_graph_guard() -> tuple[
                         "consumer_state_seal",
                         "issuer_callable_states",
                         "issuer_callable_states_seal",
+                        "scope_records",
                     }
                     else cell.cell_contents
                 )
@@ -21288,6 +22443,9 @@ def _openrouter_client_callables_are_pristine(
     _candidate_revocation_call_roots: _CandidateRevocationCallRoots = (
         _CANDIDATE_REVOCATION_CALL_ROOTS
     ),
+    _candidate_revocation_transport_scope_states: tuple[
+        tuple[object, ...], ...
+    ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
     _usage_result_method: Callable[..., UsageRecord] = OpenRouterClient._usage_with_identity_result,
     _bind_method: Callable[..., object] = OpenRouterClient._bind_real_completion_identity,
     _complete_method: Callable[..., object] = OpenRouterClient.complete_with_evidence,
@@ -21367,6 +22525,15 @@ def _openrouter_client_callables_are_pristine(
 ) -> bool:
     """Verify the client-owned request and evidence dispatch boundary is unchanged."""
 
+    if (
+        type(_candidate_revocation_transport_scope_states) is not tuple
+        or len(_candidate_revocation_transport_scope_states) != 12
+    ):
+        return False
+    candidate_revocation_alias_guard = cast(
+        Callable[[tuple[tuple[object, ...], ...]], bool],
+        _candidate_revocation_transport_scope_states[11][0],
+    )
     usage_result_kwdefaults = _usage_result_method.__kwdefaults__
     bind_kwdefaults = _bind_method.__kwdefaults__
     complete_kwdefaults = _complete_method.__kwdefaults__
@@ -21423,7 +22590,18 @@ def _openrouter_client_callables_are_pristine(
             is _TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION
         )
         and _provider_callable_descriptor_surface is _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE
+        and _register_trusted_transport_binding is _TRUSTED_REGISTER_TRANSPORT_BINDING
         and _lookup_trusted_transport_binding is _TRUSTED_LOOKUP_TRANSPORT_BINDING
+        and _lookup_trusted_candidate_revocation_constraint
+        is _TRUSTED_LOOKUP_CANDIDATE_REVOCATION_CONSTRAINT
+        and _project_trusted_candidate_revocation_constraint
+        is _TRUSTED_PROJECT_CANDIDATE_REVOCATION_CONSTRAINT
+        and _validated_candidate_revocation_constraint_projection
+        is _TRUSTED_VALIDATED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION
+        and _candidate_revocation_constraint_projection_is_valid
+        is _TRUSTED_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION_IS_VALID
+        and _resolve_trusted_candidate_revocation_constraint_projection
+        is _TRUSTED_RESOLVE_CANDIDATE_REVOCATION_CONSTRAINT_PROJECTION
         and _ProviderTransportAttemptReceipt is _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_TYPE
         and (_ProviderTransportOperationGrant is _TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE)
         and (
@@ -21444,6 +22622,11 @@ def _openrouter_client_callables_are_pristine(
         and _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS is _usage_origin_call_roots
         and _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS is _generation_origin_call_roots
         and _CANDIDATE_REVOCATION_CALL_ROOTS is _candidate_revocation_call_roots
+        and _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+        is _candidate_revocation_transport_scope_states
+        and _candidate_revocation_transport_scope_aliases_are_current
+        is candidate_revocation_alias_guard
+        and candidate_revocation_alias_guard(_candidate_revocation_transport_scope_states)
         and _candidate_revocation_call_roots
         == (
             candidate_revocation_callables_are_pristine,
@@ -21474,6 +22657,8 @@ def _openrouter_client_callables_are_pristine(
         and _provider_httpx_inflight_response_graph is _inflight_response_graph
         and _provider_httpx_completed_response_graph is _completed_response_graph
         and type(pristine_kwdefaults) is dict
+        and pristine_kwdefaults.get("_candidate_revocation_transport_scope_states")
+        is _candidate_revocation_transport_scope_states
         and pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
         is _provider_authority_graph_is_pristine
         and pristine_kwdefaults.get("_provider_authority_graph_guard_code")
@@ -22107,7 +23292,13 @@ def _transport_binding_graph_is_current(binding: _TrustedTransportBinding) -> bo
     return True
 
 
-def trusted_openrouter_execution_evidence(client: OpenRouterClient) -> ExecutionEvidenceKind:
+def trusted_openrouter_execution_evidence(
+    client: OpenRouterClient,
+    *,
+    _candidate_revocation_transport_scope_states: tuple[
+        tuple[object, ...], ...
+    ] = _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES,
+) -> ExecutionEvidenceKind:
     """Derive execution evidence once from exact sealed transport identities.
 
     The public descriptive label is deliberately ignored. This function uses base-object
@@ -22115,17 +23306,38 @@ def trusted_openrouter_execution_evidence(client: OpenRouterClient) -> Execution
     concurrent label changes cannot influence the qualification decision.
     """
 
-    if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+    if (
+        type(_candidate_revocation_transport_scope_states) is not tuple
+        or len(_candidate_revocation_transport_scope_states) != 12
+    ):
+        return ExecutionEvidenceKind.UNVERIFIED
+    trusted_transport_lookup = cast(
+        Callable[[object], _TrustedTransportBinding | None],
+        _candidate_revocation_transport_scope_states[1][0],
+    )
+    trusted_constraint_resolver = cast(
+        Callable[
+            [object, _TrustedTransportBinding],
+            _CandidateRevocationTransportScopeProjection,
+        ],
+        _candidate_revocation_transport_scope_states[9][0],
+    )
+    if (
+        _CANDIDATE_REVOCATION_TRANSPORT_SCOPE_FUNCTION_STATES
+        is not _candidate_revocation_transport_scope_states
+        or type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+    ):
         return ExecutionEvidenceKind.UNVERIFIED
     if not _openrouter_client_callables_are_pristine():
         return ExecutionEvidenceKind.UNVERIFIED
-    binding = _lookup_trusted_transport_binding(client)
+    binding = trusted_transport_lookup(client)
     if binding is None:
         return ExecutionEvidenceKind.UNVERIFIED
     try:
+        trusted_constraint_resolver(client, binding)
         http_client = object.__getattribute__(client, "_client")
         transport = object.__getattribute__(http_client, "_transport")
-    except (AttributeError, TypeError):
+    except (AttributeError, OpenRouterModelError, OpenRouterPrivacyError, TypeError):
         return ExecutionEvidenceKind.UNVERIFIED
     if (
         http_client is not binding.http_client
@@ -23918,6 +25130,19 @@ del _route_admission_kwdefaults
 
 _install_provider_authority_function_graph(
     (
+        _register_trusted_transport_binding,
+        _lookup_trusted_transport_binding,
+        _lookup_trusted_candidate_revocation_constraint,
+        _lookup_trusted_provider_policy_projection,
+        _project_trusted_candidate_revocation_constraint,
+        _validated_transport_provider_policy_projection,
+        _validated_candidate_revocation_constraint_projection,
+        _candidate_revocation_constraint_projection_is_valid,
+        _exact_route_role_from_candidate_revocation_projection,
+        _resolve_trusted_candidate_revocation_constraint_projection,
+        _candidate_revocation_transport_scope_states_are_current,
+        _candidate_revocation_transport_scope_aliases_are_current,
+        require_trusted_openrouter_candidate_revocation_constraint,
         _register_provider_transport_attempt_issuer,
         _prepare_provider_transport_operation,
         _prepare_provider_transport_attempt,

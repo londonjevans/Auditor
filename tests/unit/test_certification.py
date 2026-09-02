@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.orchestration.verification as verification_module
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -41,6 +43,7 @@ from mmaudit.orchestration.replay import (
     ReplayComponentStatus,
 )
 from mmaudit.orchestration.verification import RunVerificationStatus
+from tests.unit.test_manifest import _write_verifiable_run
 
 _RUN_ID = "certification-test-run"
 _MANIFEST_SHA256 = "1" * 64
@@ -189,6 +192,7 @@ def _certify(
     replay: OfflineReplay | None = None,
     verification_manifest_sha256: str = _MANIFEST_SHA256,
 ) -> MaximumAssuranceCertification:
+    _stub_directory_custody(monkeypatch)
     manifest = SimpleNamespace(
         run_id=_RUN_ID,
         manifest_sha256=_MANIFEST_SHA256,
@@ -238,10 +242,26 @@ def _certify(
     )
 
 
+def _stub_directory_custody(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep model-only unit tests independent of filesystem fixture construction."""
+
+    monkeypatch.setattr(
+        certification_module,
+        "_safe_verification_directory",
+        lambda path, _label: SimpleNamespace(path=path),
+    )
+    monkeypatch.setattr(
+        certification_module,
+        "_require_certification_root_custody",
+        lambda *_args: None,
+    )
+
+
 def test_v11_certification_reconstructs_embedded_effective_config(
     monkeypatch: pytest.MonkeyPatch,
     config_factory: ConfigFactory,
 ) -> None:
+    _stub_directory_custody(monkeypatch)
     config = config_factory()
     manifest = SimpleNamespace(
         run_id=_RUN_ID,
@@ -318,6 +338,7 @@ def test_v11_certification_reconstructs_embedded_effective_config(
 def test_v10_certification_requires_explicit_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_directory_custody(monkeypatch)
     monkeypatch.setattr(
         certification_module,
         "load_run_evidence_manifest",
@@ -334,6 +355,114 @@ def test_v10_certification_requires_explicit_config(
             run_dir=Path("run"),
             repository_root=Path("repository"),
             replay_path=Path("offline-replay.json"),
+        )
+
+
+def test_certification_rejects_configuration_root_with_linked_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: ConfigFactory,
+) -> None:
+    run_dir = tmp_path / "run"
+    repository_root = tmp_path / "repository"
+    run_dir.mkdir()
+    repository_root.mkdir()
+    real_parent = tmp_path / "trusted-configuration"
+    configuration_root = real_parent / "root"
+    configuration_root.mkdir(parents=True)
+    linked_parent = tmp_path / "linked-configuration"
+    try:
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    monkeypatch.setattr(
+        certification_module,
+        "load_run_evidence_manifest",
+        lambda _path: SimpleNamespace(run_configuration=None),
+    )
+
+    with pytest.raises(ValueError, match="configuration root may not traverse a link"):
+        certify_maximum_assurance_run(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository_root,
+            replay_path=tmp_path / "offline-replay.json",
+            configuration_root=linked_parent / "root",
+            config=config_factory(),
+        )
+
+
+def test_certification_rejects_transient_ignore_edit_restored_during_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: ConfigFactory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    ignore_path = repository / ".mmauditignore"
+    ignore_path.write_bytes(b"")
+    original_discover = verification_module.discover_repository
+
+    def discover_with_transient_ignore(*args, **kwargs):
+        ignore_path.write_text("/src/Vault.sol\n", encoding="utf-8")
+        try:
+            return original_discover(*args, **kwargs)
+        finally:
+            ignore_path.write_bytes(b"")
+
+    monkeypatch.setattr(
+        verification_module,
+        "discover_repository",
+        discover_with_transient_ignore,
+    )
+
+    with pytest.raises(ValueError, match="configuration ignore input changed"):
+        certify_maximum_assurance_run(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            replay_path=tmp_path / "offline-replay.json",
+            configuration_root=repository,
+            config=config,
+        )
+
+
+def test_certification_rejects_repository_swapped_after_initial_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: ConfigFactory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    alternate = tmp_path / "alternate-repository"
+    displaced = tmp_path / "displaced-repository"
+    shutil.copytree(repository, alternate)
+    original_safe_directory = certification_module._safe_verification_directory
+    swapped = False
+
+    def validate_then_swap(path: Path, label: str):
+        nonlocal swapped
+        observation = original_safe_directory(path, label)
+        if label == "repository" and not swapped:
+            swapped = True
+            repository.rename(displaced)
+            alternate.rename(repository)
+        return observation
+
+    monkeypatch.setattr(
+        certification_module,
+        "_safe_verification_directory",
+        validate_then_swap,
+    )
+
+    with pytest.raises(ValueError, match=r"certification .* root changed during custody"):
+        certify_maximum_assurance_run(
+            manifest_path=run_dir / "run-evidence-manifest.json",
+            run_dir=run_dir,
+            repository_root=repository,
+            replay_path=tmp_path / "offline-replay.json",
+            configuration_root=repository,
+            config=config,
         )
 
 

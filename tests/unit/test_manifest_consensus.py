@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 
 import mmaudit.orchestration.manifest as manifest_module
+from mmaudit.models.actor_model import ActorModelApplicability, CandidateActorContext
 from mmaudit.models.scheduler import (
     SchedulerEvidenceCapJudgmentOutput,
     SchedulerEvidencePayloadBinding,
@@ -26,20 +27,25 @@ from mmaudit.models.scheduler import (
 from mmaudit.models.schemas import (
     AuditReport,
     ConsensusReviewArtifact,
+    FindingStatus,
+    JudgeDecision,
     LocationValidation,
     Severity,
     StrictModel,
     UsageRecord,
 )
+from mmaudit.orchestration.actor_model import bind_judged_actor_context, calibrate_finding
 from mmaudit.orchestration.consensus import merge_group, publication_groups
 from mmaudit.orchestration.manifest import (
     _reconstruct_scheduler_consensus_review,
     _scheduler_report_authority_snapshot,
+    _validate_public_judge_decisions,
     _validate_scheduler_consensus_review_authority,
     _validate_scheduler_reviewer_provider_generations,
     _validate_scheduler_terminal_finding_replay,
 )
 from tests.scheduler_support import CompleteSchedulerFixture, build_complete_scheduler_fixture
+from tests.unit.test_actor_model import _current_actor_input, _scenario_payload
 
 
 class _DetachedJournal:
@@ -48,10 +54,14 @@ class _DetachedJournal:
     def __init__(
         self,
         *,
+        plans: Sequence[object],
+        activations: Sequence[SchedulerTaskActivation],
         outputs: Sequence[SchedulerTaskOutput],
         pass_results: Sequence[object],
     ) -> None:
-        self.outputs = tuple(outputs)
+        self.plans = tuple(plans)
+        self.activations = tuple(sorted(activations, key=lambda activation: activation.task_id))
+        self.outputs = tuple(sorted(outputs, key=lambda output: output.task_id))
         self.pass_results = tuple(pass_results)
 
     def reconstruct_output[OutputT: StrictModel](
@@ -74,6 +84,8 @@ def _snapshot(
     pass_results: Sequence[object] | None = None,
 ) -> Any:
     journal = _DetachedJournal(
+        plans=fixture.plans,
+        activations=fixture.activations,
         outputs=fixture.outputs,
         pass_results=fixture.pass_results if pass_results is None else pass_results,
     )
@@ -327,6 +339,202 @@ def test_manifest_rejects_published_consensus_when_reviewer_inventory_is_incompl
         )
 
 
+def test_manifest_binds_public_judge_decisions_to_retained_scheduler_output() -> None:
+    retained = JudgeDecision(
+        group_id="synthetic-group",
+        status=FindingStatus.NEEDS_REVIEW,
+        severity=Severity.MEDIUM,
+        confidence=0.7,
+        rationale="Synthetic retained scheduler judgment.",
+    )
+    matching_report = cast(
+        AuditReport,
+        SimpleNamespace(actor_model_evaluation=object(), judge_decisions=[retained]),
+    )
+
+    _validate_public_judge_decisions(matching_report, (retained,))
+
+    drifted = retained.model_copy(update={"rationale": "Coherently changed public rationale."})
+    drifted_report = cast(
+        AuditReport,
+        SimpleNamespace(actor_model_evaluation=object(), judge_decisions=[drifted]),
+    )
+    with pytest.raises(ValueError, match="exact retained scheduler output"):
+        _validate_public_judge_decisions(drifted_report, (retained,))
+
+
+def test_manifest_preserves_pre_actor_scheduler_replay_without_public_judge_inventory() -> None:
+    retained = JudgeDecision(
+        group_id="synthetic-legacy-group",
+        status=FindingStatus.NEEDS_REVIEW,
+        severity=Severity.MEDIUM,
+        confidence=0.7,
+        rationale="Synthetic retained pre-actor scheduler judgment.",
+    )
+    legacy_report = cast(
+        AuditReport,
+        SimpleNamespace(actor_model_evaluation=None, judge_decisions=[]),
+    )
+
+    _validate_public_judge_decisions(legacy_report, (retained,))
+
+
+def test_manifest_requires_public_judge_inventory_for_actor_evaluation() -> None:
+    retained = JudgeDecision(
+        group_id="synthetic-current-group",
+        status=FindingStatus.NEEDS_REVIEW,
+        severity=Severity.MEDIUM,
+        confidence=0.7,
+        rationale="Synthetic retained actor-bound scheduler judgment.",
+    )
+    actor_bound_report = cast(
+        AuditReport,
+        SimpleNamespace(actor_model_evaluation=object(), judge_decisions=[]),
+    )
+
+    with pytest.raises(ValueError, match="exact retained scheduler output"):
+        _validate_public_judge_decisions(actor_bound_report, (retained,))
+
+
+def test_detached_replay_uses_current_actor_context_without_judge_classification(
+    candidate_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = next(
+        item
+        for item in _scenario_payload()["scenarios"]
+        if item["scenario_id"] == "request-cooldown-severity"
+    )
+    actor_context = CandidateActorContext.model_validate(scenario["actor_context"])
+    actor_input = _current_actor_input()
+    candidate = candidate_factory(title="Synthetic actor replay custody")
+    candidate_id = candidate.candidate_id
+    group = publication_groups([candidate])[0]
+    judge = JudgeDecision(
+        group_id=group.group_id,
+        status=FindingStatus.REJECTED,
+        severity=Severity.CRITICAL,
+        confidence=0.01,
+        rationale="Deliberately divergent synthetic classification with retained actor context.",
+        actor_model_applicability=ActorModelApplicability.PRIVILEGED_ACTOR_REQUIRED,
+        actor_context=actor_context,
+    )
+    validation = LocationValidation(
+        valid=True,
+        content_hash="a" * 64,
+        errors=[],
+        validated_at=None,
+    )
+    merged = merge_group(
+        group,
+        decisions={},
+        validations={candidate_id: validation},
+        scanner_findings=[],
+        judge=judge,
+        apply_judge_classification=False,
+    )
+    bound = bind_judged_actor_context(merged, judgment=judge, actor_input=actor_input)
+    expected = calibrate_finding(
+        bound,
+        actor_context=bound.actor_context,
+        actor_input=actor_input,
+    ).finding
+    assert expected.severity is Severity.MEDIUM
+    assert expected.confidence == candidate.confidence
+    assert expected.actor_context == actor_context
+
+    candidate_sha256 = scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+    record = SchedulerFindingReductionCandidate(
+        candidate_id=candidate_id,
+        candidate_sha256=candidate_sha256,
+        location_validation=SchedulerFindingReductionValidation(
+            valid=True,
+            content_hash="a" * 64,
+            errors=(),
+        ),
+    )
+    integration = cast(
+        Any,
+        SimpleNamespace(
+            candidate_payload_sha256s={candidate_id: candidate_sha256},
+            candidate_records=(record,),
+        ),
+    )
+    judgment = cast(
+        Any,
+        SimpleNamespace(
+            candidate_ids=(candidate_id,),
+            terminal_candidate_records=(record,),
+            critical_confirmation_requires_execution=False,
+            severity_threshold=Severity.MEDIUM,
+        ),
+    )
+    common_report_fields = {
+        "cross_examination_decisions": (),
+        "reproductions": (),
+        "falsification_decisions": (),
+        "verification_decisions": (),
+        "scanner_runs": (),
+        "filtered_findings": (),
+        "rejected_findings": (),
+        "actor_model_evaluation": SimpleNamespace(input_evidence=actor_input),
+    }
+    report = cast(
+        Any,
+        SimpleNamespace(**common_report_fields, findings=(expected,)),
+    )
+    snapshot = cast(Any, SimpleNamespace())
+    monkeypatch.setattr(
+        manifest_module,
+        "_reconstruct_scheduler_consensus_review",
+        lambda *, snapshot: None,
+    )
+    monkeypatch.setattr(
+        manifest_module,
+        "_validate_scheduler_retained_judge_decisions",
+        lambda **kwargs: (judge,),
+    )
+    monkeypatch.setattr(manifest_module, "_scheduler_judge_vote", lambda **kwargs: None)
+    call = {
+        "judgment": judgment,
+        "integration": integration,
+        "candidates": (candidate,),
+        "trusted_scanner_fingerprints": frozenset(),
+        "snapshot": snapshot,
+        "config": None,
+        "run_options": None,
+        "require_complete_pass": False,
+    }
+
+    _validate_scheduler_terminal_finding_replay(report=report, **call)
+
+    judge_classified = merge_group(
+        group,
+        decisions={},
+        validations={candidate_id: validation},
+        scanner_findings=[],
+        judge=judge,
+    )
+    wrongly_bound = bind_judged_actor_context(
+        judge_classified,
+        judgment=judge,
+        actor_input=actor_input,
+    )
+    wrongly_calibrated = calibrate_finding(
+        wrongly_bound,
+        actor_context=wrongly_bound.actor_context,
+        actor_input=actor_input,
+    ).finding
+    assert wrongly_calibrated.severity is Severity.HIGH
+    assert wrongly_calibrated.confidence == judge.confidence
+    drifted_report = cast(
+        Any,
+        SimpleNamespace(**common_report_fields, findings=(wrongly_calibrated,)),
+    )
+    with pytest.raises(ValueError, match="deterministic consensus replay"):
+        _validate_scheduler_terminal_finding_replay(report=drifted_report, **call)
+
+
 def test_manifest_rejects_forged_reused_reviewer_lineage(
     complete_fixture: CompleteSchedulerFixture,
 ) -> None:
@@ -348,6 +556,7 @@ def test_manifest_rejects_forged_reused_reviewer_lineage(
         for task in validation_result.plan.tasks
     )
     forged_plan = SimpleNamespace(
+        manifest=validation_result.plan.manifest,
         pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
         candidate_workset=validation_result.plan.candidate_workset,
         tasks=forged_tasks,
@@ -412,7 +621,12 @@ def test_manifest_empty_validation_workset_requires_consensus_absence() -> None:
         ),
         task_results=(),
     )
-    journal = _DetachedJournal(outputs=(), pass_results=(pass_result,))
+    journal = _DetachedJournal(
+        plans=(pass_result.plan,),
+        activations=(),
+        outputs=(),
+        pass_results=(pass_result,),
+    )
     snapshot = _scheduler_report_authority_snapshot(cast(Any, journal))
 
     assert _reconstruct_scheduler_consensus_review(snapshot=snapshot) is None

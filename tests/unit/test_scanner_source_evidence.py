@@ -7,6 +7,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.models.actor_model import (
+    ActorAssessmentDisposition,
+    ActorLikelihoodAdjustment,
+    ActorModelInputState,
+    ActorRemediationFocus,
+    ActorSeverity,
+    FindingActorAssessment,
+)
 from mmaudit.models.schemas import (
     AuditReport,
     EvidenceStrength,
@@ -187,6 +195,28 @@ def test_scanner_source_authority_resolves_exact_real_runtime_evidence() -> None
     assert from_report.scanner_run == run
     assert from_report.scanner_finding == run.findings[0]
     assert from_report.location_validation == validation
+
+
+def test_scanner_source_authority_allows_only_downstream_actor_assessment() -> None:
+    run, finding, validation = _scanner_evidence()
+    assessment = FindingActorAssessment.build(
+        input_state=ActorModelInputState.MISSING,
+        disposition=ActorAssessmentDisposition.ACTOR_MODEL_MISSING,
+        baseline_finding_sha256="a" * 64,
+        original_severity=ActorSeverity.MEDIUM,
+        calibrated_severity=ActorSeverity.MEDIUM,
+        likelihood_adjustment=ActorLikelihoodAdjustment.UNASSESSED,
+        remediation_focus=ActorRemediationFocus.ACTOR_CONTEXT_VERIFICATION,
+        limitation="synthetic actor model is unavailable",
+    )
+    assessed = finding.model_copy(update={"actor_assessment": assessment})
+
+    authority = scanner_source_authority_from_runs([run], assessed, assessed.locations[0])
+
+    assert authority.location_validation == validation
+    forged = assessed.model_copy(update={"summary": "forged scanner summary"})
+    with pytest.raises(ValueError, match="exact scanner projection"):
+        scanner_source_authority_from_runs([run], forged, forged.locations[0])
 
 
 @pytest.mark.parametrize(

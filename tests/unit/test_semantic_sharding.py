@@ -1821,14 +1821,34 @@ def test_verify_run_records_manifest_bound_shard_cross_artifact_mismatch(
         smart_contracts_enabled=True,
     )
     base_report = _report(config)
+    assert base_report.minimum_analysis_floor is not None
+    floor = base_report.minimum_analysis_floor.model_copy(
+        update={"source_files_ingested": len(inventory.source_units)}
+    )
+    solidity_metadata = {
+        **shard_report.metadata["solidity"],
+        "projects": [item.model_dump(mode="json") for item in inputs.index.projects],
+        "compilation": [],
+        "property_corpus_summary": base_report.metadata["solidity"]["property_corpus_summary"],
+    }
     report = AuditReport.model_validate(
         {
             **base_report.model_dump(mode="python"),
             "repository": shard_report.repository,
             "language_capability": language_capability,
+            "minimum_analysis_floor": floor,
+            "quality_gates": [
+                minimum_analysis_floor_quality_gate(floor),
+                *[
+                    gate
+                    for gate in base_report.quality_gates
+                    if gate.gate == "known_issue_taxonomy_critical_disposition"
+                ],
+            ],
+            "solidity_coverage": shard_report.solidity_coverage,
             "metadata": {
                 **base_report.metadata,
-                "solidity": shard_report.metadata["solidity"],
+                "solidity": solidity_metadata,
             },
         }
     )
@@ -1855,6 +1875,7 @@ def test_verify_run_records_manifest_bound_shard_cross_artifact_mismatch(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=inputs.discovery.root,
+        configuration_root=inputs.discovery.root,
         config=config,
     )
     assert current.status is RunVerificationStatus.CURRENT
@@ -1885,6 +1906,7 @@ def test_verify_run_records_manifest_bound_shard_cross_artifact_mismatch(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=inputs.discovery.root,
+        configuration_root=inputs.discovery.root,
         config=config,
     )
 
@@ -1943,11 +1965,12 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
         **shard_report.metadata["solidity"],
         "projects": [item.model_dump(mode="json") for item in inputs.index.projects],
         "compilation": [],
+        "property_corpus_summary": base_report.metadata["solidity"]["property_corpus_summary"],
     }
     report = AuditReport.model_validate(
         {
             **base_report.model_dump(mode="python"),
-            "schema_version": "1.2",
+            "schema_version": "1.4",
             "completed": False,
             "incomplete_reasons": [limitation],
             "repository": shard_report.repository,
@@ -1955,7 +1978,14 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
             "quality_status": AuditQualityStatus.INCOMPLETE,
             "run_status": AuditRunStatus.INCOMPLETE,
             "minimum_analysis_floor": floor,
-            "quality_gates": [minimum_analysis_floor_quality_gate(floor)],
+            "quality_gates": [
+                minimum_analysis_floor_quality_gate(floor),
+                *[
+                    gate
+                    for gate in base_report.quality_gates
+                    if gate.gate == "known_issue_taxonomy_critical_disposition"
+                ],
+            ],
             "solidity_coverage": shard_report.solidity_coverage,
             "metadata": {
                 **base_report.metadata,
@@ -1964,17 +1994,7 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
             },
         }
     )
-    manifest_report = AuditReport.model_validate(
-        {
-            **base_report.model_dump(mode="python"),
-            "repository": shard_report.repository,
-            "language_capability": language_capability,
-            "metadata": {
-                **base_report.metadata,
-                "solidity": shard_report.metadata["solidity"],
-            },
-        }
-    )
+    manifest_report = report
     run_dir = tmp_path / manifest_report.run_id
     _write_required_artifacts(run_dir, manifest_report)
     _write_shard_artifacts(
@@ -2038,6 +2058,7 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=inputs.discovery.root,
+        configuration_root=inputs.discovery.root,
         config=config,
     )
 

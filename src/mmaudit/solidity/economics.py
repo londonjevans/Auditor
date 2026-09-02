@@ -363,7 +363,7 @@ def plan_economic_simulations(
 
     if invariants is None:
         return []
-    profiles = set(invariants.protocol_profiles)
+    profiles = detected_protocol_profiles(invariants)
     kinds: set[EconomicSimulationKind] = set()
     invariant_ids: dict[EconomicSimulationKind, list[str]] = {}
     for invariant in invariants.invariants:
@@ -495,6 +495,15 @@ def plan_economic_simulations(
             )
         )
     return plans
+
+
+def detected_protocol_profiles(invariants: InvariantSuite) -> set[str]:
+    """Return host-detected typed profiles, with legacy projection fallback only."""
+
+    assessment = invariants.protocol_profile_assessment
+    if assessment is not None:
+        return {profile.value for profile in assessment.detected_profiles}
+    return set(invariants.protocol_profiles)
 
 
 def _economic_execution_limitation(

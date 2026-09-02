@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from pydantic import Field, field_validator, model_validator
 
 import mmaudit.models.candidate_revocation as candidate_revocation_module
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.benchmark.models import (
     AuthenticatedRunnerModelBenchmarkRunKind,
     ModelBenchmarkProviderResult,
@@ -47,6 +48,7 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicy,
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
+    require_trusted_openrouter_candidate_revocation_constraint,
 )
 from mmaudit.models.qualification import (
     CandidateModel,
@@ -93,10 +95,19 @@ from mmaudit.repository.privacy_provenance import (
 if TYPE_CHECKING:
     from mmaudit.models.route_runtime_evidence import VerifiedThreeRouteRuntimeEvidence
 
-type _CandidateRevocationCallRoots = tuple[Callable[[], bool], Callable[..., None]]
+type _CandidateRevocationClientGate = Callable[
+    [OpenRouterClient, ExactRouteConstraint | None],
+    None,
+]
+type _CandidateRevocationCallRoots = tuple[
+    Callable[[], bool],
+    Callable[..., None],
+    _CandidateRevocationClientGate,
+]
 _CANDIDATE_REVOCATION_CALL_ROOTS: _CandidateRevocationCallRoots = (
     candidate_revocation_callables_are_pristine,
     require_candidate_assignment_eligible,
+    require_trusted_openrouter_candidate_revocation_constraint,
 )
 
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
@@ -496,6 +507,7 @@ class CandidateBenchmarkClientFactory(Protocol):
         usage: UsageLedger,
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
+        candidate_revocation_route_constraint: ExactRouteConstraint | None,
         reasoning_policy: ReasoningPolicyArtifact,
         token_budgets: TokenBudgetConfig | None,
     ) -> OpenRouterClient: ...
@@ -503,6 +515,33 @@ class CandidateBenchmarkClientFactory(Protocol):
 
 class CandidateBenchmarkUnavailableError(ValueError):
     """Content-free provider error used to preserve a failed candidate denominator."""
+
+
+def _require_exact_candidate_route_custody(
+    *,
+    candidate: CandidateModel,
+    endpoint_evidence: OpenRouterModelDiscoveryEvidence,
+) -> ExactRouteConstraint | None:
+    """Fail fast when supplied route custody is not the exact candidate assignment."""
+
+    constraint = endpoint_evidence.endpoint_snapshot.exact_route_constraint
+    if constraint is None:
+        if candidate.exact_route_constraint_sha256 is not None:
+            raise ModelDiscoveryValidationError(
+                "candidate benchmark lacks exact candidate-role route custody"
+            )
+        return None
+    if (
+        type(constraint) is not ExactRouteConstraint
+        or constraint.role is not ExactRouteRole.CANDIDATE
+        or constraint.exact_model_id != candidate.exact_model_id
+        or constraint.provider_endpoint != candidate.approved_provider_endpoint
+        or candidate.exact_route_constraint_sha256 != constraint.constraint_sha256
+    ):
+        raise ModelDiscoveryValidationError(
+            "candidate benchmark lacks exact candidate-role route custody"
+        )
+    return constraint
 
 
 class _UnverifiedCandidateFailureProvider:
@@ -630,11 +669,16 @@ async def run_candidate_reasoning_profile_benchmarks(
     suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
     plan = CandidateReasoningProfileBenchmarkPlan.model_validate(plan.model_dump(mode="json"))
     function_defaults = run_candidate_reasoning_profile_benchmarks.__kwdefaults__
-    if type(_candidate_revocation_call_roots) is not tuple or len(
-        _candidate_revocation_call_roots
-    ) != 2:
+    if (
+        type(_candidate_revocation_call_roots) is not tuple
+        or len(_candidate_revocation_call_roots) != 3
+    ):
         raise ValueError("candidate benchmark revocation boundary changed")
-    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    (
+        trusted_revocation_pristine,
+        trusted_assignment_gate,
+        trusted_client_constraint_gate,
+    ) = _candidate_revocation_call_roots
     if (
         type(function_defaults) is not dict
         or function_defaults.get("_candidate_revocation_call_roots")
@@ -646,15 +690,33 @@ async def run_candidate_reasoning_profile_benchmarks(
         is not trusted_revocation_pristine
         or candidate_revocation_module.require_candidate_assignment_eligible
         is not trusted_assignment_gate
+        or require_trusted_openrouter_candidate_revocation_constraint
+        is not trusted_client_constraint_gate
+        or openrouter_module.require_trusted_openrouter_candidate_revocation_constraint
+        is not trusted_client_constraint_gate
         or not trusted_revocation_pristine()
     ):
         raise ValueError("candidate benchmark revocation boundary changed")
     for candidate in registry.candidates:
         for model_id in {candidate.exact_model_id, candidate.canonical_model_slug}:
             trusted_assignment_gate(
+                role=ExactRouteRole.CANDIDATE,
                 exact_model_id=model_id,
                 provider_endpoint=candidate.approved_provider_endpoint,
             )
+    validate_candidate_registry_discovery(
+        registry=registry,
+        run_manifest=discovery_manifest,
+        evidence=discovery_evidence,
+    )
+    evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
+    candidate_route_constraints = {
+        candidate.exact_model_id: _require_exact_candidate_route_custody(
+            candidate=candidate,
+            endpoint_evidence=evidence_by_model[candidate.exact_model_id],
+        )
+        for candidate in registry.candidates
+    }
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
         raise ValueError("supplemental reasoning benchmarks require a durable atomic cost ledger")
     if not budget.require_endpoint_cost_bound:
@@ -671,16 +733,10 @@ async def run_candidate_reasoning_profile_benchmarks(
         benchmark_suite=suite,
         explicitly_allowed=explicitly_allow_synthetic_egress,
     )
-    validate_candidate_registry_discovery(
-        registry=registry,
-        run_manifest=discovery_manifest,
-        evidence=discovery_evidence,
-    )
     reasoning_policy = build_reasoning_policy(config)
     if reasoning_policy.artifact_sha256 != plan.reasoning_policy_sha256:
         raise ValueError("supplemental plan differs from the effective reasoning policy")
     candidates = {item.exact_model_id: item for item in registry.candidates}
-    evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
     if any(route.exact_model_id not in candidates for route in plan.routes):
         raise ValueError("supplemental plan names a model outside the candidate registry")
     existing_runs = list(evidence_sink.runs)
@@ -715,6 +771,10 @@ async def run_candidate_reasoning_profile_benchmarks(
                 operator_api_key=operator_api_key,
                 reasoning_policy=reasoning_policy,
                 factory=factory,
+                candidate_revocation_route_constraint=(
+                    candidate_route_constraints[candidate.exact_model_id]
+                ),
+                candidate_revocation_client_gate=trusted_client_constraint_gate,
             )
             observed_usage = tuple(usage.records[usage_start:])
             raw_ledger_after = budget.atomic_ledger.snapshot()
@@ -800,11 +860,16 @@ async def run_candidate_registry_benchmarks(
     candidate_registry = CandidateRegistry.model_validate_json(candidate_registry.model_dump_json())
     benchmark_suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
     function_defaults = run_candidate_registry_benchmarks.__kwdefaults__
-    if type(_candidate_revocation_call_roots) is not tuple or len(
-        _candidate_revocation_call_roots
-    ) != 2:
+    if (
+        type(_candidate_revocation_call_roots) is not tuple
+        or len(_candidate_revocation_call_roots) != 3
+    ):
         raise ValueError("candidate benchmark revocation boundary changed")
-    trusted_revocation_pristine, trusted_assignment_gate = _candidate_revocation_call_roots
+    (
+        trusted_revocation_pristine,
+        trusted_assignment_gate,
+        trusted_client_constraint_gate,
+    ) = _candidate_revocation_call_roots
     if (
         type(function_defaults) is not dict
         or function_defaults.get("_candidate_revocation_call_roots")
@@ -816,15 +881,33 @@ async def run_candidate_registry_benchmarks(
         is not trusted_revocation_pristine
         or candidate_revocation_module.require_candidate_assignment_eligible
         is not trusted_assignment_gate
+        or require_trusted_openrouter_candidate_revocation_constraint
+        is not trusted_client_constraint_gate
+        or openrouter_module.require_trusted_openrouter_candidate_revocation_constraint
+        is not trusted_client_constraint_gate
         or not trusted_revocation_pristine()
     ):
         raise ValueError("candidate benchmark revocation boundary changed")
     for candidate in candidate_registry.candidates:
         for model_id in {candidate.exact_model_id, candidate.canonical_model_slug}:
             trusted_assignment_gate(
+                role=ExactRouteRole.CANDIDATE,
                 exact_model_id=model_id,
                 provider_endpoint=candidate.approved_provider_endpoint,
             )
+    validate_candidate_registry_discovery(
+        registry=candidate_registry,
+        run_manifest=discovery_manifest,
+        evidence=discovery_evidence,
+    )
+    evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
+    candidate_route_constraints = {
+        candidate.exact_model_id: _require_exact_candidate_route_custody(
+            candidate=candidate,
+            endpoint_evidence=evidence_by_model[candidate.exact_model_id],
+        )
+        for candidate in candidate_registry.candidates
+    }
     if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
         raise ValueError("candidate benchmarks require a shared durable atomic cost ledger")
     if not budget.require_endpoint_cost_bound:
@@ -848,11 +931,6 @@ async def run_candidate_registry_benchmarks(
         if evidence_sink.qualification_policy_sha256 != qualification_policy.policy_sha256:
             raise ValueError("candidate campaign qualification policy binding differs")
 
-    validate_candidate_registry_discovery(
-        registry=candidate_registry,
-        run_manifest=discovery_manifest,
-        evidence=discovery_evidence,
-    )
     preview_coordinates_supplied = (
         authenticated_runner_run_kind is not None or expected_request_cost_previews is not None
     )
@@ -896,7 +974,6 @@ async def run_candidate_registry_benchmarks(
             )
     if client_factory is None and evidence_sink is None:
         raise ValueError("real candidate benchmarks require a durable campaign evidence sink")
-    evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
     factory = client_factory or _build_concrete_client
     reasoning_policy = build_reasoning_policy(config)
     reports = list(evidence_sink.reports if evidence_sink is not None else ())
@@ -935,6 +1012,10 @@ async def run_candidate_registry_benchmarks(
                 operator_api_key=operator_api_key,
                 reasoning_policy=reasoning_policy,
                 factory=factory,
+                candidate_revocation_route_constraint=(
+                    candidate_route_constraints[candidate.exact_model_id]
+                ),
+                candidate_revocation_client_gate=trusted_client_constraint_gate,
                 pre_dispatch_rejection_observer=pre_dispatch_rejection_observer,
                 authenticated_runner_run_kind=authenticated_runner_run_kind,
                 expected_request_cost_previews=sealed_request_cost_previews,
@@ -992,6 +1073,7 @@ def _build_concrete_client(
     usage: UsageLedger,
     candidate: CandidateModel,
     provider_policy: OpenRouterProviderPolicy,
+    candidate_revocation_route_constraint: ExactRouteConstraint | None,
     reasoning_policy: ReasoningPolicyArtifact,
     token_budgets: TokenBudgetConfig | None,
 ) -> OpenRouterClient:
@@ -1003,6 +1085,7 @@ def _build_concrete_client(
         budget=budget,
         usage=usage,
         provider_policy=provider_policy,
+        candidate_revocation_route_constraint=candidate_revocation_route_constraint,
         reasoning_policy=reasoning_policy,
         token_budgets=token_budgets,
     )
@@ -1050,6 +1133,8 @@ async def _execute_candidate(
     operator_api_key: str,
     reasoning_policy: ReasoningPolicyArtifact,
     factory: CandidateBenchmarkClientFactory,
+    candidate_revocation_route_constraint: ExactRouteConstraint | None,
+    candidate_revocation_client_gate: _CandidateRevocationClientGate,
     pre_dispatch_rejection_observer: (
         Callable[[CandidateBenchmarkPreDispatchError], None] | None
     ) = None,
@@ -1085,6 +1170,7 @@ async def _execute_candidate(
                 usage=usage,
                 candidate=candidate,
                 provider_policy=provider_policy,
+                candidate_revocation_route_constraint=(candidate_revocation_route_constraint),
                 reasoning_policy=reasoning_policy,
                 token_budgets=(
                     config.token_budgets if expected_request_cost_previews is not None else None
@@ -1092,7 +1178,23 @@ async def _execute_candidate(
             )
             if type(created_client) is not OpenRouterClient:
                 raise TypeError("candidate benchmark client is not the concrete client")
-            client = created_client
+        except Exception as exc:
+            _observe_pre_dispatch_rejection(
+                pre_dispatch_rejection_observer,
+                stage=CandidateBenchmarkFailureStage.CLIENT_INITIALIZATION,
+                error=exc,
+            )
+            return (
+                await _unverified_failure_report(
+                    benchmark_suite=benchmark_suite,
+                    target=target,
+                ),
+                CandidateBenchmarkFailureStage.CLIENT_INITIALIZATION,
+                len(usage.records) - before_usage,
+            )
+        client = created_client
+        candidate_revocation_client_gate(client, candidate_revocation_route_constraint)
+        try:
             if client.effective_privacy_policy is None:
                 client.bind_effective_privacy_context(
                     effective_privacy_policy=effective_privacy_policy,
