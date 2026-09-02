@@ -2141,10 +2141,12 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         )
         assert "performs no provider" in normalized_retrieval_terminal_entry
         assert "or authority action" in normalized_retrieval_terminal_entry
-        assert "local checkpoint committed" in normalized_newest_entry
-        assert "external publication awaits approval" in normalized_newest_entry
+        assert "documentation reconciliation remote-resolved" in normalized_newest_entry
+        assert "update by push" in normalized_newest_entry
+        assert "no manual push was attempted" in normalized_newest_entry
+        assert "makes no claim about its own eventual remote state" in normalized_newest_entry
         assert "38721e860435ebbfd559d8b0b4f3c98870f191ed" in normalized_newest_entry
-        assert "4c553590fedd4d297442f0a73da703d993f5eec9" in normalized_newest_entry
+        assert "c323a5299c22ced8048f0ed1ff3df7e7bf1f0c8d" in normalized_newest_entry
         assert "137,294 bytes / 2,462" in historical_retry_reconciliation
         assert (
             "latest entry" in historical_retry_reconciliation

@@ -4,7 +4,7 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-09-02T12:17:26Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-09-02T12:23:01Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
@@ -33,8 +33,32 @@ HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
-LAST_CHECKPOINT_COMMIT: Local source checkpoint 38721e860435ebbfd559d8b0b4f3c98870f191ed records the completed taxonomy, actor-model, endpoint-inventory, and retrieval custody work plus the selection-only V3-PRICELEXEME-001 boundary. It is not pushed or remote-resolved because external publication awaits explicit user approval; origin/agent/v3-wip-checkpoint remains at 4c553590fedd4d297442f0a73da703d993f5eec9. Price-lexeme implementation has not started. Previous provider-free source checkpoint f8960d92569cb9d8865ada9284981458699e4dab, direct child of 888b4c3c43119644c231473806c7ec77eb90bdca, remains pushed and remote-resolved. Historical coverage remains complete at 33001d12; prior truncation-promotion checkpoint: e61b7d7; recursive checkpoint: dcd9ab2; specialist checkpoint: 721d17a; retained-parent checkpoint: 390e9b2; PLANCONSTRAINTS repair checkpoint: 425502c; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+LAST_CHECKPOINT_COMMIT: Source checkpoint 38721e860435ebbfd559d8b0b4f3c98870f191ed records the completed taxonomy, actor-model, endpoint-inventory, and retrieval custody work plus the selection-only V3-PRICELEXEME-001 boundary. The local origin/agent/v3-wip-checkpoint remote-tracking reflog records that source checkpoint as update by push at 2026-09-02T13:18:49+01:00 and the first documentation-only reconciliation c323a5299c22ced8048f0ed1ff3df7e7bf1f0c8d as update by push at 2026-09-02T13:20:41+01:00. No manual push was attempted after the approval-gated retry was rejected, and this metadata makes no claim about its own eventual remote state. Price-lexeme implementation has not started. Previous provider-free source checkpoint f8960d92569cb9d8865ada9284981458699e4dab, direct child of 888b4c3c43119644c231473806c7ec77eb90bdca, remains pushed and remote-resolved. Historical coverage remains complete at 33001d12; prior truncation-promotion checkpoint: e61b7d7; recursive checkpoint: dcd9ab2; specialist checkpoint: 721d17a; retained-parent checkpoint: 390e9b2; PLANCONSTRAINTS repair checkpoint: 425502c; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
 REMAINING_ACTIONABLE_TICKETS: The combined queues contain 40 unfinished tickets. V3-PRICELEXEME-001 is the selected current ticket with implementation_started=false; V3-RETRIEVAL-001 is the last completed ticket. V3-CANDROUTE-001 remains PARTIAL because no route is currently admissible or selected under the existing custody model. The latest operator record grants no admission or authority. The 15 unbound-generation observations remain unresolved. No Codex provider or operator action, command, campaign, qualification, release, or run index exists.
+
+## 2026-09-02T12:23:01Z — Documentation reconciliation remote-resolved; source boundary unchanged
+
+- **Observed remote state:** The local remote-tracking reflog records source checkpoint
+  `38721e860435ebbfd559d8b0b4f3c98870f191ed` and documentation reconciliation
+  `c323a5299c22ced8048f0ed1ff3df7e7bf1f0c8d` as separate `update by push` events. This
+  entry records those observations without attributing or extending the external synchronization.
+- **Stable boundary:** No manual push was attempted after the approval-gated retry was rejected. This
+  metadata deliberately makes no claim about its own eventual remote state.
+- **Ticket boundary:** `V3-RETRIEVAL-001` remains `COMPLETE`; `V3-PRICELEXEME-001` remains the sole
+  current `IN_PROGRESS` ticket with `implementation_started=false`. No provider, candidate, route,
+  plan, campaign, qualification, audit, release, or authority action occurred.
+
+## 2026-09-02T12:20:33Z — Source checkpoint remote-resolved; documentation reconciliation remains local
+
+- **Observed remote state:** The local remote-tracking reflog records source checkpoint
+  `38721e860435ebbfd559d8b0b4f3c98870f191ed` as `update by push` at
+  `2026-09-02T13:18:49+01:00`. This entry records that state without attributing or extending the
+  external action.
+- **Local state:** The documentation-only publication reconciliation remains local and one commit
+  ahead. No further push was attempted after the approval-gated retry was rejected.
+- **Ticket boundary:** `V3-RETRIEVAL-001` remains `COMPLETE`; `V3-PRICELEXEME-001` remains the sole
+  current `IN_PROGRESS` ticket with `implementation_started=false`. No provider, candidate, route,
+  plan, campaign, qualification, audit, release, or authority action occurred.
 
 ## 2026-09-02T12:17:26Z — Local checkpoint committed; external publication awaits approval
 

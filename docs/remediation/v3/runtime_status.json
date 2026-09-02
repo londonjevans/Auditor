@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-09-02T12:17:26Z",
+  "updated_at": "2026-09-02T12:23:01Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -1114,7 +1114,7 @@
     "current_execution_next_action": "STOP_AFTER_V3_LEARNING_001_PHASE_1_COMPLETE; NO_SUCCESSOR_SELECTED; MANAGED_RUN_READY_REMAINS_FALSE; KEEP_AUTONOMY_AND_LEARNING_PHASE_2_DISABLED; REQUIRE_SEPARATE_CANDIDATE_RESELECTION"
   },
   "last_checkpoint_commit": "38721e860435ebbfd559d8b0b4f3c98870f191ed",
-  "last_checkpoint_commit_scope": "LOCAL_SOURCE_CHECKPOINT_NOT_PUSHED_OR_REMOTE_RESOLVED; completed taxonomy, actor-model, endpoint-inventory, and retrieval custody plus selection-only V3-PRICELEXEME-001 boundary; external publication awaits explicit user approval and origin/agent/v3-wip-checkpoint remains at 4c553590fedd4d297442f0a73da703d993f5eec9; AF7A24E price-form refusal and effort-high decision preserved; price-lexeme implementation has not started; active plan unchanged; operator_results, provider/network execution, credentials, private ledgers, REAL completions, commands, run indices, candidate or route selection, campaigns, qualification, audit, authority, and release are excluded",
+  "last_checkpoint_commit_scope": "SOURCE_AND_FIRST_DOCUMENTATION_CHECKPOINTS_REMOTE_TRACKING_REF_RESOLVED; local origin/agent/v3-wip-checkpoint reflog records 38721e860435ebbfd559d8b0b4f3c98870f191ed as update by push at 2026-09-02T13:18:49+01:00 and c323a5299c22ced8048f0ed1ff3df7e7bf1f0c8d as update by push at 2026-09-02T13:20:41+01:00; no manual push attempted after approval-gated retry rejection; this metadata makes no claim about its own eventual remote state; completed taxonomy, actor-model, endpoint-inventory, and retrieval custody plus selection-only V3-PRICELEXEME-001 boundary; AF7A24E price-form refusal and effort-high decision preserved; price-lexeme implementation has not started; active plan unchanged; operator_results, provider/network execution, credentials, private ledgers, REAL completions, commands, run indices, candidate or route selection, campaigns, qualification, audit, authority, and release are excluded",
   "real_model_calls": {
     "attempted": null,
     "succeeded": null,
