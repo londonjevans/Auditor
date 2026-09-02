@@ -3,6 +3,68 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-02T13:51Z — **`V3-PRICELEXEME-001` mechanism landed and is sound, but the capture does not reach validation — live test, $0**
+
+The lexeme-custody design is right and the guards are strict in the correct way. The live test still
+fails, so the captured token is not surviving to the pricing validator. Provider-free; ledger
+unchanged at 57 entries / `0.68118684` USD.
+
+### 1. What landed, and why the design is right
+
+`src/mmaudit/models/price_lexemes.py` introduces a decoder-issued `CapturedOpenRouterJSONNumber`
+token. `captured_openrouter_json_number_raw` accepts **only** that exact type and explicitly rejects
+bare `Decimal` and subclasses, so a value cannot masquerade as captured. `_request_metadata` selects
+`_price_float_decoder`/`_price_int_decoder` and calls `_price_materializer` whenever a
+`price_lexeme_layout` is supplied, and `MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT` /
+`ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT` are passed at five call sites (`openrouter.py:11236, 11291, 11379,
+11421, 11430`). `_validate_endpoint_pricing` now accepts a non-string price **only** via
+`_captured_raw(...)`, still failing closed with the existing named reason when capture is absent.
+
+That is exactly the shape requested: exactness made provable, requirement unchanged, no tolerance for
+loss. **Existing sealed evidence still replays** — bundle
+`29702a02f52626deca38ff36401eb3cb7bb4602f07677881760ad26ba40df5d4` verifies `VALID / NONCREDITING /
+NONAUTHORIZING` with its closed 4-entry ledger unchanged, so byte-identity held.
+
+### 2. The live test still fails, identically
+
+Successor plan `b1880eb6ca8659ae9856ee9e14699a3bea5a974530c8843e4da2fe458040e383` emitted cleanly for
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` with `--refresh-endpoint-inventory`. Constrained discovery
+then fails with the unchanged message:
+
+```
+mmaudit failed safely: endpoint prices must be exact decimal strings
+```
+
+By inspection that message is now reachable only at `endpoint_snapshots.py:1459`, i.e. after
+`isinstance(raw_price, str)` is false **and** `_captured_raw(raw_price)` returned `None`. So the value
+arriving at the validator is neither a string nor a genuine captured token.
+
+### 3. Hypothesis — flagged as a hypothesis, not a finding
+
+Capture is installed on the metadata **fetch**, but the constrained-snapshot path appears to receive
+pricing through something that does not preserve the token. `models list-endpoints` fetches the same
+endpoint metadata successfully for this route, so the fetch itself is not the problem; the difference
+is that discovery additionally builds a constrained endpoint snapshot and validates pricing. The most
+likely cause is an intermediate serialization, model validation, copy, or re-parse between fetch and
+`_validate_endpoint_pricing` that reduces `CapturedOpenRouterJSONNumber` to a plain value — which the
+deliberately strict type check then correctly refuses.
+
+**Requested:** trace the payload from `_request_metadata` through constrained snapshot construction to
+`_validate_endpoint_pricing` for a numeric-priced route, and confirm whether the token survives. If it
+does not, either preserve it across that boundary or carry the captured lexeme alongside the payload
+so validation can still prove exactness. A provider-free regression using a recorded numeric-priced
+fixture driven through the **full discovery path** — not the validator in isolation — would have
+caught this and should be added.
+
+### 4. Status
+
+`V3-PRICELEXEME-001` is recorded `COMPLETE`, but the acceptance test in its own ticket — that the
+route becomes admissible — does not pass. Suggest reopening as `PARTIAL`. This is the same pattern as
+`V3-CANDROUTE-001`: mechanism complete, real-route restoration unproven, and only an operator live run
+can distinguish the two. Nothing else is blocked behind anything else: this single route is still the
+only one of 112 surveyed endpoints satisfying every substantive candidate constraint, and
+`completed_real_audits` remains `0`.
+
 ## 2026-09-01T04:49Z — **OPERATOR DECISION: pursue lossless price-lexeme custody. The V3-PRICEFORM-001 refusal is upheld, and answered.**
 
 Both outstanding questions were answered by Codex, both correctly. This entry records the operator
