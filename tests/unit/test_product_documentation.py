@@ -1952,6 +1952,11 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         newest_entry = " ".join(
             raw_worklog.split("\n## ", maxsplit=1)[1].split("\n## ", maxsplit=1)[0].split()
         )
+        retrieval_terminal_entry = " ".join(
+            raw_worklog.split("## 2026-09-02T12:10:08Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
+        )
         pricelexeme_selection_entry = " ".join(
             raw_worklog.split("## 2026-09-02T08:52:48Z", maxsplit=1)[1]
             .split("\n## ", maxsplit=1)[0]
@@ -2122,19 +2127,24 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         assert "Codex" in worklog and "private" in worklog.lower()
         assert "full admission for one launch" in worklog.lower()
         normalized_newest_entry = newest_entry.lower()
+        normalized_retrieval_terminal_entry = retrieval_terminal_entry.lower()
         normalized_selection_entry = pricelexeme_selection_entry.lower()
         assert "selection does not admit or select a candidate route" in normalized_selection_entry
         assert "grant provider or runner authority" in normalized_selection_entry
         assert "or authority action occurred" in normalized_selection_entry
-        assert "terminal validation and inventory reconciled" in normalized_newest_entry
-        assert "8156 passed, 22 skipped, 12 warnings" in normalized_newest_entry
-        assert "sole `in_progress` ticket" in normalized_newest_entry
-        assert "implementation_started=false" in normalized_newest_entry
+        assert "terminal validation and inventory reconciled" in normalized_retrieval_terminal_entry
+        assert "8156 passed, 22 skipped, 12 warnings" in normalized_retrieval_terminal_entry
+        assert "sole `in_progress` ticket" in normalized_retrieval_terminal_entry
+        assert "implementation_started=false" in normalized_retrieval_terminal_entry
         assert "changes no pricing decoder, retry behavior, runtime configuration" in (
-            normalized_newest_entry
+            normalized_retrieval_terminal_entry
         )
-        assert "performs no provider" in normalized_newest_entry
-        assert "or authority action" in normalized_newest_entry
+        assert "performs no provider" in normalized_retrieval_terminal_entry
+        assert "or authority action" in normalized_retrieval_terminal_entry
+        assert "local checkpoint committed" in normalized_newest_entry
+        assert "external publication awaits approval" in normalized_newest_entry
+        assert "38721e860435ebbfd559d8b0b4f3c98870f191ed" in normalized_newest_entry
+        assert "4c553590fedd4d297442f0a73da703d993f5eec9" in normalized_newest_entry
         assert "137,294 bytes / 2,462" in historical_retry_reconciliation
         assert (
             "latest entry" in historical_retry_reconciliation

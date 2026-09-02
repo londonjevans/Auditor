@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-09-02T12:10:08Z",
+  "updated_at": "2026-09-02T12:17:26Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -1113,8 +1113,8 @@
     "current_execution_status": "V3_LEARNING_001_PHASE_1_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_NONAUTHORIZING; MANAGED_TOOLCHAIN_PHASE_1_AND_CORRECTED_RUNTIME_ADMISSION_MECHANISM_REMAIN_COMPLETE_NONAUTHORIZING; AUTONOMY_PHASE_2_PAUSED; OPERATOR_REPORTED_PRIVATE_REPLAY_ADMITTED_ONE_FAILED_CAMPAIGN; DEEPSEEK_CANDIDATE_NONRUNNABLE; MANAGED_RUN_READY_FALSE; NO_CODEX_PROVIDER_NETWORK_CREDENTIAL_COMMAND_RUN_INDEX_RETRY_CONFIGURATION_CHANGE_OR_AUTHORITY",
     "current_execution_next_action": "STOP_AFTER_V3_LEARNING_001_PHASE_1_COMPLETE; NO_SUCCESSOR_SELECTED; MANAGED_RUN_READY_REMAINS_FALSE; KEEP_AUTONOMY_AND_LEARNING_PHASE_2_DISABLED; REQUIRE_SEPARATE_CANDIDATE_RESELECTION"
   },
-  "last_checkpoint_commit": "4c553590fedd4d297442f0a73da703d993f5eec9",
-  "last_checkpoint_commit_scope": "CURRENT_HEAD_REMOTE_RESOLVED_OPERATOR_DECISION_BOUNDARY; AF7A24E price-form refusal and effort-high decision preserved; historical operator record queues V3-PRICELEXEME-001 while the newer direct directive selects it locally after V3-RETRIEVAL-001 completion; completed taxonomy and retrieval changes remain uncommitted at this field boundary; price-lexeme implementation has not started; active plan unchanged; operator_results, provider/network execution, credentials, private ledgers, REAL completions, commands, run indices, candidate or route selection, campaigns, qualification, audit, authority, and release are excluded",
+  "last_checkpoint_commit": "38721e860435ebbfd559d8b0b4f3c98870f191ed",
+  "last_checkpoint_commit_scope": "LOCAL_SOURCE_CHECKPOINT_NOT_PUSHED_OR_REMOTE_RESOLVED; completed taxonomy, actor-model, endpoint-inventory, and retrieval custody plus selection-only V3-PRICELEXEME-001 boundary; external publication awaits explicit user approval and origin/agent/v3-wip-checkpoint remains at 4c553590fedd4d297442f0a73da703d993f5eec9; AF7A24E price-form refusal and effort-high decision preserved; price-lexeme implementation has not started; active plan unchanged; operator_results, provider/network execution, credentials, private ledgers, REAL completions, commands, run indices, candidate or route selection, campaigns, qualification, audit, authority, and release are excluded",
   "real_model_calls": {
     "attempted": null,
     "succeeded": null,
