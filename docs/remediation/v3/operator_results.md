@@ -3,6 +3,60 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T14:30Z — **OPERATOR CORRECTION: the key-order root cause was WRONG. `V3-PRICEKEYORDER-001` should be withdrawn.**
+
+Codex's rebuttal is correct and mine was not. Recording this prominently because a wrong root cause
+in this file is worse than no root cause. Ledger unchanged at 57 entries / `0.68118684` USD.
+
+### 1. What I got wrong
+
+I reported that `OpenRouterPricingOverrideTier` rejecting unsorted provider keys was the root cause,
+based on reproducing the rejection directly. **That reproduction bypassed the ingest path.** Raw
+provider override objects traverse `_canonicalize_openrouter_pricing_overrides`
+(`endpoint_snapshots.py:1789`) before reaching the sealed internal tier model, so by the time the
+model validates, keys are already sorted. An internal type requiring sorted input is a legitimate
+invariant when its callers canonicalize first — not a defect.
+
+Codex's evidence is stronger than mine: an exhaustive **120-permutation provider-ingest assay
+produced one pricing hash and one snapshot hash**. Key order demonstrably does not affect real
+ingest. I tested a component in isolation and generalised to the system.
+
+**`V3-PRICEKEYORDER-001` should be withdrawn as premised on operator error.** Do not implement it.
+That is the second time in this investigation I have supplied a false premise — first that this route
+publishes numeric billable prices, now that key order blocks ingest. Both came from asserting a cause
+rather than tracing one through the path that actually runs.
+
+### 2. What remains true and independently verified
+
+- Every billable price on `x-ai/grok-4.6=amazon-bedrock/us-west-2` is an exact decimal string;
+  `overrides` is a tiered schedule with `min_prompt_tokens: 200000` doubling prompt and completion.
+- Constrained discovery for that route **still fails**, live, with
+  `PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`. Retested after
+  `V3-MODELREFRESH-001` tier-schedule custody. That failure is a fact regardless of my misdiagnosis.
+- Given a correctly-built tier, `ExactRoutePricingSchedule.build` produces exactly the
+  operator-decided maximum: `prompt 0.0000044`, `completion 0.0000132`, `web_search 0.01` carried
+  from base, `projection_method='MMAUDIT_TIERED_MAXIMUM_RATE_V1'`,
+  `conservative_for_sub_threshold_prompts=True`. The projection logic is correct.
+- It is still the only route of 112 surveyed live endpoints satisfying every substantive candidate
+  constraint, and `completed_real_audits` is still `0`.
+
+### 3. Codex's own diagnosis is the one to follow
+
+Its recorded position — that the gap is "refresh's flat-only parser, route state, comparison, pricing
+authority, and preflight custody", with `V3-PRICECAPTIER-001` still `PARTIAL` — is consistent with
+every observation, including that discovery fails the cap predicates while the schedule builder works
+in isolation. **Follow that, not my ticket.** Completing `V3-PRICECAPTIER-001` so the derived maximum
+is bound into the constrained discovery snapshot is the indicated next step; the operator has no
+better hypothesis to offer.
+
+### 4. Operator practice note, for whatever it is worth
+
+Both my false premises shared a shape: I reproduced a failure against an isolated component and
+reported it as the system's cause. The one diagnostic that has actually been reliable is running the
+real command and reading the typed failure it emits. When I next assert a root cause it should be
+traced end to end through the executing path, or offered explicitly as a hypothesis with its test
+stated.
+
 ## 2026-09-03T11:38Z — **ROOT CAUSE FOUND AND VERIFIED: override tier rejected for JSON key ORDER. One-line class of fix.**
 
 The sole viable candidate route is blocked by an alphabetical key-ordering requirement on a JSON

@@ -1986,8 +1986,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   fail closed.
 - **Validation:** `280` focused tests, `1251` affected tests with `2` warnings, and `241`
   adversarial focused tests passed. Release-schema and autonomy-inventory generation are current;
-  Ruff, strict mypy over `233` source files, strict JSON, and diff integrity passed. No terminal full
-  suite was run or credited.
+  their focused governance matrix passes `62`; Ruff, strict mypy over `233` source files, strict
+  JSON, and diff integrity passed. One numeric-loopback integration explicitly skipped because the
+  managed environment denied listener creation and earns no integration pass credit; unit
+  MockTransport coverage remains. No terminal full suite was run or credited.
 - **Remaining limitation:** The recorded xAI schedule derives prompt `0.0000044` and completion
   `0.0000132`, but independent `input_cache_write='0'` and `web_search='0.01'` cap constraints still
   reject it. Refresh and provider-free live preflight remain flat-only, so the primary xAI/preflight
@@ -2040,7 +2042,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   mypy.
 - **Dependencies:** `V3-PRICEOVERRIDES-001` `COMPLETE`, `V3-PRICECAPTIER-001` `PARTIAL` — both
   correct; the maximum-rate schedule builds successfully once the tier validates.
-- **Status:** `QUEUED`
+- **Status:** `WITHDRAWN_OPERATOR_ERROR`
+- **Withdrawal:** Premised on operator error. Raw overrides already traverse
+  `_canonicalize_openrouter_pricing_overrides` before the sealed model; a 120-permutation ingest
+  assay yields one pricing hash and one snapshot hash. Key order does not affect ingest. Do not
+  implement. See the operator record correction of 2026-09-03.
 - **Next action:** Implement order-insensitive tier ingest and surface the discarded reason. Do not
   select a candidate, launch a campaign, emit an operator command, or grant any authority.
 
@@ -2168,11 +2174,37 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   completion, and generation-refetch boundaries reject before secrets, reservation, usage/ledger
   mutation, or provider transport. Immutable closure seals reject coherent anchor replacement and
   selected instance-delegator retargeting. Adjacent explicitly pinned endpoints remain eligible.
-- **Next action:** No provider or operator action is current. Fresh candidate reselection,
-  qualification, and promotion remain separate prerequisites before `V3-SINGLE-AUDIT-001`; do not
-  infer a run index or reuse the rejected assignment. Schema-invalid structured output was not
-  retried on the same route at this ticket boundary; later `V3-RETRYCONT-001` completed the explicit
-  package-pinned path. This ticket itself changed neither retry code nor retry configuration.
+- **Resumed scope 2026-09-03:** Carry retained tier schedules through provider-free refresh,
+  deterministic drift comparison, durable pricing custody, and live-route preflight. Bind the exact
+  ordered schedule and conservative maximum without changing flat-route bytes or treating the
+  recorded xAI route as admissible while its independent component-cap constraints remain.
+- **Tier-schedule result 2026-09-03:** Exact base-plus-override schedules now survive refresh source
+  parsing, live snapshots, deterministic drift comparison, durable route and per-attempt pricing
+  evidence, resolver authority, endpoint registration, and live preflight. Every downstream consumer
+  joins the complete ordered schedule and its digest while provider caps, reservations, usage, and
+  reconciliation use the same conservative maximum. Threshold-only changes are detected even when
+  maxima match; unavailable, mismatched, or tampered schedules fail closed. Flat-route evidence omits
+  every new field and preserves prior bytes. Published nested schemas now expose the runtime tier-field
+  allowlist and canonical-decimal bounds.
+- **Tier-schedule validation:** The core/runtime/OpenRouter/schema matrix passes `245` tests; the
+  schema/route/endpoint matrix passes `262`; an independent affected review passes `471`; and the
+  composed schedule-to-cap/reservation/attempt regressions pass `2`. A broader downstream attempt
+  reached `1064` passes before five macOS `/var`-symlink fixture refusals and an intentional stop; the
+  exact five pass with direct `/private/tmp` custody, followed by `15` refresh-pricing assurance and
+  `9` scheduler runtime/recovery passes. Canonical release-schema generation, scoped Ruff, strict
+  mypy over `233` source files, import-order probes, and diff integrity pass. No terminal full-suite
+  credit is claimed.
+- **Remaining limitations:** No successful current provider snapshot, live GitHub artifact round
+  trip, automatic real benchmarking, lineage re-evaluation, qualification, promotion, or stock live
+  authority quartet exists. The recorded xAI route still fails independent
+  `input_cache_write='0'` and `web_search='0.01'` cap constraints, so it remains unselected and not
+  proven admissible. Schema-invalid structured output was not retried on the same route at the
+  historical boundary; later `V3-RETRYCONT-001` completed the explicit package-pinned path. This
+  slice changes neither retry code nor retry configuration.
+- **Next action:** `STOP` at this provider-free `PARTIAL` boundary. Current and next tickets are
+  unselected. Re-evaluate the independent component-cap policy or any queued ticket only as a newly
+  selected bounded work unit; do not access a provider, infer a run index, select a route, mutate the
+  plan/configuration/ledger, or grant authority.
 
 ### QUEUE-BOOTSTRAP-001
 
@@ -2917,29 +2949,34 @@ and report serialization.
 
 ## Current next action
 
-At `2026-09-03T11:27:12Z`, exact operator record
-`f37f46d56a544af4bef6e2ef662dc9a8e5b23a20f3789391c56aae1bb6968e5f` (`173635` bytes /
-`3084` lines; latest `2026-09-03T08:46Z`; remote-resolved commit `af16299f...`) supersedes the
-route-specific numeric-price premise: all reported direct billable values and nested override prices
-are exact strings, while `overrides` is a list and was the first parser blocker. The local
-provider-free PRICECAPTIER slice now derives exact schedule-wide Decimal maxima with inherited
-partial tiers, later-tier wins, per-state cache dominance, and proof/schedule hash binding. The
-provider cap and request-cost/reserve/spend/reconcile paths consume the same conservative maximum;
-flat-route bytes remain unchanged. Unsupported or unavailable schedules fail closed with
-`PRICE_CAP_NOT_EXPRESSIBLE` and `PRICE_CAP_PROOF_UNAVAILABLE`, and nested numeric override lexemes
-fail closed.
+At `2026-09-03T11:38Z`, exact operator record
+`37330cfdbc960dbf24691ffbafad10791abf2363767d9adaa4409458c0519cb3` (`176768` bytes /
+`3140` lines; latest `2026-09-03T11:38Z`; remote-resolved commit `a9bc614f...`) reports that direct
+construction rejects provider-order override keys while sorted construction yields the expected
+schedule projection, and queues `V3-PRICEKEYORDER-001`. Local inspection finds the full provider
+ingest already canonicalizes raw tier keys before construction, so the reported provider-path root
+cause and sole-blocker conclusion are not yet confirmed or adopted. The prior response-shape fact
+remains: direct billable values and nested override prices are exact strings, while `overrides` is a
+list.
 
-`V3-PRICECAPTIER-001` is terminal `PARTIAL`: the recorded xAI maxima are prompt `0.0000044` and
-completion `0.0000132`, but independent `input_cache_write='0'` and `web_search='0.01'` constraints
-still reject the route, while refresh and live preflight remain flat-only. `V3-PRICELEXEME-001`
-remains terminal provider-free `PARTIAL` defense-in-depth and nonblocking, and
-`V3-PRICEOVERRIDES-001` remains `COMPLETE`. Current and next tickets are `UNSELECTED`;
-PRICEOVERRIDES is the last complete ticket, PRICECAPTIER is the last partial ticket, and the combined
-queues contain `40` unfinished tickets. The xAI route remains unselected and not proven admissible.
-The active model plan,
-configuration, retry behavior, and 57-entry / `0.68118684` USD ledger remain unchanged; no
-provider/network action, operator command, campaign, run index, qualification, runtime authority,
-audit, release action, external publication, or other authority is authorized.
+At `2026-09-03T13:58:58Z`, the bounded `V3-MODELREFRESH-001` tier-schedule slice closes
+provider-free `PARTIAL`. Exact ordered schedules and their conservative maxima now traverse refresh,
+drift, durable pricing evidence, endpoint registration, live preflight, reservation, usage, recovery,
+reporting, and assurance. Schedule hashes detect equal-maximum threshold drift; unavailable,
+mismatched, or tampered schedules fail closed; flat-route bytes remain unchanged. The recorded xAI
+route still fails the independent `input_cache_write='0'` and `web_search='0.01'` component-cap
+constraints and is neither selected nor proven admissible. No current provider snapshot, live
+artifact round trip, automatic real benchmark, lineage re-evaluation, qualification, promotion, or
+stock live authority quartet exists, and no terminal full-suite credit is claimed.
+
+Current and next tickets are `UNSELECTED`; `V3-PRICEOVERRIDES-001` remains last complete,
+`V3-MODELREFRESH-001` is last partial, and the combined queues retain `41` unfinished tickets.
+`V3-PRICEKEYORDER-001` remains queued and unselected because the full ingest already canonicalizes
+raw tier keys. Re-evaluate component-cap policy or any queued work only under a separately selected
+bounded ticket. The active model plan, configuration, retry behavior, and 57-entry / `0.68118684`
+USD ledger remain unchanged; no provider/network action, operator command, campaign, run index,
+qualification, runtime authority, audit, release action, external publication, or other authority is
+authorized.
 
 ## Historical next action — c627 replay boundary (superseded)
 
