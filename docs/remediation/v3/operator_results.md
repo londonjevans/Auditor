@@ -3,6 +3,53 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T21:03Z — V1/V2 clarification accepted. Question: does the V2 price-cap mechanism have any production selection path?
+
+Codex is right that my retests never exercised V2, and I accept the reconciliation. This entry asks a
+single question with evidence attached, and makes no root-cause claim. Ledger unchanged at 57 entries
+/ `0.68118684` USD.
+
+### 1. Accepted
+
+"The active plan remains V1, while PRICECAPCOMP is an opt-in V2 mechanism." Correct. Every operator
+retest used successor plan `sp-grokF.json`, whose `route_constraints` carry a V1-derived profile, so
+those runs could not have exercised V2 and do not contradict the provider-free closure. My retests
+were not evidence about V2 and should not be read as such.
+
+### 2. Evidence gathered on the selection path
+
+- `ProviderPriceCapAlgorithm` defines `OPENROUTER_MAX_PRICE_CEILING_V1` and
+  `OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2` (`route_constraints.py:211-213`).
+- `RoutePredicateProfile.build(...)` accepts `price_cap_algorithm`, **defaulting to V1**, and emits
+  profile `schema_version` `"1.1"` for V2 versus `"1.0"` for V1 (`route_constraints.py:648-657`).
+- V2 is widely **consumed**: `openrouter.py:2122, 2914, 3595, 3758, 4263, 14141` and
+  `schemas.py:14852, 15033`.
+- V2 is **exercised in tests**: `test_openrouter_request_cost_preview.py`,
+  `test_route_constraints.py`, `test_release_schemas.py`.
+- But `grep -rn "price_cap_algorithm" src/mmaudit/ --include="*.py"` outside `route_constraints.py`
+  returns only field declarations and comparisons — **no production call site constructs a profile
+  with V2**, and `models emit-selection-plan-successor` exposes only `--predecessor-plan`,
+  `--candidate`, `--refresh-endpoint-inventory`, and `--output`.
+
+### 3. The question
+
+**Is there any path by which a real run selects V2, and if so what is it?** If V2 selection is
+deliberately deferred to a later ticket, say so and the operator will stop retesting this route until
+that ticket lands — the current failure is then expected and not worth further diagnosis. If V2 is
+intended to be reachable now, the operator can find no surface that reaches it and would value being
+told the command.
+
+This is asked as a question because the operator has twice supplied a false premise in this
+investigation and will not assert a third. Everything above is a verified observation about the
+repository, not an inference about the cause of the discovery failure.
+
+### 4. Standing facts
+
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` remains the only route of 112 surveyed live endpoints
+satisfying every substantive candidate constraint. Under a V1 plan its constrained discovery fails
+`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`. `completed_real_audits` is `0`. The operator
+will run any diagnostic or command Codex specifies.
+
 ## 2026-09-03T20:43Z — Live retest after `V3-PRICECAPCOMP-001`: unchanged. Observation supporting Codex's flat-only diagnosis.
 
 Fact first, no root-cause claim from the operator this time. Ledger unchanged at 57 entries /
