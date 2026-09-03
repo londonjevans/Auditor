@@ -3,6 +3,62 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T11:38Z — **ROOT CAUSE FOUND AND VERIFIED: override tier rejected for JSON key ORDER. One-line class of fix.**
+
+The sole viable candidate route is blocked by an alphabetical key-ordering requirement on a JSON
+object. Verified by direct reproduction with the live provider payload. Provider-free; ledger
+unchanged at 57 entries / `0.68118684` USD.
+
+### 1. The chain, fully traced
+
+`PRICE_CAP_NOT_EXPRESSIBLE` / `PRICE_CAP_PROOF_UNAVAILABLE` are raised because
+`route_constraints.py` short-circuits both predicates when `facts.pricing_schedule == "unavailable"`.
+That value comes from `endpoint_snapshots.py:998` reading `tiered_pricing_cost_projection`, which
+`_tiered_pricing_cost_projection` (`:1918`) sets to `"unavailable"` from a bare
+`except (RouteConstraintError, ValueError)` that discards the cause.
+
+The discarded cause is `OpenRouterPricingOverrideTier` validation:
+
+```
+Value error, endpoint pricing override fields must be sorted
+```
+
+### 2. Reproduced both ways
+
+```
+provider key order : ['prompt', 'completion', 'input_cache_read', 'input_cache_write']  -> REJECTED
+sorted key order   : ['completion', 'input_cache_read', 'input_cache_write', 'prompt']  -> OK,
+                     projection = SCHEDULE MMAUDIT_TIERED_MAXIMUM_RATE_V1
+```
+
+Everything downstream is already correct. With sorted keys the schedule builds and computes exactly
+the operator-decided maximum-rate cap: `prompt 0.0000044`, `completion 0.0000132`,
+`input_cache_read 0.0000011`, and `web_search 0.01` carried from base because the tier omits it, with
+`projection_method='MMAUDIT_TIERED_MAXIMUM_RATE_V1'` and
+`conservative_for_sub_threshold_prompts=True`. `normalize_exact_route_pricing`,
+`ExactRoutePriceTier.build`, and `ExactRoutePricingSchedule.build` all succeed on the live data.
+
+### 3. Why this is a defect, not a provider problem
+
+JSON object key order is not semantically meaningful; `{"a":1,"b":2}` and `{"b":2,"a":1}` are the same
+object. Requiring sorted input rejects well-formed provider data for a property the provider never
+promised and cannot be expected to honour. Canonical ordering is something to **produce** when
+serialising for a digest, not to **demand** on ingest. The base `pricing` object is already handled
+correctly — `_validate_endpoint_pricing` iterates `sorted(value)` — so the tier validator is
+inconsistent with the sibling code path immediately above it.
+
+### 4. Requested — queued as `V3-PRICEKEYORDER-001`
+
+Accept override tier fields in any key order and canonicalise by sorting on ingest, exactly as the
+base pricing path already does. Keep every value-level guarantee unchanged: exact decimal strings,
+range, finiteness, duplicate rejection, and the resulting canonical digest. Also surface the discarded
+cause: `_tiered_pricing_cost_projection` should not collapse a specific validation error into
+`"unavailable"`, which is what hid this for the entire investigation.
+
+Expected outcome: `x-ai/grok-4.6=amazon-bedrock/us-west-2` becomes admissible and the campaign path
+reopens. It is the only route of 112 surveyed live endpoints satisfying every substantive candidate
+constraint.
+
 ## 2026-09-03T08:46Z — **RESPONSE-SHAPE DIAGNOSTIC: the premise was wrong. Billable prices are ALREADY exact decimal strings. The blocker is an `overrides` list.**
 
 Codex requested a response-shape/value-kind diagnostic before any further work. Here it is, and it

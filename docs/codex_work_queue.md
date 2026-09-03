@@ -1917,8 +1917,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   cost authority or silently discarding it.
 - **Validation:** The exact synthetic five-endpoint response shape traverses the full
   `models discover` path and reaches the independent `PRICE_CAP_NOT_EXPRESSIBLE` and
-  `PRICE_CAP_PROOF_UNAVAILABLE` predicates. The focused PRICEOVERRIDES regression set passes `36`
-  tests, the affected provider-free matrix passes `461`, scoped Ruff passes, strict mypy is clean
+  `PRICE_CAP_PROOF_UNAVAILABLE` predicates. The focused PRICEOVERRIDES regression set passes `56`
+  tests, the affected provider-free matrix passes `481`, scoped Ruff passes, strict mypy is clean
   across `233` source files, canonical schema/inventory generation verifies, and no terminal
   full-suite credit is claimed.
 - **Remaining limitation:** Conditional tiers do not yet participate in reserve/spend projection or
@@ -1944,6 +1944,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   worst reachable rate. Capping at the base rate would be violated the moment a prompt crosses the
   tier boundary — precisely the case a cap exists to prevent. Over-projecting short prompts is the
   safe direction for a budget-capped autonomous run; under-projecting is not.
+- **Safety constraint discovered at selection:** OpenRouter's documented provider `max_price`
+  contract exposes only `prompt`, `completion`, `request`, and `image` ceilings. The recorded
+  route also publishes `input_cache_write='0'` and `web_search='0.01'`; a maximum-rate schedule
+  projection cannot make those independently uncapped components provider-capped. Do not discard
+  them, map them to an unrelated cap, or invent unsupported provider fields merely to satisfy the
+  primary acceptance test.
 - **Files/modules:** Price-cap expressibility and no-weaker predicates in
   `src/mmaudit/models/route_constraints.py`, the `OPENROUTER_MAX_PRICE_CEILING_V1` cap derivation,
   cost projection over retained schedules, and focused regressions.
@@ -1970,9 +1976,73 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** `V3-PRICEOVERRIDES-001` `COMPLETE`. Operator live test of `2026-09-03`: the
   pricing parse now succeeds and these two predicates are the only remaining failures on the sole
   admissible-in-principle candidate route.
+- **Status:** `PARTIAL`
+- **Result:** Exact Decimal schedule-wide maxima are derived with partial-tier inheritance and later
+  applicable tiers winning, bound to the complete schedule and proof hashes, and consumed by the
+  provider cap plus request-cost/reserve/spend/reconcile paths. Cache-read dominance is checked in
+  every effective schedule state, sub-tier projection is explicitly conservative, and flat-route
+  bytes remain unchanged. Unsupported or unavailable schedules fail closed with
+  `PRICE_CAP_NOT_EXPRESSIBLE` and `PRICE_CAP_PROOF_UNAVAILABLE`; nested numeric override lexemes also
+  fail closed.
+- **Validation:** `280` focused tests, `1251` affected tests with `2` warnings, and `241`
+  adversarial focused tests passed. Release-schema and autonomy-inventory generation are current;
+  Ruff, strict mypy over `233` source files, strict JSON, and diff integrity passed. No terminal full
+  suite was run or credited.
+- **Remaining limitation:** The recorded xAI schedule derives prompt `0.0000044` and completion
+  `0.0000132`, but independent `input_cache_write='0'` and `web_search='0.01'` cap constraints still
+  reject it. Refresh and provider-free live preflight remain flat-only, so the primary xAI/preflight
+  acceptance criterion is unmet.
+- **Next action:** `STOP`. Current and next tickets are unselected. Preserve the sound local
+  projection and address the independent component-cap policy, refresh, lineage, and route selection
+  only in separately selected future tickets; do not emit a provider/operator command or grant
+  authority.
+
+### V3-PRICEKEYORDER-001 — Accept override tier fields in any JSON key order
+
+- **Objective:** `OpenRouterPricingOverrideTier` rejects the live provider payload with
+  `endpoint pricing override fields must be sorted`, which cascades to `"unavailable"` cost
+  projection and fails `PRICE_CAP_EXPRESSIBILITY` and `PRICE_CAP_NO_WEAKER`. This is the **sole**
+  remaining blocker on `x-ai/grok-4.6=amazon-bedrock/us-west-2`, the only route of 112 surveyed live
+  endpoints satisfying every substantive candidate constraint. Accept any key order and canonicalise
+  by sorting on ingest.
+- **Files/modules:** `OpenRouterPricingOverrideTier` and `_tiered_pricing_cost_projection` in
+  `src/mmaudit/models/endpoint_snapshots.py`, plus focused regressions.
+- **Verified reproduction, operator-side `2026-09-03`:**
+  ```
+  provider key order ['prompt','completion','input_cache_read','input_cache_write'] -> REJECTED
+  sorted key order   ['completion','input_cache_read','input_cache_write','prompt'] -> OK,
+                     projection = SCHEDULE MMAUDIT_TIERED_MAXIMUM_RATE_V1
+  ```
+  With sorted keys every downstream stage already succeeds and derives the operator-decided maximum
+  rate correctly. Nothing else needs to change.
+- **Acceptance criteria:**
+  - **Primary acceptance test:** `x-ai/grok-4.6=amazon-bedrock/us-west-2` passes constrained
+    discovery **and** a provider-free `--live-route-preflight-only` gate.
+  - Override tier fields are accepted in any key order and canonicalised by sorting on ingest,
+    matching the sibling base-pricing path in `_validate_endpoint_pricing`, which already iterates
+    `sorted(value)`. The two paths must not disagree about whether ordering is the provider's
+    responsibility.
+  - Every value-level guarantee is unchanged and still fails closed: exact decimal strings, range,
+    finiteness, duplicate and ambiguous-field rejection, bounded tier counts, and the resulting
+    canonical digest. Canonical ordering remains what is **produced** for hashing, never what is
+    **required** on input.
+  - `_tiered_pricing_cost_projection` no longer collapses a specific validation failure into
+    `"unavailable"`. It must surface the underlying named reason; that bare
+    `except (RouteConstraintError, ValueError)` concealed this defect for the entire investigation and
+    is the single highest-value diagnosability fix on this path.
+  - Routes without overrides are unaffected; existing sealed evidence remains byte-identical and
+    continues to replay.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions using the recorded live payload in **provider key order**
+  driven through the full `models discover` path, permuted-key-order equivalence, unchanged
+  value-level rejections, digest stability, surfaced-reason assertion, schema drift, Ruff, strict
+  mypy.
+- **Dependencies:** `V3-PRICEOVERRIDES-001` `COMPLETE`, `V3-PRICECAPTIER-001` `PARTIAL` — both
+  correct; the maximum-rate schedule builds successfully once the tier validates.
 - **Status:** `QUEUED`
-- **Next action:** Implement maximum-rate cap derivation and projection. Do not select a candidate,
-  launch a campaign, emit an operator command, or grant any authority.
+- **Next action:** Implement order-insensitive tier ingest and surface the discarded reason. Do not
+  select a candidate, launch a campaign, emit an operator command, or grant any authority.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2847,23 +2917,26 @@ and report serialization.
 
 ## Current next action
 
-At `2026-09-03T09:54:24Z`, exact operator record
+At `2026-09-03T11:27:12Z`, exact operator record
 `f37f46d56a544af4bef6e2ef662dc9a8e5b23a20f3789391c56aae1bb6968e5f` (`173635` bytes /
 `3084` lines; latest `2026-09-03T08:46Z`; remote-resolved commit `af16299f...`) supersedes the
 route-specific numeric-price premise: all reported direct billable values and nested override prices
-are exact strings, while `overrides` is a list and was the first parser blocker. The completed local
-provider-free PRICEOVERRIDES slice now recursively validates and retains bounded ordered tiers,
-hash-binds the complete schedule, requires ZDR schedule equality, preserves flat evidence bytes,
-and records tiered cost projection as `unavailable`. Preview, registration, identity sealing, and
-flat refresh fail closed instead of silently flattening or dropping the schedule. Full constrained
-discovery proceeds to the independent `PRICE_CAP_NOT_EXPRESSIBLE` and
-`PRICE_CAP_PROOF_UNAVAILABLE` results for `input_cache_write='0'` and `web_search='0.01'`.
+are exact strings, while `overrides` is a list and was the first parser blocker. The local
+provider-free PRICECAPTIER slice now derives exact schedule-wide Decimal maxima with inherited
+partial tiers, later-tier wins, per-state cache dominance, and proof/schedule hash binding. The
+provider cap and request-cost/reserve/spend/reconcile paths consume the same conservative maximum;
+flat-route bytes remain unchanged. Unsupported or unavailable schedules fail closed with
+`PRICE_CAP_NOT_EXPRESSIBLE` and `PRICE_CAP_PROOF_UNAVAILABLE`, and nested numeric override lexemes
+fail closed.
 
-`V3-PRICELEXEME-001` remains terminal provider-free `PARTIAL` defense-in-depth and nonblocking.
-`V3-PRICEOVERRIDES-001` is `COMPLETE`. `CURRENT_TICKET` and the next safe local ticket are
-`UNSELECTED`; PRICEOVERRIDES is the last complete ticket, PRICELEXEME is the last partial ticket,
-and the combined queues contain `39` unfinished tickets. `STOP`; select any successor only as a new
-bounded work unit. The xAI route remains unselected and not proven admissible. The active model plan,
+`V3-PRICECAPTIER-001` is terminal `PARTIAL`: the recorded xAI maxima are prompt `0.0000044` and
+completion `0.0000132`, but independent `input_cache_write='0'` and `web_search='0.01'` constraints
+still reject the route, while refresh and live preflight remain flat-only. `V3-PRICELEXEME-001`
+remains terminal provider-free `PARTIAL` defense-in-depth and nonblocking, and
+`V3-PRICEOVERRIDES-001` remains `COMPLETE`. Current and next tickets are `UNSELECTED`;
+PRICEOVERRIDES is the last complete ticket, PRICECAPTIER is the last partial ticket, and the combined
+queues contain `40` unfinished tickets. The xAI route remains unselected and not proven admissible.
+The active model plan,
 configuration, retry behavior, and 57-entry / `0.68118684` USD ledger remain unchanged; no
 provider/network action, operator command, campaign, run index, qualification, runtime authority,
 audit, release action, external publication, or other authority is authorized.
