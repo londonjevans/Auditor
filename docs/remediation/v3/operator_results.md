@@ -3,6 +3,63 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T08:24Z — **`V3-PRICELEXEME-001` PARTIAL TERMINAL: route still inadmissible. Likely cause: identity-keyed custody cannot cross the model-validation boundary**
+
+Retested live after the terminal disposition. `x-ai/grok-4.6=amazon-bedrock/us-west-2` still fails
+with the unchanged message. Provider-free; ledger unchanged at 57 entries / `0.68118684` USD.
+
+### 1. One operator hypothesis tested and DISPROVEN
+
+The recorded design binds custody to the "original unfiltered endpoint index" and permanently revokes
+on relocation, which suggested discovery's single-endpoint selection might be read as tampering.
+**That is not the cause.** Live enumeration places the viable route at **index 0** of five:
+
+```
+index 0: amazon-bedrock/us-west-2   zdr=True   <- the viable route
+index 1: xai                        zdr=False
+index 2: xai/priority               zdr=False
+index 3: xai/zdr                    zdr=True
+index 4: xai/zdr/priority           zdr=True
+```
+
+A first-position endpoint cannot relocate to a lower index, so index-relocation is eliminated.
+
+### 2. Better hypothesis — flagged as a hypothesis, grounded in the ticket's own recorded design
+
+The recorded result states captured tokens have "registry-only state **keyed by object identity**"
+and that "**copied, serialized**, unregistered, float-transited, malformed, noncanonical, negative, or
+out-of-range values fail closed."
+
+Discovery does not hand the decoded payload straight to `_validate_endpoint_pricing`; it constructs
+typed snapshot models from it. Pydantic validation **builds new objects** rather than preserving the
+decoded instances. An identity-keyed registry therefore cannot survive that boundary: the value
+arriving at the validator is a faithful copy, the registry lookup misses, and the strict check
+correctly refuses it as unregistered.
+
+This is consistent with every observation: `755` tests pass where the token reaches validation
+directly, and the full `models discover` path fails, because only the latter crosses a model
+construction boundary. It also explains why three successive rounds of *stricter* custody hardening
+did not help — the failure is not tampering, it is faithful copying, which the design deliberately
+treats as indistinguishable from tampering.
+
+**Suggested direction, though the design is yours:** identity-keyed custody may be structurally
+incompatible with a path that must reconstruct models. Carrying the captured exact decimal *as data*
+alongside the payload — a parallel exact-price mapping keyed by layout and field rather than by object
+identity, sealed and validated at the same boundary — would survive reconstruction while keeping the
+same "no float ever transited" guarantee. A copy of a value is not evidence of tampering if the
+exactness claim travels with the data rather than with the object.
+
+### 3. Standing position
+
+`V3-PRICELEXEME-001` is `PARTIAL TERMINAL` and its acceptance test — the route becomes admissible —
+does not pass. The engineering here is genuinely good and the guards are right; the incompatibility is
+architectural, not a coding error.
+
+Unless this is resolved, the recorded conclusion stands: of 112 live endpoints across 12 models,
+exactly one satisfies every substantive candidate constraint, and it cannot be admitted. No candidate,
+no smoke, no campaign, `completed_real_audits` remains `0`, and no further operator action can change
+that.
+
 ## 2026-09-02T13:51Z — **`V3-PRICELEXEME-001` mechanism landed and is sound, but the capture does not reach validation — live test, $0**
 
 The lexeme-custody design is right and the guards are strict in the correct way. The live test still
