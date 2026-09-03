@@ -3,6 +3,69 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T08:46Z — **RESPONSE-SHAPE DIAGNOSTIC: the premise was wrong. Billable prices are ALREADY exact decimal strings. The blocker is an `overrides` list.**
+
+Codex requested a response-shape/value-kind diagnostic before any further work. Here it is, and it
+**invalidates the premise of both `V3-PRICEFORM-001` and `V3-PRICELEXEME-001`**. Metadata-only, no
+completion, ledger unchanged at 57 entries / `0.68118684` USD.
+
+### 1. The live response for `x-ai/grok-4.6=amazon-bedrock/us-west-2`
+
+`GET /api/v1/models/x-ai/grok-4.6/endpoints`, ordinary parse, value kinds of the `pricing` object:
+
+| field | python type | value |
+|---|---|---|
+| `prompt` | **str** | `'0.0000022'` |
+| `completion` | **str** | `'0.0000066'` |
+| `input_cache_read` | **str** | `'0.00000055'` |
+| `input_cache_write` | **str** | `'0'` |
+| `web_search` | **str** | `'0.01'` |
+| `discount` | int | `0` |
+| `overrides` | **list** | `[{'min_prompt_tokens': 200000, 'prompt': '0.0000044', 'completion': '0.0000132', 'input_cache_read': '0.0000011', 'input_cache_write': '0'}]` |
+
+**Every billable price is already an exact decimal string.** No billable price is a JSON number. There
+is no float, no lexeme loss, and nothing for a decimal-capture mechanism to fix.
+
+### 2. What actually fails
+
+`_NON_BILLABLE_PRICING_METADATA` is `frozenset({"discount"})`, so `discount` is exempt.
+`overrides` is **not** exempt, matches `_PRICING_FIELD_PATTERN`, and is a `list`. It therefore reaches
+the billable-price branch, fails `isinstance(raw_price, str)`, has no captured token, and raises
+`endpoint prices must be exact decimal strings` — a message that is accurate about the value but
+misleading about the cause.
+
+`overrides` is tiered pricing: an alternate price schedule above `200000` prompt tokens. Its nested
+values are themselves exact decimal strings.
+
+### 3. Operator error — recorded plainly
+
+**This is my error, and it cost real work.** I asserted that this provider "publishes numeric prices"
+without ever inspecting the response. `V3-PRICEFORM-001`'s decision explicitly rested on that
+characterisation — "the operator-supplied directive classifies the sole otherwise-viable route's
+billable price as a non-string numeric value" — and `V3-PRICELEXEME-001` was queued by me on the same
+unverified premise. The resulting lexeme-custody mechanism is careful, well-guarded work built for a
+problem that does not exist on this route. Codex reasoned correctly from a false premise I supplied.
+The `V3-PRICEFORM-001` reasoning about binary floats also remains correct in general; it simply does
+not apply here.
+
+I should have run this diagnostic before writing either ticket. Elimination was available and cheap,
+and I asserted instead.
+
+### 4. What is actually needed
+
+Queued as **`V3-PRICEOVERRIDES-001`**: handle a structured `overrides` tiered-pricing entry.
+The nested objects contain genuine billable prices, so treating `overrides` as opaque non-billable
+metadata would discard real cost information; validating its entries recursively as exact decimal
+strings preserves both exactness and the tier data. Either way the fix is small and needs no decimal
+capture.
+
+`V3-PRICELEXEME-001` may be retained on its merits as defence-in-depth for providers that do publish
+numeric prices, but it is **not** required to admit this route and should not block it.
+
+If `overrides` is handled, `x-ai/grok-4.6=amazon-bedrock/us-west-2` — the sole route of 112 surveyed
+endpoints satisfying every substantive candidate constraint — should become admissible, and the
+campaign path reopens.
+
 ## 2026-09-03T08:24Z — **`V3-PRICELEXEME-001` PARTIAL TERMINAL: route still inadmissible. Likely cause: identity-keyed custody cannot cross the model-validation boundary**
 
 Retested live after the terminal disposition. `x-ai/grok-4.6=amazon-bedrock/us-west-2` still fails

@@ -42,7 +42,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Tests:** Synthetic local nominal and tamper/reseal/collision/replay/log-proof
   negatives, schema drift, static checks, and focused consumer revocation.
 - **Dependencies:** `V3-OBJECTIVE-002`.
-- **Status:** `PARTIAL`
+- **Status:** `IN_PROGRESS`
 - **Result:** Added verifier-compiled provenance for all 24 planted synthetic cases,
   an opaque comparison-only ground-truth projection, exact candidate/judge collision
   maps, deterministic report projections, independent-replay equality, and bounded
@@ -1666,10 +1666,23 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** Operator survey of `2026-08-30`, provider-free at `$0`, using
   `models list-endpoints` v1.1. Full results in the operator record. Note the effective reasoning
   fields added in v1.1 were what made this determination possible.
-- **Status:** `QUEUED`
-- **Next action:** Settle the pricing question and record the answer. Do not select the candidate,
-  emit a successor plan, launch a campaign, or grant any authority. Candidate selection remains an
-  operator decision.
+- **Status:** `COMPLETE`
+- **Result:** The operator-supplied decision is upheld and formally closed. Once a provider JSON
+  number has traversed ordinary parsing, its original decimal lexeme is unavailable;
+  `Decimal(str(value))` proves only a chosen reserialization, so uncaptured float, integer,
+  `Decimal`, and boolean billable prices remain inadmissible. At that custody boundary the sole
+  otherwise-viable xAI route was not admissible and no candidate route existed under the complete
+  constraint set. The later `V3-PRICELEXEME-001` mechanism preserves a decoder-issued lexeme before
+  float transit and therefore changes custody, not this decision or the exactness requirement.
+- **Validation:** The affected price/snapshot/discovery/refresh/inventory matrix passes `795` tests
+  with `2` warnings. Regressions prove the ordinary-numeric refusal, canonical exact-string storage,
+  distinct raw decimal identity, xAI-shaped full-path handling, and numeric/string cost-bound parity.
+  This decision-only closure changes no code or configuration.
+- **Remaining limitation:** `V3-PRICELEXEME-001` remains independently `PARTIAL`: its final local
+  bytes pass, but fresh metadata-only evidence is required before the conditional xAI route can be
+  considered currently admissible. The route remains unselected.
+- **Next action:** None for this ticket. Do not select a candidate, emit a successor plan, launch a
+  campaign, or grant authority. Candidate selection remains an operator decision.
 
 ### V3-ACTORMODEL-001 — Actor and incentive model as a required audit input
 
@@ -1752,8 +1765,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   ordinary means the original decimal lexeme is destroyed, and `Decimal(str(value))` then proves only
   the chosen reserialization. The remedy is to never destroy the lexeme. Capture provider prices as
   exact decimals **at parse time**, so a numeric-valued price can be admitted with the same exactness
-  guarantee a string price already carries. This unblocks the sole otherwise-viable candidate route,
-  `x-ai/grok-4.6=amazon-bedrock/us-west-2`, **without weakening any constraint**.
+  guarantee a string price already carries. This can unblock the sole otherwise-viable candidate
+  route, `x-ai/grok-4.6=amazon-bedrock/us-west-2`, **without weakening any constraint**, subject to
+  fresh current-byte live admissibility evidence.
 - **Files/modules:** Provider metadata JSON decoding on the endpoint/pricing path,
   `_validate_endpoint_pricing` and `_canonical_price` in
   `src/mmaudit/models/endpoint_snapshots.py`, snapshot custody and digests, and focused regressions.
@@ -1780,17 +1794,108 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   lexeme identity through decode → validate → snapshot → digest, byte-identity of existing sealed
   evidence, rejection of float-transited and malformed prices, ledger arithmetic parity, schema drift,
   Ruff, strict mypy.
-- **Dependencies:** `V3-PRICEFORM-001` decision of `2026-08-30` (rejection stands under the *current*
+- **Dependencies:** `V3-PRICEFORM-001` (`COMPLETE`, decision of `2026-08-30`; rejection stands under
+  the *ordinary-JSON*
   custody model). This ticket changes that custody model rather than the requirement, so the prior
   decision is honoured, not overturned. Operator survey of `2026-08-30`: exactly one route satisfies
   every substantive candidate constraint and is blocked solely by price representation.
-- **Status:** `IN_PROGRESS`
-- **Selection boundary:** Selected as the sole current successor after `V3-RETRIEVAL-001` closure;
-  `implementation_started=false`. This is a queue-state change only: no code, configuration,
-  schema, test fixture, provider command, candidate plan, ledger, or authority changed.
-- **Next action:** `STOP` at this selection-only boundary. A later work slice may implement lossless
-  price capture and its negatives. Keep `V3-PRICEFORM-001` `QUEUED` and `V3-CANDROUTE-001`
-  `PARTIAL` and downstream; do not select a candidate, launch a campaign, or grant authority.
+- **Status:** `PARTIAL`
+- **Result:** One bounded exact-bytes decoder now owns all numeric capture for endpoint and ZDR
+  price metadata. Parsing is capped at `100000` numeric tokens, creates no registered markers, and
+  issues final tokens only while materializing fixed price paths. Captured tokens have no
+  caller-writable authority slots or public raw-number issuer; their registry-only state is keyed by
+  object identity without invoking token hashing or equality. Snapshot and refresh admission bind
+  the original endpoint/ZDR layout, original unfiltered endpoint index, and exact price field.
+  Observed field, index, layout, malformed-context, or off-layout detachment relocation permanently
+  revokes custody, and restoring the graph cannot resurrect it. Copied, serialized, unregistered,
+  float-transited, malformed, noncanonical, negative, or out-of-range values fail closed. Accepted
+  values still normalize to the existing exact-string snapshot shape, and token-bearing hashes
+  retain their separate canonical domain without changing token-free or existing string-price
+  evidence bytes.
+- **Validation:** The final affected endpoint/snapshot/OpenRouter/discovery/refresh unit matrix
+  passes `755` tests with `2` known code-object mutation warnings. Focused price-lexeme and endpoint
+  snapshot regressions pass `87`; five focused off-layout detachment and transport-observation cases
+  pass; the refresh-runtime/staging/workflow/schema matrix passes `220`; affected Ruff format/check
+  and strict mypy over the five affected source modules pass. The provider-free localhost HTTPX
+  response graph integration passes `1` test in the approved managed environment. Canonical
+  generation verification passes, and governance closure passes `93` tests (`66` schema/autonomy
+  plus `27` product-governance); strict duplicate-key JSON validation also passes. No provider call,
+  retry, usage, candidate selection, plan mutation, or authority action occurred.
+  The final provider-free diagnosis slice strengthens the full-`models discover` regression to
+  reproduce five endpoints with the viable route at index zero plus multiple ZDR rows. That focused
+  raw-numeric-price case passes `1` in `0.76s`; the adjacent price-decoder, endpoint, discovery,
+  OpenRouter, and CLI matrix passes `793` in `17.73s` with `2` known warnings. Scoped Ruff remains
+  clean and strict mypy is clean across `233` source files. A broader CLI/pipeline attempt was
+  intentionally interrupted after `111` passes at `193.54s` and receives no pass or full-suite
+  credit. The diagnosis/regression slice changes no production behavior.
+- **Latest operator evidence and diagnosis:** Exact record
+  `775b7ead8a6fae6ee37dce3cd74a129cd5b3e03858c4818baa9a001ab2f79979` (`170065` bytes /
+  `3021` lines; latest `2026-09-03T08:24Z`; commit
+  `04ba42b1f35080ac8eb427e7b5003979c9104317` remote-resolved) validly reports a fresh live
+  constrained-discovery exact-string refusal. The route was index zero of five, disproving
+  endpoint-index relocation. The call graph and the live-shaped local reproduction preserve
+  decoder-issued identity through the relevant Pydantic boundaries, contradicting the proposed
+  identity/Pydantic-copy cause. Active HEAD `04ba42b1...` lacks the price-lexeme feature; the dirty
+  relevant source is byte-identical to sibling snapshot `453f4acfffcb08b606cdf2a8af099ef05b35ba87`.
+  Both commits share parent `339ca7c8...`, and neither is an ancestor of the other. Because the
+  operator record binds neither the executed CLI/imported modules nor relevant source bytes to
+  digests, it cannot establish which implementation produced the valid refusal.
+- **Status boundary:** Terminal provider-free `PARTIAL` at `2026-09-03T08:38:00Z`. The local
+  mechanism and live-shaped regression do not establish current live admission, while the supplied
+  evidence cannot resolve executed-source provenance. Ordinary parsed numeric prices remain
+  refused. No provider command, candidate or route selection, plan or ledger mutation, campaign,
+  run index, qualification, audit, release, or authority follows.
+- **Next action:** `STOP`. Before any separately authorized live rerun, bind the executable,
+  imported module, and relevant source digests and supply a response-shape/value-kind diagnostic or
+  materially changed response bytes. Preserve ordinary numeric refusal, the active plan, retry
+  configuration, 57-entry / `0.68118684` USD ledger, `completed_real_audits == 0`, and all external
+  authority as unchanged.
+
+### V3-PRICEOVERRIDES-001 — Handle structured tiered-pricing `overrides` entries
+
+- **Objective:** Admit endpoint pricing that carries a structured `overrides` tiered-price entry.
+  This is the **sole** remaining blocker on `x-ai/grok-4.6=amazon-bedrock/us-west-2`, the only route
+  of 112 surveyed live endpoints satisfying every substantive candidate constraint. Operator response
+  -shape diagnostic of `2026-09-03` establishes that every billable price on this route is **already
+  an exact decimal string**; no numeric billable price exists and no decimal capture is required.
+- **Files/modules:** `_validate_endpoint_pricing`, `_NON_BILLABLE_PRICING_METADATA`, and the pricing
+  models in `src/mmaudit/models/endpoint_snapshots.py`, plus focused regressions.
+- **Evidence:** `GET /api/v1/models/x-ai/grok-4.6/endpoints`, `pricing` object for endpoint
+  `amazon-bedrock/us-west-2`: `prompt='0.0000022'`, `completion='0.0000066'`,
+  `input_cache_read='0.00000055'`, `input_cache_write='0'`, `web_search='0.01'` — all `str`;
+  `discount=0` (`int`, already exempt via `_NON_BILLABLE_PRICING_METADATA`); and
+  `overrides=[{'min_prompt_tokens': 200000, 'prompt': '0.0000044', 'completion': '0.0000132',
+  'input_cache_read': '0.0000011', 'input_cache_write': '0'}]` — a `list`, not exempt, matching
+  `_PRICING_FIELD_PATTERN`, therefore reaching the billable-scalar branch and raising
+  `endpoint prices must be exact decimal strings`.
+- **Acceptance criteria:**
+  - **Primary acceptance test:** with `overrides` handled, `x-ai/grok-4.6=amazon-bedrock/us-west-2`
+    passes constrained discovery **and** a provider-free `--live-route-preflight-only` gate.
+  - `overrides` is validated as structured tiered pricing, not discarded as opaque metadata: each
+    entry's `min_prompt_tokens` is an exact bounded non-negative integer and each nested price is an
+    exact decimal string subject to the same canonicalisation, range, and finiteness rules as a
+    top-level price. Discarding the tier would drop genuine cost information.
+  - Tier entries are bounded in count and canonically ordered; duplicate, overlapping, malformed,
+    negative, out-of-range, or non-decimal tier values fail closed with a named reason.
+  - The refusal message is corrected so that a non-scalar pricing field reports *that*, rather than
+    `prices must be exact decimal strings`, which was accurate about the value but misleading about
+    the cause and cost several days of misdirected work.
+  - Cost reserve/spend/reconcile arithmetic is unchanged for routes without `overrides`; existing
+    sealed evidence remains byte-identical and continues to replay. Whether tiered rates participate
+    in cost projection is a separate decision — record it, do not silently ignore a tier that could
+    change spend above `200000` prompt tokens.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions using a recorded fixture of this exact pricing shape driven
+  through the **full `models discover` path**, tier validation and rejection negatives, byte-identity
+  of existing sealed evidence, message-accuracy assertion, schema drift, Ruff, strict mypy.
+- **Dependencies:** Supersedes the premise of `V3-PRICEFORM-001` and `V3-PRICELEXEME-001`, both of
+  which were queued by the operator on an unverified assumption that this route published numeric
+  billable prices. It does not. `V3-PRICELEXEME-001` may be retained on its merits for providers that
+  genuinely publish numeric prices, but it is not required here and must not block this ticket.
+- **Status:** `QUEUED`
+- **Next action:** Implement `overrides` handling and its negatives, and correct the refusal message.
+  Do not select a candidate, launch a campaign, emit an operator command, or grant any authority.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2665,14 +2770,24 @@ and report serialization.
 
 ## Current next action
 
-`CURRENT_TICKET` is `V3-PRICELEXEME-001`; `V3-RETRIEVAL-001` is the last completed ticket.
-`V3-PRICELEXEME-001` is the sole `IN_PROGRESS` ticket at a selection-only boundary with
-`implementation_started=false`. The combined queues contain `40` unfinished tickets.
-`V3-PRICEFORM-001` remains `QUEUED`. `V3-CANDROUTE-001` remains `PARTIAL` and downstream: the
-current operator record reports zero admissible real candidates, the active plan is unchanged,
-and no replacement is selected. `V3-SINGLE-AUDIT-001` and `V3-MULTI-AUDIT-001` remain queued behind
-their prerequisites. No provider action, campaign, operator command, run index, qualification,
-runtime authority, audit, or release action is current.
+At `2026-09-03T08:38:00Z`, `V3-PRICELEXEME-001` returns to terminal provider-free `PARTIAL` after
+source-provenance diagnosis. The strengthened full `models discover` regression reproduces five
+endpoints with the viable route at index zero plus multiple ZDR rows and passes `1` test in `0.76s`;
+the adjacent provider-free price-decoder, endpoint, discovery, OpenRouter, and CLI matrix passes
+`793` tests in `17.73s` with `2` known warnings; scoped Ruff passes; and strict mypy is clean across
+`233` source files. A broader CLI/pipeline attempt was intentionally interrupted after `111` passes
+at `193.54s` and earns no pass or full-suite credit. The final slice changes no production behavior.
+
+`CURRENT_TICKET` is `UNSELECTED` and the next safe local ticket is unselected; `V3-PRICEFORM-001` remains the last
+completed ticket and `V3-PRICELEXEME-001` is the last partial ticket. The operator-reported live
+refusal is valid, but executed CLI/module/source digests are unbound; index relocation is disproven,
+and the proposed identity/Pydantic-copy cause is contradicted by the call graph and local
+reproduction. The combined queues still contain `39` unfinished tickets. `STOP`: before another
+separately authorized live rerun, bind executable/module/source digests and supply a
+response-shape/value-kind diagnostic or materially changed response bytes. The active model plan,
+retry configuration, and 57-entry / `0.68118684` USD ledger remain unchanged; no candidate or route
+is selected, and no provider/network action, operator command, campaign, run index, qualification,
+runtime authority, audit, release action, external publication, or other authority is authorized.
 
 ## Historical next action — c627 replay boundary (superseded)
 
