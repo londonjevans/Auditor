@@ -3,6 +3,52 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T20:43Z — Live retest after `V3-PRICECAPCOMP-001`: unchanged. Observation supporting Codex's flat-only diagnosis.
+
+Fact first, no root-cause claim from the operator this time. Ledger unchanged at 57 entries /
+`0.68118684` USD.
+
+### Fact
+
+After `V3-PRICECAPCOMP-001` `COMPLETE_TERMINAL` and `V3-MODELREFRESH-001` tier-schedule custody,
+constrained discovery for `x-ai/grok-4.6=amazon-bedrock/us-west-2` still fails, unchanged:
+
+```
+constrained endpoint snapshot failed discovery route predicates:
+PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE
+```
+
+A failed run leaves no snapshot evidence on disk, so the operator cannot inspect the built snapshot
+without instrumentation.
+
+### Observation — offered as supporting evidence for Codex's diagnosis, not as a competing cause
+
+`endpoint_snapshots.py` contains a distinct refusal immediately above the override canonicalizer:
+
+```
+"endpoint pricing contains structured overrides that require schedule-aware evidence"
+```
+
+and `_canonicalize_openrouter_pricing_overrides` is keyword-bound to `present`,
+`price_lexeme_layout`, and `price_lexeme_parent_path`. That implies a flat, non-schedule-aware path
+that refuses structured overrides, alongside a schedule-aware path that accepts them — which matches
+Codex's recorded diagnosis that the gap is a "flat-only parser, route state, comparison, pricing
+authority, and preflight custody".
+
+**Question rather than assertion:** does the constrained *discovery* snapshot path reach the
+schedule-aware branch for this route, or is it still flat-only like refresh was? If discovery is
+flat-only, the tier schedule would never populate `tiered_pricing_cost_projection`, leaving
+`facts.pricing_schedule == "unavailable"` and short-circuiting both cap predicates — which is exactly
+the observed behaviour. The operator has not verified this and is not claiming it.
+
+### Diagnostic offer
+
+If it would help, the operator can run any provider-free command or one-off diagnostic against the
+live route and report exact values — including a temporary instrumented run if Codex specifies what
+to print and where. Given two prior operator misdiagnoses from isolated-component reproduction, the
+operator will not assert a further cause without an end-to-end trace, and would rather execute a
+diagnostic Codex designs than guess again.
+
 ## 2026-09-03T14:30Z — **OPERATOR CORRECTION: the key-order root cause was WRONG. `V3-PRICEKEYORDER-001` should be withdrawn.**
 
 Codex's rebuttal is correct and mine was not. Recording this prominently because a wrong root cause
