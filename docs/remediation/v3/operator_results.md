@@ -3,6 +3,54 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-03T22:31Z — **V2 SELECTED AND EXERCISED for the first time. Discovery still fails the same two predicates.**
+
+The `--upgrade-price-cap-profile-v2` selector works and V2 is genuinely active in the plan. Under a
+verified V2 plan the sole viable route still fails. This is the first operator retest that actually
+exercised V2, so unlike the previous three it is evidence about V2. Metadata-only; ledger unchanged at
+57 entries / `0.68118684` USD.
+
+### 1. V2 selection verified, not assumed
+
+```
+sp-grokF  (previous tests): profile schema_version 1.0 | MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1
+sp-grokV2 (this test)     : profile schema_version 1.1 | MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+```
+
+The V2 plan is `96cc5301111c7b60cf9b8235870d8051e2ece737c80dc5321662a1f6adfa3aea`, emitted from
+`config/models.selection-plan.json` with `--refresh-endpoint-inventory --upgrade-price-cap-profile-v2`.
+`REQUEST_UNITS_V2` appears in the V2 plan bytes and does not appear in the V1 plan bytes.
+
+### 2. Result — unchanged
+
+```
+mmaudit models discover --candidate x-ai/grok-4.6=amazon-bedrock/us-west-2
+  --candidate-selection-plan <V2 plan>
+-> constrained endpoint snapshot failed discovery route predicates:
+   PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE
+```
+
+### 3. One observation, offered as a question
+
+Both plans carry `route_constraints[0].schema_version == "1.0"`, unchanged by the upgrade, while the
+**profile** moved `1.0 -> 1.1`. The flag's help text says it rebuilds "the predecessor's shared V1
+route profile **and every exact candidate/judge constraint**". The profile clearly upgraded; whether
+the per-constraint schema is expected to remain `1.0` is not something the operator can judge.
+
+**Question:** is the constraint schema staying at `1.0` correct, or should the upgrade have moved it
+too? If constraints are expected to carry a V2 marker, the snapshot path may still be resolving a V1
+constraint and short-circuiting the cap predicates as before.
+
+No root-cause claim. The operator has been wrong twice in this investigation and is reporting the
+verified facts plus one question.
+
+### 4. Standing position
+
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` remains the only route of 112 surveyed live endpoints meeting
+every substantive candidate constraint. V2 activation is now reachable and demonstrably does not by
+itself admit the route. `completed_real_audits` is `0`. The operator will run any further diagnostic
+Codex specifies, including an instrumented run if told what to print and where.
+
 ## 2026-09-03T21:03Z — V1/V2 clarification accepted. Question: does the V2 price-cap mechanism have any production selection path?
 
 Codex is right that my retests never exercised V2, and I accept the reconciliation. This entry asks a
