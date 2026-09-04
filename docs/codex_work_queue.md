@@ -4,9 +4,66 @@ This queue decomposes the maximum-assurance roadmap into independently testable
 work units. It is a planning artifact, not evidence that a capability exists.
 
 Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
-`BLOCKED_SAFETY`, `BLOCKED_TECHNICAL`.
+`BLOCKED_SAFETY`, `BLOCKED_TECHNICAL`, `WITHDRAWN_OPERATOR_ERROR`.
 
 ## Queue governance
+
+### V3-AUTONOMY-001 — Resume typed managed provisioning
+
+- **Objective:** Resume only the bounded Phase-2 provisioning slice: derive strict,
+  nonauthorizing plan/state/refusal evidence from the exact managed-toolchain bundle and effective
+  configuration, and make local cost-ledger setup idempotently create-or-verify without resetting
+  or repairing incompatible state.
+- **Files/modules:** Managed provisioning models, cost-ledger provisioning, CLI setup surface,
+  generated schema/inventory, and focused regressions.
+- **Acceptance criteria:** Missing fork, CodeQL, dependency-snapshot, installed-toolchain, or other
+  required inputs remain explicit closed refusals. Existing exact ledgers verify; corrupt, linked,
+  incomplete, or cap-mismatched state fails closed. Every provider, spend-admission, execution,
+  runtime, completion, and release authority remains literal false.
+- **Tests:** Provisioning model/CLI and ledger create, repeat, collision, corruption, identity-drift,
+  schema, inventory, Ruff, and strict-mypy regressions using local synthetic state only.
+- **Dependencies:** Phase 0 and Phase 1 of `V3-AUTONOMY-001` are complete. This provider-free slice
+  does not depend on REAL `V3-AUTHRUNNER-001` or `V3-HARDHAT-001` evidence and cannot satisfy them.
+- **Status:** `PARTIAL`
+- **Selected:** `2026-09-03T22:26:22Z`; implementation started at
+  `2026-09-03T22:37:51Z`. The parked prototype was not applied wholesale.
+- **Result:** The bounded provider-free slice now emits a strict, self-contained typed receipt
+  joining its exact plan, observations, refusals, and terminal state. File-only CLI configuration,
+  source finalization and digest comparison before linking, descriptor-bound no-replace publication,
+  final-file revalidation, identity-checked rollback under the cooperative publication lease, and a
+  durable marker-bound cost-ledger create-or-verify lease fail closed on collisions, reset attempts,
+  links, FIFO swaps, drift, corruption, cap mismatch, and incomplete state. Unsupported fork, CodeQL,
+  dependency-snapshot, installed-toolchain, Trivy, target, template, consent, and external-role
+  surfaces remain explicit refusals. Every provider, spend-admission, execution, runtime,
+  completion, and release authority remains false.
+- **Closure validation:** The affected local matrix passed `287` tests in `8.38s`; the release-schema and
+  autonomy-inventory contract passed `65` in `51.99s`; canonical generator verification, Ruff
+  format over `604` files, repository-wide Ruff, strict mypy over `235` source files, and independent
+  no-blocker review passed. The final inventory hashes are raw
+  `7f11314bfa3f13260386d46d5f9f32865e4bf04cc896eb09a602eb24ccda0182`, self
+  `619f96b46e1b1b243f8bb4a79dfff8aeb193b777975421668c501eb49d1870a2`, discovery
+  `61b828c8f6f102345cfca0881879dbbbb84c3283bebe6aca02429ce59ab31d4b`, and universe
+  `145332eb3ca2e1cd8a25a5bb3c04fb37033ca8a9b7e8bab5421bbd7290ac7714`; it records
+  `3,999` sources / `4,002` occurrences / `3,949` gates / `50` non-gating controls. No full-suite
+  pass credit is claimed.
+- **Latest post-closure validation:** At `2026-09-04T00:25:42Z`, the current affected matrix passed
+  `287` tests in `13.30s`, release-schema/autonomy validation passed `65` in `51.43s`, and the
+  product-governance matrix passed `27`. Canonical generator verification, Python-file Ruff format
+  over `588` discovered files, repository-wide Ruff, strict mypy over `235` source files, strict
+  JSON, and diff integrity passed. The closure-time metrics above remain immutable history; no
+  terminal full-suite credit is claimed.
+- **Remaining limitation:** This slice provisions only local evidence and an empty local cost
+  ledger. It does not install or attest the 25 unresolved toolchain roles, start or verify a fork,
+  build CodeQL or dependency inputs, derive targets, approve invariant templates, capture client
+  consent, execute an audit, access a provider, or establish runtime readiness. The ticket therefore
+  remains `PARTIAL`; `runtime_authority=false` and `managed_run_ready=false`. Repository custody is
+  point-in-time and honors explicit audited-workspace exclusions; stat-to-unlink rollback assumes
+  writers cooperate with the publication lease; and a same-UID actor able to delete the marker,
+  state, and ordinary lock can defeat the purely local reset anchor.
+- **Next action:** `STOP`. Current and next tickets are `UNSELECTED`; no successor is selected.
+  Begin any later bounded ticket only after rereading current governance and operator evidence. Do
+  not infer a route or run index, mutate the active V1 plan or operator ledger, issue a command, or
+  grant authority.
 
 ### V3-OBJECTIVE-002 — Freeze explicit autonomous completion objective
 
@@ -1999,25 +2056,191 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   only in separately selected future tickets; do not emit a provider/operator command or grant
   authority.
 
+### V3-PRICECAPCOMP-001 — Bind unsupported pricing components to exact request-unit envelopes
+
+- **Objective:** Distinguish a provider price component that the exact emitted request cannot use
+  from a component whose price merely happens to be zero. Permit omission from provider
+  `max_price` only when a typed, immutable request-unit envelope proves the component has exactly
+  zero reachable units; otherwise fail closed before reservation or provider egress.
+- **Files/modules:** Route price-cap algorithms and predicate profiles in
+  `src/mmaudit/models/route_constraints.py`; OpenRouter endpoint registration, request assembly,
+  provider-cap projection, and cost-bound evidence in `src/mmaudit/models/openrouter.py`;
+  successor-plan construction in `src/mmaudit/models/candidate_selection.py`; the
+  `models emit-selection-plan-successor --upgrade-price-cap-profile-v2` CLI in
+  `src/mmaudit/cli.py`; focused provider-free regressions and governance records.
+- **Acceptance criteria:**
+  - Existing `OPENROUTER_MAX_PRICE_CEILING_V1` behavior, active configuration, flat-route bytes,
+    pricing/snapshot hashes, and the four transmitted provider `max_price` fields remain unchanged.
+  - A new explicitly selected proof mode may retain nonzero `web_search` pricing only when the
+    exact request contract proves search/tool/plugin enablement absent and therefore binds
+    `web_search` to exactly zero maximum request units and zero maximum cost.
+  - The supported successor workflow exposes a default-off V1→V2 option. Omission preserves the
+    exact existing V1/default bytes. Selection accepts only an exact V1 predecessor, supports a
+    same-route successor, and rebuilds the shared profile plus every resulting candidate, PRIMARY,
+    and REPLAY constraint rather than mixing profile generations.
+  - Enabling tools, plugins, search, or any positive/unknown web-search unit envelope rejects before
+    reservation and provider egress; missing, duplicate, substituted, or tampered component proofs
+    also reject.
+  - `input_cache_write` and `internal_reasoning` remain rejected even when their observed prices are
+    zero unless a real provider cap, dominance invariant, or immutable disable control is proven;
+    observed zero price is not enforcement.
+  - Unknown components reject; cache-read remains prompt-dominated only when every effective tier
+    preserves that invariant; tier schedules and their conservative maxima stay bound end to end.
+  - No current candidate or route is selected or declared admissible. The recorded xAI fixture must
+    continue to fail while it includes independently unbounded `input_cache_write`; a synthetic
+    variant without that field may prove the zero-search-unit mechanism provider-free.
+  - Plan, configuration, retry behavior, ledger, completed-audit count, and every provider, runner,
+    qualification, release, and external authority flag remain unchanged.
+- **Tests:** Algorithm/profile proof custody; isolated `web_search='0.01'` zero-unit success; search,
+  tool, plugin, positive-unit, unknown/missing/duplicate/tamper negatives; variable-price refusals;
+  default-off and deterministic exact V1→V2 successor emission; same-route selection; rebuilt
+  candidate/PRIMARY/REPLAY constraints; repeat-V2, downgrade, drift/tamper, non-boolean, revocation,
+  and stateful-predecessor-substitution refusals; fresh mode-`0600` publication; tier and flat
+  byte/hash preservation; provider-free discovery/registration/preflight and request-cost evidence;
+  schema drift, Ruff, and strict mypy.
+- **Dependencies:** `V3-PRICECAPTIER-001` `PARTIAL` with its schedule-wide maximum mechanism
+  complete; `V3-MODELREFRESH-001` `PARTIAL` with tier-schedule custody complete. This ticket is the
+  independently deferred component-cap policy and grants no provider or selection authority.
+- **Status:** `COMPLETE`
+- **Result:** Added an explicitly selected V2 price-cap profile with one self-hashed immutable
+  `web_search` request-unit envelope. Nonzero search pricing is retained in exact cost evidence at
+  zero units and zero cost, while search/tool/plugin request fields are absent and the unsupported
+  component is omitted from provider `max_price`. The profile and envelope now remain joined
+  through discovery, endpoint registration, tier-wide projection, preflight, request assembly,
+  preview, refresh controls and durable attempts, smoke plans, route-runtime evidence, and the
+  frozen provider-egress callable graph. V1/default serialization and the active plan remain
+  unchanged. The provider-free successor emitter now accepts the default-off
+  `--upgrade-price-cap-profile-v2` flag for an exact V1→V2 transition, including a same-route
+  successor, and rebuilds the shared profile and every resulting candidate, PRIMARY, and REPLAY
+  constraint. Omission preserves exact V1/default bytes. Publication uses a fresh mode-`0600`
+  output, and validation rejects repeat V2, downgrade, drift/tamper, non-boolean input, revocation,
+  and stateful predecessor substitution.
+- **Validation:** The focused selector matrix passed `120` tests. The broad affected
+  pricing/endpoint/preview/refresh/OpenRouter/smoke/runtime/successor matrix passed `1,328` tests
+  with two known code-retarget deprecation warnings; release-schema, autonomy-inventory, and
+  refresh-schema validation passed `79` tests. Scoped Ruff format/check, strict mypy over `233`
+  source files, canonical generation/verification, and diff integrity passed. The regenerated
+  autonomy inventory has raw SHA-256
+  `fcecc2351ab9d5fd7a0e6c0289e9daeb7f6ec83cebfd00552948e9b090617c73`, self SHA-256
+  `0f575febde00869a20192214a40af87e7196660a8e82b5810e8beefb45caad28`, discovery-semantics
+  SHA-256 `bc80c98c469dc9cce61af880c8849e8387143ad1e3fb7d853d4eca8e9205e340`, source-universe
+  SHA-256 `3f41a8b19a0e7547bc619f1405692e19a05e62d9662471f10736d79a2d619389`, and schema raw
+  SHA-256 `88790b6d1d02fff4f2a39ff0bc0c023d062459e6d19d594a1c93cee03871c6c7`; it records
+  3,941 sources, 3,944 occurrences, 3,892 gate sources, 49 non-gating controls, and 337 completion
+  entrypoint parameters. All transport was local synthetic MockTransport; no provider or operator
+  command was issued.
+- **Remaining limitation:** The recorded xAI route remains unselected and inadmissible because its
+  independent `input_cache_write='0'` component still lacks a provider cap, dominance invariant, or
+  immutable disable control. V2 resolves `web_search='0.01'` only for an exact zero-reachable-unit
+  request; it does not convert an observed zero price into enforcement or authorize a live route.
+- **Historical 2026-09-03T21:11Z operator-question reconciliation (superseded by this same-ticket
+  repair):** Exact current record
+  `d502c61a2525a2bdcc2e7efd79b115821af60f604e715d7be7ccd51b02983ab1` (185,462 bytes / 3,287
+  lines, latest `2026-09-03T21:03Z`, remote-resolved commit
+  `dd141cd580c2a012a6efdef26213d3a727b68041`) accepts that the operator retests used an active
+  V1-derived profile and did not exercise V2, then asks whether a supported V2 selection path
+  existed. At that historical boundary it did not: the normal profile sealer emitted V1,
+  successor emission preserved the predecessor profile, and the CLI exposed no upgrade. That
+  observation caused the 21:18 reopening below; it is not the current implementation state. The
+  prior exact
+  `2da419f85a9f6b2d087c1f75dca4247ef91d8fcf23005c719644de5830238b21` record (182,652 bytes /
+  3,240 lines, latest `2026-09-03T20:43Z`, remote-resolved commit
+  `b9ea875e70d865b50c1eb847e39ed767162c9c6b`) remains historical evidence of the metadata-only V1
+  retest, its aggregate refusal, absent snapshot, and unchanged 57-entry / `0.68118684` USD ledger.
+  Both records are operator-supplied, nonauthorizing, and not independently authenticated by Codex;
+  `completed_real_audits` remains `0` and every authority remains false.
+- **Historical 2026-09-03T21:18Z reopened acceptance gap (resolved):** Direct construction and
+  tests did not satisfy the explicit-selection criterion, so the ticket reopened as the sole
+  bounded work unit. The default-off successor option described above now closes that gap without
+  changing the active V1 plan, configuration, retry behavior, ledger, or no-route state.
+- **Next action:** `STOP`. Current and next tickets are `UNSELECTED`; this ticket is last complete,
+  `V3-MODELREFRESH-001` is last partial, and the combined unfinished count is `40`. No successor
+  artifact was selected or inspected, no live command or route retest is requested, and no
+  authority follows. Preserve the active V1 plan and fail-closed `input_cache_write='0'` blocker.
+
+### V3-PRICECAPCACHE-001 — Bind prompt-dominated cache-write pricing
+
+- **Objective:** Add a versioned, explicitly selected price-cap policy for cache-write charges that
+  are provably dominated by the provider-capped prompt rate, without treating an observed zero as
+  enforcement or weakening the existing V1/V2 policies.
+- **Files/modules:** `src/mmaudit/models/route_constraints.py`,
+  `src/mmaudit/models/openrouter.py`, `src/mmaudit/models/candidate_selection.py`,
+  `src/mmaudit/models/schemas.py`, `src/mmaudit/cli.py`, generated release schemas, focused
+  provider-free regressions, and governance records.
+- **Acceptance criteria:**
+  - Existing `OPENROUTER_MAX_PRICE_CEILING_V1` and
+    `OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2` serialization, hashes, behavior, and accepted evidence
+    remain byte-identical. The active repository plan remains V1.
+  - A new opt-in V3 algorithm retains the exact V2 zero-web-search request-unit envelope and may
+    omit `input_cache_write` from provider `max_price` only when its exact base rate and every
+    inherited effective tier rate are no greater than the corresponding provider-capped prompt
+    rate. Observed zero alone under V1/V2 remains insufficient.
+  - Cost planning, reservation, spending, reconciliation, refresh, and durable evidence price the
+    full reachable cache-write token population at the transmitted prompt cap, never at a stale or
+    merely observed discounted/zero rate. Prompt and cache-write units remain additive.
+  - `internal_reasoning`, unknown components, missing or mixed policy custody, cache-write rates
+    greater than prompt in any effective state, and positive/unknown search units all fail closed
+    before reservation or provider egress.
+  - The supported successor workflow exposes a default-off exact V2→V3 option. It accepts only an
+    exact V2 predecessor, supports a same-route successor, and rebuilds the shared profile plus
+    every candidate, PRIMARY, and REPLAY constraint. Omission preserves exact predecessor bytes;
+    repeat upgrades, downgrade, drift/tamper, non-boolean input, revocation, and stateful
+    predecessor substitution reject.
+  - No successor artifact is emitted or adopted by this ticket. No candidate or route is selected
+    or declared live-admissible; no configuration, retry, ledger, run index, completed-audit count,
+    provider action, qualification, runtime, release, or other authority changes.
+- **Tests:** V1/V2 byte and hash identity; unconditional trusted-boundary V3 refusal before preview,
+  discovery, registration, reservation, or provider egress; absent, zero, positive, tiered, and
+  prompt-dominated cache-write metadata; no V3 successor-plan derivation or CLI publication; V2
+  preview and durable-attempt compatibility; schema-version removal; and focused governance
+  consistency.
+- **Dependencies:** `V3-PRICECAPCOMP-001` (`COMPLETE`) plus the completed provider-free schedule
+  maximum and refresh-custody slices inside `V3-PRICECAPTIER-001` and
+  `V3-MODELREFRESH-001`. Official OpenRouter documentation distinguishes free or
+  prompt-dominated cache writes from providers whose cache-write rate is 1.25× or 2× prompt;
+  the mechanism is therefore conditional per exact route rather than a universal exemption.
+- **Status:** `PARTIAL`
+- **Selected:** `2026-09-04T00:56:31Z`; implementation started at `2026-09-04T01:00:32Z`. The active repository plan
+  remains V1, the operator-reported private V2 plan remains unadopted, and no candidate, route,
+  command, run index, ledger action, provider access, or authority is selected.
+- **Provider-free result:** At `2026-09-04T01:48:46Z`, the trusted
+  `project_provider_price_cap` boundary rejects the reserved V3 algorithm unconditionally, and the
+  successor derivation and CLI emit no V3 plan. Preview schema `1.3` and pricing-attempt schema
+  `1.2` were removed; V1/V2 behavior remains preserved. A self-resealed historical schema-`1.2`
+  attempt that understated both prompt and cache-write units was reproduced, but those V3 attempts
+  are no longer published or reachable.
+- **Unmet acceptance criterion:** OpenRouter's documented `max_price` contract caps prompt,
+  completion, request, and image only. It has no request-bound cache-write or total-cost ceiling.
+  Metadata-time cache-write dominance is non-atomic and can race provider repricing; local
+  reconciliation observes an overage only after spend. The requested provider-enforced dominance
+  therefore is not established, so this ticket cannot close `COMPLETE`.
+- **Next action:** `STOP`. Current and next tickets are `UNSELECTED`; this ticket is last partial,
+  `V3-PRICECAPCOMP-001` remains last complete, and the combined unfinished count is `41`. Resume
+  only if the provider supplies a request-bound cache-write/total-cost cap or an equivalent
+  enforceable atomic contract. Do not emit or adopt a successor artifact, access a provider or
+  operator ledger, or claim route admission.
+
 ### V3-PRICEKEYORDER-001 — Accept override tier fields in any JSON key order
 
-- **Objective:** `OpenRouterPricingOverrideTier` rejects the live provider payload with
-  `endpoint pricing override fields must be sorted`, which cascades to `"unavailable"` cost
-  projection and fails `PRICE_CAP_EXPRESSIBILITY` and `PRICE_CAP_NO_WEAKER`. This is the **sole**
-  remaining blocker on `x-ai/grok-4.6=amazon-bedrock/us-west-2`, the only route of 112 surveyed live
-  endpoints satisfying every substantive candidate constraint. Accept any key order and canonicalise
-  by sorting on ingest.
+- **Objective:** Historical, withdrawn operator premise only; this is not a current objective and
+  must not be implemented. The retracted report claimed that `OpenRouterPricingOverrideTier`
+  rejected the live provider payload with `endpoint pricing override fields must be sorted`, that
+  the failure cascaded to `"unavailable"` cost projection and failed `PRICE_CAP_EXPRESSIBILITY` and
+  `PRICE_CAP_NO_WEAKER`, and that key order was the **sole** remaining blocker on
+  `x-ai/grok-4.6=amazon-bedrock/us-west-2`. Full provider ingest already canonicalizes the keys.
 - **Files/modules:** `OpenRouterPricingOverrideTier` and `_tiered_pricing_cost_projection` in
   `src/mmaudit/models/endpoint_snapshots.py`, plus focused regressions.
-- **Verified reproduction, operator-side `2026-09-03`:**
+- **Withdrawn isolated reproduction, operator-side `2026-09-03` (historical only):**
   ```
   provider key order ['prompt','completion','input_cache_read','input_cache_write'] -> REJECTED
   sorted key order   ['completion','input_cache_read','input_cache_write','prompt'] -> OK,
                      projection = SCHEDULE MMAUDIT_TIERED_MAXIMUM_RATE_V1
   ```
-  With sorted keys every downstream stage already succeeds and derives the operator-decided maximum
-  rate correctly. Nothing else needs to change.
-- **Acceptance criteria:**
+  The withdrawn report inferred from this component-only result that every downstream stage already
+  succeeded and nothing else needed to change. The corrected end-to-end evidence disproves that
+  inference.
+- **Acceptance criteria:** The following withdrawn proposal is retained only as provenance and must
+  not be implemented:
   - **Primary acceptance test:** `x-ai/grok-4.6=amazon-bedrock/us-west-2` passes constrained
     discovery **and** a provider-free `--live-route-preflight-only` gate.
   - Override tier fields are accepted in any key order and canonicalised by sorting on ingest,
@@ -2036,7 +2259,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
     continues to replay.
   - Every durable authority, provider, runner, qualification, selection, egress, completion, and
     release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
-- **Tests:** Provider-free regressions using the recorded live payload in **provider key order**
+- **Tests:** The withdrawn proposal requested provider-free regressions using the recorded live
+  payload in **provider key order**
   driven through the full `models discover` path, permuted-key-order equivalence, unchanged
   value-level rejections, digest stability, surfaced-reason assertion, schema drift, Ruff, strict
   mypy.
@@ -2047,8 +2271,55 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `_canonicalize_openrouter_pricing_overrides` before the sealed model; a 120-permutation ingest
   assay yields one pricing hash and one snapshot hash. Key order does not affect ingest. Do not
   implement. See the operator record correction of 2026-09-03.
-- **Next action:** Implement order-insensitive tier ingest and surface the discarded reason. Do not
-  select a candidate, launch a campaign, emit an operator command, or grant any authority.
+- **Next action:** `STOP`. This ticket is withdrawn, must not be implemented, and is excluded from
+  unfinished work. Preserve the existing provider-ingest canonicalization and select no candidate,
+  route, campaign, operator command, or authority.
+
+### V3-PLANADOPT-001 — The active repository plan pins a revoked candidate route
+
+- **Objective:** `config/models.selection-plan.json` (`plan_sha256 bb3d60c3ff75ed…`) still names
+  `deepseek/deepseek-v4-pro-0813=parasail/fp8` as its `role=candidate` route constraint. That exact
+  route is **tombstoned** in `candidate-selection-revocations.json` with reason
+  `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`. The build's governing plan therefore pins a route the
+  build itself refuses to select. Resolve that incoherence.
+- **Context:** Successor plans emitted by `models emit-selection-plan-successor` are private operator
+  artifacts, and Codex's own state records them as `PRIVATE_OPERATOR_V2_UNADOPTED` with
+  `ACTIVE_REPOSITORY_PLAN_V1`. So no operator-side successor — with or without
+  `--upgrade-price-cap-profile-v2` — can change the governing state. Adoption is a repository action
+  and only Codex can perform it.
+- **Files/modules:** `config/models.selection-plan.json` and its derivation/custody, plan
+  succession/adoption path, and focused regressions.
+- **Acceptance criteria:**
+  - The active repository plan does not pin a revoked route for any role. Either it names a
+    non-revoked candidate, or — if no admissible candidate exists — the plan records that state
+    explicitly and fails closed with a named reason, rather than silently pinning a tombstone.
+  - Revocation and the active plan cannot disagree: a route tombstoned in the revocation resource can
+    never appear as an active plan constraint, and a regression asserts that invariant so this
+    cannot recur.
+  - Adoption is deterministic and hash-custodied: `plan_sha256`, per-entry `entry_sha256`,
+    `constraint_sha256`, and `profile_sha256` are all derived, the predecessor digest is recorded, and
+    adoption cannot resurrect a revoked route.
+  - **Decide and record** whether the V2 price-cap profile is adopted at the same time. V2 is
+    reachable via `--upgrade-price-cap-profile-v2`, verified operator-side to emit profile
+    `schema_version 1.1` with `MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2`. Adopting it is a
+    separate decision from fixing the revoked pin; do not conflate them, and do not adopt V2 merely
+    because it exists.
+  - Judge constraints are carried forward unchanged. Existing sealed evidence remains byte-identical
+    and continues to replay.
+  - Every durable authority, provider, runner, qualification, selection, egress, completion, and
+    release flag remains literal false; `completed_real_audits` is unchanged by this ticket.
+- **Tests:** Provider-free regressions asserting no active plan constraint is revoked, adoption
+  determinism and digest custody, resurrection rejection, judge carry-forward, byte-identity of
+  existing sealed evidence, schema drift, Ruff, strict mypy.
+- **Dependencies:** `V3-REVOKERECON-001` `COMPLETE`, `V3-PLANSUCCESSOR-001` `COMPLETE`. Operator
+  verification `2026-09-04`: repository plan `bb3d60c3…` contains no V2 marker and pins the revoked
+  deepseek route.
+- **Status:** `QUEUED`
+- **Next action:** Resolve the revoked pin and record the V2 adoption decision. Do not select a
+  replacement candidate on the operator's behalf, launch a campaign, emit an operator command, or
+  grant any authority — candidate choice remains an operator decision informed by a provider-free
+  sweep, and the operator has already reported that exactly one route of 112 surveyed live endpoints
+  meets every substantive constraint.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -2949,34 +3220,42 @@ and report serialization.
 
 ## Current next action
 
-At `2026-09-03T11:38Z`, exact operator record
-`37330cfdbc960dbf24691ffbafad10791abf2363767d9adaa4409458c0519cb3` (`176768` bytes /
-`3140` lines; latest `2026-09-03T11:38Z`; remote-resolved commit `a9bc614f...`) reports that direct
-construction rejects provider-order override keys while sorted construction yields the expected
-schedule projection, and queues `V3-PRICEKEYORDER-001`. Local inspection finds the full provider
-ingest already canonicalizes raw tier keys before construction, so the reported provider-path root
-cause and sole-blocker conclusion are not yet confirmed or adopted. The prior response-shape fact
-remains: direct billable values and nested override prices are exact strings, while `overrides` is a
-list.
+`V3-PRICECAPCACHE-001` closes `PARTIAL`, provider-free, and nonauthorizing at
+`2026-09-04T01:48:46Z`. OpenRouter's documented `max_price` object caps prompt, completion,
+request, and image pricing but exposes no cache-write or total-cost member. A metadata-time
+cache-write-to-prompt comparison is not an atomic provider ceiling and can become stale before
+POST; reconciliation detects any excess only after spend. The ticket's provider-enforced dominance
+acceptance criterion is therefore unmet.
 
-At `2026-09-03T13:58:58Z`, the bounded `V3-MODELREFRESH-001` tier-schedule slice closes
-provider-free `PARTIAL`. Exact ordered schedules and their conservative maxima now traverse refresh,
-drift, durable pricing evidence, endpoint registration, live preflight, reservation, usage, recovery,
-reporting, and assurance. Schedule hashes detect equal-maximum threshold drift; unavailable,
-mismatched, or tampered schedules fail closed; flat-route bytes remain unchanged. The recorded xAI
-route still fails the independent `input_cache_write='0'` and `web_search='0.01'` component-cap
-constraints and is neither selected nor proven admissible. No current provider snapshot, live
-artifact round trip, automatic real benchmark, lineage re-evaluation, qualification, promotion, or
-stock live authority quartet exists, and no terminal full-suite credit is claimed.
+The safe local result reserves V3 but rejects it unconditionally at the trusted
+`project_provider_price_cap` boundary. Successor derivation and the CLI emit no V3 plan, and preview
+schema `1.3` plus pricing-attempt schema `1.2` are removed. V1/V2 behavior and the active repository
+V1 plan remain unchanged. A second old schema-`1.2` understatement affecting both prompt and
+cache-write units was reproduced, but is neutralized because V3 attempt publication and transport
+are unreachable.
 
-Current and next tickets are `UNSELECTED`; `V3-PRICEOVERRIDES-001` remains last complete,
-`V3-MODELREFRESH-001` is last partial, and the combined queues retain `41` unfinished tickets.
-`V3-PRICEKEYORDER-001` remains queued and unselected because the full ingest already canonicalizes
-raw tier keys. Re-evaluate component-cap policy or any queued work only under a separately selected
-bounded ticket. The active model plan, configuration, retry behavior, and 57-entry / `0.68118684`
-USD ledger remain unchanged; no provider/network action, operator command, campaign, run index,
-qualification, runtime authority, audit, release action, external publication, or other authority is
-authorized.
+The exact latest operator record is
+`63bfe90b281a6382b921c63669e817e65220c81b629fc75a7cb35b3f3e429d5b` (187,993 bytes / 3,335
+lines; latest `2026-09-03T22:31Z`, remote-resolved commit
+`c8a46b9b53a77fcdd4241d8fadeecbebc876346d`). It operator-reports that private plan
+`96cc5301111c7b60cf9b8235870d8051e2ece737c80dc5321662a1f6adfa3aea` genuinely exercised the
+V2 selector in metadata-only discovery and still failed
+`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`; the 57-entry / `0.68118684` USD ledger
+and zero completed real audits were unchanged. That private artifact is not checked in, inspected,
+adopted, or selected as the repository's active plan. The active repository plan remains V1, and
+the result grants no route admission or authority. Codex issued no provider or operator command.
+
+Post-cutoff focused validation is recorded in the worklog and runtime status; no terminal
+repository-wide suite credit is claimed. The current autonomy inventory records `4000/4003/3950/50`
+sources/occurrences/gate-sources/non-gating controls and `35/29/15` logical/unsatisfied/manual gates.
+
+`STOP`: current and next tickets are `UNSELECTED`; `V3-PRICECAPCOMP-001` is last complete,
+`V3-PRICECAPCACHE-001` is last partial, `V3-AUTONOMY-001` remains historically partial,
+`V3-CANDROUTE-001` remains partial, and the combined queues retain `41` unfinished tickets. Resume
+only after a provider supplies a request-bound cache-write/total-cost cap or equivalent enforceable
+atomic contract. No successor, current command, candidate, route, campaign, or run index is
+selected, and all provider, spend-admission, execution, qualification, runtime, audit, completion,
+release, and other authority remains false.
 
 ## Historical next action — c627 replay boundary (superseded)
 
