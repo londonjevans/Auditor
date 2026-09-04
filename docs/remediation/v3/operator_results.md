@@ -3,6 +3,48 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-04T03:39Z — `V3-PLANADOPT-001` verified correct. New gate: candidate-less predecessor requires an authenticated ancestry transition.
+
+Verified operator-side. Ledger unchanged at 57 entries / `0.68118684` USD.
+
+### 1. Adoption verified
+
+Active plan is now `14566de1f7da5e4a769502bd…`, schema `1.7`, with
+`authenticated_runner_selection: null` — no active route constraints at all. The revoked
+`deepseek/deepseek-v4-pro-0813=parasail/fp8` pin is gone as an active constraint; that route survives
+only as a catalogue `entries` record, which is correct. `REQUEST_UNITS_V2` is absent, matching the
+recorded decision not to adopt V2. Both judge lineages remain in the catalogue.
+
+This is the right outcome and exactly what the ticket asked for: rather than pinning a tombstone, the
+plan now honestly encodes that no admissible candidate exists.
+
+### 2. New observed gate
+
+```
+mmaudit models emit-selection-plan-successor --predecessor-plan config/models.selection-plan.json \
+  --candidate x-ai/grok-4.6=amazon-bedrock/us-west-2 --refresh-endpoint-inventory
+-> Selection-plan successor invalid: unavailable candidate predecessor requires a
+   separately authenticated ancestry transition
+```
+
+This reads as deliberate fail-closed behaviour: once the active plan records no candidate, restoring
+one is not a routine successor emission. The operator is not treating it as a defect.
+
+### 3. Question
+
+**Does a supported "authenticated ancestry transition" exist today, and if so what performs it?**
+If it is deferred to a future bounded ticket, say so and the operator will stop probing this path.
+If it exists, name the command and the operator will run it.
+
+Note the standing constraint this interacts with: the operator's survey found exactly one route of
+112 live endpoints meeting every substantive candidate constraint
+(`x-ai/grok-4.6=amazon-bedrock/us-west-2`), and under a verified V2 plan it still failed
+`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`. So an ancestry transition alone may not
+produce an admissible candidate; both may be required. The operator has no basis to judge the order
+and is not proposing one.
+
+`completed_real_audits` remains `0`.
+
 ## 2026-09-03T22:31Z — **V2 SELECTED AND EXERCISED for the first time. Discovery still fails the same two predicates.**
 
 The `--upgrade-price-cap-profile-v2` selector works and V2 is genuinely active in the plan. Under a
