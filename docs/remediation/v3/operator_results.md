@@ -3,6 +3,84 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-07T09:25Z — **`V3-DEVTRIAL-001` cannot start: `development review-fixture` refuses every real endpoint snapshot on the endpoint-level reasoning inventory. Verified at $0.**
+
+Operator resumed monitoring today. Read the 2026-09-06/07 queue entries, the DEVCOST/DEVRUN
+closures, the PLANANCESTRY answer (accepted: the operator stops probing the ancestry path), and the
+README development sections. Before selecting any paid trial the operator probed the new transport
+with real inputs and no credential. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. Verified defect
+
+`prepare_development_review` (`development_review.py`) requires
+`endpoint.supported_reasoning_efforts` to be non-`None` and contain `high` at the **endpoint** level.
+Live OpenRouter metadata does not carry that field on any endpoint: the 2026-08-30 survey found it
+absent on 112/112 endpoints, and today's live `list-endpoints --model moonshotai/kimi-k3 --json`
+(schema `1.1`, 18 endpoints, 09:24Z) shows `supported_reasoning_efforts: null` on all 18 while the
+new `effective` column resolves `['low','high','max']` from the model-level inventory. The
+production admission path already resolves that fallback (`_reasoning_effort_result` in
+`route_constraints.py`); the development path does not.
+
+Consequence: the command refuses every real route before reading credentials, so the trial is
+blocked by transport, not by model choice or spend authorization.
+
+### 2. Reproduction, $0, no network
+
+- Snapshot: the `endpoint_snapshot` object extracted verbatim from the frozen discovery artifact
+  `~/.mmaudit/private/model-discovery/authrunner-replay-judge-20260830-h25/candidate-9e460c49…json`
+  (`moonshotai/kimi-k3=modal/mxfp4`, `require_zdr: true`, `provider_policy_mode: only`, one
+  endpoint, native JSON schema supported, endpoint efforts `null`, model efforts `[low,high,max]`).
+  It validates as `OpenRouterEndpointSnapshotEvidence`.
+- Controls: `ControlA.sol` copied byte-exact; a **copy** of the cumulative ledger; a synthetic
+  `OPENROUTER_API_KEY`. All four paths absolute and distinct.
+
+```
+mmaudit development review-fixture --endpoint-snapshot <snap> --fixture-file <ControlA.sol> \
+  --cost-ledger <ledger-copy> --secrets-env-file <synthetic.env> --request-id devtrial-probe-0 \
+  --budget-usd 250 --per-attempt-usd 0.50 --accept-estimate-risk --allow-code-egress
+-> Development fixture review refused: invalid input, consent, route, credentials, or cumulative
+   accounting. (exit 2)
+```
+
+Calling `prepare_development_review(...)` directly with the same policy/snapshot/fixture gives the
+typed reason: `DevelopmentCostError: development review requires native JSON schema and high
+reasoning`. The refusal occurs before `AtomicCostLedger.open_existing` and before
+`load_operator_secrets` (CLI order verified), so no ledger write and no egress. The ledger copy is
+byte-identical to the original afterwards.
+
+The local regression passes because `tests/fixtures/model_responses/development_cost_case.json`
+sets `"reasoning": {"supported_efforts": ["high"]}` **on the endpoint** — a shape the live API has
+never returned in any operator survey.
+
+### 3. Requests
+
+1. **Bounded ticket:** make the development review resolve the effective reasoning inventory the
+   same way admission does (endpoint-level if present, else model-level), or state why the
+   development path must be stricter than production admission. Please add a regression whose
+   snapshot has endpoint-level `null` and model-level `[..., high, ...]`, since that is the only
+   live shape.
+2. **Supply route question:** is extracting `endpoint_snapshot` from a `candidate-*.json` discovery
+   artifact the intended way to obtain `--endpoint-snapshot`, or should a command emit a fresh
+   standalone snapshot? The README says "existing validated endpoint-snapshot JSON" without naming a
+   producer. If extraction is intended, say so and the operator will use a fresh discovery run
+   (metadata drifts in minutes; a week-old snapshot is not a trial input).
+
+### 4. Second live observation
+
+`list-endpoints --model z-ai/glm-5.2` (09:24Z) now fails closed with
+`endpoint inventory contains duplicate exact routes`. On 2026-08-30 the same model enumerated 33
+endpoints. Reported as an observation only; the primary judge lineage may need re-enumeration once
+the provider inventory settles or once the enumeration tolerates provider-side duplicates
+explicitly.
+
+### 5. Durability note
+
+HEAD `810ed7f` is pushed; the working tree carries 145 uncommitted paths since 2026-09-04
+(≈68k inserted lines). The operator snapshotted it non-invasively to
+`refs/heads/wip/durability-latest` (`2f94526`, 09:20Z). No product file was modified by the
+operator.
+
 ## 2026-09-04T03:39Z — `V3-PLANADOPT-001` verified correct. New gate: candidate-less predecessor requires an authenticated ancestry transition.
 
 Verified operator-side. Ledger unchanged at 57 entries / `0.68118684` USD.
