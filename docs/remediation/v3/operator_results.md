@@ -3,6 +3,56 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-07T10:40Z — `V3-DEVREASON-001` verified: both input shapes now prepare. Trial input frozen fresh. Awaiting operator route/spend decision.
+
+Provider-free verification of the repair, plus one metadata-only discovery. Ledger unchanged at
+57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Repair verified against the same inputs that failed at 09:25
+
+| input | before | after |
+|---|---|---|
+| extracted `endpoint_snapshot` (kimi-k3=modal/mxfp4, endpoint efforts `null`, model efforts `[low,high,max]`) | `DevelopmentCostError: … requires native JSON schema and high reasoning` | `PREPARED`, `within_estimated_budget: true` |
+| complete `candidate-9e460c49…json` on the same path | not accepted | parses as `OpenRouterModelDiscoveryEvidence`; `PREPARED` |
+
+Both via `prepare_development_review(...)` with the pinned `ControlA.sol` bytes and policy
+`total 250 / per-attempt 0.50 / multiplier 2 / attempts 1`. No ledger, credential, or network access
+in either call. The producer answer (complete `models discover` candidate JSON on
+`--endpoint-snapshot`, no extraction) is accepted and will be used.
+
+### 2. Fresh trial input, $0
+
+```
+mmaudit models discover --candidate moonshotai/kimi-k3=modal/mxfp4 \
+  --config config/openrouter-qualification.toml --secrets-env-file ~/.mmaudit/secrets.env \
+  --output-dir ~/.mmaudit/private/model-discovery/devtrial-kimi-k3-modal-20260907-d1
+-> Frozen 1 exact REAL discovery record; run de34b33a…; no model completion was requested.
+```
+
+Candidate file content hash `9e460c49…` is byte-identical to the 2026-08-30 h25 record, so this
+route's metadata has not drifted in eight days: operational, ZDR, native JSON schema, model-level
+efforts `[low,high,max]`, prices prompt `0.000003` / completion `0.000015` / cache-read `0.0000003`
+per token, no cache-write component. No selection plan was needed for plain discovery.
+
+### 3. Estimate for one attempt (from the prepared request, not a preview command)
+
+Request bytes 2979, output allowance 4096 tokens, multiplier 2 →
+`estimated_cost_per_attempt_usd: 0.1425414`. The `ControlA` + `ControlB` pair is therefore bounded
+at roughly `0.29` USD estimated, with the policy's stated overspend risk accepted by the operator on
+2026-09-06. Nothing has been launched.
+
+### 4. What the operator will do next, after explicit direction
+
+Run `development review-fixture` once per fixture against the frozen candidate file above, with the
+real cumulative ledger (`--budget-usd 250` matches its cap), a distinct `--request-id` per fixture,
+`--per-attempt-usd 0.50`, and report the two observations here: status, model/provider echo,
+declared findings per fixture, false positives on `ControlB`, reported cost, runtime. The operator
+notes for the record that `moonshotai/kimi-k3` is a judge lineage in the retired triple; for a
+two-fixture transport observation that is immaterial, but it will not be reused as a candidate
+without a separate decision.
+
+No question for Codex in this entry.
+
 ## 2026-09-07T09:25Z — **`V3-DEVTRIAL-001` cannot start: `development review-fixture` refuses every real endpoint snapshot on the endpoint-level reasoning inventory. Verified at $0.**
 
 Operator resumed monitoring today. Read the 2026-09-06/07 queue entries, the DEVCOST/DEVRUN
