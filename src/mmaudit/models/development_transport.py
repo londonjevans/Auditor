@@ -1,6 +1,6 @@
 """Bounded estimated-cost fixture transport, isolated from qualifying provider usage.
 
-Only exact pinned synthetic requests can cross this boundary. HTTP observations
+Only exact pinned fixture or explicit manifest-bound source requests can cross this boundary. HTTP observations
 remain non-qualifying even when their JSON, routing, and reported cost validate.
 """
 
@@ -23,6 +23,13 @@ from mmaudit.models.development_audit import (
     DevelopmentScoredAuditShardObservation,
     PreparedDevelopmentAuditShard,
     prepare_development_audit_shard,
+)
+from mmaudit.models.development_corpus import (
+    DevelopmentCorpusResponse,
+    DevelopmentCorpusShardObservation,
+    PreparedDevelopmentCorpusShard,
+    prepare_development_corpus_shard,
+    validate_development_corpus_response,
 )
 from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
@@ -83,7 +90,10 @@ MAX_DEVELOPMENT_RESPONSE_BYTES = 1_000_000
 DEVELOPMENT_ATTEMPT_TIMEOUT_SECONDS = 180
 _GENERATION_ID = DEVELOPMENT_GENERATION_ID
 type _PreparedSource = (
-    PreparedDevelopmentReview | PreparedDevelopmentAuditShard | PreparedDevelopmentJudgmentShard
+    PreparedDevelopmentReview
+    | PreparedDevelopmentAuditShard
+    | PreparedDevelopmentJudgmentShard
+    | PreparedDevelopmentCorpusShard
 )
 
 
@@ -227,7 +237,11 @@ def _validated_review(
     api_key: str,
     routing_evidence: DevelopmentRoutingEvidence,
 ) -> tuple[
-    str, DevelopmentReviewResponse | DevelopmentScoredReviewResponse | DevelopmentJudgmentResponse
+    str,
+    DevelopmentReviewResponse
+    | DevelopmentScoredReviewResponse
+    | DevelopmentJudgmentResponse
+    | DevelopmentCorpusResponse,
 ]:
     _validate_routing(routing_evidence)
     generation_id = payload.get("id")
@@ -286,6 +300,15 @@ def _validated_review(
         or detect_secrets(generation_id)
     ):
         raise _ResponseRejected(Diagnostic.SECRET_OUTPUT)
+    if type(prepared) is PreparedDevelopmentCorpusShard:
+        corpus_response = _decode_development_review(content, DevelopmentCorpusResponse)
+        try:
+            validate_development_corpus_response(
+                corpus_response, prepared.manifest, prepared.source_filename
+            )
+        except ValueError:
+            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE) from None
+        return generation_id, corpus_response
     if type(prepared) is PreparedDevelopmentJudgmentShard:
         judgment = _decode_development_review(content, DevelopmentJudgmentResponse)
         try:
@@ -429,6 +452,30 @@ async def review_development_judgment_shard(
     return result
 
 
+async def review_development_corpus_shard(
+    *,
+    prepared: PreparedDevelopmentCorpusShard,
+    ledger: AtomicCostLedger,
+    operator_secrets: OperatorSecrets,
+    allow_code_egress: bool = False,
+    mock_transport: httpx.MockTransport | None = None,
+) -> DevelopmentCorpusShardObservation:
+    """Use the same exact request, cumulative accounting and routing boundary for a selected source."""
+
+    if type(prepared) is not PreparedDevelopmentCorpusShard:
+        raise DevelopmentTransportError("development corpus requires an exact prepared shard")
+    result = await _review_development_source(
+        prepared=prepared,
+        ledger=ledger,
+        operator_secrets=operator_secrets,
+        allow_code_egress=allow_code_egress,
+        attempt=1,
+        mock_transport=mock_transport,
+    )
+    assert type(result) is DevelopmentCorpusShardObservation
+    return result
+
+
 async def _review_development_source(
     *,
     prepared: _PreparedSource,
@@ -441,6 +488,7 @@ async def _review_development_source(
     DevelopmentReviewObservation
     | DevelopmentAnyAuditShardObservation
     | DevelopmentJudgmentShardObservation
+    | DevelopmentCorpusShardObservation
 ):
     """Execute one explicit attempt; never automatically retry an ambiguous paid call.
 
@@ -458,6 +506,7 @@ async def _review_development_source(
             PreparedDevelopmentReview,
             PreparedDevelopmentAuditShard,
             PreparedDevelopmentJudgmentShard,
+            PreparedDevelopmentCorpusShard,
         }
         or type(ledger) is not AtomicCostLedger
     ):
@@ -492,6 +541,18 @@ async def _review_development_source(
             run_id=prepared.run_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
             schema_version=prepared.schema_version,
+        )
+    elif type(prepared) is PreparedDevelopmentCorpusShard:
+        if attempt != 1:
+            raise DevelopmentTransportError("development corpus shards do not automatically retry")
+        rebuilt = prepare_development_corpus_shard(
+            policy=prepared.estimate.policy,
+            endpoint_snapshot=prepared.discovery or prepared.endpoint_snapshot,
+            manifest=prepared.manifest,
+            source_files=prepared.source_files,
+            primary_filename=prepared.source_filename,
+            run_id=prepared.run_id,
+            maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
         )
     else:
         assert type(prepared) is PreparedDevelopmentJudgmentShard
@@ -556,6 +617,7 @@ async def _review_development_source(
         DevelopmentReviewResponse
         | DevelopmentScoredReviewResponse
         | DevelopmentJudgmentResponse
+        | DevelopmentCorpusResponse
         | None
     ) = None
     routing_evidence: DevelopmentRoutingEvidence | None = None
@@ -739,6 +801,14 @@ async def _review_development_source(
     )
     if type(prepared) is PreparedDevelopmentReview:
         return DevelopmentReviewObservation.model_validate(values)
+    if type(prepared) is PreparedDevelopmentCorpusShard:
+        values.update(
+            manifest=prepared.manifest,
+            run_id=prepared.run_id,
+            shard_id=prepared.shard_id,
+            elapsed_seconds=_DEVELOPMENT_MONOTONIC() - started,
+        )
+        return DevelopmentCorpusShardObservation.model_validate(values)
     if type(prepared) is PreparedDevelopmentJudgmentShard:
         values.update(
             candidate_sha256=prepared.candidate_sha256,

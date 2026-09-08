@@ -53,6 +53,14 @@ from mmaudit.models.development_audit import (
     DevelopmentAuditShardObservation,
     DevelopmentScoredAuditShardObservation,
 )
+from mmaudit.models.development_corpus import (
+    DevelopmentCorpusManifest,
+    DevelopmentCorpusMaterial,
+    DevelopmentCorpusObservation,
+    DevelopmentCorpusPlan,
+    DevelopmentCorpusResponse,
+    DevelopmentCorpusShardObservation,
+)
 from mmaudit.models.development_costs import DevelopmentCostEstimate, DevelopmentCostPolicy
 from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
@@ -255,6 +263,12 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_ensemble_plan.schema.json": DevelopmentEnsemblePlan,
     "development_ensemble_observation.schema.json": DevelopmentEnsembleObservation,
     "development_ensemble_score.schema.json": DevelopmentEnsembleScore,
+    "development_corpus_manifest.schema.json": DevelopmentCorpusManifest,
+    "development_corpus_material.schema.json": DevelopmentCorpusMaterial,
+    "development_corpus_response.schema.json": DevelopmentCorpusResponse,
+    "development_corpus_plan.schema.json": DevelopmentCorpusPlan,
+    "development_corpus_shard_observation.schema.json": DevelopmentCorpusShardObservation,
+    "development_corpus_observation.schema.json": DevelopmentCorpusObservation,
     "openrouter_endpoint_inventory_diagnostic.schema.json": (OpenRouterEndpointInventoryDiagnostic),
     "findings_artifact.schema.json": FindingsArtifact,
     "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,

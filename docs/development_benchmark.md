@@ -326,6 +326,59 @@ live negative-control discrimination, private billing authenticity, external tru
 genuine root independence, a reproducible external evidence seal or the frozen hard-cost objective.
 All qualification, release, audit-completion and finding-validation authority stays false.
 
+## Explicit source-manifest development candidates
+
+`development audit-manifest` reviews a supplied local source inventory beyond the two
+fixed three-file controls. It accepts an absolute `--source-manifest` and `--corpus-root`,
+explicit endpoint metadata, the existing cumulative cost ledger, a distinct new output
+directory and run ID. Both `--accept-estimate-risk` and `--allow-code-egress` are required
+before any input is read. This is a paid-capable development command, not a selected
+operator run or a qualifying audit.
+
+Prepare the typed manifest with the pure `freeze_development_corpus` API using an
+explicit, sorted tuple of `(relative_filename, original_bytes)`. It performs no file
+discovery or I/O. The CLI consumes that manifest; it does not find sources, follow imports,
+download dependencies, compile or execute Solidity. Scope must be declared
+`OPERATOR_SUPPLIED_SYNTHETIC` or `OPERATOR_SUPPLIED_PUBLIC`, but that declaration and its
+hash do not authenticate provenance, licensing or ground truth. `EXPLICIT_MANIFEST_ONLY`
+and `dependency_closure: NOT_ESTABLISHED` remain fixed.
+
+The inventory permits 1–64 lexicographically sorted, case-fold-distinct relative `.sol`
+paths, at most 65536 bytes and 10000 lines per source, and 524288 total original bytes.
+The loader refuses traversal, aliases, links, hard-linked/special files, malformed or
+ambiguous UTF-8, secret-like content and any exact path/byte/hash/line drift. It reads only
+selected members and revalidates their bindings before handing off the immutable snapshot.
+These global bounds do not promise that the selected endpoint's request/token capacity
+or the estimated budget can admit every otherwise valid corpus.
+
+Each selected file receives one request with its entire primary file and the entire
+selected source snapshot as context. Requests share one exact model/metadata selection,
+completion allowance and one-attempt estimated-cost policy. Full context is repeated per
+file, so input cost scales with both corpus size and file count; this is not semantic
+dependency-aware sharding. The existing independent 180-second request cap still applies,
+within a whole-run `--maximum-run-seconds` deadline (default600, maximum1800). There is no
+automatic retry or resume, and estimated costs are not a provider-enforced ceiling.
+Explicit carry mode preserves prior eligible uncertain estimates as liabilities.
+
+The v3 response permits up to16 unvalidated claims per file with exact nested origin paths
+and source-bounded primary/origin lines. It retains the coarse v2 vulnerability classes
+(including `other`) and advisory/invariant distinction; v1/v2 schemas and fixed source
+allowlists remain unchanged. Coordinate validity is not semantic correctness.
+
+Owned mode0700 output retains `plan.json`, exact original UTF-8 material in `sources.json`,
+observed `file-0001.json` through at most `file-0064.json`, and `result.json`, all mode0600.
+Every selected file/line and candidate remains in the denominator; failures, missing shards,
+unreturned requests and unknown/overrun costs remain visible. Generation reuse, replay and
+owned-output drift refuse. Completion means responses were observed for selected files:
+`RESPONSE_COMPLETION_NOT_VALIDATED_ANALYSIS_COVERAGE`. All audit, validation, qualification
+and release flags remain false, including when every response contains no findings.
+
+This candidate consumer does not yet supply general-manifest truth scoring, candidate
+judgment or the dual-review ensemble. Those existing commands retain their fixed v2
+three-file scope. Local tests use the larger paired synthetic source fixture and a64-file
+boundary with exact MockTransport and real network/process traps; they do not demonstrate
+real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
+
 ## Comparing retained runs without another provider call
 
 `mmaudit development compare-scores` accepts two through eight explicit absolute

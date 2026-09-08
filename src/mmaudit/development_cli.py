@@ -22,6 +22,7 @@ from mmaudit.models.development_audit import (
     DevelopmentCorpusId,
     prepare_development_audit,
 )
+from mmaudit.models.development_corpus import prepare_development_corpus
 from mmaudit.models.development_costs import (
     MAX_DEVELOPMENT_REQUEST_BYTES,
     DevelopmentCostError,
@@ -45,6 +46,7 @@ from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.development_audit import run_development_audit
 from mmaudit.orchestration.development_comparison import compare_development_score_files
+from mmaudit.orchestration.development_corpus import run_development_corpus
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
@@ -52,8 +54,119 @@ from mmaudit.release_io import (
     read_json_evidence,
     revalidate_evidence_file_binding,
 )
+from mmaudit.repository.development_corpus import (
+    load_development_corpus,
+    revalidate_loaded_development_corpus,
+)
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("audit-manifest")
+def audit_development_manifest_command(
+    source_manifest: Annotated[Path, typer.Option("--source-manifest")],
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    endpoint_snapshot: Annotated[Path, typer.Option("--endpoint-snapshot")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    budget_usd: Annotated[str, typer.Option("--budget-usd")],
+    per_attempt_usd: Annotated[str, typer.Option("--per-attempt-usd")],
+    maximum_completion_tokens: Annotated[
+        int, typer.Option("--maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    maximum_run_seconds: Annotated[
+        int, typer.Option("--maximum-run-seconds", min=1, max=1800)
+    ] = 600,
+    safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+) -> None:
+    """Review only a frozen local source manifest; no discovery or qualified audit completion.
+
+    The supplied synthetic/public declaration does not authenticate provenance or complete
+    dependency scope. This paid-capable command requires separate explicit source/cost consent.
+    """
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Development manifest audit requires --accept-estimate-risk and --allow-code-egress; estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        inputs = (source_manifest, corpus_root, endpoint_snapshot, cost_ledger, secrets_env_file)
+        paths = (*inputs, output_dir)
+        if any(not p.is_absolute() or ".." in p.parts for p in paths) or len(set(paths)) != len(
+            paths
+        ):
+            raise DevelopmentCostError(
+                "development manifest paths must be absolute, distinct and normalized"
+            )
+        if output_dir.is_relative_to(corpus_root) or any(
+            p.is_relative_to(output_dir) for p in inputs
+        ):
+            raise DevelopmentCostError(
+                "development corpus output overlaps selected inputs or controls"
+            )
+        loaded = load_development_corpus(manifest_file=source_manifest, corpus_root=corpus_root)
+        metadata_input = read_json_evidence(
+            evidence_root=endpoint_snapshot.parent,
+            relative_path=endpoint_snapshot.name,
+            max_bytes=2_000_000,
+        )
+        metadata: DevelopmentReviewMetadata = TypeAdapter(DevelopmentReviewMetadata).validate_json(
+            metadata_input.content, strict=True
+        )
+        policy = DevelopmentCostPolicy.model_validate(
+            {
+                "overspend_risk_accepted": accept_estimate_risk,
+                "total_budget_usd": budget_usd,
+                "per_attempt_budget_usd": per_attempt_usd,
+                "safety_multiplier": safety_multiplier,
+                "maximum_attempts": 1,
+                "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
+                if carry_uncertain_estimates
+                else "STOP",
+            }
+        )
+        prepared = prepare_development_corpus(
+            policy=policy,
+            endpoint_snapshot=metadata,
+            manifest=loaded.material.manifest,
+            source_files=loaded.material.source_files,
+            run_id=run_id,
+            maximum_completion_tokens=maximum_completion_tokens,
+            maximum_run_seconds=float(maximum_run_seconds),
+        )
+        revalidate_loaded_development_corpus(loaded)
+        revalidate_evidence_file_binding(
+            evidence_root=endpoint_snapshot.parent,
+            binding=metadata_input.binding,
+            max_bytes=2_000_000,
+        )
+        ledger = AtomicCostLedger.open_existing(cost_ledger, cap_usd=policy.total_budget_usd)
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            observation = asyncio.run(
+                run_development_corpus(
+                    prepared=prepared,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                )
+            )
+    except Exception:
+        typer.echo(
+            "Development manifest audit refused: invalid selected source, metadata/allowance, consent, cumulative accounting or output custody. No complete dependency scope or validated audit is implied.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(observation.model_dump_json(indent=2))
+    if observation.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 @development_app.command("ensemble-corpus")

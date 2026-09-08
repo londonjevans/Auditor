@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4200
-    assert inventory.source_occurrence_count == 4203
+    assert inventory.source_count == 4209
+    assert inventory.source_occurrence_count == 4212
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 294,
-        "EXPLICIT_NON_FIELD_GATE": 2263,
+        "AUDITED_MODULE_UNIVERSE": 297,
+        "EXPLICIT_NON_FIELD_GATE": 2269,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4148,
+        SourceCoverageClassification.GATE: 4157,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1382,6 +1382,30 @@ def test_committed_inventory_is_canonical_self_hashed_and_current(
     ],
 )
 def test_executed_development_ensemble_remains_explicitly_nonauthorizing(
+    inventory, source_id, gate_id
+):
+    source = next(item for item in inventory.source_coverage if item.source_id == source_id)
+    assert source.logical_gate_id == gate_id
+    assert source.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize(
+    "source_id,gate_id",
+    [
+        ("audited-module:models.development_corpus", "gate-runtime-package-integrity"),
+        ("audited-module:orchestration.development_corpus", "gate-runtime-package-integrity"),
+        ("audited-module:repository.development_corpus", "gate-runtime-package-integrity"),
+        ("explicit:development-corpus-frozen-manifest", "gate-client-audit-scope"),
+        ("explicit:development-corpus-selected-source-loader", "gate-client-audit-scope"),
+        ("explicit:development-corpus-frozen-plan", "gate-client-audit-scope"),
+        ("explicit:development-corpus-shard-transport", "gate-provider-secret-transport"),
+        ("explicit:development-corpus-sequential-run", "gate-full-quality-analysis"),
+        ("explicit:development-corpus-accounting", "gate-cost-ledger-provisioning"),
+    ],
+)
+def test_manifest_development_corpus_remains_explicitly_nonauthorizing(
     inventory, source_id, gate_id
 ):
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)

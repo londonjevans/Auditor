@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "DevelopmentCorpusFinding": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Reuse advisory/invariant distinctions, with manifest-scoped coordinates instead of flat pins.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "advisory"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "type": "null"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "title": "Violated Invariant",
+              "type": "null"
+            },
+            "vulnerability_class": {
+              "title": "Vulnerability Class",
+              "type": "null"
+            }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
+          ],
+          "title": "DevelopmentCorpusFinding",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reuse advisory/invariant distinctions, with manifest-scoped coordinates instead of flat pins.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "invariant_violation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "$ref": "#/$defs/DevelopmentCorpusRootCauseReference"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Violated Invariant",
+              "type": "string"
+            },
+            "vulnerability_class": {
+              "enum": [
+                "access_control",
+                "accounting",
+                "reservation",
+                "pause",
+                "other"
+              ],
+              "title": "Vulnerability Class",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
+          ],
+          "title": "DevelopmentCorpusFinding",
+          "type": "object"
+        }
+      ],
+      "description": "Reuse advisory/invariant distinctions, with manifest-scoped coordinates instead of flat pins.",
+      "title": "DevelopmentCorpusFinding"
+    },
+    "DevelopmentCorpusRootCauseReference": {
+      "additionalProperties": false,
+      "description": "An unvalidated origin in the explicitly supplied nested source namespace.",
+      "properties": {
+        "filename": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentCorpusRootCauseReference",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_corpus_response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentCorpusFinding"
+      },
+      "maxItems": 16,
+      "title": "Findings",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "3.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "findings"
+  ],
+  "title": "DevelopmentCorpusResponse",
+  "type": "object"
+}

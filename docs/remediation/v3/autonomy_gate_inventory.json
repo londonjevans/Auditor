@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4148,
-  "inventory_sha256": "c48ee5566a3a856668239c171085898c537a56979b64ce90d8439a6298fdd1d3",
+  "gate_source_count": 4157,
+  "inventory_sha256": "05b7feaf30007a7ebe2066e32a4afc20a25dd42083d06429ad1865ede5421f1f",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -900,6 +900,9 @@
         "explicit:development-audit-frozen-plan",
         "explicit:development-benchmark-plan-binding",
         "explicit:development-comparison-files",
+        "explicit:development-corpus-frozen-manifest",
+        "explicit:development-corpus-frozen-plan",
+        "explicit:development-corpus-selected-source-loader",
         "explicit:development-ensemble-frozen-plan",
         "explicit:development-judgment-frozen-plan",
         "filesystem-input:cli:_repo_path:1",
@@ -1069,6 +1072,7 @@
         "entropy-ast:orchestration.cost_ledger:atomiccostledger.reserve_portfolio:uuid-uuid4:1",
         "environment-override:mmaudit_cost_ledger_path",
         "explicit:cost-ledger-existing-state-contract",
+        "explicit:development-corpus-accounting",
         "explicit:development-ensemble-accounting",
         "explicit:development-judgment-candidate-accounting",
         "explicit:development-uncertain-estimate-carry",
@@ -1649,6 +1653,7 @@
         "environment-override:mmaudit_require_prior_audit",
         "environment-override:mmaudit_solidity_compile",
         "explicit:development-audit-sequential-run",
+        "explicit:development-corpus-sequential-run",
         "explicit:development-ensemble-sequential-run",
         "explicit:development-judgment-sequential-run",
         "explicit:hardhat-captured-inventory-preparation",
@@ -3209,6 +3214,7 @@
         "direct-env:operator-secrets-env-file-selector",
         "explicit:development-audit-shard-transport",
         "explicit:development-completion-telemetry",
+        "explicit:development-corpus-shard-transport",
         "explicit:development-judgment-shard-transport",
         "explicit:development-routing-observation",
         "filesystem-input:operator_secrets:_read_validated_secret_file:1",
@@ -4040,6 +4046,7 @@
         "audited-module:models.candidate_selection",
         "audited-module:models.coverage_planning",
         "audited-module:models.development_audit",
+        "audited-module:models.development_corpus",
         "audited-module:models.development_costs",
         "audited-module:models.development_diagnostics",
         "audited-module:models.development_ensemble",
@@ -4115,6 +4122,7 @@
         "audited-module:orchestration.development_audit",
         "audited-module:orchestration.development_budget",
         "audited-module:orchestration.development_comparison",
+        "audited-module:orchestration.development_corpus",
         "audited-module:orchestration.development_ensemble",
         "audited-module:orchestration.development_judgment",
         "audited-module:orchestration.execution_candidates",
@@ -4186,6 +4194,7 @@
         "audited-module:repository.__init__",
         "audited-module:repository.chunking",
         "audited-module:repository.configuration_custody",
+        "audited-module:repository.development_corpus",
         "audited-module:repository.directory_custody",
         "audited-module:repository.discovery",
         "audited-module:repository.file_custody",
@@ -4560,7 +4569,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4200,
+  "source_count": 4209,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -10059,7 +10068,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/development_cli.py",
-      "source_semantics_sha256": "ce07fd70ca48a63daf79a591911f6cc0944b7b5c29dfe5b06d75d23b314aa67f"
+      "source_semantics_sha256": "9c9cf1eba397e262b5cfc35342d422743282df4bf95c8d0c52477e92cc29dae8"
     },
     {
       "classification": "GATE",
@@ -10370,6 +10379,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:models.development_corpus",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/development_corpus.py",
+      "source_semantics_sha256": "7de2f6eda9700488d42ba731260912127af2d0858f6c14a10470396e1128ccdb"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
       "source_id": "audited-module:models.development_costs",
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
@@ -10410,7 +10428,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_review.py",
-      "source_semantics_sha256": "129e17a871a9f1ef7abba1e96f296af6c4844b81872374cb5e13e3dc73f55e4a"
+      "source_semantics_sha256": "c7cad65823c72df7c29a177d91bb06eb25230897dfae9200e6040937fa8b493b"
     },
     {
       "classification": "GATE",
@@ -10428,7 +10446,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_transport.py",
-      "source_semantics_sha256": "7e1ef72cb7b45a03598bf89c40c729cfa3e9a9876699a6c092c8c2fe4e90723c"
+      "source_semantics_sha256": "fe3c2a6c658a49b9a2703a135aced0f8a89ed1419fa2da3eb1aea7ed52a649d3"
     },
     {
       "classification": "GATE",
@@ -10923,7 +10941,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "dd860738e6c76381abec392f452aa8426af13a47bb11ca80f45a41ff609683c5"
+      "source_semantics_sha256": "1cd867ccd3180641dfacf5230d52d6611755e52c0c4527a71e292dc3041bd4fc"
     },
     {
       "classification": "GATE",
@@ -11041,6 +11059,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_comparison.py",
       "source_semantics_sha256": "a073b824b947f35e4a94c8446e2f8a350ed149f47213d99ba89f9023df3d6a92"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:orchestration.development_corpus",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_corpus.py",
+      "source_semantics_sha256": "a342bd1753e25e1c385fa4a703046121596d9ce209252d6354fc23971acc2e3c"
     },
     {
       "classification": "GATE",
@@ -11680,6 +11707,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/repository/configuration_custody.py",
       "source_semantics_sha256": "f5f74686037e210df78a12ab59d3762b1efa7dabfb48c30d76a8bf3b12b1708e"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:repository.development_corpus",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/repository/development_corpus.py",
+      "source_semantics_sha256": "c8e06af596034bb263df24b11601dc390ccb20e9afaa3884278d73a80c22d561"
     },
     {
       "classification": "GATE",
@@ -21607,6 +21643,60 @@
       "source_occurrence_count": 1,
       "source_path": "mmaudit.models.development_diagnostics.project_development_completion_telemetry",
       "source_semantics_sha256": "aa638fb88b973d51ea4322a52579ade624eca45f4a586bf99e8ce6a3399c19ac"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-cost-ledger-provisioning",
+      "source_id": "explicit:development-corpus-accounting",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_corpus._report",
+      "source_semantics_sha256": "bc12365980c96961a057db9cf332ac1c23a3c27f6c7abe2f401ceb838eced762"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-frozen-manifest",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.development_corpus.freeze_development_corpus",
+      "source_semantics_sha256": "9ffa7ceaf658378e86c86dd5340ce2a872cabe2d405decbeeb7b66880a66d54b"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-frozen-plan",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.development_corpus.prepare_development_corpus",
+      "source_semantics_sha256": "fae5fc4fdca8577442dcbd9d8b09ddff601a53cfd98e6fdf106b3cc313ca4788"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-selected-source-loader",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.repository.development_corpus.load_development_corpus",
+      "source_semantics_sha256": "f67c0df638d7fc5d5ea21330a4d49a0fd9d3cb69650ce0f64dffe6511226e01a"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-full-quality-analysis",
+      "source_id": "explicit:development-corpus-sequential-run",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_corpus.run_development_corpus",
+      "source_semantics_sha256": "05af0140f4441817b1a7568e1ad4797733fb1e6515bc280f8754807f7bf87367"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-provider-secret-transport",
+      "source_id": "explicit:development-corpus-shard-transport",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.development_transport.review_development_corpus_shard",
+      "source_semantics_sha256": "4618ae9f2ea4eaab4864454ca324b29768efae6f86acc62d0fc7e5963269d237"
     },
     {
       "classification": "GATE",
@@ -42363,9 +42453,9 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "d6f9cefe07808cdbc3ccab983c6fb30e2b50636bffe3c3fc747aae98762f8a01",
+  "source_discovery_semantics_sha256": "bc97c2124525db4b438524d53b31e2d4ae1851d5baad90aefc22344a71008c53",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 294,
+    "AUDITED_MODULE_UNIVERSE": 297,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
@@ -42374,13 +42464,13 @@
     "DIRECT_ENVIRONMENT_INPUT": 549,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2263,
+    "EXPLICIT_NON_FIELD_GATE": 2269,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4203,
-  "source_universe_sha256": "9e244b7bb5db5ab035a0928fb6e66a9027d8357f7740f98735cf6030ea4d3eb4",
+  "source_occurrence_count": 4212,
+  "source_universe_sha256": "6e0c41f26ca60671c3f5a106a1440e52b3639cec8a70e982086a9556c52db0fe",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

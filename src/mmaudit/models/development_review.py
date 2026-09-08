@@ -287,13 +287,7 @@ class DevelopmentReviewDiagnostic(StrEnum):
     COST_OVERRUN = "COST_OVERRUN"
 
 
-class _DevelopmentAccountedObservation[
-    ReviewT: (
-        DevelopmentReviewResponse,
-        DevelopmentScoredReviewResponse,
-        DevelopmentJudgmentResponse,
-    )
-](_DevelopmentModel):
+class _DevelopmentAccountedObservation[ReviewT: BaseModel](_DevelopmentModel):
     """Shared accounting/refusal contract; subclasses must bind their exact source scope."""
 
     source_filename: str
