@@ -931,7 +931,7 @@ def _authorized_ordinary_review_evidence(
     temporary_root = TemporaryDirectory(prefix="mmaudit-model-review-authority-")
     inventory = _scheduler_inventory()
     journal = _create_test_scheduler_journal(
-        Path(temporary_root.name) / "journal",
+        Path(temporary_root.name).resolve(strict=True) / "journal",
         bindings=_scheduler_bindings(),
         shard_inventory=inventory,
         privacy_evidence_custody=_scheduler_privacy_custody(

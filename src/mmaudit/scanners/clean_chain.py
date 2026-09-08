@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, Literal, Protocol
+from typing import IO, TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 
@@ -36,6 +36,10 @@ from mmaudit.scanners.fork_rpc import (
     local_fork_rpc_port,
     observe_pinned_fork_rpc,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+    from mmaudit.scanners.base import _ScannerExecutableObservation
 
 _LAUNCHER_POLICY_VERSION = "2.0"
 _LOOPBACK_HOST = "127.0.0.1"
@@ -334,6 +338,73 @@ class _TrustedExecutable:
         return self.descriptor
 
 
+@dataclass(frozen=True, slots=True)
+class _ManagedCleanAnvilTool:
+    """Retain one prepared direct tool, not installed-closure or chain authority."""
+
+    material: ManagedHostToolMaterialization
+    path: Path
+    observation: _ScannerExecutableObservation
+
+    def verify(
+        self,
+        config: RepositoryCleanForkMatrixStateConfig,
+        *,
+        repository: Path,
+        private: Path,
+    ) -> RepositoryCleanForkMatrixStateConfig:
+        from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
+        from mmaudit.scanners.base import _observe_scanner_executable
+
+        selected_path = self.material.executable_for(ManagedToolchainRole.ANVIL)
+        prepared = next(
+            (
+                state
+                for state in self.material.config.smart_contracts.repository_suite.fork_matrix_states
+                if type(state) is RepositoryCleanForkMatrixStateConfig and state == config
+            ),
+            None,
+        )
+        if type(config) is not RepositoryCleanForkMatrixStateConfig or prepared is None:
+            raise CleanAnvilConfigurationError(
+                "managed clean Anvil config differs from its prepared clean-state selection"
+            )
+        if (
+            selected_path != self.path
+            or _observe_scanner_executable(self.path) != self.observation
+            or self.observation.sha256 != config.anvil_sha256
+        ):
+            raise CleanAnvilConfigurationError("managed clean Anvil tool identity changed")
+        resolved_private = private.resolve(strict=True)
+        if resolved_private != private:
+            raise CleanAnvilConfigurationError("managed clean Anvil private root is not canonical")
+        if any(
+            _paths_overlap(self.material.directory, root) for root in (repository, resolved_private)
+        ):
+            raise CleanAnvilConfigurationError("managed clean Anvil material overlaps run roots")
+        return prepared
+
+
+def _managed_clean_anvil_tool(material: ManagedHostToolMaterialization) -> _ManagedCleanAnvilTool:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+    from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
+    from mmaudit.scanners.base import _observe_scanner_executable
+
+    if type(material) is not ManagedHostToolMaterialization:
+        raise CleanAnvilConfigurationError("managed clean Anvil requires exact prepared material")
+    path = material.executable_for(ManagedToolchainRole.ANVIL)
+    observation = _observe_scanner_executable(path)
+    if not any(
+        type(state) is RepositoryCleanForkMatrixStateConfig
+        and state.anvil_sha256 == observation.sha256
+        for state in material.config.smart_contracts.repository_suite.fork_matrix_states
+    ):
+        raise CleanAnvilConfigurationError(
+            "managed clean Anvil has no matching prepared clean-state"
+        )
+    return _ManagedCleanAnvilTool(material=material, path=path, observation=observation)
+
+
 class TrustedCleanAnvilLauncher:
     """Launch only an exact, externally pinned Anvil binary into a private workspace."""
 
@@ -341,6 +412,7 @@ class TrustedCleanAnvilLauncher:
         self,
         *,
         environment: Mapping[str, str] | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
         process_factory: _ProcessFactory | None = None,
         observer: _Observer | None = None,
         head_observer: _HeadObserver | None = None,
@@ -350,7 +422,14 @@ class TrustedCleanAnvilLauncher:
         clock: Callable[[], float] | None = None,
         sleeper: Callable[[float], None] | None = None,
     ) -> None:
-        self._environment = os.environ if environment is None else environment
+        if host_tools is not None and environment is not None:
+            raise CleanAnvilConfigurationError(
+                "managed clean Anvil cannot be combined with an environment override"
+            )
+        self._managed = _managed_clean_anvil_tool(host_tools) if host_tools is not None else None
+        self._environment = (
+            {} if host_tools is not None else os.environ if environment is None else environment
+        )
         self._process_factory = process_factory or subprocess.Popen
         self._observer = observer or observe_pinned_fork_rpc
         self._head_observer = head_observer or _observe_pristine_head
@@ -373,7 +452,15 @@ class TrustedCleanAnvilLauncher:
 
         _require_future_deadline(absolute_deadline, clock=self._clock)
         repository = _trusted_repository_root(repository_root)
-        configured_path = self._environment.get(config.anvil_executable_env)
+        configured_path: str | None
+        launch_config = config
+        if self._managed is not None:
+            launch_config = self._managed.verify(
+                config, repository=repository, private=private_root
+            )
+            configured_path = str(self._managed.path)
+        else:
+            configured_path = self._environment.get(config.anvil_executable_env)
         if configured_path is None:
             raise CleanAnvilConfigurationError(
                 "the configured clean Anvil executable environment variable is missing"
@@ -384,12 +471,16 @@ class TrustedCleanAnvilLauncher:
         try:
             trusted_executable = _copy_pinned_executable(
                 configured_path,
-                expected_sha256=config.anvil_sha256,
+                expected_sha256=launch_config.anvil_sha256,
                 repository_root=repository,
                 workspace=workspace,
             )
+            if self._managed is not None:
+                launch_config = self._managed.verify(
+                    config, repository=repository, private=private_root
+                )
             lease = self._start_trusted(
-                config=config,
+                config=launch_config,
                 workspace=workspace,
                 executable=trusted_executable,
                 absolute_deadline=absolute_deadline,

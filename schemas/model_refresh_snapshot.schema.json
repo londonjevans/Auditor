@@ -1,5 +1,123 @@
 {
   "$defs": {
+    "ExactRoutePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "unit_price": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "title": "Unit Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "unit_price"
+      ],
+      "title": "ExactRoutePrice",
+      "type": "object"
+    },
+    "ExactRoutePriceTier": {
+      "additionalProperties": false,
+      "description": "One ordered prompt-threshold tier of exact partial price replacements.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Pricing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "pricing"
+      ],
+      "title": "ExactRoutePriceTier",
+      "type": "object"
+    },
+    "ExactRoutePricingSchedule": {
+      "additionalProperties": false,
+      "description": "Exact conditional pricing plus its conservative component-wise maximum.",
+      "properties": {
+        "base_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Base Pricing",
+          "type": "array"
+        },
+        "conservative_for_sub_threshold_prompts": {
+          "const": true,
+          "default": true,
+          "title": "Conservative For Sub Threshold Prompts",
+          "type": "boolean"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Maximum Pricing",
+          "type": "array"
+        },
+        "pricing_schedule_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Schedule Sha256",
+          "type": "string"
+        },
+        "projection_method": {
+          "const": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "default": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "title": "Projection Method",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tiers": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePriceTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Tiers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_pricing",
+        "tiers",
+        "maximum_pricing",
+        "pricing_schedule_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ExactRoutePricingSchedule",
+      "type": "object"
+    },
     "LiveCatalogModelState": {
       "additionalProperties": false,
       "description": "Schema-visible exact catalogue evidence required in a live snapshot.",
@@ -222,6 +340,31 @@
           "title": "Pricing Observation",
           "type": "string"
         },
+        "pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Pricing Overrides",
+          "type": "array"
+        },
+        "pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "const": "unavailable",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing Schedule"
+        },
         "pricing_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Pricing Sha256",
@@ -311,6 +454,61 @@
       ],
       "title": "LiveProviderRouteState",
       "type": "object"
+    },
+    "OpenRouterPricingOverrideTier": {
+      "additionalProperties": false,
+      "description": "One ordered, threshold-conditional partial endpoint price replacement.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "prices": {
+          "additionalProperties": {
+            "maxLength": 49,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "audio",
+              "completion",
+              "input_audio_cache",
+              "input_cache_read",
+              "input_cache_write",
+              "input_cache_write_1h",
+              "prompt"
+            ]
+          },
+          "title": "Prices",
+          "type": "object"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "prices"
+      ],
+      "title": "OpenRouterPricingOverrideTier",
+      "type": "object"
+    },
+    "RoutePriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "input_cache_read",
+        "input_cache_write",
+        "internal_reasoning",
+        "prompt",
+        "request",
+        "web_search"
+      ],
+      "title": "RoutePriceComponent",
+      "type": "string"
     },
     "StructuredOutputMode": {
       "description": "One exact request/validation protocol for model output.",

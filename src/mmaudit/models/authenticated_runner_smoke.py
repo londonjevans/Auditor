@@ -151,6 +151,7 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
         if (self.schema_version, preview.schema_version) not in {
             ("1.1", "1.0"),
             ("1.2", "1.1"),
+            ("1.2", "1.2"),
         }:
             raise ValueError(
                 "authenticated runner smoke plan schema differs from its token accounting"
@@ -355,6 +356,16 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             or self.candidate_cost_plan.request_preview.exact_model_id
             != self.candidate.exact_model_id
             or self.judge_cost_plan.request_preview.exact_model_id != self.judge.exact_model_id
+            or (
+                self.candidate_cost_plan.request_preview.schema_version == "1.2"
+                and self.candidate_cost_plan.request_preview.route_predicate_profile_sha256
+                != self.candidate.route_predicate_profile_sha256
+            )
+            or (
+                self.judge_cost_plan.request_preview.schema_version == "1.2"
+                and self.judge_cost_plan.request_preview.route_predicate_profile_sha256
+                != self.judge.route_predicate_profile_sha256
+            )
         ):
             raise ValueError("authenticated runner smoke run evidence differs from its exact pair")
         candidate_routing = candidate_usage.routing
@@ -679,7 +690,7 @@ def build_authenticated_runner_smoke_cost_plan(
     )
     values: dict[str, Any] = {
         "artifact_kind": "authenticated_runner_smoke_cost_plan",
-        "schema_version": "1.2" if preview.schema_version == "1.1" else "1.1",
+        "schema_version": "1.2" if preview.schema_version in {"1.1", "1.2"} else "1.1",
         "disposition": "NONCREDITING_SMOKE",
         "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
@@ -987,7 +998,7 @@ def _require_usage_preview_join(
     )
     current_token_accounting = (
         token_plan.schema_version == "3.0"
-        and preview.schema_version == "1.1"
+        and preview.schema_version in {"1.1", "1.2"}
         and token_detail is not None
         and token_plan.token_detail_accounting_method
         == preview.token_detail_accounting_method

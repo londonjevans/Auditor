@@ -402,7 +402,7 @@ def _token_detail_proof_is_valid(item: _RuntimeSourceItem) -> bool:
     plan = _request_token_plan(item.usage)
     evidence = _token_detail_evidence(item.usage)
     return (
-        item.plan.request_preview.schema_version == "1.1"
+        item.plan.request_preview.schema_version in {"1.1", "1.2"}
         and plan is not None
         and plan.schema_version == "3.0"
         and evidence is not None
@@ -465,13 +465,17 @@ def _validate_source_item(item: _RuntimeSourceItem) -> None:
     ):
         raise ValueError("route runtime source usage is not a route-bound REAL success")
     if (
-        preview.schema_version != "1.1"
+        preview.schema_version not in {"1.1", "1.2"}
         or preview.exact_model_id != model.exact_model_id
         or preview.provider_endpoint != model.approved_provider_endpoint
         or preview.discovery_evidence_sha256 != model.discovery_evidence_sha256
         or preview.endpoint_policy_snapshot_sha256 != model.endpoint_snapshot_sha256
         or preview.output_capability_sha256 != model.output_capability_sha256
         or preview.response_schema_sha256 != usage.schema_sha256
+        or (
+            preview.schema_version == "1.2"
+            and preview.route_predicate_profile_sha256 != model.route_predicate_profile_sha256
+        )
     ):
         raise ValueError("route runtime source differs from its exact route preview")
 

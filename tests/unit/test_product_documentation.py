@@ -10,6 +10,14 @@ import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from scripts.validate_governance_state import (
+    GOVERNANCE_SCOPE,
+    HISTORICAL_PAYLOAD_SHA256S,
+    historical_payload_sha256,
+    validate_governance_state,
+    validate_worklog_header,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 AGENTS_PATH = ROOT / "AGENTS.md"
 QUEUE_PATH = ROOT / "docs/remediation/v3/work_queue.md"
@@ -20,6 +28,9 @@ RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
 README_PATH = ROOT / "README.md"
 MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
 SELECTION_PLAN_PATH = ROOT / "config/models.selection-plan.json"
+HISTORICAL_V1_4_SELECTION_PLAN_PATH = (
+    ROOT / "tests/fixtures/model_selection/revoked-active-plan-v1.4.json"
+)
 OPERATOR_PREREQUISITES_PATH = ROOT / "docs/remediation/operator_prerequisites.md"
 V3_OPERATOR_PREREQUISITES_PATH = ROOT / "docs/remediation/v3/operator_prerequisites.md"
 PRODUCT_VISION_PATH = ROOT / "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
@@ -93,11 +104,74 @@ CURRENT_COVERAGE_CHECKPOINT = "33001d12d62ffe54788a41ed7321a77cd9fcb05f"
 CURRENT_COVERAGE_PARENT_CHECKPOINT = "d6c7c5b05d8466a3793b3174809e1cd48b6a02e8"
 CURRENT_RETRY_CHECKPOINT = "4f666d05c79e550af4f5fc646c5e6ffabb60dcf0"
 CURRENT_RETRY_PARENT_CHECKPOINT = "9a902192cae14bb14144094b3a3b3bf6dafed9a9"
-CURRENT_OPERATOR_RESULTS_SHA256 = "af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b"
-CURRENT_OPERATOR_RESULTS_BYTES = 162_656
-CURRENT_OPERATOR_RESULTS_LINES = 2_902
-CURRENT_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-01T04:49Z"
-CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT = "4c553590fedd4d297442f0a73da703d993f5eec9"
+HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256 = (
+    "215ea0f2f312b9674fb51285f6fdf758b166a0a998e2d2d621ac2da42f9a5f19"
+)
+HISTORICAL_SEPT4_OPERATOR_RESULTS_BYTES = 190_177
+HISTORICAL_SEPT4_OPERATOR_RESULTS_LINES = 3_377
+HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-04T03:39Z"
+HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT = "810ed7f32a9f39df104a6959e84b71c59966fb44"
+HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_SHA256 = (
+    "63bfe90b281a6382b921c63669e817e65220c81b629fc75a7cb35b3f3e429d5b"
+)
+HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_BYTES = 187_993
+HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_LINES = 3_335
+HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-03T22:31Z"
+HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_REPOSITORY_COMMIT = (
+    "c8a46b9b53a77fcdd4241d8fadeecbebc876346d"
+)
+HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_SHA256 = (
+    "d502c61a2525a2bdcc2e7efd79b115821af60f604e715d7be7ccd51b02983ab1"
+)
+HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_BYTES = 185_462
+HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_LINES = 3_287
+HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-03T21:03Z"
+HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_REPOSITORY_COMMIT = (
+    "dd141cd580c2a012a6efdef26213d3a727b68041"
+)
+HISTORICAL_POST_PRICECAPCOMP_RETEST_SHA256 = (
+    "2da419f85a9f6b2d087c1f75dca4247ef91d8fcf23005c719644de5830238b21"
+)
+HISTORICAL_POST_PRICECAPCOMP_RETEST_BYTES = 182_652
+HISTORICAL_POST_PRICECAPCOMP_RETEST_LINES = 3_240
+HISTORICAL_POST_PRICECAPCOMP_RETEST_LATEST_ENTRY = "2026-09-03T20:43Z"
+HISTORICAL_POST_PRICECAPCOMP_RETEST_REPOSITORY_COMMIT = "b9ea875e70d865b50c1eb847e39ed767162c9c6b"
+HISTORICAL_PRICEKEYORDER_CORRECTION_SHA256 = (
+    "e446f2c23f3de0b6dd1352b8f4874f8f95bbb26a128638b2356af29a0850f596"
+)
+HISTORICAL_PRICEKEYORDER_CORRECTION_BYTES = 180_312
+HISTORICAL_PRICEKEYORDER_CORRECTION_LINES = 3_194
+HISTORICAL_PRICEKEYORDER_CORRECTION_LATEST_ENTRY = "2026-09-03T14:30Z"
+HISTORICAL_PRICEKEYORDER_CORRECTION_REPOSITORY_COMMIT = "5245c02beb18d1376d14069e3df2b3fcc098aa55"
+PRE_WITHDRAWAL_OPERATOR_RESULTS_SHA256 = (
+    "37330cfdbc960dbf24691ffbafad10791abf2363767d9adaa4409458c0519cb3"
+)
+PRE_WITHDRAWAL_OPERATOR_RESULTS_BYTES = 176_768
+PRE_WITHDRAWAL_OPERATOR_RESULTS_LINES = 3_140
+PRE_WITHDRAWAL_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-03T11:38Z"
+PRE_WITHDRAWAL_OPERATOR_RESULTS_REPOSITORY_COMMIT = "a9bc614f6243b593ad06ca9bf9b87f7cd32aa3bd"
+HISTORICAL_RUNTIMEADMIT_OPERATOR_RESULTS_SHA256 = (
+    "955b5d3e75c7cb0fe3f4ef571829dfde55a337bd704d140268b3dffa66485808"
+)
+PRE_PRICEKEYORDER_OPERATOR_RESULTS_SHA256 = (
+    "f37f46d56a544af4bef6e2ef662dc9a8e5b23a20f3789391c56aae1bb6968e5f"
+)
+PRE_PRICEKEYORDER_OPERATOR_RESULTS_REPOSITORY_COMMIT = "af16299f1612df656dbc5f25592230c812a62dc4"
+PREVIOUS_PRICELEXEME_OPERATOR_RESULTS_SHA256 = (
+    "775b7ead8a6fae6ee37dce3cd74a129cd5b3e03858c4818baa9a001ab2f79979"
+)
+PREVIOUS_PRICELEXEME_OPERATOR_RESULTS_REPOSITORY_COMMIT = "04ba42b1f35080ac8eb427e7b5003979c9104317"
+PREVIOUS_OPERATOR_RESULTS_SHA256 = (
+    "5d3de38f022b23bf426990659a892fe33cd6bcd164bda4aef7699f92ab01854e"
+)
+PREVIOUS_OPERATOR_RESULTS_REPOSITORY_COMMIT = "339ca7c8b29f8abfd81e8707c61566950e2739e7"
+HISTORICAL_AF7_OPERATOR_RESULTS_SHA256 = (
+    "af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b"
+)
+HISTORICAL_AF7_OPERATOR_RESULTS_BYTES = 162_656
+HISTORICAL_AF7_OPERATOR_RESULTS_LINES = 2_902
+HISTORICAL_AF7_OPERATOR_RESULTS_LATEST_ENTRY = "2026-09-01T04:49Z"
+HISTORICAL_AF7_OPERATOR_RESULTS_REPOSITORY_COMMIT = "4c553590fedd4d297442f0a73da703d993f5eec9"
 HISTORICAL_50D_OPERATOR_RESULTS_CHECKPOINT = "e8610cd6325ae599f5a725a9bf6c64da12928564"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
@@ -218,11 +292,134 @@ CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
 CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
     "d0a1471e64dc50a32e23a3dab4c52a14d56acb22f8ab5f460a2494c7a0f3c6fa"
 )
+CURRENT_TESTQUALITY_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "a895900aa48c2af60485e4a1a98035036dca2c6003d65db7a8f3df97182c6c9c"
+)
+CURRENT_TESTQUALITY_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "228db72a188433fa9727fc8f0185b69949c615c81f56abbad1565cc0492af4ab"
+)
+CURRENT_TESTQUALITY_AUTONOMY_INVENTORY_SHA256 = (
+    "22f351a283e023768de673cff786922845a7d8b4d3e71c69d7159ebacd21524a"
+)
+CURRENT_TESTQUALITY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "75a5dfc94f47d5d7873c661b46899ffd6939d74fd6a8052e0c86f0a1718ea692"
+)
+CURRENT_TESTQUALITY_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "4c48cc0b8c13ba716b776749fee86530ea8de00b74aa119565d7d6de82fe24f8"
+)
+CURRENT_PRICECAPTIER_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "4b70ee2592d4f484e6168a6ba1de9fd98888c5aa913985932fa5d87829af5a0a"
+)
+CURRENT_PRICECAPTIER_AUTONOMY_INVENTORY_SHA256 = (
+    "faf6ad51d3fdb4ad9cd2bb09d4742a3a6368b888353fdd578298637c1728f9c8"
+)
+CURRENT_PRICECAPTIER_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "75a5dfc94f47d5d7873c661b46899ffd6939d74fd6a8052e0c86f0a1718ea692"
+)
+CURRENT_PRICECAPTIER_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "fc1256f823123a9af1efdc50be05f32d81ad40958d567be4d19a6afbe92dabf2"
+)
+CURRENT_MODELREFRESH_TIER_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "a9ec0962cc8f841e615847d54287a3edf1b9c69a25a769fae7d3eb41ee1f123d"
+)
+CURRENT_MODELREFRESH_TIER_AUTONOMY_INVENTORY_SHA256 = (
+    "dec2ed2acff2f68823bf9b63e071ed88b4b8b3ba12d9965b9c5be4a5263fca87"
+)
+CURRENT_MODELREFRESH_TIER_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "75a5dfc94f47d5d7873c661b46899ffd6939d74fd6a8052e0c86f0a1718ea692"
+)
+CURRENT_MODELREFRESH_TIER_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "d908f8050d39d416f831eb633885b8014cbdba63be433adbe02a3d9f7fd0d4c9"
+)
+HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "0fa0e776468ab5ecf815d6c4dae92c25b86c86117ed8995d7a7df8f565963cce"
+)
+HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_INVENTORY_SHA256 = (
+    "9679c2515be4ed08e9fb0fec4f1671cb2c1e94ba4d636c8ee7b4a917991decff"
+)
+HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "75a5dfc94f47d5d7873c661b46899ffd6939d74fd6a8052e0c86f0a1718ea692"
+)
+HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "37b456a2ee9560992c662c4a7a86eb4255c30119f7096f646dc21634ac14c683"
+)
+CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_RAW_SHA256 = (
+    "fcecc2351ab9d5fd7a0e6c0289e9daeb7f6ec83cebfd00552948e9b090617c73"
+)
+CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_SHA256 = (
+    "0f575febde00869a20192214a40af87e7196660a8e82b5810e8beefb45caad28"
+)
+CURRENT_PRICECAPCOMP_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "bc80c98c469dc9cce61af880c8849e8387143ad1e3fb7d853d4eca8e9205e340"
+)
+CURRENT_PRICECAPCOMP_AUTONOMY_SOURCE_UNIVERSE_SHA256 = (
+    "3f41a8b19a0e7547bc619f1405692e19a05e62d9662471f10736d79a2d619389"
+)
+CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "88790b6d1d02fff4f2a39ff0bc0c023d062459e6d19d594a1c93cee03871c6c7"
+)
+CURRENT_AUTONOMY_PHASE2_INVENTORY_RAW_SHA256 = (
+    "7f11314bfa3f13260386d46d5f9f32865e4bf04cc896eb09a602eb24ccda0182"
+)
+CURRENT_AUTONOMY_PHASE2_INVENTORY_SHA256 = (
+    "619f96b46e1b1b243f8bb4a79dfff8aeb193b777975421668c501eb49d1870a2"
+)
+CURRENT_AUTONOMY_PHASE2_DISCOVERY_SEMANTICS_SHA256 = (
+    "61b828c8f6f102345cfca0881879dbbbb84c3283bebe6aca02429ce59ab31d4b"
+)
+CURRENT_AUTONOMY_PHASE2_SOURCE_UNIVERSE_SHA256 = (
+    "145332eb3ca2e1cd8a25a5bb3c04fb37033ca8a9b7e8bab5421bbd7290ac7714"
+)
+CURRENT_AUTONOMY_PHASE2_SCHEMA_RAW_SHA256 = (
+    "7ea168913cc89d463ced1c61cd68b8e08a2f2b816d2fb4c6a2f0924a3527a3a4"
+)
+HISTORICAL_PRICECAPCACHE_INVENTORY_RAW_SHA256 = (
+    "cd3c54972d919f0b92989666b3ab4e4be0d56839f6aca01ea00c9424a8362bc1"
+)
+HISTORICAL_PRICECAPCACHE_INVENTORY_SHA256 = (
+    "97a611edbeebf8c03256be2be1563be30b1978791bfbf4079934c8bfe56c206d"
+)
+HISTORICAL_PRICECAPCACHE_DISCOVERY_SEMANTICS_SHA256 = (
+    "a27b532fd9164ec0b7ef5bbbf755b986553858795dd624d6e2f54d745c5971df"
+)
+HISTORICAL_PRICECAPCACHE_SOURCE_UNIVERSE_SHA256 = (
+    "7fd019c52f2acd8f86ae0e823d992d4788b1a5ec80225d81175523245d6c5a05"
+)
+CURRENT_PLANADOPT_INVENTORY_RAW_SHA256 = (
+    "adf4593aeaa78df69e8b2f38b6fab3243c666fa92b543fb7a8a2ad5b883d5799"
+)
+CURRENT_PLANADOPT_INVENTORY_SHA256 = (
+    "95c9f5d08850956e38f83bb372ee52742b3d0000957609a0f81f0c7d9dce1a40"
+)
+CURRENT_PLANADOPT_DISCOVERY_SEMANTICS_SHA256 = (
+    "a27b532fd9164ec0b7ef5bbbf755b986553858795dd624d6e2f54d745c5971df"
+)
+CURRENT_PLANADOPT_SOURCE_UNIVERSE_SHA256 = (
+    "642a157eb96853e129b16c7f00c2c311fea5bbd54a68fa002fd0fbe7f0428064"
+)
+CURRENT_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "1ace15eed74459638a2141aefea6d95e61acad143c2f918ea5d0701a084f39d9"
+)
+CURRENT_MANAGED_PROVISIONING_RECEIPT_SCHEMA_RAW_SHA256 = (
+    "df1bb1730227966a2cf7424b04df623e88771ab3d10610b77e02e529ee61afed"
+)
+CURRENT_MANAGED_PROVISIONING_STATE_SCHEMA_RAW_SHA256 = (
+    "fa1fdc841729c51963072dc8395ee21346aae959994101dfd9071c8bac0caeac"
+)
+CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256 = (
+    "ab26b52af8a99cde03302afe553c4ee73f0474d3ff9d1014d929379feea8a005"
+)
+CURRENT_REQUEST_COST_PREVIEW_SCHEMA_RAW_SHA256 = (
+    "5aa3665fed2f7910993615d2c5edb93b59d52082c7015815de157b82a867db85"
+)
+CURRENT_PRICING_ATTEMPT_SCHEMA_RAW_SHA256 = (
+    "31b964264627cdb742292f108b1fa2ac096bdfa17603558aa52cbed436529028"
+)
 CURRENT_ENDPOINTLIST_DIAGNOSTIC_SCHEMA_RAW_SHA256 = (
     "326cd2a83b5bc1b825018bfbfe2e7244c62587105d1bc188e4dbe3ff7b8a2b72"
 )
 ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256 = (
-    "e3b1280836581456a43c73c0eaa9acc184dc05bb175c0dac4a83973bab79c921"
+    "94fb9f405d1365371961a6498462ea413e98cbfd982fb8c316710a7faab4ad04"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -550,11 +747,27 @@ HISTORICAL_INELIGIBLE_GEMMA_PLAN_SHA256 = (
 HISTORICAL_INELIGIBLE_GEMMA_ROLE_SHA256 = (
     "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
 )
-CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256 = (
+HISTORICAL_V1_4_SELECTION_PLAN_SHA256 = (
     "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
 )
-CURRENT_NONAUTHORIZING_SUCCESSOR_ROLE_SHA256 = (
+HISTORICAL_V1_4_SELECTION_PLAN_RAW_SHA256 = (
+    "0da03b75dd608efade4c41e87de38139fb735576049f824365889be9c9a3ff24"
+)
+HISTORICAL_V1_4_SELECTION_ROLE_SHA256 = (
     "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14"
+)
+CURRENT_PLANADOPT_PLAN_SHA256 = "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3"
+CURRENT_PLANADOPT_PLAN_RAW_SHA256 = (
+    "4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695"
+)
+CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256 = (
+    "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae"
+)
+CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256 = (
+    "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5"
+)
+CURRENT_PLANADOPT_V1_PROFILE_SHA256 = (
+    "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82"
 )
 CURRENT_NONAUTHORIZING_ZAI_ENTRY_SHA256 = (
     "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef"
@@ -588,8 +801,10 @@ ALLOWED_TICKET_STATUSES = frozenset(
         "PARTIAL",
         "BLOCKED_TECHNICAL",
         "BLOCKED_SAFETY",
+        "WITHDRAWN_OPERATOR_ERROR",
     }
 )
+TERMINAL_QUEUE_STATUSES = frozenset({"COMPLETE", "WITHDRAWN_OPERATOR_ERROR"})
 README_CAPABILITY_TICKETS = frozenset(
     {
         "V3-SHARD-001",
@@ -724,12 +939,16 @@ def _derive_requirement_status(
         assert queue_statuses, "ALL cannot derive from an empty queue"
         return (
             "COMPLETE"
-            if all(status == "COMPLETE" for status in queue_statuses.values())
+            if all(status in TERMINAL_QUEUE_STATUSES for status in queue_statuses.values())
             else "IN_PROGRESS"
         )
     assert "ALL" not in tickets, "ALL cannot be combined with individual ticket IDs"
     unknown = sorted(set(tickets) - set(queue_statuses))
     assert not unknown, f"traceability requirement references unknown tickets: {unknown}"
+    withdrawn = sorted(
+        ticket for ticket in tickets if queue_statuses[ticket] == "WITHDRAWN_OPERATOR_ERROR"
+    )
+    assert not withdrawn, f"traceability requirement references withdrawn tickets: {withdrawn}"
     mapped = [queue_statuses[ticket] for ticket in tickets]
     if all(status == "COMPLETE" for status in mapped):
         return "COMPLETE"
@@ -831,6 +1050,11 @@ def test_queue_parser_rejects_duplicate_missing_and_invalid_statuses() -> None:
 
 - **Status:** `DONE`
 """
+    withdrawn_status = """
+## V3-ONE-001 — withdrawn after corrected premise
+
+- **Status:** `WITHDRAWN_OPERATOR_ERROR`
+"""
 
     _assert_fails(
         "duplicate queue ticket heading",
@@ -848,6 +1072,9 @@ def test_queue_parser_rejects_duplicate_missing_and_invalid_statuses() -> None:
         "unsupported status",
         lambda: _parse_queue_ticket_statuses(invalid_status),
     )
+    assert _parse_queue_ticket_statuses(withdrawn_status) == {
+        "V3-ONE-001": "WITHDRAWN_OPERATOR_ERROR"
+    }
 
 
 def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> None:
@@ -1677,55 +1904,75 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
     canonical = _parse_all_queue_ticket_statuses(QUEUE_PATH.read_text(encoding="utf-8"))
-    codex = _parse_all_queue_ticket_statuses(CODEX_QUEUE_PATH.read_text(encoding="utf-8"))
+    codex_queue_text = CODEX_QUEUE_PATH.read_text(encoding="utf-8")
+    normalized_codex_queue_text = " ".join(codex_queue_text.split())
+    codex = _parse_all_queue_ticket_statuses(codex_queue_text)
     for ticket in canonical.keys() & codex.keys():
         assert canonical[ticket] == codex[ticket], f"queue status disagreement for {ticket}"
     combined = codex | canonical
-    unfinished = sum(status != "COMPLETE" for status in combined.values())
+    unfinished = sum(status not in TERMINAL_QUEUE_STATUSES for status in combined.values())
 
     assert combined["V3-TAXONOMY-001"] == "COMPLETE"
     assert combined["V3-RETRIEVAL-001"] == "COMPLETE"
-    assert combined["V3-PRICELEXEME-001"] == "IN_PROGRESS"
-    assert combined["V3-PRICEFORM-001"] == "QUEUED"
-    assert unfinished == 40
+    assert combined["V3-PRICELEXEME-001"] == "PARTIAL"
+    assert combined["V3-PRICEOVERRIDES-001"] == "COMPLETE"
+    assert combined["V3-PRICECAPTIER-001"] == "PARTIAL"
+    assert combined["V3-PRICECAPCACHE-001"] == "PARTIAL"
+    assert combined["V3-PLANADOPT-001"] == "COMPLETE"
+    assert combined["V3-PRICEKEYORDER-001"] == "WITHDRAWN_OPERATOR_ERROR"
+    assert combined["V3-PRICEFORM-001"] == "COMPLETE"
+    assert combined["V3-TESTQUALITY-001"] == "PARTIAL"
+    assert unfinished == validate_governance_state(ROOT).unfinished_ticket_count
+    assert "direct and nested billable values are strings" in normalized_codex_queue_text
+    assert "`overrides` is the first parser blocker" in normalized_codex_queue_text
+    assert "`V3-PRICELEXEME-001` remains terminal `PARTIAL`" in normalized_codex_queue_text
+    assert "`V3-PRICEOVERRIDES-001` successor is now `COMPLETE`" in normalized_codex_queue_text
+    assert "tiered cost projection explicitly unavailable" in normalized_codex_queue_text
+    assert "`input_cache_write='0'`" in normalized_codex_queue_text
+    assert "`web_search='0.01'`" in normalized_codex_queue_text
+    assert "Neither the operator's sole-blocker statement nor route admission is proven" in (
+        normalized_codex_queue_text
+    )
+    assert "must not be implemented" in normalized_codex_queue_text
+    assert "excluded from unfinished work" in normalized_codex_queue_text
     assert (
         f"REMAINING_ACTIONABLE_TICKETS: The combined queues contain {unfinished} unfinished tickets"
     ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
 
 
-def test_current_worklog_headers_bind_pricelexeme_status_and_retrieval_inventory() -> None:
-    exact_status = (
-        "V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_"
-        "IMPLEMENTATION_NOT_STARTED_CODEX_ZERO_EXTERNAL_COMMANDS"
+def test_historical_governance_payloads_are_exact_and_cannot_select_current_work() -> None:
+    # Preserve every pre-GOVSYNC historical field, not a hand-picked set of header words.
+    for name, expected in HISTORICAL_PAYLOAD_SHA256S.items():
+        document = json.loads((ROOT / name).read_bytes())
+        assert document["governance_state_scope"] == GOVERNANCE_SCOPE
+        assert document["historical_payload_sha256"] == expected
+        assert historical_payload_sha256(document) == expected
+    runtime = json.loads(RUNTIME_STATUS_PATH.read_bytes())
+    assert "V3_PLANADOPT_001_COMPLETE" in runtime["autorun_status"]
+    assert "CURRENT_AND_NEXT_TICKET_UNSELECTED" in runtime["autorun_status"]
+    historical_header = _isolated_level_two_section(
+        (ROOT / "docs/remediation/v3/worklog.md").read_text(encoding="utf-8"),
+        "## Historical September-4 pause header — preserved by GOVSYNC",
     )
-    exact_counts = (
-        "3895 sources / 3898 occurrences / 3846 gate sources / 49 non-gating controls / "
-        "13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual"
-    )
-    inventory_components = (
-        f"Raw `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256}`",
-        f"self `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256}`",
-        f"discovery `{CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256}`",
-        f"universe `{CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256}`",
-        f"schema raw `{CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256}`",
-    )
+    assert "PAUSED_BY_USER_V3_PLANANCESTRY_001_IN_PROGRESS" in historical_header
+    assert "WIP_COMMAND_MUST_NOT_BE_USED" in historical_header
+    assert "42 unfinished tickets" in historical_header
+    assert "4008 sources / 4011 occurrences" in historical_header
+    assert HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256 in historical_header
 
+
+def test_current_worklog_headers_bind_current_engineering_not_historical_selection() -> None:
+    state = validate_governance_state(ROOT)
     for worklog_path in (CODEX_WORKLOG_PATH, ROOT / "docs/remediation/v3/worklog.md"):
-        current_header = worklog_path.read_text(encoding="utf-8").split("\n## ", maxsplit=1)[0]
-        assert f"AUTORUN_STATUS: {exact_status}" in current_header
-        assert f"CURRENT_LOCAL_SLICE_STATUS: {exact_status}" in current_header
-        assert "CURRENT_TICKET: V3-PRICELEXEME-001" in current_header
-        assert "CURRENT_TICKET_IMPLEMENTATION_STARTED: false" in current_header
-        assert (
-            "CURRENT_AUTONOMY_INVENTORY: "
-            "CURRENT_RECONCILED_V3_PRICELEXEME_001_SELECTION_AFTER_V3_RETRIEVAL_001_COMPLETE"
-            in current_header
-        )
-        for component in inventory_components:
-            assert component in current_header
-        assert exact_counts in current_header
-        assert "PRE_TRANSITION_GOVERNED_GENERATION_LAST_VERIFIED" not in current_header
-        assert "8156 passed, 22 skipped, 12 warnings in 9963.54s (2:46:03)" in current_header
+        header = worklog_path.read_text(encoding="utf-8").split("\n## ", 1)[0]
+        validate_worklog_header(header, state)
+        assert "CURRENT_LOCAL_SLICE_STATUS:" in header
+        assert "No provider" in header or "NO_PROVIDER_COMMAND" in header
+    current_operator_bytes = (ROOT / OPERATOR_RESULTS_RELATIVE_PATH).read_bytes()
+    assert state.operator.raw_sha256 == hashlib.sha256(current_operator_bytes).hexdigest()
+    assert state.operator.byte_count == len(current_operator_bytes)
+    assert state.operator.line_count == len(current_operator_bytes.decode("utf-8").splitlines())
+    assert state.operator.completed_real_audits == 0
 
 
 def test_retry_ticket_is_mirrored_complete_and_has_an_exact_source_manifest() -> None:
@@ -1949,8 +2196,10 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
     for raw_worklog in worklogs:
         worklog = " ".join(raw_worklog.split())
         current_header = " ".join(raw_worklog.split("\n## ", maxsplit=1)[0].split())
-        newest_entry = " ".join(
-            raw_worklog.split("\n## ", maxsplit=1)[1].split("\n## ", maxsplit=1)[0].split()
+        priceform_completion_entry = " ".join(
+            raw_worklog.split("## 2026-09-02T15:10:30Z", maxsplit=1)[1]
+            .split("\n## ", maxsplit=1)[0]
+            .split()
         )
         retrieval_terminal_entry = " ".join(
             raw_worklog.split("## 2026-09-02T12:10:08Z", maxsplit=1)[1]
@@ -2017,40 +2266,7 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
             .split("\n## ", maxsplit=1)[0]
             .split()
         )
-        assert "AUTORUN_STATUS:" in current_header
-        assert "PROVIDER_FREE" in current_header
-        assert "NONAUTHORIZING" in current_header
-        assert "CODEX_ZERO_EXTERNAL_COMMANDS" in current_header
-        assert "CURRENT_LOCAL_SLICE_STATUS:" in current_header
-        assert "CURRENT_TICKET:" in current_header
-        assert "LAST_COMPLETED_TICKET:" in current_header
-        assert "LAST_PARTIAL_TICKET: V3-CANDROUTE-001" in current_header
-        assert "unfinished tickets" in current_header
-        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_AF7A24E" in (
-            current_header
-        )
-        for status_component in (
-            "OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY",
-            "PRICEFORM_REFUSAL_UPHELD",
-            "REASONING_EFFORT_REQUIRED",
-            "PRICELEXEME_QUEUED",
-            "PRIOR_LIVE_V1_0_METADATA_SURVEY",
-            "12_MODELS",
-            "112_ENDPOINTS",
-            "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
-            "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
-            "ZERO_ADMISSIBLE_CANDIDATES",
-            "ACTIVE_PLAN_UNCHANGED",
-            "LEDGER_UNCHANGED",
-            "57_ENTRIES",
-            "068118684_SPEND",
-            "ZERO_COMPLETED_REAL_AUDITS",
-            "NONAUTHORIZING",
-            "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
-        ):
-            assert status_component in current_header
-        assert CURRENT_OPERATOR_RESULTS_SHA256 in current_header
-        assert "162656 bytes / 2902 lines" in current_header
+        validate_worklog_header(raw_worklog.split("\n## ", 1)[0], validate_governance_state(ROOT))
         assert "V3-LEARNING-001" in learning_entry
         assert "Phase 1" in learning_entry and "complete" in learning_entry.lower()
         assert "PARTIAL" in learning_entry
@@ -2116,8 +2332,7 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         assert "tombstone" in modelrefresh_entry.lower()
         assert "max_model_retries" in schema_retry_entry
         assert "schema_validation_failed" in schema_retry_entry.lower()
-        assert "no codex provider or operator action" in current_header.lower()
-        assert "is current" in current_header
+        assert validate_governance_state(ROOT).provider_call_authorized is False
         assert "operator-reports" in worklog.lower()
         assert "index-21" in worklog.lower() or "index21" in worklog.lower()
         assert "r21" in worklog
@@ -2126,7 +2341,7 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         assert "RUNTIME_EVIDENCE_INVALID" in worklog
         assert "Codex" in worklog and "private" in worklog.lower()
         assert "full admission for one launch" in worklog.lower()
-        normalized_newest_entry = newest_entry.lower()
+        normalized_priceform_completion_entry = priceform_completion_entry.lower()
         normalized_retrieval_terminal_entry = retrieval_terminal_entry.lower()
         normalized_selection_entry = pricelexeme_selection_entry.lower()
         assert "selection does not admit or select a candidate route" in normalized_selection_entry
@@ -2141,12 +2356,40 @@ def test_actor_model_closure_is_preserved_with_endpoint_candidate_history() -> N
         )
         assert "performs no provider" in normalized_retrieval_terminal_entry
         assert "or authority action" in normalized_retrieval_terminal_entry
-        assert "documentation reconciliation remote-resolved" in normalized_newest_entry
-        assert "update by push" in normalized_newest_entry
-        assert "no manual push was attempted" in normalized_newest_entry
-        assert "makes no claim about its own eventual remote state" in normalized_newest_entry
-        assert "38721e860435ebbfd559d8b0b4f3c98870f191ed" in normalized_newest_entry
-        assert "c323a5299c22ced8048f0ed1ff3df7e7bf1f0c8d" in normalized_newest_entry
+        assert "v3-priceform-001 complete" in normalized_priceform_completion_entry
+        assert "rejection stands for billable values" in normalized_priceform_completion_entry
+        assert "ordinary json numeric parsing" in normalized_priceform_completion_entry
+        assert "uncaptured float, integer, `decimal`, and boolean prices remain refused" in (
+            normalized_priceform_completion_entry
+        )
+        assert "v3-pricelexeme-001` changes custody before float transit" in (
+            normalized_priceform_completion_entry
+        )
+        assert (
+            "affected matrix passes `795` tests with `2` warnings"
+            in normalized_priceform_completion_entry
+        )
+        for parity_component in (
+            "identical canonical snapshots",
+            "request cost bounds",
+            "durable reservations",
+            "reconciled/accounted cost",
+            "spend",
+            "released reserve",
+            "remaining budget",
+        ):
+            assert parity_component in normalized_priceform_completion_entry
+        assert (
+            "changes no production code, configuration, retry policy"
+            in normalized_priceform_completion_entry
+        )
+        assert "v3-pricelexeme-001` and `v3-candroute-001` remain `partial`" in (
+            normalized_priceform_completion_entry
+        )
+        assert (
+            "requires separate authorization and was not issued"
+            in normalized_priceform_completion_entry
+        )
         assert "137,294 bytes / 2,462" in historical_retry_reconciliation
         assert (
             "latest entry" in historical_retry_reconciliation
@@ -2298,7 +2541,7 @@ def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
         assert "`OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`" in section
 
 
-def test_modelrefresh_candidate_revocation_closure_is_current() -> None:
+def test_modelrefresh_tier_schedule_closure_preserves_candidate_revocation() -> None:
     for document in (
         QUEUE_PATH.read_text(encoding="utf-8"),
         CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
@@ -2310,7 +2553,6 @@ def test_modelrefresh_candidate_revocation_closure_is_current() -> None:
         )
         assert match is not None
         section = " ".join(match.group().split())
-        assert "No provider or operator action is current" in section
         assert "**Status:** `PARTIAL`" in section
         assert "Candidate-revocation result 2026-08-27" in section
         assert "negative" in section.lower() and "tombstone" in section.lower()
@@ -2319,12 +2561,20 @@ def test_modelrefresh_candidate_revocation_closure_is_current() -> None:
         assert "Adjacent explicitly pinned endpoints remain eligible" in section or (
             "explicitly pinned adjacent endpoint is not overblocked" in section
         )
-        assert "changed neither retry code nor retry configuration" in section
+        assert "changes neither retry code nor retry configuration" in section
+        assert "Carry retained tier schedules through provider-free refresh" in section
+        assert "Tier-schedule result 2026-09-03" in section
+        assert "Exact base-plus-override schedules now survive refresh" in section
+        assert "live preflight" in section
+        assert "Threshold-only changes are detected even when maxima match" in section
+        assert "No terminal full-suite credit is claimed" in section
+        assert "Current and next tickets are unselected" in section
 
 
 def test_status_reducer_is_derived_and_rejects_unknown_ticket_ids() -> None:
     statuses = {
         "V3-COMPLETE-001": "COMPLETE",
+        "V3-WITHDRAWN-001": "WITHDRAWN_OPERATOR_ERROR",
         "V3-ACTIVE-001": "IN_PROGRESS",
         "V3-PARTIAL-001": "PARTIAL",
         "V3-SAFETY-001": "BLOCKED_SAFETY",
@@ -2342,6 +2592,13 @@ def test_status_reducer_is_derived_and_rejects_unknown_ticket_ids() -> None:
     assert _derive_requirement_status(["V3-QUEUED-001"], statuses) == "QUEUED"
     assert _derive_requirement_status(["ALL"], statuses) == "IN_PROGRESS"
     assert _derive_requirement_status(["ALL"], {"V3-ONE-001": "COMPLETE"}) == "COMPLETE"
+    assert (
+        _derive_requirement_status(
+            ["ALL"],
+            {"V3-ONE-001": "COMPLETE", "V3-TWO-001": "WITHDRAWN_OPERATOR_ERROR"},
+        )
+        == "COMPLETE"
+    )
 
     _assert_fails(
         "unknown tickets",
@@ -2354,6 +2611,10 @@ def test_status_reducer_is_derived_and_rejects_unknown_ticket_ids() -> None:
     _assert_fails(
         "repeats a ticket",
         lambda: _derive_requirement_status(["V3-QUEUED-001", "V3-QUEUED-001"], statuses),
+    )
+    _assert_fails(
+        "references withdrawn tickets",
+        lambda: _derive_requirement_status(["V3-WITHDRAWN-001"], statuses),
     )
 
 
@@ -2374,7 +2635,17 @@ def test_status_table_parser_rejects_duplicate_rows() -> None:
 
 
 def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> None:
-    queue_statuses = _parse_queue_ticket_statuses(QUEUE_PATH.read_text(encoding="utf-8"))
+    canonical_queue_statuses = _parse_all_queue_ticket_statuses(
+        QUEUE_PATH.read_text(encoding="utf-8")
+    )
+    codex_queue_statuses = _parse_all_queue_ticket_statuses(
+        CODEX_QUEUE_PATH.read_text(encoding="utf-8")
+    )
+    for ticket in canonical_queue_statuses.keys() & codex_queue_statuses.keys():
+        assert canonical_queue_statuses[ticket] == codex_queue_statuses[ticket], (
+            f"queue status disagreement for {ticket}"
+        )
+    queue_statuses = codex_queue_statuses | canonical_queue_statuses
     traceability_text = TRACEABILITY_PATH.read_text(encoding="utf-8")
     traceability = json.loads(traceability_text)
     requirements = traceability["requirements"]
@@ -2393,12 +2664,504 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         "release authority."
     )
     assert requirements_by_id["U"]["status"] == "IN_PROGRESS"
-    assert "V3-RETRIEVAL-001 is COMPLETE" in requirements_by_id["U"]["evidence"][-1]
-    assert "V3-PRICELEXEME-001" in requirements_by_id["U"]["evidence"][-1]
-    assert "implementation_started=false" in requirements_by_id["U"]["evidence"][-1]
+    pricelexeme_evidence = next(
+        evidence
+        for evidence in reversed(requirements_by_id["U"]["evidence"])
+        if "V3-PRICELEXEME-001 is PARTIAL, not complete" in evidence
+    )
+    assert PREVIOUS_OPERATOR_RESULTS_SHA256 in pricelexeme_evidence
+    assert "166648 bytes / 2964 lines" in pricelexeme_evidence
+    assert PREVIOUS_OPERATOR_RESULTS_REPOSITORY_COMMIT in pricelexeme_evidence
+    assert "joined provider-free raw-HTTP" in pricelexeme_evidence
+    assert "affected matrix now passes 795 tests with two warnings" in pricelexeme_evidence
+    assert "focused custody matrix 24" in pricelexeme_evidence
+    assert "schema/inventory closure 126" in pricelexeme_evidence
+    assert "fresh current-byte live admissibility remains unproven" in pricelexeme_evidence
+    historical_priceform_evidence = next(
+        evidence
+        for evidence in reversed(requirements_by_id["U"]["evidence"])
+        if "V3-PRICEFORM-001 is COMPLETE" in evidence
+    )
+    assert PREVIOUS_OPERATOR_RESULTS_SHA256 in historical_priceform_evidence
+    assert "166648 bytes / 2964 lines" in historical_priceform_evidence
+    assert "V3-PRICEFORM-001 is COMPLETE" in historical_priceform_evidence
+    assert "decision-only, provider-free, nonauthorizing policy closure" in (
+        historical_priceform_evidence
+    )
+    assert "795 passed tests and two warnings" in historical_priceform_evidence
+    assert "ordinary uncaptured numeric prices remain refused" in historical_priceform_evidence
+    assert "registered captured lexemes retain canonical exact-string storage" in (
+        historical_priceform_evidence
+    )
+    assert "cost reserve, spend, and reconcile arithmetic remains identical" in (
+        historical_priceform_evidence
+    )
+    assert "last partial is V3-PRICELEXEME-001" in historical_priceform_evidence
+    assert "V3-PRICELEXEME-001 remains PARTIAL" in historical_priceform_evidence
+    historical_testquality_evidence = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith("At 2026-09-02T22:13:00Z, V3-TESTQUALITY-001")
+    )
+    assert PREVIOUS_OPERATOR_RESULTS_SHA256 in historical_testquality_evidence
+    assert "166648 bytes / 2964 lines" in historical_testquality_evidence
+    assert "V3-TESTQUALITY-001 remains PARTIAL, provider-free, and nonauthorizing" in (
+        historical_testquality_evidence
+    )
+    assert "one-shot same-invocation campaign cleanup handoff closure" in (
+        historical_testquality_evidence
+    )
+    assert "preserves the exact live MutationSuiteObservation" in historical_testquality_evidence
+    assert "binds the exact plan, mutation specification, source" in historical_testquality_evidence
+    assert "Observed campaign invalidation or replay synchronously cascades" in (
+        historical_testquality_evidence
+    )
+    assert "not an independent campaign receipt" in historical_testquality_evidence
+    assert "lack a shared revocation lease" in historical_testquality_evidence
+    assert "Production campaign authority remains hard-disabled" in historical_testquality_evidence
+    assert "current REAL mutation campaign receipt" in historical_testquality_evidence
+    assert "portable same-UID disposal" in historical_testquality_evidence
+    assert "REAL mutation run and kill artifact" in historical_testquality_evidence
+    assert "Current ticket is UNSELECTED" in historical_testquality_evidence
+    assert "last completed is V3-PRICEFORM-001" in historical_testquality_evidence
+    assert "last partial is V3-TESTQUALITY-001" in historical_testquality_evidence
+    assert "combined unfinished count is 39" in historical_testquality_evidence
+    assert "no next local ticket is selected" in historical_testquality_evidence
+    assert "V3-PRICELEXEME-001 and V3-CANDROUTE-001 remain PARTIAL" in (
+        historical_testquality_evidence
+    )
+    assert "no provider, operator command" in historical_testquality_evidence
+    historical_testquality_selection = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith("At 2026-09-03T05:40:39Z, V3-PRICELEXEME-001")
+    )
+    assert "V3-PRICELEXEME-001 is recorded PARTIAL terminal" in (historical_testquality_selection)
+    assert "V3-TESTQUALITY-001 becomes current and critical-path IN_PROGRESS" in (
+        historical_testquality_selection
+    )
+    assert "implementation has not started" in historical_testquality_selection
+    assert "shared lease and race-safe live dependency authority remain false" in (
+        historical_testquality_selection
+    )
+    assert "V3-PRICELEXEME-001 becomes last partial" in historical_testquality_selection
+    assert "combined unfinished count remains 39" in historical_testquality_selection
+    historical_testquality_closure = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith("At 2026-09-03T07:06:29Z, V3-TESTQUALITY-001 returns to PARTIAL")
+    )
+    normalized_historical_testquality_closure = historical_testquality_closure.lower()
+    assert "shared process-local revocation-lease race slice" in (
+        normalized_historical_testquality_closure
+    )
+    assert "one pid-bound domain serializes run, observation, campaign, and score" in (
+        normalized_historical_testquality_closure
+    )
+    assert "seal-sha-matched immutable schema snapshots" in (
+        normalized_historical_testquality_closure
+    )
+    assert "callbacks defer beyond the outer lease" in normalized_historical_testquality_closure
+    assert "focused chain passes 166 tests" in normalized_historical_testquality_closure
+    assert "adjacent unit matrix passes 135" in normalized_historical_testquality_closure
+    assert "no terminal or full-suite credit" in normalized_historical_testquality_closure
+    assert CURRENT_TESTQUALITY_AUTONOMY_INVENTORY_RAW_SHA256 in historical_testquality_closure
+    assert CURRENT_TESTQUALITY_AUTONOMY_INVENTORY_SHA256 in historical_testquality_closure
+    assert CURRENT_TESTQUALITY_AUTONOMY_DISCOVERY_SEMANTICS_SHA256 in historical_testquality_closure
+    assert CURRENT_TESTQUALITY_AUTONOMY_SOURCE_UNIVERSE_SHA256 in historical_testquality_closure
+    assert "counts 3940/3943/3891/49" in normalized_historical_testquality_closure
+
+    historical_pricecaptier_evidence = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith("At 2026-09-03T11:27:12Z, V3-PRICECAPTIER-001 is PARTIAL")
+    )
+    normalized_historical_pricecaptier_evidence = historical_pricecaptier_evidence.lower()
+    assert historical_pricecaptier_evidence.startswith(
+        "At 2026-09-03T11:27:12Z, V3-PRICECAPTIER-001 is PARTIAL"
+    )
+    assert "exact decimal schedule-wide maxima" in normalized_historical_pricecaptier_evidence
+    assert "partial-tier inheritance" in normalized_historical_pricecaptier_evidence
+    assert "later applicable tiers winning" in normalized_historical_pricecaptier_evidence
+    assert "per-state cache dominance" in normalized_historical_pricecaptier_evidence
+    assert "complete schedule/proof hash binding" in normalized_historical_pricecaptier_evidence
+    assert "provider cap, request-cost, reserve, spend, and reconciliation" in (
+        normalized_historical_pricecaptier_evidence
+    )
+    assert "flat-route bytes remain unchanged" in normalized_historical_pricecaptier_evidence
+    assert "input_cache_write='0'" in normalized_historical_pricecaptier_evidence
+    assert "web_search='0.01'" in normalized_historical_pricecaptier_evidence
+    assert "refresh and live preflight remain flat-only" in (
+        normalized_historical_pricecaptier_evidence
+    )
+    assert "current and next tickets are unselected" in normalized_historical_pricecaptier_evidence
+    assert "v3-priceoverrides-001 is last complete" in normalized_historical_pricecaptier_evidence
+    assert "v3-pricecaptier-001 is last partial" in normalized_historical_pricecaptier_evidence
+    assert "unfinished count remains 40" in normalized_historical_pricecaptier_evidence
+    assert "validation passed 280 focused tests" in normalized_historical_pricecaptier_evidence
+    assert "1251 affected tests with two warnings" in normalized_historical_pricecaptier_evidence
+    assert "241 adversarial focused tests" in normalized_historical_pricecaptier_evidence
+    assert "no integration pass credit" in normalized_historical_pricecaptier_evidence
+    assert CURRENT_PRICECAPTIER_AUTONOMY_INVENTORY_RAW_SHA256 in historical_pricecaptier_evidence
+    assert CURRENT_PRICECAPTIER_AUTONOMY_INVENTORY_SHA256 in historical_pricecaptier_evidence
+    assert CURRENT_PRICECAPTIER_AUTONOMY_SOURCE_UNIVERSE_SHA256 in historical_pricecaptier_evidence
+    assert "57-entry / 0.68118684 usd ledger" in normalized_historical_pricecaptier_evidence
+    assert "every external or production authority remain unchanged" in (
+        normalized_historical_pricecaptier_evidence
+    )
+    assert "emitted no command" in normalized_historical_pricecaptier_evidence
+
+    latest_requirement_u_evidence = next(
+        evidence
+        for evidence in reversed(requirements_by_id["U"]["evidence"])
+        if evidence.startswith(
+            "At 2026-09-03T13:58:58Z, V3-MODELREFRESH-001 closes a tier-schedule continuation"
+        )
+    )
+    normalized_latest_requirement_u_evidence = latest_requirement_u_evidence.lower()
+    assert latest_requirement_u_evidence.startswith(
+        "At 2026-09-03T13:58:58Z, V3-MODELREFRESH-001 closes a tier-schedule continuation"
+    )
+    for modelrefresh_evidence_fragment in (
+        "exact ordered schedules and conservative maxima",
+        "durable route and attempt pricing evidence",
+        "live preflight",
+        "equal-maximum threshold drift is detected",
+        "unavailable, mismatched, or tampered schedules fail closed",
+        "flat-route bytes remain unchanged",
+        "validation passed 245 core tests",
+        "262 schema/route/endpoint tests",
+        "471 independently reviewed affected tests",
+        "2 composed custody tests",
+        "1064 passes and two known warnings",
+        "all five passed under direct /private/tmp custody",
+        "15 refresh-pricing assurance",
+        "9 scheduler runtime/recovery passes",
+        "no terminal full-suite credit",
+        "input_cache_write='0' and web_search='0.01'",
+        "current and next tickets are unselected",
+        "v3-priceoverrides-001 is last complete",
+        "v3-modelrefresh-001 is last partial",
+        "unfinished count remains 41",
+    ):
+        assert modelrefresh_evidence_fragment in normalized_latest_requirement_u_evidence
+    assert CURRENT_MODELREFRESH_TIER_AUTONOMY_INVENTORY_RAW_SHA256 in latest_requirement_u_evidence
+    assert CURRENT_MODELREFRESH_TIER_AUTONOMY_INVENTORY_SHA256 in latest_requirement_u_evidence
+    assert (
+        CURRENT_MODELREFRESH_TIER_AUTONOMY_SOURCE_UNIVERSE_SHA256 in latest_requirement_u_evidence
+    )
+    assert requirements_by_id["L"]["status"] == "PARTIAL"
+    assert "V3-PRICEOVERRIDES-001" in requirements_by_id["L"]["tickets"]
+    assert "V3-PRICECAPTIER-001" in requirements_by_id["L"]["tickets"]
+    assert "V3-PRICECAPCOMP-001" in requirements_by_id["L"]["tickets"]
+    latest_requirement_l_evidence_raw = next(
+        evidence
+        for evidence in reversed(requirements_by_id["L"]["evidence"])
+        if evidence.startswith(
+            "At 2026-09-03T13:58:58Z, V3-MODELREFRESH-001 closes a tier-schedule continuation"
+        )
+    )
+    latest_requirement_l_evidence = latest_requirement_l_evidence_raw.lower()
+    assert latest_requirement_l_evidence_raw.startswith(
+        "At 2026-09-03T13:58:58Z, V3-MODELREFRESH-001 closes a tier-schedule continuation"
+    )
+    assert "exact ordered schedules and conservative maxima" in latest_requirement_l_evidence
+    assert "equal-maximum threshold drift is detected" in latest_requirement_l_evidence
+    assert "live preflight" in latest_requirement_l_evidence
+    assert "v3-modelrefresh-001 is last partial" in latest_requirement_l_evidence
+    assert "v3-priceoverrides-001 is last complete" in latest_requirement_l_evidence
+    assert "input_cache_write='0'" in latest_requirement_l_evidence
+    assert "web_search='0.01'" in latest_requirement_l_evidence
+    assert "current and next tickets are unselected" in latest_requirement_l_evidence
+    assert "unfinished count remains 41" in latest_requirement_l_evidence
+    for requirement_id in ("L", "U"):
+        evidence = requirements_by_id[requirement_id]["evidence"]
+        correction = next(
+            item
+            for item in evidence
+            if item.startswith(
+                f"At 2026-09-03T14:37:03Z, exact operator correction "
+                f"{HISTORICAL_PRICEKEYORDER_CORRECTION_SHA256}"
+            )
+        )
+        normalized_correction = correction.lower()
+        assert correction.startswith(
+            "At 2026-09-03T14:37:03Z, exact operator correction "
+            f"{HISTORICAL_PRICEKEYORDER_CORRECTION_SHA256}"
+        )
+        for fragment in (
+            "retracts the earlier key-order root-cause claim",
+            "120-permutation assay yields one pricing hash and one snapshot hash",
+            "v3-pricekeyorder-001 is withdrawn_operator_error",
+            "must not be implemented",
+            "price_cap_not_expressible and price_cap_proof_unavailable",
+            "tier-schedule projection is correct",
+            "xai route remains unselected and not proven admissible",
+            "combined unfinished count is 40",
+        ):
+            assert fragment in normalized_correction
+        pricecapcomp = next(
+            item
+            for item in evidence
+            if item.startswith(
+                "At 2026-09-03T20:35:48Z, V3-PRICECAPCOMP-001 is COMPLETE provider-free"
+            )
+        )
+        normalized_pricecapcomp = pricecapcomp.lower()
+        assert pricecapcomp.startswith(
+            "At 2026-09-03T20:35:48Z, V3-PRICECAPCOMP-001 is COMPLETE provider-free"
+        )
+        for fragment in (
+            "opt-in v2 self-hashed route profile",
+            "maximum reachable units and cost are exactly zero",
+            "fails closed before reservation and again at transport",
+            "default v1 profile, active plan, configuration, retry behavior",
+            "input_cache_write='0' remains an independent current-route cap blocker",
+            "971 affected tests with two known warnings",
+            "79 release/autonomy/schema tests",
+            "v3-pricecapcomp-001 is last complete",
+            "v3-modelrefresh-001 is last partial",
+            "combined unfinished count is 40",
+        ):
+            assert fragment in normalized_pricecapcomp
+        assert HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_INVENTORY_RAW_SHA256 in pricecapcomp
+        assert HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_INVENTORY_SHA256 in pricecapcomp
+        assert HISTORICAL_PRICECAPCOMP_COMPONENT_AUTONOMY_SOURCE_UNIVERSE_SHA256 in pricecapcomp
+        operator_retest = next(
+            item
+            for item in evidence
+            if item.startswith(
+                "At 2026-09-03T20:53:27Z, exact operator record "
+                f"{HISTORICAL_POST_PRICECAPCOMP_RETEST_SHA256}"
+            )
+        )
+        normalized_operator_retest = operator_retest.lower()
+        assert operator_retest.startswith(
+            "At 2026-09-03T20:53:27Z, exact operator record "
+            f"{HISTORICAL_POST_PRICECAPCOMP_RETEST_SHA256} "
+            f"({HISTORICAL_POST_PRICECAPCOMP_RETEST_BYTES} bytes / "
+            f"{HISTORICAL_POST_PRICECAPCOMP_RETEST_LINES} lines, latest "
+            f"{HISTORICAL_POST_PRICECAPCOMP_RETEST_LATEST_ENTRY}, remote-resolved commit "
+            f"{HISTORICAL_POST_PRICECAPCOMP_RETEST_REPOSITORY_COMMIT})"
+        )
+        for fragment in (
+            "credentialed metadata-only post-pricecapcomp constrained-discovery retest",
+            "price_cap_not_expressible and price_cap_proof_unavailable",
+            "produced no failed snapshot",
+            "active repository plan remains v1",
+            "no private plan or profile bytes",
+            "nor proves opt-in v2 was selected or exercised",
+            "constrained discovery canonicalizes tier schedules and evaluates schedule-aware facts",
+            "quoted flat-pricing refusal is refresh-only",
+            "aggregate public failure pair is nondiagnostic",
+            "v3-pricecapcomp-001 remains complete",
+            "input_cache_write='0' remains uncapped",
+            "codex performed no provider, network, credential, or command action",
+        ):
+            assert fragment in normalized_operator_retest
+        selector_closure = next(
+            item
+            for item in evidence
+            if item.startswith(
+                "At 2026-09-03T21:41:10Z, exact current operator record "
+                f"{HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_SHA256}"
+            )
+        )
+        normalized_selector_closure = selector_closure.lower()
+        assert selector_closure.startswith(
+            "At 2026-09-03T21:41:10Z, exact current operator record "
+            f"{HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_SHA256} "
+            f"({HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_BYTES} bytes / "
+            f"{HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_LINES} lines, latest "
+            f"{HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_LATEST_ENTRY}, "
+            "remote-resolved commit "
+            f"{HISTORICAL_V1_V2_CLARIFICATION_OPERATOR_RESULTS_REPOSITORY_COMMIT})"
+        )
+        for fragment in (
+            "every earlier retest used a v1-derived sp-grokf.json plan",
+            "supported default-off successor cli",
+            "exact v1 predecessor",
+            "same-route v1-to-v2 upgrade",
+            "every candidate, primary-judge, and replay-judge constraint",
+            "validates the exact immediate transition",
+            "omission preserves pinned v1 bytes",
+            "repeat upgrade, downgrade, drift, tamper, revocation, non-boolean input",
+            "stateful predecessor substitution fail closed",
+            "no successor artifact was emitted, selected, or inspected",
+            "active plan, configuration, retry behavior",
+            "input_cache_write='0' remains independently uncapped",
+            "120 focused selector/cli tests",
+            "1328 affected tests with two known warnings",
+            "79 release/autonomy/schema tests",
+            "337 completion parameters",
+        ):
+            assert fragment in normalized_selector_closure
+        for digest in (
+            CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_RAW_SHA256,
+            CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_SHA256,
+            CURRENT_PRICECAPCOMP_AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
+            CURRENT_PRICECAPCOMP_AUTONOMY_SOURCE_UNIVERSE_SHA256,
+        ):
+            assert digest in selector_closure
+        assert "counts are 3941/3944/3892/49" in normalized_selector_closure
+    autonomy_closure = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith(
+            "At 2026-09-03T23:38:22Z, V3-AUTONOMY-001 closes only its bounded Phase-2"
+        )
+    )
+    normalized_autonomy_closure = autonomy_closure.lower()
+    assert autonomy_closure.startswith(
+        "At 2026-09-03T23:38:22Z, V3-AUTONOMY-001 closes only its bounded Phase-2 "
+        "provisioning slice PARTIAL"
+    )
+    for fragment in (
+        "strict self-contained receipt",
+        "source set before the final receipt name is linked",
+        "durable marker-bound no-reset cost-ledger",
+        "25 external-role inputs remain explicit refusals",
+        "affected local matrix passed 287 tests",
+        "release-schema/autonomy contract passed 65",
+        "no terminal full-suite credit",
+        HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_SHA256,
+        HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_REPOSITORY_COMMIT,
+        "private v2 plan 96cc5301",
+        "active repository plan remains v1",
+        "current and next tickets are unselected",
+        "every provider, spend-admission, execution, qualification, runtime, audit, "
+        "completion, release, and other authority remains false",
+    ):
+        assert fragment in normalized_autonomy_closure
+    for digest in (
+        CURRENT_AUTONOMY_PHASE2_INVENTORY_RAW_SHA256,
+        CURRENT_AUTONOMY_PHASE2_INVENTORY_SHA256,
+        CURRENT_AUTONOMY_PHASE2_DISCOVERY_SEMANTICS_SHA256,
+        CURRENT_AUTONOMY_PHASE2_SOURCE_UNIVERSE_SHA256,
+    ):
+        assert digest in autonomy_closure
+    assert "counts are 3999/4002/3949/50" in normalized_autonomy_closure
+    pricecapcache_closure = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if evidence.startswith("At 2026-09-04T01:48:46Z, V3-PRICECAPCACHE-001 closes PARTIAL")
+    )
+    normalized_pricecapcache_closure = pricecapcache_closure.lower()
+    for fragment in (
+        "prompt, completion, request, and image ceilings",
+        "no request-bound cache-write or total-cost cap",
+        "metadata-time cache-write dominance is non-atomic",
+        "provider-enforced dominance remains unmet",
+        "rejects reserved v3 unconditionally",
+        "successor derivation and the cli emit no v3 plan",
+        "preview schema 1.3 and pricing-attempt schema 1.2 are removed",
+        "understating both prompt and cache-write units",
+        "neutralized because v3 publication and transport are unreachable",
+        "current and next tickets are unselected",
+        "pricecapcomp remains last complete",
+        "pricecapcache is last partial",
+        "unfinished count is 42",
+        "all authority remains false",
+    ):
+        assert fragment in normalized_pricecapcache_closure
+    for digest in (
+        HISTORICAL_PRICECAPCACHE_INVENTORY_RAW_SHA256,
+        HISTORICAL_PRICECAPCACHE_INVENTORY_SHA256,
+        HISTORICAL_PRICECAPCACHE_DISCOVERY_SEMANTICS_SHA256,
+        HISTORICAL_PRICECAPCACHE_SOURCE_UNIVERSE_SHA256,
+    ):
+        assert digest in pricecapcache_closure
+    assert "counts are 4000/4003/3950/50" in normalized_pricecapcache_closure
+    assert "V3-PRICECAPCACHE-001" in requirements_by_id["L"]["tickets"]
+    assert "V3-PLANADOPT-001" in requirements_by_id["L"]["tickets"]
+    planadopt_l_evidence = next(
+        evidence
+        for evidence in requirements_by_id["L"]["evidence"]
+        if "V3-PLANADOPT-001" in evidence and "COMPLETE" in evidence
+    )
+    planadopt_u_evidence = next(
+        evidence
+        for evidence in requirements_by_id["U"]["evidence"]
+        if "V3-PLANADOPT-001" in evidence and "COMPLETE" in evidence
+    )
+    for planadopt_evidence in (planadopt_l_evidence, planadopt_u_evidence):
+        normalized_planadopt_evidence = planadopt_evidence.lower()
+        for digest in (
+            CURRENT_PLANADOPT_PLAN_SHA256,
+            CURRENT_PLANADOPT_PLAN_RAW_SHA256,
+            HISTORICAL_V1_4_SELECTION_PLAN_SHA256,
+            CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256,
+            CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256,
+        ):
+            assert digest in planadopt_evidence
+        for fragment in (
+            "schema-1.7",
+            "no_active_candidate_after_revocation",
+            "exact v1 profile and judges are preserved",
+            "v2 is not adopted",
+            "structural private-plan loading is not lineage authentication",
+            "future repository adoption requires exact successor validation",
+            "separately authenticated unavailable-state ancestry transition",
+            "current and next tickets are unselected",
+            "unfinished count is 41",
+            "all authority is false",
+        ):
+            assert fragment in normalized_planadopt_evidence
     assert "V3-TAXONOMY-001" in requirements_by_id["U"]["remaining_proof"]
     assert "V3-RETRIEVAL-001" in requirements_by_id["U"]["remaining_proof"]
     assert "V3-PRICELEXEME-001" in requirements_by_id["U"]["remaining_proof"]
+    assert (
+        "COMPLETE provider-free V3-PRICEOVERRIDES-001"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert "typed tier validation and retention" in requirements_by_id["U"]["remaining_proof"]
+    assert "web_search='0.01'" in requirements_by_id["U"]["remaining_proof"]
+    assert (
+        "Preserve COMPLETE provider-free V3-PRICECAPCOMP-001"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert (
+        "conditional V2 profile resolves web_search='0.01' only"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert "active repository schema-1.7 plan" in requirements_by_id["U"]["remaining_proof"]
+    assert "no active candidate" in requirements_by_id["U"]["remaining_proof"]
+    assert "exact V1" in requirements_by_id["U"]["remaining_proof"]
+    assert (
+        "private V2 artifact is unselected and unadopted"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert (
+        "metadata-only failure does not prove route admission"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert (
+        "PRICEOVERRIDES requires no future implementation or live rerun"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert (
+        "Before any later V3-TESTQUALITY-001 completion claim"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert (
+        "current REAL isolated production statement receipt"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert "decisive REAL mutation execution" in requirements_by_id["U"]["remaining_proof"]
+    assert "portable same-UID disposal proof" in requirements_by_id["U"]["remaining_proof"]
+    assert (
+        "durable statement authority remains comparison_only"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert "current REAL mutation campaign receipt" in requirements_by_id["U"]["remaining_proof"]
+    assert "production plan generator" in requirements_by_id["U"]["remaining_proof"]
+    assert "sealed backend" in requirements_by_id["U"]["remaining_proof"]
+    assert "REAL mutation run/kill artifact" in requirements_by_id["U"]["remaining_proof"]
+    assert (
+        "Current and next local tickets remain unselected"
+        in (requirements_by_id["U"]["remaining_proof"])
+    )
+    assert "decision-only V3-PRICEFORM-001" in requirements_by_id["U"]["remaining_proof"]
     assert "Finish V3-TAXONOMY-001" not in requirements_by_id["U"]["remaining_proof"]
     assert "The current 29375-byte operator log" not in traceability_text
     assert "The current 35771-byte operator record" not in traceability_text
@@ -2408,39 +3171,139 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "then-current 35771-byte operator record" in traceability_text
     assert "global 25-entry ledger / 0.396223 USD" in traceability_text
     operator_reconciliation = traceability["operator_evidence_reconciliation"]
-    assert operator_reconciliation["critical_path_ticket"] == "V3-PRICELEXEME-001"
+    assert operator_reconciliation["critical_path_ticket"] == "UNSELECTED"
+    assert operator_reconciliation["current_testquality_ticket"] == "V3-TESTQUALITY-001"
+    assert operator_reconciliation["current_testquality_ticket_status"] == (
+        "PARTIAL_PROVIDER_FREE_NONAUTHORIZING_SHARED_PROCESS_LOCAL_REVOCATION_LEASE_RACE_SLICE_"
+        "COMPLETE_COMPARISON_ONLY"
+    )
+    assert operator_reconciliation["current_testquality_closure_timestamp"] == (
+        "2026-09-03T07:06:29Z"
+    )
+    assert operator_reconciliation[
+        "current_testquality_shared_revocation_lease_slice_selected_at"
+    ] == ("2026-09-03T05:40:39Z")
+    assert (
+        operator_reconciliation[
+            "current_testquality_shared_revocation_lease_slice_implementation_started"
+        ]
+        is True
+    )
+    for testquality_true_field in (
+        "current_testquality_exact_utf8_statement_spans_bound",
+        "current_testquality_contract_function_span_population_consistency_required",
+        "current_testquality_live_process_local_foundry_seal_required",
+        "current_testquality_legacy_v1_0_replay_preserved",
+        "current_testquality_bounded_lcov_parser_is_line_only",
+        "current_testquality_compiler_exact_statement_producer_implemented",
+        "current_testquality_raw_coverage_process_custody_implemented",
+        "current_testquality_schema_v1_2_shared_receipt_implemented",
+        "current_testquality_host_observed_compiler_exact_inventory_available",
+        "current_testquality_host_observed_coverage_process_receipt_available",
+        "current_testquality_exact_mutation_executor_implemented",
+        "current_testquality_executor_implementation_graph_bound",
+        "current_testquality_process_local_mutation_comparison_implemented",
+        "current_testquality_mutation_seals_pid_bound",
+        "current_testquality_fork_serialization_and_copy_authority_loss_enforced",
+        "current_testquality_one_shot_campaign_cleanup_handoff_implemented",
+        "current_testquality_exact_live_observation_preserved_through_same_invocation_cleanup_handoff",
+        "current_testquality_cleanup_handoff_exact_plan_spec_source_private_root_identity_mode_executor_pid_cleanup_observation_bound",
+        "current_testquality_cleanup_handoff_replay_copy_serialization_fork_substitution_tamper_stale_authority_rejected",
+        "current_testquality_observed_campaign_invalidation_or_replay_synchronously_cascades_to_dependent_scorecards",
+        "current_testquality_baseexception_and_lock_interruption_clean_identity_scoped_seals",
+        "current_testquality_shared_revocation_lease_available",
+        "current_testquality_race_safe_live_dependency_authority_proven",
+        "current_testquality_pid_bound_shared_domain_serializes_run_observation_campaign_score_and_handoff_replay",
+        "current_testquality_composite_local_seals_revalidated_after_dependency_release",
+        "current_testquality_decisive_scoring_uses_seal_sha_matched_immutable_schema_snapshots",
+        "current_testquality_authenticated_snapshot_plan_matches_canonical_score_plan",
+        "current_testquality_exact_live_sources_revalidated_at_registration",
+        "current_testquality_callbacks_deferred_beyond_outer_lease",
+        "current_testquality_baseexception_partial_paths_exact_remove_without_masking_primary",
+        "current_testquality_fork_refuses_before_inherited_layer_locks",
+    ):
+        assert operator_reconciliation[testquality_true_field] is True
+    assert (
+        operator_reconciliation["current_testquality_durable_statement_projection_authority"]
+        == "comparison_only"
+    )
+    assert operator_reconciliation["current_testquality_shared_revocation_lease_scope"] == (
+        "PROCESS_LOCAL_COMPARISON_ONLY"
+    )
+    assert operator_reconciliation[
+        "current_testquality_race_safe_live_dependency_authority_scope"
+    ] == ("PROCESS_LOCAL_LEASE_LINEARIZATION_ONLY")
+    for testquality_false_field in (
+        "current_testquality_production_statement_evidence_emitted",
+        "current_testquality_current_real_isolated_production_receipt_available",
+        "current_testquality_decisive_real_mutation_execution_available",
+        "current_testquality_portable_race_safe_disposal_available",
+        "current_testquality_benchmark_mutation_credit_enabled",
+        "current_testquality_production_campaign_authority_enabled",
+        "current_testquality_production_disposal_authority_enabled",
+        "current_testquality_one_shot_campaign_cleanup_handoff_is_independent_receipt",
+        "current_testquality_one_shot_campaign_receipt_available",
+        "current_testquality_current_real_mutation_campaign_receipt_available",
+        "current_testquality_sealed_backend_available",
+        "current_testquality_real_mutation_run_and_kill_artifact_available",
+        "current_testquality_production_plan_generator_available",
+        "current_testquality_same_interpreter_reflection_gap_eliminated",
+        "current_testquality_asynchronous_exception_micro_gap_eliminated",
+        "current_testquality_post_linearization_return_gap_eliminated",
+        "current_testquality_provider_or_network_accessed_by_codex",
+        "current_testquality_operator_command_emitted_by_codex",
+        "current_testquality_terminal_full_suite_pass_credit",
+        "current_testquality_grants_authority",
+    ):
+        assert operator_reconciliation[testquality_false_field] is False
     critical_path_status = operator_reconciliation["critical_path_ticket_status"]
     for status_component in (
-        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING",
-        "PRICEFORM_REFUSAL_UPHELD",
-        "EFFORT_HIGH_RETAINED",
-        "V3_RETRIEVAL_001_COMPLETE",
-        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
+        "NO_CURRENT_OR_NEXT_LOCAL_TICKET_SELECTED",
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "ACTIVE_REPOSITORY_PLAN_SCHEMA_1_7_NO_ACTIVE_CANDIDATE",
+        "EXACT_V1_PROFILE_AND_JUDGES_PRESERVED",
+        "V2_NOT_ADOPTED",
+        "V3_PRICEKEYORDER_001_IS_WITHDRAWN_OPERATOR_ERROR",
+        "V3_PRICECAPCACHE_001_IS_LAST_PARTIAL",
+        "HISTORICAL_V3_AUTONOMY_001_PARTIAL_PRESERVED",
+        "NO_CURRENT_COMMAND_SUCCESSOR_CANDIDATE_ROUTE_CAMPAIGN_OR_RUN_INDEX",
+        "NO_CODEX_PROVIDER_NETWORK_COMMAND_PLAN_CONFIGURATION_RETRY_OPERATOR_LEDGER_OR_"
+        "AUTHORITY_ACTION",
     ):
         assert status_component in critical_path_status
     assert (
         operator_reconciliation[
             "critical_path_ticket_newly_selected_started_or_marked_in_progress_this_turn"
         ]
-        is True
+        is False
     )
     assert operator_reconciliation["current_preflight_status"].startswith(
-        "LOCAL_V3_PRICELEXEME_001_IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
+        "CURRENT_OPERATOR_RECORD_215EA0F2_AT_REMOTE_RESOLVED_HEAD_810ED7F_"
+        "VERIFIES_PLANADOPT_STATE_AND_AUTHENTICATED_ANCESTRY_GATE"
     )
-    assert (
-        "RETAINED_LOCAL_V3_ACTORMODEL_001_COMPLETE"
-        in (operator_reconciliation["current_preflight_status"])
+    for preflight_component in (
+        "NO_SUPPORTED_AUTHENTICATED_ANCESTRY_TRANSITION_EXISTS_TODAY",
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "ACTIVE_REPOSITORY_PLAN_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        "EXACT_V1_PROFILE_AND_JUDGES_PRESERVED",
+        "V2_NOT_ADOPTED",
+        "STRUCTURAL_PRIVATE_PLAN_LOADING_DOES_NOT_AUTHENTICATE_ANCESTRY",
+        "EXACT_SUCCESSOR_VALIDATION_REQUIRED_FOR_ADOPTION",
+        "CURRENT_AND_NEXT_LOCAL_TICKET_UNSELECTED",
+        "V3_PLANADOPT_001_LAST_COMPLETE",
+        "V3_PRICECAPCACHE_001_LAST_PARTIAL",
+        "PRIVATE_V2_ARTIFACT_UNSELECTED_UNADOPTED",
+        "COMBINED_UNFINISHED_TICKET_COUNT_41",
+        "57_ENTRY_068118684_USD_LEDGER_AND_ZERO_REAL_AUDITS_UNCHANGED",
+        "ALL_PRODUCTION_AND_EXTERNAL_AUTHORITY_FALSE",
+        "CODEX_ZERO_EXTERNAL_COMMANDS",
+    ):
+        assert preflight_component in operator_reconciliation["current_preflight_status"]
+    assert operator_reconciliation["current_local_ticket"] == "UNSELECTED"
+    assert operator_reconciliation["current_local_ticket_status"].startswith(
+        "UNSELECTED_AFTER_V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
     )
-    assert (
-        "RETAINED_LOCAL_V3_ENDPOINTLIST_001_COMPLETE"
-        in (operator_reconciliation["current_preflight_status"])
-    )
-    assert "V3_RETRIEVAL_001_COMPLETE" in operator_reconciliation["current_preflight_status"]
-    assert "IMPLEMENTATION_STARTED_FALSE" in operator_reconciliation["current_preflight_status"]
-    assert operator_reconciliation["current_local_ticket"] == "V3-PRICELEXEME-001"
-    assert operator_reconciliation["current_local_ticket_status"] == (
-        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
-    )
+    assert operator_reconciliation["current_local_ticket_implementation_started"] is False
     assert operator_reconciliation["current_taxonomy_ticket"] == "V3-TAXONOMY-001"
     assert operator_reconciliation["current_taxonomy_status"] == (
         "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
@@ -2540,6 +3403,32 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert operator_reconciliation["current_candidate_price_form_decision"] == (
         "CURRENT_BINARY_FLOAT_CUSTODY_REFUSAL_UPHELD"
     )
+    assert operator_reconciliation["current_candidate_price_form_ticket"] == "V3-PRICEFORM-001"
+    assert operator_reconciliation["current_candidate_price_form_ticket_status"] == (
+        "COMPLETE_DECISION_ONLY_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    for price_form_true_field in (
+        "current_candidate_price_form_policy_decision_closure",
+        "current_candidate_price_form_ordinary_uncaptured_numeric_refusal_validated",
+        "current_candidate_price_form_captured_lexeme_canonical_string_storage_validated",
+        "current_candidate_price_form_exact_cost_arithmetic_parity_validated",
+    ):
+        assert operator_reconciliation[price_form_true_field] is True
+    assert operator_reconciliation["current_candidate_price_form_decision_validation_passed"] == 795
+    assert operator_reconciliation["current_candidate_price_form_decision_validation_warnings"] == 2
+    for price_form_false_field in (
+        "current_candidate_price_form_code_changed",
+        "current_candidate_price_form_configuration_changed",
+        "current_candidate_price_form_retry_behavior_changed",
+        "current_candidate_price_form_active_plan_changed",
+        "current_candidate_price_form_global_ledger_changed",
+        "current_candidate_price_form_provider_or_network_action_by_codex",
+        "current_candidate_price_form_operator_command_emitted_by_codex",
+        "current_candidate_price_form_grants_authority",
+    ):
+        assert operator_reconciliation[price_form_false_field] is False
+    assert operator_reconciliation["current_global_ledger_entry_count"] == 57
+    assert operator_reconciliation["current_global_ledger_spent_usd_exact"] == "0.68118684"
     assert operator_reconciliation["current_candidate_price_exactness_requirement_relaxed"] is False
     assert (
         operator_reconciliation[
@@ -2552,7 +3441,17 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     )
     assert operator_reconciliation[
         "current_candidate_lossless_price_lexeme_custody_ticket_status"
-    ] == ("IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING")
+    ] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_PREMISE_SUPERSEDED_RETAINED_AS_DEFENSE_IN_DEPTH_"
+        "NONBLOCKING_NONAUTHORIZING"
+    )
+    assert operator_reconciliation[
+        "current_candidate_lossless_price_lexeme_terminal_partial_timestamp"
+    ] == ("2026-09-03T08:38:00Z")
+    assert (
+        operator_reconciliation["current_candidate_lossless_price_lexeme_implementation_started"]
+        is True
+    )
     assert operator_reconciliation[
         "current_candidate_lossless_price_lexeme_parse_float_decimal_fact_operator_reported"
     ]
@@ -2560,8 +3459,139 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         operator_reconciliation[
             "current_candidate_lossless_price_lexeme_parse_float_decimal_fact_independently_verified_by_codex"
         ]
+        is True
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_parse_phase_numeric_token_ceiling"
+        ]
+        == 100000
+    )
+    for bounded_path_true_field in (
+        "current_candidate_lossless_price_lexeme_parse_phase_numeric_token_ceiling_enforced_before_materialization",
+        "current_candidate_lossless_price_lexeme_decoder_issues_tokens_only_at_final_fixed_price_paths",
+        "current_candidate_lossless_price_lexeme_snapshot_admission_binds_original_layout_endpoint_index_and_price_field",
+        "current_candidate_lossless_price_lexeme_observed_field_index_or_layout_relocation_revokes_monotonically",
+    ):
+        assert operator_reconciliation[bounded_path_true_field] is True
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_relocation_restore_resurrects_authority"
+        ]
         is False
     )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_historical_pre_hardening_affected_matrix_passed"
+        ]
+        == 795
+    )
+    assert operator_reconciliation[
+        "current_candidate_lossless_price_lexeme_joined_raw_http_constrained_regression_passed"
+    ]
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_fresh_current_byte_live_admissibility_proven"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_required_for_completion"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_authorized"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_command_emitted_by_codex"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_historical_pre_hardening_focused_combined_passed"
+        ]
+        == 24
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_historical_pre_hardening_schema_inventory_closure_passed"
+        ]
+        == 126
+    )
+    for current_pricelexeme_true_field in (
+        "current_candidate_lossless_price_lexeme_decoder_is_only_normal_issuer",
+        "current_candidate_lossless_price_lexeme_registry_only_slotless_marker",
+        "current_candidate_lossless_price_lexeme_exact_layout_full_path_and_price_field_bound",
+        "current_candidate_lossless_price_lexeme_detach_copy_and_deepcopy_preserve_same_identity",
+        "current_candidate_lossless_price_lexeme_construction_pickle_and_reduction_rejected",
+        "current_candidate_lossless_price_lexeme_setattr_delattr_and_observed_class_substitution_revoke_monotonically",
+        "current_candidate_lossless_price_lexeme_id_keyed_exact_weakref_registry",
+        "current_candidate_lossless_price_lexeme_exact_weakref_cleanup_and_id_reuse_bound",
+        "current_candidate_lossless_price_lexeme_current_provider_free_focused_hardening_validation_passed",
+        "current_candidate_lossless_price_lexeme_current_provider_free_affected_validation_passed",
+        "current_candidate_lossless_price_lexeme_current_provider_free_localhost_integration_passed",
+    ):
+        assert operator_reconciliation[current_pricelexeme_true_field] is True
+    for current_pricelexeme_false_field in (
+        "current_candidate_lossless_price_lexeme_decoder_issued_instance_registry_and_detached_copy_custody",
+        "current_candidate_lossless_price_lexeme_raw_capture_factories_available",
+        "current_candidate_lossless_price_lexeme_registry_lookup_invokes_marker_hash_or_equality",
+        "current_candidate_lossless_price_lexeme_current_terminal_full_suite_claimed",
+        "current_candidate_lossless_price_lexeme_provider_or_network_accessed_by_codex",
+    ):
+        assert operator_reconciliation[current_pricelexeme_false_field] is False
+    assert operator_reconciliation["current_candidate_pricekeyorder_ticket"] == (
+        "V3-PRICEKEYORDER-001"
+    )
+    assert operator_reconciliation["current_candidate_pricekeyorder_ticket_status"] == (
+        "WITHDRAWN_OPERATOR_ERROR"
+    )
+    for pricekeyorder_true_field in (
+        "current_candidate_pricekeyorder_prior_diagnosis_retracted_by_operator",
+        "current_candidate_pricekeyorder_prior_diagnosis_bypassed_provider_ingest",
+        "current_candidate_pricekeyorder_operator_requested_withdrawal",
+        "current_candidate_pricekeyorder_provider_ingest_already_sorts_raw_tier_keys",
+        "current_candidate_post_modelrefresh_live_constrained_discovery_failed_operator_reported",
+        "current_candidate_tier_schedule_projection_correct_operator_reported",
+    ):
+        assert operator_reconciliation[pricekeyorder_true_field] is True
+    assert (
+        operator_reconciliation["current_candidate_pricekeyorder_full_ingest_permutation_count"]
+        == 120
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_pricekeyorder_full_ingest_distinct_pricing_hash_count"
+        ]
+        == 1
+    )
+    assert (
+        operator_reconciliation[
+            "current_candidate_pricekeyorder_full_ingest_distinct_snapshot_hash_count"
+        ]
+        == 1
+    )
+    assert operator_reconciliation[
+        "current_candidate_post_modelrefresh_live_constrained_discovery_failure_reasons"
+    ] == ["PRICE_CAP_NOT_EXPRESSIBLE", "PRICE_CAP_PROOF_UNAVAILABLE"]
+    assert operator_reconciliation["current_candidate_tier_schedule_projection_method"] == (
+        "MMAUDIT_TIERED_MAXIMUM_RATE_V1"
+    )
+    for pricekeyorder_false_field in (
+        "current_candidate_pricekeyorder_root_cause_confirmed_by_codex",
+        "current_candidate_pricekeyorder_sole_blocker_confirmed_by_codex",
+        "current_candidate_pricekeyorder_selected",
+        "current_candidate_pricekeyorder_implementation_started",
+        "current_candidate_pricekeyorder_grants_authority",
+    ):
+        assert operator_reconciliation[pricekeyorder_false_field] is False
     assert operator_reconciliation["current_candidate_conditional_future_route"] == (
         "x-ai/grok-4.6=amazon-bedrock/us-west-2"
     )
@@ -2686,28 +3716,200 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         operator_reconciliation["current_endpoint_inventory_diagnostic_grants_authority"] is False
     )
     assert operator_reconciliation["current_modelrefresh_ticket_status"].startswith(
-        "PARTIAL_CANDIDATE_REVOCATION_SLICE_COMPLETE_PROVIDER_FREE"
+        "PARTIAL_TERMINAL_PROVIDER_FREE_TIER_SCHEDULE_CUSTODY_COMPLETE"
     )
     assert operator_reconciliation["current_learning_ticket_status"].startswith(
         "PARTIAL_PHASE_1_COMPLETE_PROVIDER_FREE"
     )
-    assert operator_reconciliation["last_completed_ticket"] == "V3-RETRIEVAL-001"
-    assert operator_reconciliation["last_partial_ticket"] == "V3-CANDROUTE-001"
-    assert operator_reconciliation["next_safe_local_ticket"] == "V3-PRICELEXEME-001"
+    assert operator_reconciliation["last_completed_ticket"] == "V3-PLANADOPT-001"
+    assert operator_reconciliation["last_partial_ticket"] == "V3-PRICECAPCACHE-001"
+    assert operator_reconciliation["next_safe_local_ticket"] is None
+    assert operator_reconciliation["combined_unfinished_ticket_count"] == 41
+    assert operator_reconciliation["current_pricecapcache_ticket_status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_ATOMIC_PROVIDER_CAP_UNAVAILABLE"
+    )
+    assert operator_reconciliation["current_pricecapcache_closure_timestamp"] == (
+        "2026-09-04T01:48:46Z"
+    )
+    assert operator_reconciliation[
+        "current_pricecapcache_provider_max_price_supported_dimensions"
+    ] == ["prompt", "completion", "request", "image"]
+    for pricecapcache_true_field in (
+        "current_pricecapcache_trusted_project_provider_price_cap_rejects_v3_unconditionally",
+        "current_pricecapcache_preview_schema_1_3_removed",
+        "current_pricecapcache_pricing_attempt_schema_1_2_removed",
+        "current_pricecapcache_old_schema_1_2_both_units_understatement_reproduced",
+        "current_pricecapcache_old_schema_1_2_understatement_neutralized_by_unreachability",
+        "current_pricecapcache_v1_and_v2_preserved",
+        "current_pricecapcache_post_cutoff_static_and_generation_validation_passed",
+    ):
+        assert operator_reconciliation[pricecapcache_true_field] is True
+    for pricecapcache_false_field in (
+        "current_pricecapcache_v3_successor_derivation_available",
+        "current_pricecapcache_v3_successor_cli_available",
+        "current_pricecapcache_v3_plan_preview_attempt_or_transport_reachable",
+        "current_pricecapcache_request_bound_cache_write_cap_available",
+        "current_pricecapcache_request_bound_total_cost_cap_available",
+        "current_pricecapcache_metadata_dominance_atomic",
+        "current_pricecapcache_reconciliation_before_spend",
+        "current_pricecapcache_provider_enforced_dominance_acceptance_met",
+        "current_pricecapcache_post_cutoff_focused_validation_in_progress",
+        "current_pricecapcache_provider_or_network_accessed_by_codex",
+        "current_pricecapcache_operator_command_emitted_by_codex",
+        "current_pricecapcache_ledger_accessed_or_mutated_by_codex",
+        "current_pricecapcache_grants_authority",
+    ):
+        assert operator_reconciliation[pricecapcache_false_field] is False
+    assert (
+        operator_reconciliation["current_pricecapcache_post_cutoff_affected_tests_passed"] == 1436
+    )
+    assert operator_reconciliation["current_pricecapcache_post_cutoff_affected_test_warnings"] == 2
+    assert (
+        operator_reconciliation["current_pricecapcache_post_cutoff_affected_test_duration_seconds"]
+        == 245.19
+    )
+    assert (
+        operator_reconciliation["current_pricecapcache_post_cutoff_product_governance_tests_passed"]
+        == 27
+    )
+    assert operator_reconciliation["current_pricecapcache_independent_review"] == (
+        "PASS_NO_BLOCKERS"
+    )
+    assert operator_reconciliation["queued_successor_ticket"] is None
+    assert operator_reconciliation["queued_successor_ticket_status"] == "NONE"
+    assert operator_reconciliation["queued_successor_selected"] is False
+    assert operator_reconciliation["queued_successor_implementation_started"] is False
+    assert operator_reconciliation["withdrawn_successor_ticket"] == "V3-PRICEKEYORDER-001"
+    assert (
+        operator_reconciliation["withdrawn_successor_ticket_status"] == "WITHDRAWN_OPERATOR_ERROR"
+    )
+    assert (
+        operator_reconciliation["withdrawn_successor_decision_commit"]
+        == HISTORICAL_PRICEKEYORDER_CORRECTION_REPOSITORY_COMMIT
+    )
     assert operator_reconciliation["completed_real_audits"] == 0
+    assert operator_reconciliation[
+        "current_candidate_lossless_price_lexeme_all_direct_and_nested_billable_price_leaves_"
+        "are_exact_decimal_strings_operator_reported"
+    ]
+    assert operator_reconciliation[
+        "current_candidate_pricing_overrides_structured_list_caused_first_scalar_price_parser_"
+        "refusal_operator_reported"
+    ]
+    assert operator_reconciliation[
+        "current_candidate_pricing_overrides_local_input_cache_write_zero_rejected_as_variable_"
+        "without_provider_cap"
+    ]
+    assert operator_reconciliation[
+        "current_candidate_pricing_overrides_local_web_search_0_01_rejected_as_nonzero_without_"
+        "provider_cap_after_input_cache_write_omitted"
+    ]
+    assert (
+        operator_reconciliation["current_candidate_pricing_overrides_is_sole_route_blocker_proven"]
+        is False
+    )
+    assert (
+        operator_reconciliation["current_candidate_pricing_overrides_route_admissibility_proven"]
+        is False
+    )
+    assert operator_reconciliation["current_candidate_pricing_overrides_ticket_status"] == (
+        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    assert operator_reconciliation["current_candidate_pricing_overrides_ticket_selected"] is False
+    assert operator_reconciliation["current_candidate_pricing_overrides_implementation_started"]
+    assert operator_reconciliation["current_candidate_pricing_overrides_code_changed"]
+    for overrides_true_field in (
+        "current_candidate_pricing_overrides_typed_override_tier_model_implemented",
+        "current_candidate_pricing_overrides_recorded_operator_shape_validated_and_retained",
+        "current_candidate_pricing_overrides_nested_exact_canonical_decimal_prices_enforced",
+        "current_candidate_pricing_overrides_pricing_schedule_sha256_binds_base_and_ordered_tiers",
+        "current_candidate_pricing_overrides_endpoint_snapshot_sha256_binds_schedule",
+        "current_candidate_pricing_overrides_zdr_schedule_equivalence_required",
+        "current_candidate_pricing_overrides_flat_endpoint_evidence_byte_identical",
+        "current_candidate_pricing_overrides_provider_free_preview_refuses_conditional_cost_authority",
+        "current_candidate_pricing_overrides_identity_sealing_refuses_conditional_cost_authority",
+        "current_candidate_pricing_overrides_model_refresh_refuses_schedule_instead_of_dropping_it",
+        "current_candidate_pricing_overrides_full_models_discover_recorded_shape_reaches_route_predicates",
+    ):
+        assert operator_reconciliation[overrides_true_field] is True
+    assert (
+        operator_reconciliation[
+            "current_candidate_pricing_overrides_tiered_pricing_cost_projection"
+        ]
+        == "unavailable"
+    )
+    assert operator_reconciliation[
+        "current_candidate_pricing_overrides_full_models_discover_failure_reasons"
+    ] == ["PRICE_CAP_NOT_EXPRESSIBLE", "PRICE_CAP_PROOF_UNAVAILABLE"]
+    assert (
+        operator_reconciliation[
+            "current_candidate_lossless_price_lexeme_blocks_price_overrides_ticket"
+        ]
+        is False
+    )
     next_safe_action = operator_reconciliation["next_safe_action"]
     for next_action_component in (
-        "BEGIN",
-        "PROVIDER_FREE",
-        "V3_PRICELEXEME_001",
-        "IMPLEMENTATION",
-        "NOT_STARTED",
-        "PRICEFORM_REFUSAL",
-        "EFFORT_HIGH",
-        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
-        "NO_PROVIDER_OR_OPERATOR_COMMAND_OR_AUTHORITY_IS_CURRENT",
+        "STOP_WITH_CURRENT_AND_NEXT_LOCAL_TICKET_UNSELECTED_AFTER_V3_PLANADOPT_001_COMPLETE",
+        "RESUME_ONLY_UNDER_ONE_SEPARATELY_SELECTED_BOUNDED_TICKET",
+        "FUTURE_CANDIDATE_ADOPTION_REQUIRES_EXACT_SUCCESSOR_VALIDATION_AND_A_SEPARATELY_"
+        "AUTHENTICATED_ANCESTRY_TRANSITION",
+        "PRESERVE_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_EXACT_V1_PROFILE_JUDGE_CUSTODY_AND_PRIVATE_"
+        "V2_NONADOPTION",
+        "KEEP_CONFIGURATION_RETRY_57_ENTRY_068118684_OPERATOR_LEDGER_ZERO_REAL_AUDITS_AND_ALL_"
+        "EXTERNAL_AUTHORITY_UNCHANGED",
     ):
         assert next_action_component in next_safe_action
+    assert operator_reconciliation["current_candidate_selection_plan_schema_version"] == "1.7"
+    assert operator_reconciliation["current_candidate_selection_plan_raw_sha256"] == (
+        CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_sha256"] == (
+        CURRENT_PLANADOPT_PLAN_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_predecessor_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_has_active_selection"] is False
+    assert operator_reconciliation["current_candidate_selection_plan_unavailable_state_sha256"] == (
+        CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_unavailable_disposition"] == (
+        "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    )
+    assert (
+        operator_reconciliation["current_candidate_selection_plan_matched_revocation_set_sha256"]
+        == CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_profile_decision"] == (
+        "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_pins_revoked_route"] is False
+    assert operator_reconciliation["current_repository_active_plan_remains_v1"] is False
+    assert operator_reconciliation["current_repository_active_plan_schema_version"] == "1.7"
+    assert operator_reconciliation["current_repository_active_plan_retains_v1_price_cap_profile"]
+    assert operator_reconciliation["current_active_plan_to_v2_supported_path_available"] is False
+    assert (
+        operator_reconciliation["current_operator_reported_private_v2_plan_adopted_by_repository"]
+        is False
+    )
+    assert operator_reconciliation["current_autonomy_inventory_raw_sha256"] == (
+        CURRENT_PLANADOPT_INVENTORY_RAW_SHA256
+    )
+    assert operator_reconciliation["current_autonomy_inventory_sha256"] == (
+        CURRENT_PLANADOPT_INVENTORY_SHA256
+    )
+    assert operator_reconciliation["current_autonomy_schema_raw_sha256"] == (
+        CURRENT_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    )
+    assert operator_reconciliation["current_candidate_selection_plan_schema_raw_sha256"] == (
+        CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256
+    )
+    assert operator_reconciliation["current_autonomy_source_discovery_semantics_sha256"] == (
+        CURRENT_PLANADOPT_DISCOVERY_SEMANTICS_SHA256
+    )
+    assert operator_reconciliation["current_autonomy_source_universe_sha256"] == (
+        CURRENT_PLANADOPT_SOURCE_UNIVERSE_SHA256
+    )
     assert operator_reconciliation["current_candidate_revocation_plan_reconciliation_complete"]
     assert operator_reconciliation["current_candidate_revocation_local_evaluation_scope"] == (
         "REQUESTED_ASSIGNED_ROUTE"
@@ -2728,19 +3930,27 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         "current_candidate_plan_or_constraint_hash_resurrection_rejected"
     ]
     assert operator_reconciliation["current_candidate_selection_plan_emitter_available"]
-    assert operator_reconciliation["current_candidate_plan_successor_ticket_selected"]
-    assert operator_reconciliation["current_candidate_plan_successor_ticket_complete"]
-    assert operator_reconciliation["current_candidate_plan_successor_schema_version"] == "1.5"
-    assert operator_reconciliation["current_candidate_plan_successor_artifact_emitted_or_selected"]
+    assert operator_reconciliation["historical_candidate_plan_successor_ticket"] == (
+        "V3-PLANSUCCESSOR-001"
+    )
     assert operator_reconciliation[
-        "current_candidate_plan_successor_artifact_emitted_operator_reported"
+        "historical_candidate_plan_successor_ticket_selected_at_boundary"
+    ]
+    assert operator_reconciliation["historical_candidate_plan_successor_ticket_complete"]
+    assert operator_reconciliation["historical_candidate_plan_successor_schema_version"] == "1.5"
+    assert operator_reconciliation[
+        "historical_candidate_plan_successor_artifact_emitted_or_selected_at_boundary"
+    ]
+    assert operator_reconciliation[
+        "historical_candidate_plan_successor_artifact_emitted_operator_reported"
     ]
     assert (
-        operator_reconciliation["current_candidate_plan_successor_artifact_inspected_by_codex"]
+        operator_reconciliation["historical_candidate_plan_successor_artifact_inspected_by_codex"]
         is False
     )
     assert (
-        operator_reconciliation["current_candidate_plan_successor_selected_as_active_plan"] is False
+        operator_reconciliation["historical_candidate_plan_successor_selected_as_active_plan"]
+        is False
     )
     assert (
         operator_reconciliation[
@@ -2749,7 +3959,7 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
         == 0
     )
     assert operator_reconciliation[
-        "current_candidate_plan_successor_provider_free_live_route_preflight_proven"
+        "historical_candidate_plan_successor_provider_free_live_route_preflight_proven"
     ]
     assert operator_reconciliation["current_candidate_replacement_selected"] is False
     assert operator_reconciliation["current_schema_retry_ticket_status"].startswith(
@@ -2768,20 +3978,22 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "PROVIDER_FREE" in trace_runtime_mechanism_status
     assert "NONAUTHORIZING" in trace_runtime_mechanism_status
     assert operator_reconciliation["current_operator_results_sha256"] == (
-        CURRENT_OPERATOR_RESULTS_SHA256
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256
     )
     assert operator_reconciliation["current_latest_entry_timestamp"] == (
-        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY
     )
     assert (
-        operator_reconciliation["current_operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
+        operator_reconciliation["current_operator_results_bytes"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_BYTES
     )
     assert (
-        operator_reconciliation["current_operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
+        operator_reconciliation["current_operator_results_lines"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_LINES
     )
     assert (
         operator_reconciliation["current_operator_results_repository_commit"]
-        == CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT
     )
     assert (
         operator_reconciliation[
@@ -2933,7 +4145,14 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "MOCK remains unpromoted" in autonomy_evidence
     assert "Synthetic REAL attestations" in autonomy_evidence
     assert "not provider execution" in autonomy_evidence
-    assert CURRENT_OPERATOR_RESULTS_SHA256 in autonomy_evidence
+    assert HISTORICAL_RUNTIMEADMIT_OPERATOR_RESULTS_SHA256 in autonomy_evidence
+    assert HISTORICAL_AF7_OPERATOR_RESULTS_SHA256 in autonomy_evidence
+    assert (
+        f"{HISTORICAL_AF7_OPERATOR_RESULTS_BYTES} bytes / "
+        f"{HISTORICAL_AF7_OPERATOR_RESULTS_LINES} lines"
+    ) in autonomy_evidence
+    assert HISTORICAL_AF7_OPERATOR_RESULTS_LATEST_ENTRY in autonomy_evidence
+    assert HISTORICAL_AF7_OPERATOR_RESULTS_REPOSITORY_COMMIT in autonomy_evidence
     assert "V3-RUNTIMEADMIT-001" in autonomy_evidence
     assert "COMPLETE" in autonomy_evidence
     assert "provider-free" in autonomy_evidence
@@ -2954,7 +4173,7 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     )
     assert "V3-CONSENSUS-001" in autonomy_remaining
     assert "COMPLETE" in autonomy_remaining
-    assert "genuine provider-backed promotion" in autonomy_remaining.lower()
+    assert "genuine provider-backed retry and promotion evidence" in autonomy_remaining.lower()
     assert "terminal maximum-assurance" in autonomy_remaining
     assert "V3-RUNTIMEADMIT-001" in autonomy_remaining
     assert "COMPLETE" in autonomy_remaining
@@ -2963,7 +4182,12 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "V3-RETRYCONT-001" in autonomy_remaining
     assert "provider-backed retry" in autonomy_remaining.lower()
     assert "V3-CALIBRATE-001" in autonomy_remaining
-    assert "No current command or run index exists" in autonomy_remaining
+    assert "terminal provider-free PARTIAL V3-PRICELEXEME-001" in autonomy_remaining
+    assert "terminal provider-free comparison-only PARTIAL V3-TESTQUALITY-001" in (
+        autonomy_remaining
+    )
+    assert "all false provider, network, command" in autonomy_remaining
+    assert "Current and next local tickets remain unselected" in autonomy_remaining
     for requirement in requirements:
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
@@ -3031,6 +4255,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     operator_results = operator_result_bytes.decode("utf-8")
     current_operator_result_bytes = (ROOT / OPERATOR_RESULTS_RELATIVE_PATH).read_bytes()
     current_operator_results = current_operator_result_bytes.decode("utf-8")
+    current_state = validate_governance_state(ROOT)
     queues = (
         (ROOT / "docs/codex_work_queue.md").read_text(encoding="utf-8"),
         QUEUE_PATH.read_text(encoding="utf-8"),
@@ -3041,14 +4266,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         current_header = worklog.split("\n## ", maxsplit=1)[0]
-        assert "AUTORUN_STATUS:" in current_header
-        assert "PROVIDER_FREE" in current_header
-        assert "NONAUTHORIZING" in current_header
-        assert "CODEX_ZERO_EXTERNAL_COMMANDS" in current_header
-        assert "CURRENT_TICKET:" in current_header
-        assert "CURRENT_LOCAL_SLICE_STATUS:" in current_header
-        assert "LAST_COMPLETED_TICKET:" in current_header
-        assert "LAST_PARTIAL_TICKET: V3-CANDROUTE-001" in current_header
+        validate_worklog_header(current_header, current_state)
         assert CURRENT_COVERAGE_CHECKPOINT in worklog
         assert "V3-ACTORMODEL-001" in worklog
         assert "unfinished tickets" in current_header
@@ -3056,35 +4274,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert "V3-ACTORMODEL-001" in worklog
         assert "REMAINING_ACTIONABLE_TICKETS:" in current_header
         assert "V3-CANDROUTE-001" in current_header and "PARTIAL" in current_header
-        assert "ZERO_ADMISSIBLE_CANDIDATES" in current_header
-        assert "no codex provider or operator action" in current_header.lower()
         assert "V3-CALIBRATE-001" in worklog and "BLOCKED_TECHNICAL" in worklog
-        assert "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: RECONCILED_EXACT_AF7A24E" in (
-            current_header
-        )
-        for status_component in (
-            "OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY",
-            "PRICEFORM_REFUSAL_UPHELD",
-            "REASONING_EFFORT_REQUIRED",
-            "PRICELEXEME_QUEUED",
-            "PRIOR_LIVE_V1_0_METADATA_SURVEY",
-            "12_MODELS",
-            "112_ENDPOINTS",
-            "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
-            "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
-            "ZERO_ADMISSIBLE_CANDIDATES",
-            "ACTIVE_PLAN_UNCHANGED",
-            "LEDGER_UNCHANGED",
-            "57_ENTRIES",
-            "068118684_SPEND",
-            "ZERO_COMPLETED_REAL_AUDITS",
-            "NONAUTHORIZING",
-            "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
-        ):
-            assert status_component in current_header
         assert (
-            f"LAST_RECONCILED_OPERATOR_RESULTS: `{CURRENT_OPERATOR_RESULTS_SHA256}` / "
-            f"{CURRENT_OPERATOR_RESULTS_BYTES} bytes / {CURRENT_OPERATOR_RESULTS_LINES} lines"
+            f"LAST_RECONCILED_OPERATOR_RESULTS: `{current_state.operator.raw_sha256}` / "
+            f"{current_state.operator.byte_count} bytes / {current_state.operator.line_count} lines"
         ) in current_header
     normalized_queues = tuple(" ".join(queue.split()) for queue in queues)
     combined_queue_statuses = _parse_all_queue_ticket_statuses(queues[0]) | (
@@ -3100,6 +4293,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-SCHEMARETRY-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-ENDPOINTLIST-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-ACTORMODEL-001"] == "COMPLETE"
+        assert _parse_all_queue_ticket_statuses(raw_queue)["V3-PRICECAPCOMP-001"] == "COMPLETE"
         assert _parse_all_queue_ticket_statuses(raw_queue)["V3-LEARNING-001"] == "PARTIAL"
         assert "V3-CALIBRATE-001" in normalized_queue
         assert "Stop after" in normalized_queue and "`COMPLETE`" in normalized_queue
@@ -3112,59 +4306,135 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert combined_queue_statuses["V3-ENDPOINTLIST-001"] == "COMPLETE"
     assert combined_queue_statuses["V3-ACTORMODEL-001"] == "COMPLETE"
     assert combined_queue_statuses["V3-CANDROUTE-001"] == "PARTIAL"
-    assert combined_queue_statuses["V3-PRICEFORM-001"] == "QUEUED"
+    assert combined_queue_statuses["V3-PRICEFORM-001"] == "COMPLETE"
     assert combined_queue_statuses["V3-RETRIEVAL-001"] == "COMPLETE"
-    assert combined_queue_statuses["V3-PRICELEXEME-001"] == "IN_PROGRESS"
+    assert combined_queue_statuses["V3-PRICELEXEME-001"] == "PARTIAL"
+    assert combined_queue_statuses["V3-PRICEOVERRIDES-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-PRICECAPCOMP-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-PLANADOPT-001"] == "COMPLETE"
+    assert combined_queue_statuses["V3-TESTQUALITY-001"] == "PARTIAL"
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+    # These retained fields belong to the pinned September-4 operator snapshot;
+    # current engineering selection is checked independently above.
     current_operator_status = runtime_status["operator_results_current_worktree_status"]
-    assert current_operator_status.startswith(
-        "RECONCILED_EXACT_AF7A24E_OPERATOR_DECISION_LOSSLESS_PRICE_LEXEME_CUSTODY"
-    )
+    assert current_operator_status.startswith("RECONCILED_EXACT_215EA0F2")
     for status_component in (
-        "PRICEFORM_REFUSAL_UPHELD",
-        "REASONING_EFFORT_REQUIRED",
-        "PRICELEXEME_QUEUED",
-        "PRIOR_LIVE_V1_0_METADATA_SURVEY",
-        "V1_0_METADATA_SURVEY",
-        "12_MODELS",
-        "112_ENDPOINTS",
-        "ZERO_ENDPOINT_REASONING_EFFORT_INVENTORIES",
-        "V1_0_MODEL_AND_EFFECTIVE_REASONING_OMISSION_CORRECTED_LOCALLY_IN_V1_1",
-        "ZERO_ADMISSIBLE_CANDIDATES",
-        "ACTIVE_PLAN_UNCHANGED",
-        "LEDGER_UNCHANGED",
+        "OPERATOR_VERIFIED_ACTIVE_SCHEMA_1_7_NO_ACTIVE_CANDIDATE",
+        "REVOKED_PIN_REMOVED",
+        "V1_PROFILE_RETAINED",
+        "V2_NOT_ADOPTED",
+        "OBSERVED_AUTHENTICATED_ANCESTRY_TRANSITION_GATE",
+        "NO_SUPPORTED_TRANSITION_EXISTS_TODAY",
+        "DEFERRED_TO_FUTURE_SEPARATELY_SELECTED_BOUNDED_TICKET",
+        "CURRENT_AND_NEXT_TICKET_UNSELECTED",
         "57_ENTRIES",
         "068118684_SPEND",
         "ZERO_COMPLETED_REAL_AUDITS",
+        "CODEX_ZERO_EXTERNAL_COMMANDS",
+        "ALL_AUTHORITY_FALSE",
         "NONAUTHORIZING",
         "NOT_INDEPENDENTLY_AUTHENTICATED_BY_CODEX",
     ):
         assert status_component in current_operator_status
     assert runtime_status["operator_results_current_worktree_required_for_ticket"] is False
     assert (
-        runtime_status["last_reconciled_operator_results_sha256"] == CURRENT_OPERATOR_RESULTS_SHA256
+        runtime_status["last_reconciled_operator_results_sha256"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256
     )
     assert (
-        runtime_status["last_reconciled_operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
+        runtime_status["last_reconciled_operator_results_bytes"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_BYTES
     )
     assert (
-        runtime_status["last_reconciled_operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
+        runtime_status["last_reconciled_operator_results_lines"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_LINES
     )
     assert runtime_status["last_reconciled_operator_entry_timestamp"] == (
-        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY
     )
     assert (
-        hashlib.sha256(current_operator_result_bytes).hexdigest() == CURRENT_OPERATOR_RESULTS_SHA256
+        hashlib.sha256(current_operator_result_bytes).hexdigest()
+        == current_state.operator.raw_sha256
     )
-    assert len(current_operator_result_bytes) == CURRENT_OPERATOR_RESULTS_BYTES
-    assert len(current_operator_results.splitlines()) == CURRENT_OPERATOR_RESULTS_LINES
-    assert f"## {CURRENT_OPERATOR_RESULTS_LATEST_ENTRY}" in current_operator_results
-    current_operator_entry = _isolated_level_two_section(
+    assert len(current_operator_result_bytes) == current_state.operator.byte_count
+    assert len(current_operator_results.splitlines()) == current_state.operator.line_count
+    assert f"## {current_state.operator.latest_entry_timestamp}" in current_operator_results
+    # The original report remains independently pinned; new reports need not share its digest.
+    intro = current_operator_results.split("\n## ", 1)[0] + "\n"
+    historical_suffix = current_operator_results.split(
+        f"\n## {HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY}", 1
+    )[1]
+    historical_bytes = (
+        intro + f"## {HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY}" + historical_suffix
+    ).encode("utf-8")
+    assert hashlib.sha256(historical_bytes).hexdigest() == HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256
+    assert len(historical_bytes) == HISTORICAL_SEPT4_OPERATOR_RESULTS_BYTES
+    assert (
+        len(historical_bytes.decode("utf-8").splitlines())
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_LINES
+    )
+    assert f"## {HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY}" in current_operator_results
+    current_planadopt_operator_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-04T03:39Z — `V3-PLANADOPT-001` verified correct. New gate: "
+        "candidate-less predecessor requires an authenticated ancestry transition.",
+    )
+    normalized_current_planadopt_operator_entry = " ".join(current_planadopt_operator_entry.split())
+    for current_planadopt_fragment in (
+        "Verified operator-side",
+        "Ledger unchanged at 57 entries / `0.68118684` USD",
+        "schema `1.7`",
+        "`authenticated_runner_selection: null`",
+        "no active route constraints at all",
+        "revoked",
+        "pin is gone as an active constraint",
+        "`REQUEST_UNITS_V2` is absent",
+        "no admissible candidate exists",
+        "separately authenticated ancestry transition",
+        "deliberate fail-closed behaviour",
+        "operator is not treating it as a defect",
+        'Does a supported "authenticated ancestry transition" exist today',
+        "deferred to a future bounded ticket",
+        "operator will stop probing this path",
+        "`completed_real_audits` remains `0`",
+    ):
+        assert current_planadopt_fragment in normalized_current_planadopt_operator_entry
+    current_correction_operator_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-03T14:30Z — **OPERATOR CORRECTION: the key-order root cause was WRONG. "
+        "`V3-PRICEKEYORDER-001` should be withdrawn.**",
+    )
+    normalized_current_correction_operator_entry = " ".join(
+        current_correction_operator_entry.split()
+    )
+    historical_key_order_operator_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-03T11:38Z — **ROOT CAUSE FOUND AND VERIFIED: override tier rejected for "
+        "JSON key ORDER. One-line class of fix.**",
+    )
+    normalized_historical_key_order_operator_entry = " ".join(
+        historical_key_order_operator_entry.split()
+    )
+    historical_response_shape_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-03T08:46Z — **RESPONSE-SHAPE DIAGNOSTIC: the premise was wrong. "
+        "Billable prices are ALREADY exact decimal strings. The blocker is an `overrides` list.**",
+    )
+    normalized_historical_response_shape_entry = " ".join(historical_response_shape_entry.split())
+    historical_pricelexeme_live_entry = _isolated_level_two_section(
+        current_operator_results,
+        "## 2026-09-02T13:51Z — **`V3-PRICELEXEME-001` mechanism landed and is sound, "
+        "but the capture does not reach validation — live test, $0**",
+    )
+    normalized_historical_pricelexeme_live_entry = " ".join(
+        historical_pricelexeme_live_entry.split()
+    )
+    historical_af7_operator_entry = _isolated_level_two_section(
         current_operator_results,
         "## 2026-09-01T04:49Z — **OPERATOR DECISION: pursue lossless price-lexeme custody. "
         "The V3-PRICEFORM-001 refusal is upheld, and answered.**",
     )
-    normalized_current_operator_entry = " ".join(current_operator_entry.split())
+    normalized_historical_af7_operator_entry = " ".join(historical_af7_operator_entry.split())
     historical_endpoint_survey_entry = _isolated_level_two_section(
         current_operator_results,
         "## 2026-08-30T19:00Z — **`list-endpoints` WORKS. Live survey of 112 endpoints "
@@ -3201,33 +4471,96 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "## 2026-08-27T06:37Z — **CAMPAIGN BLOCKER FULLY TRACED: two admission predicates "
         "have no satisfying code path**",
     )
-    assert "Both refusals are accepted" in normalized_current_operator_entry
-    assert "`REASONING_EFFORT_SUPPORT` is genuinely required" in (normalized_current_operator_entry)
-    assert "`model_benchmark` reasoning policy" in normalized_current_operator_entry
-    assert "emits `effort=high` and reserves reasoning tokens" in normalized_current_operator_entry
-    assert "rejection also stands" in normalized_current_operator_entry
-    assert "ordinary JSON parsing" in normalized_current_operator_entry
+    assert "codex's rebuttal is correct and mine was not" in (
+        normalized_current_correction_operator_entry.lower()
+    )
+    assert "bypassed the ingest path" in normalized_current_correction_operator_entry.lower()
+    assert "120-permutation provider-ingest assay" in (
+        normalized_current_correction_operator_entry.lower()
+    )
+    assert "one pricing hash and one snapshot hash" in normalized_current_correction_operator_entry
+    assert "should be withdrawn as premised on operator error" in (
+        normalized_current_correction_operator_entry.lower()
+    )
+    assert "do not implement it" in normalized_current_correction_operator_entry.lower()
+    assert "still fails" in normalized_current_correction_operator_entry.lower()
+    assert "PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE" in (
+        current_correction_operator_entry
+    )
+    assert "projection logic is correct" in normalized_current_correction_operator_entry.lower()
+    assert "ledger unchanged at 57 entries / `0.68118684` usd" in (
+        normalized_current_correction_operator_entry.lower()
+    )
+    assert "sole viable candidate route" in normalized_historical_key_order_operator_entry.lower()
+    assert "provider key order" in normalized_historical_key_order_operator_entry.lower()
+    assert "sorted key order" in normalized_historical_key_order_operator_entry.lower()
+    assert "projection = schedule mmaudit_tiered_maximum_rate_v1" in (
+        normalized_historical_key_order_operator_entry.lower()
+    )
+    assert "prompt 0.0000044" in normalized_historical_key_order_operator_entry
+    assert "completion 0.0000132" in normalized_historical_key_order_operator_entry
+    assert "V3-PRICEKEYORDER-001" in historical_key_order_operator_entry
+    assert "Expected outcome" in historical_key_order_operator_entry
+    assert "becomes admissible" in normalized_historical_key_order_operator_entry
+    assert "Provider-free" in historical_key_order_operator_entry
+    assert "ledger unchanged at 57 entries / `0.68118684` USD" in (
+        normalized_historical_key_order_operator_entry
+    )
+    assert "every billable price is already an exact decimal string" in (
+        normalized_historical_response_shape_entry.lower()
+    )
+    assert "`overrides`" in historical_response_shape_entry
+    assert "list" in normalized_historical_response_shape_entry
+    assert "reaches the billable-price branch" in normalized_historical_response_shape_entry.lower()
+    assert "no float, no lexeme loss" in normalized_historical_response_shape_entry.lower()
+    assert "operator error" in normalized_historical_response_shape_entry.lower()
+    assert "V3-PRICEOVERRIDES-001" in historical_response_shape_entry
+    assert "metadata-only, no completion" in normalized_historical_response_shape_entry.lower()
+    assert "ledger unchanged at 57 entries / `0.68118684` USD" in (
+        normalized_historical_response_shape_entry
+    )
+    assert "live test still fails" in normalized_historical_pricelexeme_live_entry
+    assert "neither a string nor a genuine captured token" in (
+        normalized_historical_pricelexeme_live_entry
+    )
+    assert "flagged as a hypothesis, not a finding" in (
+        normalized_historical_pricelexeme_live_entry
+    )
+    assert "full discovery path" in normalized_historical_pricelexeme_live_entry
+    assert "Suggest reopening as `PARTIAL`" in normalized_historical_pricelexeme_live_entry
+    assert "completed_real_audits` remains `0`" in normalized_historical_pricelexeme_live_entry
+    assert HISTORICAL_AF7_OPERATOR_RESULTS_LATEST_ENTRY in current_operator_results
+    assert "Both refusals are accepted" in normalized_historical_af7_operator_entry
+    assert "`REASONING_EFFORT_SUPPORT` is genuinely required" in (
+        normalized_historical_af7_operator_entry
+    )
+    assert "`model_benchmark` reasoning policy" in normalized_historical_af7_operator_entry
+    assert "emits `effort=high` and reserves reasoning tokens" in (
+        normalized_historical_af7_operator_entry
+    )
+    assert "rejection also stands" in normalized_historical_af7_operator_entry
+    assert "ordinary JSON parsing" in normalized_historical_af7_operator_entry
     assert "`Decimal(str(value))` proves only the chosen reserialization" in (
-        normalized_current_operator_entry
+        normalized_historical_af7_operator_entry
     )
-    assert "unsound and is withdrawn" in normalized_current_operator_entry
-    assert "Pursue lossless price-lexeme custody" in normalized_current_operator_entry
-    assert "Do not relax the exactness requirement" in normalized_current_operator_entry
-    assert "parse_float=Decimal" in current_operator_entry
-    assert "V3-PRICELEXEME-001" in current_operator_entry
-    assert "the *requirement* is unchanged and still fails closed" in current_operator_entry
-    assert "only the *custody model* changes" in current_operator_entry
+    assert "unsound and is withdrawn" in normalized_historical_af7_operator_entry
+    assert "Pursue lossless price-lexeme custody" in normalized_historical_af7_operator_entry
+    assert "Do not relax the exactness requirement" in normalized_historical_af7_operator_entry
+    assert "parse_float=Decimal" in historical_af7_operator_entry
+    assert "V3-PRICELEXEME-001" in historical_af7_operator_entry
+    assert "the *requirement* is unchanged and still fails closed" in historical_af7_operator_entry
+    assert "only the *custody model* changes" in historical_af7_operator_entry
     assert "Existing sealed evidence must remain byte-identical and continue to replay" in (
-        normalized_current_operator_entry
+        normalized_historical_af7_operator_entry
     )
-    assert "x-ai/grok-4.6=amazon-bedrock/us-west-2" in current_operator_entry
-    assert "If implemented" in current_operator_entry
-    assert "If it cannot be implemented soundly" in normalized_current_operator_entry
+    assert "x-ai/grok-4.6=amazon-bedrock/us-west-2" in historical_af7_operator_entry
+    assert "If implemented" in historical_af7_operator_entry
+    assert "If it cannot be implemented soundly" in normalized_historical_af7_operator_entry
     assert "under the current constraint set no admissible candidate route exists" in (
-        normalized_current_operator_entry
+        normalized_historical_af7_operator_entry
     )
-    assert "No spend" in current_operator_entry
-    assert "ledger unchanged at 57 entries" in normalized_current_operator_entry
+    assert "No spend" in historical_af7_operator_entry
+    assert "ledger unchanged at 57 entries" in normalized_historical_af7_operator_entry
     assert "`V3-ENDPOINTLIST-001` works and was exercised live" in (
         normalized_historical_endpoint_survey_entry
     )
@@ -3298,63 +4631,300 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "was reverted" in historical_50d_entry
     assert "ledger unchanged at 29" in current_operator_results
     assert "0.43458261" in current_operator_results
-    current_guide_reconciliation = _isolated_level_three_section(
+    historical_autonomy_guide = _isolated_level_three_section(
         model_selection,
-        "### Current operator-result reconciliation — 2026-09-01T04:49Z",
+        "### Historical AUTONOMY Phase-2 local provisioning boundary",
     )
-    normalized_current_guide_reconciliation = " ".join(current_guide_reconciliation.split())
-    assert CURRENT_OPERATOR_RESULTS_SHA256 in current_guide_reconciliation
-    assert "162,656 bytes / 2,902 lines" in current_guide_reconciliation
-    assert "nonauthorizing" in normalized_current_guide_reconciliation
-    assert "not independently authenticated by Codex" in normalized_current_guide_reconciliation
-    assert "credentialed metadata-only" in normalized_current_guide_reconciliation
-    assert "12 models and 112 endpoints" in normalized_current_guide_reconciliation
-    assert "both outstanding refusals" in normalized_current_guide_reconciliation
-    assert "reserve reasoning tokens" in normalized_current_guide_reconciliation
-    assert "all four route-constraint purposes" in normalized_current_guide_reconciliation
-    assert "binary float" in normalized_current_guide_reconciliation
-    assert "parse_float=Decimal" in current_guide_reconciliation
-    assert "V3-PRICELEXEME-001" in current_guide_reconciliation
-    assert "AF7 evidence boundary" in current_guide_reconciliation
-    assert "queued, unselected, and unimplemented" in normalized_current_guide_reconciliation
-    assert "sole `IN_PROGRESS` ticket" in current_guide_reconciliation
-    assert "V3-RETRIEVAL-001" in current_guide_reconciliation
-    assert "`COMPLETE`" in current_guide_reconciliation
-    assert "`implementation_started=false`" in current_guide_reconciliation
-    assert "no decoder, pricing, retry, or configuration change" in (
-        normalized_current_guide_reconciliation
+    normalized_current_autonomy_guide = " ".join(historical_autonomy_guide.split())
+    for autonomy_guide_fragment in (
+        "V3-AUTONOMY-001` remains `PARTIAL`",
+        "mmaudit managed provision",
+        "ambient configuration overrides disabled",
+        "bounded audited-workspace content inventory",
+        "durable private provisioning marker",
+        "self-contained typed plan-and-state receipt",
+        "before a final receipt name is linked",
+        "cooperative publication lease",
+        "point-in-time evidence",
+        "operator_secret_sources_accessed` literal false",
+        "mandatory installed-toolchain refusal",
+        "REFUSED_INCOMPLETE",
+        "active repository schema-v1.7 plan retains the exact V1 judge profile",
+        "no selected candidate or candidate route",
+        "not adopted or selected",
+        "no active selected successor or current live operator command",
+    ):
+        assert autonomy_guide_fragment in normalized_current_autonomy_guide
+
+    current_pricecapcache_guide = _isolated_level_three_section(
+        model_selection,
+        "### Retained PRICECAPCACHE provider-free partial closure",
     )
-    assert "not currently admissible or selected" in normalized_current_guide_reconciliation
-    assert "existing sealed evidence must remain byte-identical" in (
-        normalized_current_guide_reconciliation.lower()
+    normalized_current_pricecapcache_guide = " ".join(current_pricecapcache_guide.split())
+    for pricecapcache_guide_fragment in (
+        "V3-PRICECAPCACHE-001` is `PARTIAL`",
+        "rejects it unconditionally",
+        "No supported successor derivation or CLI path emits a V3 plan",
+        "Preview schema `1.3` and durable pricing-attempt schema `1.2` have been removed",
+        "prompt, completion, request, and image only",
+        "no request-bound cache-write or total-cost cap",
+        "metadata-time cache-write-to-prompt comparison is therefore non-atomic",
+        "reconciliation observes an overage only after spend",
+        "both prompt and cache-write units were lowered",
+        "neutralized because V3 preview/attempt publication and transport are now unreachable",
+        "active unavailable-candidate plan preserves the exact V1 price-cap profile",
+        "private V2 plan remains unselected and unadopted",
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT,
+        "V3-PLANADOPT-001",
+    ):
+        assert pricecapcache_guide_fragment in normalized_current_pricecapcache_guide
+
+    historical_pricecapcomp_guide = _isolated_level_three_section(
+        model_selection,
+        "### Historical PRICECAPCOMP selector closure",
     )
-    assert "schema v1.1" in normalized_current_guide_reconciliation
-    assert "has not been exercised live" in normalized_current_guide_reconciliation
-    assert "effort=high" in normalized_current_guide_reconciliation
-    assert "predicate remains unchanged" in normalized_current_guide_reconciliation
-    assert "prior 15:18 entry remains historical" in normalized_current_guide_reconciliation
-    assert "zero admissible candidates" in current_guide_reconciliation
-    assert "V3-CANDROUTE-001" in current_guide_reconciliation
-    assert "57 entries" in current_guide_reconciliation
-    assert "0.68118684" in current_guide_reconciliation
-    assert "non-runnable" in normalized_current_guide_reconciliation.lower()
-    assert "cannot substitute" in current_guide_reconciliation
-    assert "No operator command or run index is current or inferred" in (
-        normalized_current_guide_reconciliation
+    normalized_historical_pricecapcomp_guide = " ".join(historical_pricecapcomp_guide.split())
+    for pricecapcomp_guide_fragment in (
+        "V3-PRICECAPCOMP-001` is `COMPLETE`",
+        "explicitly selected V2 route profile",
+        "zero reachable search units and zero search cost",
+        "prohibits search, tool, and plugin controls",
+        "revalidated before reservation and again at transport",
+        "models emit-selection-plan-successor --upgrade-price-cap-profile-v2",
+        "flag is default-off",
+        "omitting it preserves exact V1/default bytes",
+        "exact V1→V2 transition",
+        "supports a same-route successor",
+        "every resulting candidate, PRIMARY, and REPLAY constraint",
+        "stateful predecessor substitution",
+        "fresh mode-`0600` output",
+        "no successor artifact was selected or inspected",
+        "At that historical closure boundary, the active selection plan remained schema `1.4`",
+        "input_cache_write='0'` still lacks an enforceable provider cap",
+        "resolves only `web_search='0.01'` for the exact zero-unit request",
+        "passed `120` focused selector tests",
+        "`1,328` affected tests with two known warnings",
+        "passed `79` tests",
+        "3,941 sources",
+        "3,944 occurrences",
+        "3,892 gate sources",
+        "337 completion entrypoint parameters",
+        "No full-suite credit, provider action, or authority is claimed",
+        "V3-PRICECAPCOMP-001` was last complete",
+        "V3-MODELREFRESH-001` was last partial",
+        "combined unfinished count was `40`",
+    ):
+        assert pricecapcomp_guide_fragment in normalized_historical_pricecapcomp_guide
+    for digest in (
+        HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_SHA256,
+        CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_RAW_SHA256,
+        CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_SHA256,
+        CURRENT_PRICECAPCOMP_AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
+        CURRENT_PRICECAPCOMP_AUTONOMY_SOURCE_UNIVERSE_SHA256,
+        CURRENT_PRICECAPCOMP_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
+    ):
+        assert digest in historical_pricecapcomp_guide
+    assert (
+        HISTORICAL_V2_EXERCISE_OPERATOR_RESULTS_REPOSITORY_COMMIT in historical_pricecapcomp_guide
     )
-    assert "0.20264508" in current_guide_reconciliation
-    assert LAST_RECONCILED_OPERATOR_RESULTS_SHA256 not in current_guide_reconciliation
+    assert HISTORICAL_POST_PRICECAPCOMP_RETEST_SHA256 in historical_pricecapcomp_guide
+
+    current_modelrefresh_guide = _isolated_level_three_section(
+        model_selection,
+        "### Previous MODELREFRESH tier-schedule closure — 2026-09-03T13:58:58Z",
+    )
+    normalized_current_modelrefresh_guide = " ".join(current_modelrefresh_guide.split())
+    assert "V3-MODELREFRESH-001` closes" in normalized_current_modelrefresh_guide
+    assert "provider-free continuation as `PARTIAL`" in normalized_current_modelrefresh_guide
+    assert "Exact ordered base-plus-override schedules" in normalized_current_modelrefresh_guide
+    assert "live preflight" in normalized_current_modelrefresh_guide
+    assert "Schedule digests distinguish equal-maximum threshold changes" in (
+        normalized_current_modelrefresh_guide
+    )
+    assert "flat-route evidence remains byte-identical" in normalized_current_modelrefresh_guide
+    assert "successful current provider snapshot" in normalized_current_modelrefresh_guide
+    assert "stock live authority quartet" in normalized_current_modelrefresh_guide
+    assert "no terminal full-suite credit is claimed" in normalized_current_modelrefresh_guide
+    assert "current and next tickets were `UNSELECTED`" in normalized_current_modelrefresh_guide
+    assert "`V3-PRICEOVERRIDES-001` was last complete" in normalized_current_modelrefresh_guide
+    assert "`V3-MODELREFRESH-001` was last partial" in normalized_current_modelrefresh_guide
+    assert "`V3-PRICEKEYORDER-001` is therefore `WITHDRAWN_OPERATOR_ERROR`" in (
+        normalized_current_modelrefresh_guide
+    )
+    assert "must not be implemented" in normalized_current_modelrefresh_guide
+    assert HISTORICAL_PRICEKEYORDER_CORRECTION_SHA256 in current_modelrefresh_guide
+    assert HISTORICAL_PRICEKEYORDER_CORRECTION_REPOSITORY_COMMIT in current_modelrefresh_guide
+    assert "120-permutation assay yields one pricing hash and one snapshot hash" in (
+        normalized_current_modelrefresh_guide
+    )
+
+    historical_pricecaptier_guide = _isolated_level_three_section(
+        model_selection,
+        "### Previous PRICECAPTIER closure — 2026-09-03T11:27:12Z",
+    )
+    normalized_historical_pricecaptier_guide = " ".join(historical_pricecaptier_guide.split())
+    assert "V3-PRICECAPTIER-001` is `PARTIAL`" in normalized_historical_pricecaptier_guide
+    assert "exact Decimal component maxima" in normalized_historical_pricecaptier_guide
+    assert "Partial tiers inherit prior values" in normalized_historical_pricecaptier_guide
+    assert "later applicable tiers win" in normalized_historical_pricecaptier_guide
+    assert "prompt/cache-read dominance" in normalized_historical_pricecaptier_guide
+    assert "complete ordered schedule" in normalized_historical_pricecaptier_guide
+    assert "Provider cap, request-cost projection, reserve, spend, and reconciliation" in (
+        normalized_historical_pricecaptier_guide
+    )
+    assert "flat-route serialization" in normalized_historical_pricecaptier_guide
+    assert "`PRICE_CAP_NOT_EXPRESSIBLE`" in normalized_historical_pricecaptier_guide
+    assert "`PRICE_CAP_PROOF_UNAVAILABLE`" in normalized_historical_pricecaptier_guide
+    assert "`input_cache_write='0'`" in normalized_historical_pricecaptier_guide
+    assert "`web_search='0.01'`" in normalized_historical_pricecaptier_guide
+    assert "Refresh and provider-free live preflight were flat-only" in (
+        normalized_historical_pricecaptier_guide
+    )
+    assert "primary route/preflight acceptance criterion was unmet" in (
+        normalized_historical_pricecaptier_guide
+    )
+    assert PRE_WITHDRAWAL_OPERATOR_RESULTS_SHA256 in historical_pricecaptier_guide
+    assert "176,768 bytes / 3,140 lines" in normalized_historical_pricecaptier_guide
+    assert PRE_WITHDRAWAL_OPERATOR_RESULTS_REPOSITORY_COMMIT in historical_pricecaptier_guide
+    assert (
+        "provider-facing path already sorts raw tier keys"
+        in normalized_historical_pricecaptier_guide
+    )
+    assert "full-ingest root cause and sole-blocker conclusion are not confirmed" in (
+        normalized_historical_pricecaptier_guide
+    )
+    assert "`V3-PRICEKEYORDER-001`" in historical_pricecaptier_guide
+    assert "Current and next tickets were `UNSELECTED`" in normalized_historical_pricecaptier_guide
+    assert "`V3-PRICEOVERRIDES-001` was last complete" in (normalized_historical_pricecaptier_guide)
+    assert "`V3-PRICECAPTIER-001` was last partial" in normalized_historical_pricecaptier_guide
+
+    historical_priceoverrides_guide = _isolated_level_three_section(
+        model_selection,
+        "### Previous PRICEOVERRIDES closure — 2026-09-03T09:54:24Z",
+    )
+    normalized_historical_priceoverrides_guide = " ".join(historical_priceoverrides_guide.split())
+    assert PRE_PRICEKEYORDER_OPERATOR_RESULTS_SHA256 in historical_priceoverrides_guide
+    assert "173,635 bytes / 3,084 lines" in historical_priceoverrides_guide
+    assert PRE_PRICEKEYORDER_OPERATOR_RESULTS_REPOSITORY_COMMIT in historical_priceoverrides_guide
+    assert "nonauthorizing" in normalized_historical_priceoverrides_guide
+    assert "not independently authenticated by Codex" in normalized_historical_priceoverrides_guide
+    assert "every direct billable value and every nested override price" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "is an exact string" in normalized_historical_priceoverrides_guide
+    assert "`overrides` value is a list" in normalized_historical_priceoverrides_guide
+    assert "first parser blocker" in normalized_historical_priceoverrides_guide
+    assert "route-specific premise" in normalized_historical_priceoverrides_guide
+    assert "`input_cache_write='0'`" in normalized_historical_priceoverrides_guide
+    assert "`web_search='0.01'`" in normalized_historical_priceoverrides_guide
+    assert "V3-PRICELEXEME-001" in historical_priceoverrides_guide
+    assert "remains terminal `PARTIAL` provider-free defense-in-depth" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "no longer blocks the xAI route" in normalized_historical_priceoverrides_guide
+    assert "ordinary parsed numeric prices" in normalized_historical_priceoverrides_guide
+    assert "remain refused" in normalized_historical_priceoverrides_guide
+    assert "full-`models discover` raw-numeric-price case passes `1` test in `0.76s`" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "matrix passes `793` tests in `17.73s` with two known warnings" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "strict mypy is clean across `233` source files" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "no pass or full-suite credit" in normalized_historical_priceoverrides_guide
+    assert "V3-PRICEOVERRIDES-001` is now `COMPLETE`" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "the conditional xAI route remains unselected and not proven admissible" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "`CURRENT_TICKET` was `UNSELECTED`" in normalized_historical_priceoverrides_guide
+    assert "no next local ticket was selected" in normalized_historical_priceoverrides_guide
+    assert "V3-TESTQUALITY-001` is `PARTIAL`" in normalized_historical_priceoverrides_guide
+    assert "shared process-local revocation-lease race slice" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "One PID-bound domain serializes run, observation, campaign, and score" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "seal-SHA-matched immutable schema snapshots" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "comparison-only" in normalized_historical_priceoverrides_guide
+    assert "V3-MODELREFRESH-001` was the last partial ticket" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "route remains unselected" in normalized_historical_priceoverrides_guide
+    assert "Those selection-state statements are historical" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "the current bounded `V3-AUTONOMY-001` partial slice is described above" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "AF7 remains historical evidence" in normalized_historical_priceoverrides_guide
+    assert "`40` unfinished tickets" in normalized_historical_priceoverrides_guide
+    assert "`V3-PRICEKEYORDER-001` is `WITHDRAWN_OPERATOR_ERROR`" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert "do not implement it" in normalized_historical_priceoverrides_guide
+    assert "V3-CANDROUTE-001" in historical_priceoverrides_guide
+    assert "57-entry" in historical_priceoverrides_guide
+    assert "0.68118684" in historical_priceoverrides_guide
+    assert "no provider, candidate, route, operator command, campaign, run index" in (
+        normalized_historical_priceoverrides_guide
+    )
+    assert LAST_RECONCILED_OPERATOR_RESULTS_SHA256 not in historical_priceoverrides_guide
     assert "### Historical r1\u2013r19 accounting and canonical-replay boundary" in model_selection
     assert "### Last reconciled r1\u2013r19 accounting and canonical-replay boundary" not in (
         model_selection
     )
-    assert "no successful current provider snapshot" not in normalized_model_selection
-    assert "active schema-v1.4 selection plan remains byte-unchanged" in (
-        normalized_model_selection
-    )
-    assert "that assignment non-runnable" in normalized_model_selection
+    assert "no successful current provider snapshot" in normalized_model_selection
+    assert "active schema-v1.7 selection plan has self-hash" in normalized_model_selection
+    assert (
+        "prior schema-v1.4 bytes and revoked candidate assignment remain immutable historical "
+        "evidence only"
+    ) in normalized_model_selection
+    assert "has no active candidate and fails closed" in normalized_model_selection
     assert "no replacement candidate is selected" in normalized_model_selection.lower()
-    route_profile = selection_plan["authenticated_runner_selection"]["route_predicate_profile"]
+    assert selection_plan["schema_version"] == "1.7"
+    assert selection_plan["plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
+    assert len(SELECTION_PLAN_PATH.read_bytes()) == 15_163
+    assert hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest() == (
+        CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    )
+    assert selection_plan["predecessor_plan_sha256"] == HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    historical_plan_bytes = HISTORICAL_V1_4_SELECTION_PLAN_PATH.read_bytes()
+    historical_plan = json.loads(historical_plan_bytes)
+    assert len(historical_plan_bytes) == 14_918
+    assert hashlib.sha256(historical_plan_bytes).hexdigest() == (
+        HISTORICAL_V1_4_SELECTION_PLAN_RAW_SHA256
+    )
+    assert historical_plan["plan_sha256"] == HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    assert selection_plan["authenticated_runner_selection"] is None
+    unavailability = selection_plan["authenticated_runner_unavailability"]
+    assert unavailability["state_sha256"] == CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    assert unavailability["disposition"] == "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    assert unavailability["matched_revocation_set_sha256"] == (
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert unavailability["price_cap_profile_decision"] == (
+        "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"
+    )
+    assert unavailability["candidate_selection_authorized"] is False
+    assert {
+        constraint["constraint_sha256"] for constraint in unavailability["judge_route_constraints"]
+    } == {
+        "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
+        "ffc54dc13eea0d92c06a1c6f29e0ae679eac5328d05ae8899e8cd7899b1eb199",
+        "2a820c3b85936bc24cc1b0d007415d39e8e8bfd3b4eacb072a321e904e8a5912",
+    }
+    assert {
+        constraint["profile_sha256"] for constraint in unavailability["judge_route_constraints"]
+    } == {CURRENT_PLANADOPT_V1_PROFILE_SHA256}
+    route_profile = unavailability["route_predicate_profile"]
+    assert route_profile["profile_sha256"] == CURRENT_PLANADOPT_V1_PROFILE_SHA256
     assert route_profile["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
     assert route_profile["token_detail_convention_disposition"] == "UNAVAILABLE"
     assert selection_plan["status"] == "NONAUTHORIZING"
@@ -3369,36 +4939,105 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "release_authorized",
         "documentary_lineage_identity_authorized",
         "serialized_authority",
+        "cached_ranking_payload_present",
+        "discovery_evidence_present",
+        "provider_metadata_present",
+        "ranking_executed",
     ):
         assert selection_plan[authority_field] is False
     for operator_prerequisites in operator_prerequisite_guides:
         normalized_operator_prerequisites = " ".join(operator_prerequisites.split())
-        assert CURRENT_OPERATOR_RESULTS_SHA256 in operator_prerequisites
-        assert "162,656 bytes / 2,902 lines" in operator_prerequisites
-        assert "credentialed metadata-only" in normalized_operator_prerequisites
-        assert "12 models" in normalized_operator_prerequisites
-        assert "112 endpoints" in normalized_operator_prerequisites
-        assert "accepts both refusals" in normalized_operator_prerequisites
-        assert "reserve reasoning tokens" in normalized_operator_prerequisites
-        assert "all four route purposes" in normalized_operator_prerequisites
-        assert "binary float" in normalized_operator_prerequisites
-        assert "parse_float=Decimal" in operator_prerequisites
-        assert "V3-PRICELEXEME-001" in operator_prerequisites
-        assert "AF7 evidence boundary" in operator_prerequisites
-        assert "queued, unselected, and unimplemented" in normalized_operator_prerequisites
-        assert "sole `IN_PROGRESS` ticket" in operator_prerequisites
-        assert "V3-RETRIEVAL-001" in operator_prerequisites
-        assert "`COMPLETE`" in operator_prerequisites
-        assert "`implementation_started=false`" in operator_prerequisites
-        assert "no decoder, pricing, retry, or configuration change" in (
+        assert "V3-PRICECAPCOMP-001` `COMPLETE`" in normalized_operator_prerequisites
+        assert "opt-in V2 route profile" in normalized_operator_prerequisites
+        assert "zero reachable search units and zero search cost" in (
             normalized_operator_prerequisites
         )
-        assert "not currently admissible or selected" in normalized_operator_prerequisites
-        assert "no admissible candidate route" in normalized_operator_prerequisites
-        assert "No constraint was relaxed" in operator_prerequisites
-        assert "schema v1.1" in normalized_operator_prerequisites
-        assert "has not been exercised live" in normalized_operator_prerequisites
-        assert "no repeat external command is required" in normalized_operator_prerequisites
+        assert "active plan remains byte-identical V1" in normalized_operator_prerequisites
+        assert "input_cache_write='0'` still lacks an enforceable cap" in (
+            normalized_operator_prerequisites
+        )
+        assert "used it for one metadata-only constrained discovery" in (
+            normalized_operator_prerequisites
+        )
+        assert (
+            "operator-supplied, nonauthorizing, and not independently authenticated by Codex"
+            in (normalized_operator_prerequisites)
+        )
+        assert "does not adopt the private successor" in normalized_operator_prerequisites
+        assert "schema-v1.7" in normalized_operator_prerequisites
+        assert "no replacement candidate was selected" in normalized_operator_prerequisites
+        assert "V3-PLANADOPT-001` is `COMPLETE`" in normalized_operator_prerequisites
+        assert "combined unfinished count is `41`" in normalized_operator_prerequisites
+        for digest in (
+            CURRENT_PLANADOPT_PLAN_SHA256,
+            CURRENT_PLANADOPT_PLAN_RAW_SHA256,
+            HISTORICAL_V1_4_SELECTION_PLAN_SHA256,
+            CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256,
+            CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256,
+            CURRENT_PLANADOPT_V1_PROFILE_SHA256,
+        ):
+            assert digest in operator_prerequisites
+        assert HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256 in operator_prerequisites
+        assert "185,462 bytes / 3,287 lines" in normalized_operator_prerequisites
+        assert HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT in operator_prerequisites
+        assert "retracts the key-order cause" in normalized_operator_prerequisites
+        assert "direct construction bypassed provider-facing ingest" in (
+            normalized_operator_prerequisites
+        )
+        assert "already sorts raw tier keys" in normalized_operator_prerequisites
+        assert (
+            "120-permutation full-ingest assay yields one pricing hash and one snapshot hash"
+            in (normalized_operator_prerequisites)
+        )
+        assert "`V3-PRICEKEYORDER-001` is `WITHDRAWN_OPERATOR_ERROR`" in (
+            normalized_operator_prerequisites
+        )
+        assert "must not be implemented" in normalized_operator_prerequisites
+        assert "V3-PRICECAPTIER-001` closed `PARTIAL`" in normalized_operator_prerequisites
+        assert "Exact Decimal maxima" in normalized_operator_prerequisites
+        assert "complete schedule and cap proof" in normalized_operator_prerequisites
+        assert "request-cost, reserve, spend, and reconciliation" in (
+            normalized_operator_prerequisites
+        )
+        assert "`input_cache_write='0'`" in normalized_operator_prerequisites
+        assert "`web_search='0.01'`" in normalized_operator_prerequisites
+        assert (
+            "Refresh and live preflight were flat-only at that historical boundary"
+            in normalized_operator_prerequisites
+        )
+        assert "primary route/preflight criterion was unmet" in normalized_operator_prerequisites
+        assert "V3-PRICEOVERRIDES-001` is `COMPLETE`" in normalized_operator_prerequisites
+        assert "sole-blocker claim and route admission remain unproven" in (
+            normalized_operator_prerequisites
+        )
+        assert "effort=high" in normalized_operator_prerequisites
+        assert "binary-float" in normalized_operator_prerequisites
+        assert "V3-PRICELEXEME-001" in operator_prerequisites
+        assert "`PARTIAL`" in normalized_operator_prerequisites
+        assert "defense-in-depth" in normalized_operator_prerequisites
+        assert "nonblocking for the xAI route" in normalized_operator_prerequisites
+        assert "`CURRENT_TICKET` was `UNSELECTED`" in normalized_operator_prerequisites
+        assert "no next local ticket was selected" in normalized_operator_prerequisites
+        assert "V3-TESTQUALITY-001` is `PARTIAL`" in normalized_operator_prerequisites
+        assert "shared process-local revocation-lease race slice" in (
+            normalized_operator_prerequisites
+        )
+        assert "comparison-only" in normalized_operator_prerequisites
+        assert "V3-MODELREFRESH-001` is the last partial ticket" in (
+            normalized_operator_prerequisites
+        )
+        assert "remains unselected and not currently proven admissible" in (
+            normalized_operator_prerequisites
+        )
+        assert "This guide authorizes or issues no live command" in (
+            normalized_operator_prerequisites
+        )
+        assert "AF7 remains historical evidence" in normalized_operator_prerequisites
+        assert "combined unfinished count is `41`" in normalized_operator_prerequisites
+        assert "V3-PLANADOPT-001" in operator_prerequisites
+        assert "`V3-PRICEKEYORDER-001` is `WITHDRAWN_OPERATOR_ERROR`" in (
+            normalized_operator_prerequisites
+        )
         assert "--qualification-policy" in operator_prerequisites
         assert "V3-RUNTIMEADMIT-001" in operator_prerequisites
         assert "COMPLETE" in operator_prerequisites
@@ -3420,125 +5059,722 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert "manifest-v1.3" in operator_prerequisites
         assert "max_model_retries" in operator_prerequisites
         assert "transient-only" in operator_prerequisites
-    assert runtime_status["current_ticket"] == "V3-PRICELEXEME-001"
-    assert runtime_status["last_completed_ticket"] == "V3-RETRIEVAL-001"
-    assert runtime_status["last_partial_ticket"] == "V3-CANDROUTE-001"
-    assert runtime_status["next_safe_local_ticket"] == "V3-PRICELEXEME-001"
-    assert runtime_status["completed_real_audits"] == 0
-    current_work = runtime_status["current_provider_free_work"]
-    assert current_work["ticket"] == "V3-PRICELEXEME-001"
-    assert current_work["slice"] == "LOSSLESS_PROVIDER_PRICE_LEXEME_CUSTODY_SELECTION"
-    assert current_work["status"] == (
-        "IN_PROGRESS_SELECTED_PROVIDER_FREE_NONAUTHORIZING_IMPLEMENTATION_NOT_STARTED"
-    )
-    assert current_work["implementation_started"] is False
+    assert re.fullmatch(r"2026-09-04T\d{2}:\d{2}:\d{2}Z", runtime_status["updated_at"])
     assert (
-        "BEGIN_PROVIDER_FREE_LOSSLESS_PRICE_LEXEME_IMPLEMENTATION" in (current_work["next_slice"])
+        runtime_status["current_repository_head_commit"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT
     )
-    assert current_work["provider_or_network_accessed_by_codex"] is False
-    assert current_work["operator_command_emitted_by_codex"] is False
-    assert current_work["candidate_or_route_selected"] is False
-    assert current_work["grants_authority"] is False
-    retrieval_work = runtime_status["last_completed_provider_free_work"]
-    assert retrieval_work["ticket"] == "V3-RETRIEVAL-001"
-    assert retrieval_work["slice"] == "BOUNDED_READ_ONLY_INDEXED_RETRIEVAL_LOOP"
-    assert retrieval_work["status"] == (
-        "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS"
+    assert runtime_status["current_repository_head_parent"] == (
+        "ad013aeeb4ea754ec7f0c751175e4badd5fc95b2"
     )
-    for retrieval_true_field in (
-        "fixed_typed_read_only_indexed_lookup_allowlist",
-        "secret_taint_and_scope_refusal",
-        "static_role_wide_request_byte_token_budgets",
-        "private_transcript_and_hash_only_public_custody",
-        "failed_primary_transcript_retained",
-        "exact_replay_and_resume",
-        "single_shot_fallback",
-        "canonical_generation_current",
-        "active_selection_plan_unchanged",
-        "affected_matrices_complete",
+    assert runtime_status["current_repository_head_remote_resolved"] is True
+    assert runtime_status["current_ticket"] == "UNSELECTED"
+    assert runtime_status["last_completed_ticket"] == "V3-PLANADOPT-001"
+    assert runtime_status["last_partial_ticket"] == "V3-PRICECAPCACHE-001"
+    assert runtime_status["next_safe_local_ticket"] is None
+    assert runtime_status["combined_unfinished_ticket_count"] == 41
+    for autorun_component in (
+        "V3_PLANADOPT_001_COMPLETE",
+        "PROVIDER_FREE",
+        "NONAUTHORIZING",
+        "SCHEMA_1_7",
+        "NO_ACTIVE_CANDIDATE",
+        "CURRENT_AND_NEXT_TICKET_UNSELECTED",
+        "CODEX_ZERO_EXTERNAL_COMMANDS",
     ):
-        assert retrieval_work[retrieval_true_field] is True
-    for retrieval_false_field in (
+        assert autorun_component in runtime_status["autorun_status"]
+    assert runtime_status["queued_successor_ticket"] is None
+    assert runtime_status["queued_successor_ticket_status"] == "NONE"
+    assert runtime_status["queued_successor_selected"] is False
+    assert runtime_status["queued_successor_implementation_started"] is False
+    assert runtime_status["withdrawn_successor_ticket"] == "V3-PRICEKEYORDER-001"
+    assert runtime_status["withdrawn_successor_ticket_status"] == "WITHDRAWN_OPERATOR_ERROR"
+    assert (
+        runtime_status["withdrawn_successor_decision_commit"]
+        == HISTORICAL_PRICEKEYORDER_CORRECTION_REPOSITORY_COMMIT
+    )
+    assert runtime_status["completed_real_audits"] == 0
+    assert runtime_status["current_provider_free_work"] is None
+    pricecapcache_work = runtime_status["last_partial_provider_free_work"]
+    assert pricecapcache_work["ticket"] == "V3-PRICECAPCACHE-001"
+    assert pricecapcache_work["slice"] == (
+        "UNCONDITIONAL_V3_TRUSTED_BOUNDARY_REFUSAL_AND_UNREACHABLE_V3_ARTIFACTS"
+    )
+    assert pricecapcache_work["status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_ATOMIC_PROVIDER_CAP_UNAVAILABLE"
+    )
+    assert pricecapcache_work["selected_at"] == "2026-09-04T00:56:31Z"
+    assert pricecapcache_work["closure_timestamp"] == "2026-09-04T01:48:46Z"
+    assert pricecapcache_work["provider_max_price_supported_dimensions"] == [
+        "prompt",
+        "completion",
+        "request",
+        "image",
+    ]
+    assert pricecapcache_work["preview_schema_versions_supported"] == ["1.0", "1.1", "1.2"]
+    assert pricecapcache_work["pricing_attempt_schema_versions_supported"] == ["1.0", "1.1"]
+    for pricecapcache_true_field in (
+        "trusted_project_provider_price_cap_rejects_v3_unconditionally",
+        "preview_schema_1_3_removed",
+        "pricing_attempt_schema_1_2_removed",
+        "old_schema_1_2_both_prompt_and_cache_write_units_understatement_reproduced",
+        "old_schema_1_2_understatement_neutralized_by_unreachability",
+        "v1_and_v2_behavior_preserved",
+    ):
+        assert pricecapcache_work[pricecapcache_true_field] is True
+    for pricecapcache_false_field in (
+        "requested_provider_enforced_dominance_established",
+        "provider_request_bound_cache_write_cap_available",
+        "provider_request_bound_total_cost_cap_available",
+        "metadata_dominance_is_atomic",
+        "reconciliation_occurs_before_spend",
+        "v3_successor_derivation_available",
+        "v3_successor_cli_available",
+        "v3_plan_emitted_or_adopted",
+        "v3_preview_or_attempt_publication_reachable",
+        "operator_reported_private_v2_plan_adopted",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "operator_ledger_accessed_or_mutated_by_codex",
+        "authority",
+        "grants_authority",
+    ):
+        assert pricecapcache_work[pricecapcache_false_field] is False
+    partial_work = runtime_status["prior_autonomy_provider_free_work"]
+    assert partial_work["ticket"] == "V3-AUTONOMY-001"
+    assert partial_work["slice"] == "PHASE_2_TYPED_PROVISIONING_AND_IDEMPOTENT_LOCAL_COST_LEDGER"
+    assert partial_work["status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_UNSUPPORTED_EXTERNAL_SURFACES_REFUSED"
+    )
+    assert partial_work["selected_at"] == "2026-09-03T22:26:22Z"
+    assert partial_work["closure_timestamp"] == "2026-09-03T23:38:22Z"
+    assert partial_work["implementation_started"] is True
+    for partial_true_field in (
+        "self_contained_typed_plan_state_refusal_receipt",
+        "receipt_reproduces_exact_embedded_plan_and_state",
+        "file_only_cli_configuration",
+        "repository_content_custody_bounded_and_no_follow",
+        "private_output_directory_descriptor_custody",
+        "atomic_no_replace_receipt_publication",
+        "repository_finalized_and_digest_compared_before_final_name_link",
+        "receipt_is_point_in_time_evidence_not_post_finalization_stability_guarantee",
+        "audited_workspace_exclusions_honored",
+        "published_receipt_bytes_and_identity_revalidated",
+        "identity_checked_rollback_under_cooperative_publication_lease",
+        "stat_to_unlink_rollback_requires_cooperating_writers",
+        "receipt_ledger_and_workspace_reads_nonblocking",
+        "fifo_substitution_refused",
+        "cost_ledger_create_or_verify_idempotent",
+        "cost_ledger_durable_provisioning_marker_bound",
+        "cost_ledger_provisioning_lease_held_through_snapshot",
+        "same_uid_delete_marker_state_and_lock_defeats_purely_local_anchor",
+        "linked_corrupt_incomplete_cap_mismatched_or_drifted_state_refused",
+        "canonical_generation_and_verification_passed",
+        "autonomy_inventory_generation_current",
+        "scoped_ruff_passed",
+        "strict_mypy_passed",
+        "strict_json_validation_passed",
+    ):
+        assert partial_work[partial_true_field] is True
+    assert partial_work["managed_toolchain_first_class_role_count"] == 28
+    assert partial_work["managed_toolchain_pinned_role_count"] == 3
+    assert partial_work["managed_toolchain_unresolved_role_count"] == 25
+    assert partial_work["affected_local_matrix_tests_passed"] == 287
+    assert partial_work["release_schema_and_autonomy_tests_passed"] == 65
+    assert partial_work["unsupported_surface_refusals"] == [
+        "FORK_RPC",
+        "CODEQL_DATABASE",
+        "DEPENDENCY_SNAPSHOT",
+        "INSTALLED_TOOLCHAIN",
+        "TRIVY_DATABASE",
+        "REPRODUCTION_TARGETS",
+        "INVARIANT_TEMPLATE_AUTHORITY",
+        "CLIENT_CONSENT",
+        "EXTERNAL_TOOLCHAIN_ROLES",
+    ]
+    for partial_false_field in (
+        "parked_stash_applied_wholesale",
+        "ambient_environment_configuration_accepted",
+        "cost_ledger_reset_or_automatic_repair_permitted",
+        "terminal_full_suite_pass_credit",
+        "installed_toolchain_verified",
+        "transitive_dependency_closure_verified",
+        "fork_endpoint_provisioned",
+        "codeql_database_provisioned",
+        "dependency_snapshot_provisioned",
+        "client_decisions_captured",
+        "reproduction_targets_derived",
+        "invariant_template_enforcement_available",
+        "zero_input_end_to_end_audit_proven",
+        "operator_reported_private_v2_plan_adopted",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "candidate_or_route_selected",
+        "active_plan_changed",
+        "configuration_or_retry_behavior_changed",
+        "operator_ledger_accessed_or_mutated_by_codex",
+        "run_index_selected_or_inferred",
+        "spend_admission_authority",
+        "execution_authority",
+        "qualification_authority",
+        "runtime_authority",
+        "managed_run_ready",
+        "audit_completion_authority",
+        "release_authority",
+        "authority",
+        "grants_authority",
+    ):
+        assert partial_work[partial_false_field] is False
+    completed_work = runtime_status["last_completed_provider_free_work"]
+    assert completed_work["ticket"] == "V3-PLANADOPT-001"
+    assert completed_work["status"] == "COMPLETE_TERMINAL_PROVIDER_FREE_NONAUTHORIZING"
+    assert completed_work["active_plan_schema_version"] == "1.7"
+    assert completed_work["active_plan_raw_sha256"] == CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    assert completed_work["active_plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
+    assert completed_work["predecessor_plan_sha256"] == HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    assert completed_work["active_candidate_present"] is False
+    assert completed_work["unavailable_state_sha256"] == CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    assert completed_work["unavailable_disposition"] == "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    assert completed_work["matched_revocation_set_sha256"] == (
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert completed_work["revoked_route_pinned"] is False
+    assert completed_work["v1_price_cap_profile_preserved"] is True
+    assert completed_work["judge_constraints_preserved"] is True
+    assert completed_work["v2_price_cap_profile_adopted"] is False
+    assert completed_work[
+        "future_reactivation_requires_separately_authenticated_ancestry_transition"
+    ]
+    assert completed_work["active_plan_changed"] is True
+    assert completed_work["configuration_changed"] is True
+    for completed_false_field in (
+        "retry_behavior_changed",
+        "global_ledger_changed",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "candidate_or_route_selected",
+        "run_index_selected_or_inferred",
+        "qualification_runtime_audit_or_release_authority",
+        "terminal_full_suite_pass_credit",
+        "grants_authority",
+        "authority",
+    ):
+        assert completed_work[completed_false_field] is False
+
+    pricecapcomp_work = runtime_status["prior_pricecapcomp_provider_free_work"]
+    assert pricecapcomp_work["ticket"] == "V3-PRICECAPCOMP-001"
+    assert pricecapcomp_work["slice"] == (
+        "EXACT_ZERO_WEB_SEARCH_REQUEST_UNIT_ENVELOPE_AND_DEFAULT_OFF_V1_TO_V2_SUCCESSOR_SELECTOR"
+    )
+    assert pricecapcomp_work["status"] == "COMPLETE_TERMINAL_PROVIDER_FREE_NONAUTHORIZING"
+    for completed_true_field in (
+        "implementation_started",
+        "v2_price_cap_algorithm_opt_in",
+        "web_search_nonzero_price_retained",
+        "search_tool_plugin_fields_prohibited",
+        "exact_request_revalidated_before_reservation_and_transport",
+        "profile_and_envelope_discovery_registration_projection_custody",
+        "profile_and_envelope_preview_refresh_durable_custody",
+        "profile_and_envelope_smoke_runtime_custody",
+        "provider_egress_callable_graph_bound",
+        "missing_duplicate_substituted_tampered_or_positive_proof_rejected",
+        "input_cache_write_remains_rejected",
+        "internal_reasoning_remains_rejected",
+        "active_v1_plan_bytes_unchanged",
+        "supported_successor_cli_v1_to_v2_upgrade_available",
+        "successor_cli_upgrade_default_off",
+        "same_candidate_route_upgrade_supported",
+        "exact_v1_predecessor_required_for_upgrade",
+        "shared_v2_profile_and_every_resulting_role_constraint_rebuilt",
+        "same_algorithm_or_v1_to_v2_transition_only",
+        "repeat_upgrade_downgrade_drift_tamper_and_revocation_rejected",
+        "stateful_predecessor_substitution_rejected",
+        "fresh_private_mode_0600_successor_publication",
+        "release_schema_generation_current",
+        "autonomy_inventory_generation_current",
+        "scoped_ruff_passed",
+        "diff_integrity_passed",
+        "code_changed",
+    ):
+        assert pricecapcomp_work[completed_true_field] is True
+    assert pricecapcomp_work["web_search_maximum_units"] == 0
+    assert pricecapcomp_work["web_search_maximum_cost_usd_exact"] == "0"
+    assert pricecapcomp_work["recorded_xai_remaining_failure_components"] == ["input_cache_write"]
+    assert pricecapcomp_work["focused_successor_and_cli_tests_passed"] == 120
+    assert pricecapcomp_work["independent_review"] == "PASS_NO_BLOCKER"
+    assert pricecapcomp_work["broad_affected_tests_passed"] == 1328
+    assert pricecapcomp_work["broad_affected_test_warnings"] == 2
+    assert pricecapcomp_work["release_autonomy_refresh_schema_tests_passed"] == 79
+    assert pricecapcomp_work["strict_mypy_source_files_clean"] == 233
+    for completed_false_field in (
+        "recorded_xai_route_admissible",
+        "configuration_changed",
+        "retry_behavior_changed",
+        "active_plan_changed",
+        "global_ledger_changed",
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "candidate_or_route_selected",
+        "run_index_selected_or_inferred",
+        "qualification_runtime_audit_or_release_authority",
+        "terminal_full_suite_pass_credit",
+        "grants_authority",
+        "authority",
+    ):
+        assert pricecapcomp_work[completed_false_field] is False
+
+    priceoverrides_work = runtime_status["prior_priceoverrides_provider_free_work"]
+    assert priceoverrides_work["ticket"] == "V3-PRICEOVERRIDES-001"
+    assert priceoverrides_work["slice"] == (
+        "TYPED_TIERED_PRICING_RETENTION_AND_COST_AUTHORITY_REFUSAL"
+    )
+    assert priceoverrides_work["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
+    for priceoverrides_true_field in (
+        "typed_override_tier_model_implemented",
+        "recorded_operator_shape_validated_and_retained",
+        "nested_exact_canonical_decimal_prices_enforced",
+        "pricing_schedule_sha256_binds_base_and_ordered_tiers",
+        "flat_endpoint_evidence_byte_identical",
+        "provider_free_preview_refuses_conditional_cost_authority",
+        "identity_sealing_refuses_conditional_cost_authority",
+        "model_refresh_refuses_schedule_instead_of_dropping_it",
+        "full_models_discover_recorded_shape_reaches_route_predicates",
+    ):
+        assert priceoverrides_work[priceoverrides_true_field] is True
+    for priceoverrides_false_field in (
         "retry_behavior_changed",
         "retry_configuration_changed",
-        "model_completion_issued",
-        "cost_ledger_opened_or_mutated",
-        "usage_recorded",
-        "credential_or_secret_disclosed",
-        "candidate_replacement_selected",
-        "candidate_or_route_selected",
+        "active_plan_changed",
+        "global_ledger_changed",
         "provider_or_network_accessed_by_codex",
         "operator_command_emitted_by_codex",
         "grants_authority",
+        "authority",
     ):
-        assert retrieval_work[retrieval_false_field] is False
-    assert retrieval_work["completed_real_audits"] == 0
-    assert "V3_PRICELEXEME_001_SELECTED_IN_PROGRESS" in retrieval_work["next_slice"]
-    assert "IMPLEMENTATION_STARTED_FALSE" in retrieval_work["next_slice"]
-    assert "KEEP_V3_CANDROUTE_001_PARTIAL_DOWNSTREAM" in retrieval_work["next_slice"]
+        assert priceoverrides_work[priceoverrides_false_field] is False
+    assert priceoverrides_work["code_changed"] is True
+    assert priceoverrides_work["tiered_pricing_cost_projection"] == "unavailable"
+    assert priceoverrides_work["full_models_discover_failure_reasons"] == [
+        "PRICE_CAP_NOT_EXPRESSIBLE",
+        "PRICE_CAP_PROOF_UNAVAILABLE",
+    ]
     terminal_validation = runtime_status["last_validation"]
-    complete_sequential_suite_passed = retrieval_work["complete_sequential_suite_passed"]
-    assert type(complete_sequential_suite_passed) is bool
-    if complete_sequential_suite_passed:
-        assert (
-            retrieval_work[
-                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
-            ]
-            is False
-        )
-        assert type(retrieval_work["terminal_full_suite_passed"]) is int
-        assert retrieval_work["terminal_full_suite_passed"] > 0
-        assert type(retrieval_work["terminal_full_suite_skipped"]) is int
-        assert retrieval_work["terminal_full_suite_skipped"] >= 0
-        assert type(retrieval_work["terminal_full_suite_warnings"]) is int
-        assert retrieval_work["terminal_full_suite_warnings"] >= 0
-        assert type(retrieval_work["terminal_full_suite_elapsed_seconds"]) in (int, float)
-        assert retrieval_work["terminal_full_suite_elapsed_seconds"] > 0
-        assert terminal_validation["status"].startswith("V3_RETRIEVAL_001_COMPLETE_PROVIDER_FREE")
-        assert "NONAUTHORIZING_CODEX_ZERO_EXTERNAL_COMMANDS" in terminal_validation["status"]
-        assert terminal_validation["terminal_full_suite_run"] is True
-        assert terminal_validation["terminal_full_suite_attempt_started"] is True
-        terminal_suite = terminal_validation["v3_retrieval_001_terminal_full_suite"]
-        assert terminal_suite["exit_code"] == 0
-        assert terminal_suite["tests_passed"] == retrieval_work["terminal_full_suite_passed"]
-        assert terminal_suite["tests_skipped"] == retrieval_work["terminal_full_suite_skipped"]
-        assert terminal_suite["warnings"] == retrieval_work["terminal_full_suite_warnings"]
-        assert (
-            terminal_suite["elapsed_seconds"]
-            == retrieval_work["terminal_full_suite_elapsed_seconds"]
-        )
-        assert terminal_suite["terminal_result_available"] is True
-        assert terminal_suite["pass_credit"] is True
-        assert terminal_suite["required_local_loopback_permission"] is True
-    else:
-        assert retrieval_work["terminal_full_suite_passed"] == 0
-        assert retrieval_work["terminal_full_suite_skipped"] == 0
-        assert retrieval_work["terminal_full_suite_warnings"] == 0
-        assert retrieval_work["terminal_full_suite_elapsed_seconds"] == 0.0
-        assert (
-            retrieval_work[
-                "terminal_full_suite_final_rerun_pending_after_governance_reconciliation"
-            ]
-            is True
-        )
-        assert "v3_retrieval_001_terminal_full_suite" not in terminal_validation
+    assert terminal_validation["status"] == (
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CURRENT_AND_NEXT_TICKET_UNSELECTED"
+    )
+    assert terminal_validation["terminal_full_suite_run"] is False
+    assert terminal_validation["terminal_full_suite_attempt_started"] is False
+    planadopt_validation = runtime_status["v3_planadopt_001_local_validation"]
+    assert planadopt_validation["closure_timestamp"] == "2026-09-04T03:27:47Z"
+    assert planadopt_validation["canonical_release_schema_generation_passed"] is True
+    assert planadopt_validation["candidate_selection_plan_schema_raw_sha256"] == (
+        CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256
+    )
+    assert planadopt_validation["scoped_ruff_passed"] is True
+    assert planadopt_validation["strict_mypy_passed"] is True
+    assert planadopt_validation["diff_integrity_passed"] is True
+    assert planadopt_validation["independent_review"] == "PASS_NO_BLOCKERS"
+    for planadopt_validation_false_field in (
+        "provider_or_network_accessed_by_codex",
+        "operator_command_emitted_by_codex",
+        "terminal_full_suite_run",
+        "grants_authority",
+    ):
+        assert planadopt_validation[planadopt_validation_false_field] is False
+    autonomy_validation = terminal_validation["v3_autonomy_001_phase2_provisioning_validation"]
+    assert autonomy_validation["status"] == "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING"
+    assert autonomy_validation["validation_scope"] == ("TICKET_CLOSURE_AT_2026_09_03T23_38_22Z")
+    assert autonomy_validation["affected_local_matrix_tests_passed"] == 287
+    assert autonomy_validation["affected_local_matrix_duration_seconds"] == 8.38
+    assert autonomy_validation["release_schema_and_autonomy_tests_passed"] == 65
+    assert autonomy_validation["release_schema_and_autonomy_duration_seconds"] == 51.99
+    assert autonomy_validation["ruff_format_files_checked"] == 604
+    assert autonomy_validation["canonical_generation_and_verification_passed"] is True
+    assert autonomy_validation["repository_wide_ruff_passed"] is True
+    assert autonomy_validation["strict_mypy_source_files_clean"] == 235
+    assert autonomy_validation["terminal_full_suite_pass_credit"] is False
+    assert autonomy_validation["runtime_authority"] is False
+    assert autonomy_validation["managed_run_ready"] is False
+    assert autonomy_validation["grants_authority"] is False
+    latest_validation = terminal_validation["v3_autonomy_001_latest_post_closure_validation"]
+    assert latest_validation["validated_at"] == "2026-09-04T00:25:42Z"
+    assert latest_validation["validation_scope"] == "CURRENT_POST_CLOSURE_RECHECK"
+    assert latest_validation["affected_local_matrix_tests_passed"] == 287
+    assert latest_validation["affected_local_matrix_duration_seconds"] == 13.3
+    assert latest_validation["release_schema_and_autonomy_tests_passed"] == 65
+    assert latest_validation["release_schema_and_autonomy_duration_seconds"] == 51.43
+    assert latest_validation["product_governance_tests_passed"] == 27
+    assert latest_validation["ruff_format_files_checked"] == 588
+    assert latest_validation["strict_mypy_source_files_clean"] == 235
+    assert latest_validation["terminal_full_suite_pass_credit"] is False
+    assert latest_validation["grants_authority"] is False
+    pricecapcomp_validation = terminal_validation["v3_pricecapcomp_001_local_validation"]
+    assert pricecapcomp_validation["status"] == "COMPLETE_TERMINAL_PROVIDER_FREE_NONAUTHORIZING"
+    assert pricecapcomp_validation["closure_timestamp"] == "2026-09-03T21:41:10Z"
+    assert pricecapcomp_validation["web_search_maximum_cost_usd_exact"] == "0"
+    assert pricecapcomp_validation["focused_selector_and_cli_tests_passed"] == 120
+    assert pricecapcomp_validation["broad_affected_tests_passed"] == 1328
+    assert pricecapcomp_validation["broad_affected_test_warnings"] == 2
+    assert pricecapcomp_validation["release_autonomy_refresh_schema_tests_passed"] == 79
+    assert pricecapcomp_validation["input_cache_write_remains_rejected"] is True
+    for selector_validation_field in (
+        "supported_default_off_v1_to_v2_successor_selector",
+        "successor_selector_exact_v1_predecessor_only",
+        "successor_selector_same_route_upgrade_supported",
+        "successor_selector_rebuilds_shared_profile_and_every_role_constraint",
+        "successor_selector_exact_immediate_transition_validated",
+        "successor_selector_rejects_repeat_upgrade_downgrade_drift_tamper_and_stateful_substitution",
+        "v1_default_and_active_plan_bytes_unchanged",
+    ):
+        assert pricecapcomp_validation[selector_validation_field] is True
+    assert pricecapcomp_validation["recorded_xai_route_admissible"] is False
+    assert pricecapcomp_validation["terminal_full_suite_pass_credit"] is False
+    modelrefresh_validation = terminal_validation[
+        "v3_modelrefresh_001_tier_schedule_local_validation"
+    ]
+    assert modelrefresh_validation["status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_EXTERNAL_AND_COMPONENT_CAP_CRITERIA_UNMET"
+    )
+    assert modelrefresh_validation["selected_at"] == "2026-09-03T12:38:50Z"
+    assert modelrefresh_validation["closure_timestamp"] == "2026-09-03T13:58:58Z"
+    assert modelrefresh_validation["implementation_started"] is True
+    for modelrefresh_true_field in (
+        "exact_ordered_schedule_retained_through_refresh",
+        "equal_maximum_threshold_drift_detected",
+        "durable_route_and_attempt_schedule_custody_implemented",
+        "live_route_preflight_schedule_join_implemented",
+        "provider_cap_and_cost_use_same_conservative_maximum",
+        "flat_route_bytes_unchanged",
+        "unavailable_mismatched_or_tampered_schedule_fails_closed",
+        "nested_schedule_schema_bounds_exposed",
+        "release_schema_generation_current",
+        "autonomy_inventory_generation_current",
+        "scoped_ruff_passed",
+        "strict_json_validation_passed",
+        "diff_integrity_passed",
+    ):
+        assert modelrefresh_validation[modelrefresh_true_field] is True
+    assert modelrefresh_validation["focused_core_tests_passed"] == 245
+    assert modelrefresh_validation["schema_route_endpoint_tests_passed"] == 262
+    assert modelrefresh_validation["independent_affected_tests_passed"] == 471
+    assert modelrefresh_validation["composed_custody_tests_passed"] == 2
+    assert modelrefresh_validation["broad_attempt_passed_before_environment_failures"] == 1064
+    assert modelrefresh_validation["environment_path_failures_direct_root_rerun_passed"] == 5
+    assert modelrefresh_validation["focused_refresh_pricing_assurance_tests_passed"] == 15
+    assert modelrefresh_validation["scheduler_runtime_recovery_tests_passed"] == 9
+    assert modelrefresh_validation["import_order_probes_passed"] == 4
+    assert modelrefresh_validation["strict_mypy_source_files_clean"] == 233
+    assert modelrefresh_validation["recorded_xai_failure_components"] == [
+        "input_cache_write",
+        "web_search",
+    ]
+    for modelrefresh_false_field in (
+        "terminal_full_suite_pass_credit",
+        "successful_current_provider_snapshot_available",
+        "live_artifact_round_trip_available",
+        "stock_live_authority_quartet_available",
+        "automatic_real_benchmark_lineage_qualification_or_promotion_available",
+        "recorded_xai_route_admissible",
+        "provider_or_network_accessed",
+        "operator_command_emitted",
+        "candidate_or_route_selected",
+        "active_plan_changed",
+        "retry_behavior_or_configuration_changed",
+        "global_ledger_changed",
+        "run_index_selected_or_inferred",
+        "qualification_runtime_audit_or_release_authority",
+        "grants_authority",
+    ):
+        assert modelrefresh_validation[modelrefresh_false_field] is False
+    pricecaptier_validation = terminal_validation["v3_pricecaptier_001_local_validation"]
+    assert pricecaptier_validation["status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_PRIMARY_XAI_PREFLIGHT_ACCEPTANCE_UNMET"
+    )
+    assert pricecaptier_validation["selected_at"] == "2026-09-03T10:57:31Z"
+    assert pricecaptier_validation["closure_timestamp"] == "2026-09-03T11:27:12Z"
+    assert pricecaptier_validation["implementation_started"] is True
+    for pricecaptier_true_field in (
+        "exact_decimal_schedule_wide_maximum_implemented",
+        "partial_tier_inheritance_implemented",
+        "later_applicable_tier_wins",
+        "per_effective_state_cache_dominance_required",
+        "complete_schedule_and_provider_cap_proof_hash_bound",
+        "subthreshold_projection_deliberately_conservative",
+        "provider_cap_request_cost_reserve_spend_reconcile_share_maximum",
+        "flat_route_bytes_unchanged",
+        "unsupported_or_unavailable_schedule_fails_closed",
+        "nested_numeric_override_lexemes_fail_closed",
+        "unit_mocktransport_coverage_remains",
+        "release_schema_generation_current",
+        "autonomy_inventory_generation_current",
+        "scoped_ruff_passed",
+        "strict_json_validation_passed",
+        "diff_integrity_passed",
+    ):
+        assert pricecaptier_validation[pricecaptier_true_field] is True
+    assert pricecaptier_validation["unavailable_schedule_failure_reasons"] == [
+        "PRICE_CAP_NOT_EXPRESSIBLE",
+        "PRICE_CAP_PROOF_UNAVAILABLE",
+    ]
+    assert pricecaptier_validation["recorded_xai_prompt_maximum"] == "0.0000044"
+    assert pricecaptier_validation["recorded_xai_completion_maximum"] == "0.0000132"
+    assert pricecaptier_validation["recorded_xai_input_cache_write_value"] == "0"
+    assert pricecaptier_validation["recorded_xai_web_search_value"] == "0.01"
+    assert pricecaptier_validation["focused_tests_passed"] == 280
+    assert pricecaptier_validation["affected_tests_passed"] == 1251
+    assert pricecaptier_validation["affected_test_warnings"] == 2
+    assert pricecaptier_validation["adversarial_focused_tests_passed"] == 241
+    assert pricecaptier_validation["numeric_loopback_integration_skipped"] == 1
+    assert pricecaptier_validation["strict_mypy_source_files_clean"] == 233
+    for pricecaptier_false_field in (
+        "recorded_xai_route_admissible",
+        "refresh_supports_tiered_schedules",
+        "live_route_preflight_acceptance_proven",
+        "primary_acceptance_met",
+        "numeric_loopback_integration_pass_credit",
+        "provider_or_network_accessed",
+        "operator_command_emitted",
+        "candidate_or_route_selected",
+        "active_plan_changed",
+        "retry_behavior_or_configuration_changed",
+        "global_ledger_changed",
+        "run_index_selected_or_inferred",
+        "qualification_runtime_audit_or_release_authority",
+        "grants_authority",
+        "terminal_full_suite_pass_credit",
+    ):
+        assert pricecaptier_validation[pricecaptier_false_field] is False
+    testquality_validation = terminal_validation["v3_testquality_001_local_validation"]
+    assert testquality_validation["status"] == (
+        "PARTIAL_PROVIDER_FREE_NONAUTHORIZING_SHARED_PROCESS_LOCAL_REVOCATION_LEASE_RACE_SLICE_"
+        "COMPLETE_COMPARISON_ONLY"
+    )
+    assert testquality_validation["current_slice_selected_at"] == "2026-09-03T05:40:39Z"
+    assert testquality_validation["current_slice_closure_timestamp"] == "2026-09-03T07:06:29Z"
+    assert testquality_validation["current_slice_implementation_started"] is True
+    assert testquality_validation["focused_matrix_passed"] == 161
+    assert testquality_validation["replay_and_execution_hardening_matrix_passed"] == 107
+    assert testquality_validation["autonomy_producer_execution_boundary_matrix_passed"] == 54
+    assert testquality_validation["release_schema_matrix_passed"] == 29
+    assert testquality_validation["pipeline_interface_smoke_passed"] == 1
+    assert testquality_validation["broad_integration_attempt_collected"] == 265
+    assert testquality_validation["broad_integration_attempt_passed_before_interruption"] == 168
+    assert testquality_validation["broad_integration_attempt_skipped"] == 1
+    assert testquality_validation["broad_integration_attempt_duration_seconds"] == "547.50"
+    assert testquality_validation["broad_integration_attempt_operator_interrupted"] is True
+    assert testquality_validation["broad_integration_attempt_complete_pass_credit"] is False
+    assert testquality_validation["focused_run_observation_campaign_score_chain_passed"] == 166
+    assert testquality_validation["focused_chain_duration_seconds"] == "4.33"
+    assert testquality_validation["adjacent_unit_matrix_passed"] == 135
+    assert testquality_validation["adjacent_unit_matrix_duration_seconds"] == "19.41"
+    assert testquality_validation["execution_origin_integration_skipped"] == 1
+    assert testquality_validation["repository_python_ruff_files_clean"] == 599
+    assert testquality_validation["strict_mypy_source_files_clean"] == 233
+    assert (
+        testquality_validation["focused_mutation_benchmark_coverage_integration_matrix_passed"]
+        == 190
+    )
+    assert testquality_validation["runtime_hardening_and_replay_matrix_passed"] == 156
+    assert testquality_validation["release_benchmark_schema_and_autonomy_matrix_passed"] == 66
+    assert testquality_validation["product_documentation_and_objective_matrix_passed"] == 27
+    for testquality_validation_true_field in (
+        "schema_generation_passed",
+        "scoped_ruff_passed",
+        "strict_mypy_passed",
+        "diff_integrity_passed",
+        "exact_utf8_statement_spans_bound",
+        "complete_contract_function_population_agreement_required",
+        "live_process_local_foundry_seal_required",
+        "legacy_v1_0_replay_preserved",
+        "bounded_lcov_parser_line_only",
+        "compiler_exact_statement_producer_implemented",
+        "raw_coverage_process_custody_implemented",
+        "schema_v1_2_shared_receipt_implemented",
+        "host_observed_compiler_exact_statement_inventory_available",
+        "host_observed_coverage_process_receipt_available",
+        "exact_mutation_executor_implemented",
+        "executor_implementation_graph_bound",
+        "process_local_mutation_comparison_implemented",
+        "mutation_seals_pid_bound",
+        "fork_serialization_and_copy_authority_loss_enforced",
+        "one_shot_campaign_cleanup_handoff_implemented",
+        "exact_live_observation_preserved_through_same_invocation_cleanup_handoff",
+        "cleanup_handoff_exact_plan_spec_source_private_root_identity_mode_executor_pid_cleanup_observation_bound",
+        "cleanup_handoff_replay_copy_serialization_fork_substitution_tamper_stale_authority_rejected",
+        "observed_campaign_invalidation_or_replay_synchronously_cascades_to_dependent_scorecards",
+        "baseexception_and_lock_interruption_clean_identity_scoped_seals",
+        "shared_revocation_lease_available",
+        "race_safe_live_dependency_authority_proven",
+        "pid_bound_shared_domain_serializes_run_observation_campaign_score_and_handoff_replay",
+        "composite_local_seals_revalidated_after_dependency_release",
+        "decisive_scoring_uses_seal_sha_matched_immutable_schema_snapshots",
+        "authenticated_snapshot_plan_matches_canonical_score_plan",
+        "exact_live_sources_revalidated_at_registration",
+        "dependent_revocation_callbacks_deferred_beyond_outer_lease",
+        "baseexception_partial_paths_exact_remove_without_masking_primary",
+        "fork_refuses_before_inherited_layer_locks",
+        "canonical_inventory_generation_verified",
+    ):
+        assert testquality_validation[testquality_validation_true_field] is True
+    assert testquality_validation["durable_projection_authority"] == "comparison_only"
+    assert testquality_validation["shared_revocation_lease_scope"] == (
+        "PROCESS_LOCAL_COMPARISON_ONLY"
+    )
+    assert testquality_validation["race_safe_live_dependency_authority_scope"] == (
+        "PROCESS_LOCAL_LEASE_LINEARIZATION_ONLY"
+    )
+    for testquality_validation_false_field in (
+        "production_statement_evidence_emitted",
+        "current_real_isolated_production_receipt_available",
+        "decisive_real_mutation_execution_available",
+        "portable_race_safe_disposal_available",
+        "benchmark_mutation_credit_enabled",
+        "production_campaign_authority_enabled",
+        "production_disposal_authority_enabled",
+        "one_shot_campaign_cleanup_handoff_is_independent_receipt",
+        "one_shot_campaign_receipt_available",
+        "current_real_mutation_campaign_receipt_available",
+        "sealed_backend_available",
+        "real_mutation_run_and_kill_artifact_available",
+        "production_plan_generator_available",
+        "same_interpreter_reflection_gap_eliminated",
+        "asynchronous_exception_micro_gap_eliminated",
+        "post_linearization_return_gap_eliminated",
+        "provider_or_network_accessed",
+        "operator_command_emitted",
+        "grants_authority",
+        "terminal_full_suite_pass_credit",
+    ):
+        assert testquality_validation[testquality_validation_false_field] is False
+    price_form_validation = terminal_validation["v3_priceform_001_decision_validation"]
+    for validation_true_field in (
+        "policy_decision_closure",
+        "decision_only",
+        "ordinary_uncaptured_numeric_price_refusal_upheld",
+        "captured_price_lexeme_canonical_string_storage_validated",
+        "exact_cost_reserve_spend_and_reconcile_arithmetic_parity_validated",
+    ):
+        assert price_form_validation[validation_true_field] is True
+    assert price_form_validation["affected_unit_matrix_passed"] == 795
+    assert price_form_validation["affected_unit_matrix_warnings"] == 2
+    for validation_false_field in (
+        "code_changed",
+        "retry_behavior_changed",
+        "retry_configuration_changed",
+        "active_plan_changed",
+        "global_ledger_changed",
+        "provider_or_network_accessed",
+        "operator_command_emitted",
+        "grants_authority",
+        "terminal_full_suite_pass_credit",
+    ):
+        assert price_form_validation[validation_false_field] is False
+    assert terminal_validation["v3_pricelexeme_001_terminal_full_suite"] is None
+    local_validation = terminal_validation["v3_pricelexeme_001_local_validation"]
+    assert local_validation["status"] == (
+        "PARTIAL_TERMINAL_PROVIDER_FREE_NONAUTHORIZING_DEFENSE_IN_DEPTH_PREMISE_"
+        "SUPERSEDED_NONBLOCKING"
+    )
+    assert local_validation["historical_pre_hardening_affected_unit_matrix_passed"] == 795
+    assert local_validation["historical_pre_hardening_affected_unit_matrix_warnings"] == 2
+    assert local_validation["historical_pre_hardening_combined_custody_retest_passed"] == 24
+    assert local_validation["historical_pre_hardening_schema_inventory_closure_passed"] == 126
+    assert local_validation["parse_phase_numeric_token_ceiling"] == 100000
+    assert local_validation["current_focused_price_and_endpoint_matrix_passed"] == 87
+    assert local_validation["current_affected_unit_matrix_passed"] == 755
+    assert local_validation["current_affected_unit_matrix_warnings"] == 2
+    assert local_validation["current_refresh_runtime_staging_workflow_schema_matrix_passed"] == 220
+    assert (
+        local_validation["current_focused_detachment_and_transport_observation_cases_passed"] == 5
+    )
+    assert local_validation["current_schema_autonomy_matrix_passed"] == 66
+    assert local_validation["current_product_governance_matrix_passed"] == 27
+    assert local_validation["current_governance_matrix_passed"] == 93
+    for local_validation_true_field in (
+        "current_focused_validation_passed",
+        "current_affected_validation_passed",
+        "current_provider_free_localhost_integration_passed",
+        "canonical_generation_verification_passed",
+        "strict_duplicate_key_json_validation_passed",
+        "parse_phase_numeric_token_ceiling_enforced_before_materialization",
+        "decoder_issues_tokens_only_at_final_fixed_price_paths",
+        "snapshot_admission_binds_original_layout_endpoint_index_and_price_field",
+        "observed_field_index_or_layout_relocation_revokes_monotonically",
+        "decoder_is_only_normal_issuer",
+        "registry_only_slotless_marker",
+        "exact_layout_full_path_and_price_field_bound",
+        "detach_copy_and_deepcopy_preserve_same_identity",
+        "construction_pickle_and_reduction_rejected",
+        "setattr_delattr_and_observed_class_substitution_revoke_monotonically",
+        "id_keyed_exact_weakref_registry",
+        "exact_weakref_cleanup_and_id_reuse_bound",
+        "scoped_ruff_passed",
+        "strict_mypy_passed",
+        "joined_raw_http_constrained_regression_passed",
+    ):
+        assert local_validation[local_validation_true_field] is True
+    for local_validation_false_field in (
+        "registry_lookup_invokes_marker_hash_or_equality",
+        "relocation_restore_resurrects_authority",
+        "independent_review_remaining_blocker",
+        "provider_or_network_accessed",
+        "operator_attempt_predates_current_hardened_price_lexemes_bytes",
+        "fresh_current_byte_live_admissibility_proven",
+        "fresh_current_byte_metadata_only_live_rerun_authorized",
+        "fresh_current_byte_metadata_only_live_rerun_command_emitted_by_codex",
+        "live_route_admissibility_proven",
+        "terminal_full_suite_pass_credit",
+    ):
+        assert local_validation[local_validation_false_field] is False
 
     successor_status = runtime_status["candidate_selection_plan_successor"]
     assert successor_status["ticket"] == "V3-PLANSUCCESSOR-001"
     assert successor_status["status"] == "COMPLETE_PROVIDER_FREE_NONAUTHORIZING"
-    assert successor_status["active_plan_schema_version"] == "1.4"
-    assert successor_status["active_plan_sha256"] == CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
-    assert successor_status["active_plan_unchanged"] is True
-    assert successor_status["successor_plan_schema_version"] == "1.5"
+    assert successor_status["active_plan_schema_version"] == "1.7"
+    assert successor_status["active_plan_raw_sha256"] == CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    assert successor_status["active_plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
+    assert successor_status["active_plan_predecessor_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    )
+    assert successor_status["active_plan_unchanged"] is False
+    assert successor_status["active_plan_has_active_candidate"] is False
+    assert successor_status["active_plan_unavailable_state_sha256"] == (
+        CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    )
+    assert successor_status["active_plan_unavailable_disposition"] == (
+        "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    )
+    assert successor_status["active_plan_matched_revocation_set_sha256"] == (
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert successor_status["active_plan_retains_v1_price_cap_profile"] is True
+    assert successor_status["active_plan_adopts_v2_price_cap_profile"] is False
+    assert successor_status["successor_plan_schema_versions"] == ["1.5", "1.6", "1.7"]
     assert successor_status["candidate_selection_plan_schema_raw_sha256"] == (
-        "ea3a9218f1595d3de521b8020e7929235e5940105c5f5d43cfbc45a21a2c3feb"
+        CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256
     )
     assert successor_status["emitter_command"] == "models emit-selection-plan-successor"
     assert successor_status["emitter_available"] is True
+    assert successor_status["price_cap_profile_v2_upgrade_flag"] == (
+        "--upgrade-price-cap-profile-v2"
+    )
+    for price_cap_upgrade_field in (
+        "price_cap_profile_v2_upgrade_default_off",
+        "price_cap_profile_v2_upgrade_exact_v1_predecessor_only",
+        "price_cap_profile_v2_upgrade_same_candidate_route_supported",
+        "price_cap_profile_v2_upgrade_rebuilds_shared_profile",
+        "price_cap_profile_v2_upgrade_rebuilds_every_resulting_role_constraint",
+        "price_cap_profile_v2_upgrade_validation_reproduces_exact_transition",
+        "price_cap_profile_v2_upgrade_rejects_repeat_upgrade_downgrade_drift_and_tamper",
+        "price_cap_profile_v2_upgrade_rejects_stateful_predecessor_substitution",
+        "default_v1_successor_artifact_bytes_unchanged",
+    ):
+        assert successor_status[price_cap_upgrade_field] is True
     assert successor_status["predecessor_digest_recorded"] is True
     assert successor_status["entry_constraint_profile_role_and_plan_hashes_derived"] is True
     assert successor_status["caller_supplied_hashes_accepted"] is False
-    assert successor_status["judge_constraints_carried_forward"] is True
+    assert successor_status["judge_constraints_carried_forward_by_default"] is True
+    assert successor_status["judge_constraints_rebuilt_for_explicit_v2_upgrade"] is True
     assert successor_status["current_revocation_enforced_before_publication"] is True
     assert successor_status["historical_structural_validation_independent_of_later_revocation"]
     assert successor_status["predecessor_discovery_evidence_reinterpreted_under_successor"] is False
@@ -3548,6 +5784,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert successor_status["successor_bound_live_route_preflight_only_proven_provider_free"]
     assert successor_status["successor_bound_completion_transport_occurred"] is False
     assert successor_status["successor_artifact_checked_in"] is False
+    assert successor_status["checked_in_successor_ticket"] == "V3-PLANADOPT-001"
+    assert successor_status["checked_in_successor_is_unavailable_candidate_state"] is True
+    assert successor_status["operator_reported_private_selected_successor_checked_in"] is False
+    assert successor_status["ordinary_reactivation_from_unavailable_predecessor_allowed"] is False
+    assert successor_status[
+        "future_reactivation_requires_separately_authenticated_ancestry_transition"
+    ]
     assert successor_status["candidate_replacement_selected"] is False
     assert successor_status["completed_real_audits"] == 0
     for authority_field in (
@@ -3734,19 +5977,182 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert schema_retry[authority_key] is False
     operator_reconciliation = runtime_status["current_operator_result_reconciliation"]
     assert operator_reconciliation["latest_entry_timestamp"] == (
-        CURRENT_OPERATOR_RESULTS_LATEST_ENTRY
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_LATEST_ENTRY
     )
-    assert operator_reconciliation["operator_results_sha256"] == CURRENT_OPERATOR_RESULTS_SHA256
-    assert operator_reconciliation["operator_results_bytes"] == CURRENT_OPERATOR_RESULTS_BYTES
-    assert operator_reconciliation["operator_results_lines"] == CURRENT_OPERATOR_RESULTS_LINES
+    assert (
+        operator_reconciliation["operator_results_sha256"]
+        == HISTORICAL_SEPT4_OPERATOR_RESULTS_SHA256
+    )
+    assert (
+        operator_reconciliation["operator_results_bytes"] == HISTORICAL_SEPT4_OPERATOR_RESULTS_BYTES
+    )
+    assert (
+        operator_reconciliation["operator_results_lines"] == HISTORICAL_SEPT4_OPERATOR_RESULTS_LINES
+    )
     assert operator_reconciliation["operator_results_repository_commit"] == (
-        CURRENT_OPERATOR_RESULTS_REPOSITORY_COMMIT
+        HISTORICAL_SEPT4_OPERATOR_RESULTS_REPOSITORY_COMMIT
     )
     assert (
         operator_reconciliation["operator_results_repository_commit_pushed_and_remote_resolved"]
         is True
     )
-    assert operator_reconciliation["critical_path_ticket"] == "V3-PRICELEXEME-001"
+    assert operator_reconciliation["candidate_selection_plan_schema_version"] == "1.7"
+    assert operator_reconciliation["candidate_selection_plan_raw_sha256"] == (
+        CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_sha256"] == (
+        CURRENT_PLANADOPT_PLAN_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_predecessor_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_has_active_candidate"] is False
+    assert (
+        operator_reconciliation["candidate_selection_plan_authenticated_runner_selection"] is None
+    )
+    assert operator_reconciliation["candidate_selection_plan_unavailability_state_sha256"] == (
+        CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_disposition"] == (
+        "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    )
+    assert operator_reconciliation["candidate_selection_plan_matched_revocation_set_sha256"] == (
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_price_cap_profile_decision"] == (
+        "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"
+    )
+    assert operator_reconciliation["candidate_selection_plan_retained_profile_sha256"] == (
+        CURRENT_PLANADOPT_V1_PROFILE_SHA256
+    )
+    assert operator_reconciliation["candidate_selection_plan_private_v2_adopted"] is False
+    assert operator_reconciliation["candidate_selection_plan_pins_revoked_route"] is False
+    assert operator_reconciliation["active_repository_plan_remains_v1"] is False
+    assert operator_reconciliation["active_repository_plan_schema_version"] == "1.7"
+    assert operator_reconciliation["active_repository_plan_has_active_candidate"] is False
+    assert operator_reconciliation["active_repository_plan_retains_v1_price_cap_profile"] is True
+    assert (
+        operator_reconciliation["operator_reported_private_v2_plan_adopted_by_repository"] is False
+    )
+    assert operator_reconciliation["production_v2_active_plan_activation_performed"] is False
+    assert operator_reconciliation["current_active_plan_to_v2_supported_path_available"] is False
+    assert operator_reconciliation["historical_v1_predecessor_to_v2_selection_path_available"]
+    assert operator_reconciliation[
+        "historical_v1_predecessor_operator_facing_v2_selection_command_available"
+    ]
+    assert operator_reconciliation[
+        "production_v2_activation_deferred_to_future_separately_selected_ticket"
+    ]
+    assert operator_reconciliation["pricekeyorder_ticket"] == "V3-PRICEKEYORDER-001"
+    assert operator_reconciliation["pricekeyorder_ticket_status"] == "WITHDRAWN_OPERATOR_ERROR"
+    for pricekeyorder_true_field in (
+        "pricekeyorder_prior_diagnosis_retracted_by_operator",
+        "pricekeyorder_prior_diagnosis_bypassed_provider_ingest",
+        "pricekeyorder_operator_requested_withdrawal",
+        "pricekeyorder_full_provider_ingest_already_sorts_raw_tier_keys",
+        "operator_reported_post_modelrefresh_live_constrained_discovery_failed",
+        "operator_reported_tier_schedule_projection_correct",
+    ):
+        assert operator_reconciliation[pricekeyorder_true_field] is True
+    assert operator_reconciliation["pricekeyorder_full_ingest_permutation_count"] == 120
+    assert operator_reconciliation["pricekeyorder_full_ingest_distinct_pricing_hash_count"] == 1
+    assert operator_reconciliation["pricekeyorder_full_ingest_distinct_snapshot_hash_count"] == 1
+    assert operator_reconciliation[
+        "operator_reported_post_modelrefresh_live_constrained_discovery_failure_reasons"
+    ] == ["PRICE_CAP_NOT_EXPRESSIBLE", "PRICE_CAP_PROOF_UNAVAILABLE"]
+    for pricekeyorder_false_field in (
+        "pricekeyorder_operator_reported_root_cause_confirmed_by_codex",
+        "pricekeyorder_operator_reported_sole_blocker_confirmed_by_codex",
+        "pricekeyorder_selected",
+        "pricekeyorder_implementation_started",
+        "pricekeyorder_grants_authority",
+    ):
+        assert operator_reconciliation[pricekeyorder_false_field] is False
+    assert operator_reconciliation["critical_path_ticket"] == "UNSELECTED"
+    assert operator_reconciliation["current_testquality_ticket"] == "V3-TESTQUALITY-001"
+    assert operator_reconciliation["current_testquality_ticket_status"] == (
+        "PARTIAL_PROVIDER_FREE_NONAUTHORIZING_SHARED_PROCESS_LOCAL_REVOCATION_LEASE_RACE_SLICE_"
+        "COMPLETE_COMPARISON_ONLY"
+    )
+    assert operator_reconciliation["current_testquality_closure_timestamp"] == (
+        "2026-09-03T07:06:29Z"
+    )
+    assert operator_reconciliation[
+        "current_testquality_shared_revocation_lease_slice_selected_at"
+    ] == ("2026-09-03T05:40:39Z")
+    assert (
+        operator_reconciliation[
+            "current_testquality_shared_revocation_lease_slice_implementation_started"
+        ]
+        is True
+    )
+    for testquality_true_field in (
+        "current_testquality_exact_utf8_statement_spans_bound",
+        "current_testquality_contract_function_span_population_consistency_required",
+        "current_testquality_live_process_local_foundry_seal_required",
+        "current_testquality_legacy_v1_0_replay_preserved",
+        "current_testquality_bounded_lcov_parser_is_line_only",
+        "current_testquality_compiler_exact_statement_producer_implemented",
+        "current_testquality_raw_coverage_process_custody_implemented",
+        "current_testquality_schema_v1_2_shared_receipt_implemented",
+        "current_testquality_host_observed_compiler_exact_inventory_available",
+        "current_testquality_host_observed_coverage_process_receipt_available",
+        "current_testquality_exact_mutation_executor_implemented",
+        "current_testquality_executor_implementation_graph_bound",
+        "current_testquality_process_local_mutation_comparison_implemented",
+        "current_testquality_mutation_seals_pid_bound",
+        "current_testquality_fork_serialization_and_copy_authority_loss_enforced",
+        "current_testquality_one_shot_campaign_cleanup_handoff_implemented",
+        "current_testquality_exact_live_observation_preserved_through_same_invocation_cleanup_handoff",
+        "current_testquality_cleanup_handoff_exact_plan_spec_source_private_root_identity_mode_executor_pid_cleanup_observation_bound",
+        "current_testquality_cleanup_handoff_replay_copy_serialization_fork_substitution_tamper_stale_authority_rejected",
+        "current_testquality_observed_campaign_invalidation_or_replay_synchronously_cascades_to_dependent_scorecards",
+        "current_testquality_baseexception_and_lock_interruption_clean_identity_scoped_seals",
+        "current_testquality_shared_revocation_lease_available",
+        "current_testquality_race_safe_live_dependency_authority_proven",
+        "current_testquality_pid_bound_shared_domain_serializes_run_observation_campaign_score_and_handoff_replay",
+        "current_testquality_composite_local_seals_revalidated_after_dependency_release",
+        "current_testquality_decisive_scoring_uses_seal_sha_matched_immutable_schema_snapshots",
+        "current_testquality_authenticated_snapshot_plan_matches_canonical_score_plan",
+        "current_testquality_exact_live_sources_revalidated_at_registration",
+        "current_testquality_callbacks_deferred_beyond_outer_lease",
+        "current_testquality_baseexception_partial_paths_exact_remove_without_masking_primary",
+        "current_testquality_fork_refuses_before_inherited_layer_locks",
+    ):
+        assert operator_reconciliation[testquality_true_field] is True
+    assert (
+        operator_reconciliation["current_testquality_durable_statement_projection_authority"]
+        == "comparison_only"
+    )
+    assert operator_reconciliation["current_testquality_shared_revocation_lease_scope"] == (
+        "PROCESS_LOCAL_COMPARISON_ONLY"
+    )
+    assert operator_reconciliation[
+        "current_testquality_race_safe_live_dependency_authority_scope"
+    ] == ("PROCESS_LOCAL_LEASE_LINEARIZATION_ONLY")
+    for testquality_false_field in (
+        "current_testquality_production_statement_evidence_emitted",
+        "current_testquality_current_real_isolated_production_receipt_available",
+        "current_testquality_decisive_real_mutation_execution_available",
+        "current_testquality_portable_race_safe_disposal_available",
+        "current_testquality_benchmark_mutation_credit_enabled",
+        "current_testquality_production_campaign_authority_enabled",
+        "current_testquality_production_disposal_authority_enabled",
+        "current_testquality_one_shot_campaign_cleanup_handoff_is_independent_receipt",
+        "current_testquality_one_shot_campaign_receipt_available",
+        "current_testquality_current_real_mutation_campaign_receipt_available",
+        "current_testquality_sealed_backend_available",
+        "current_testquality_real_mutation_run_and_kill_artifact_available",
+        "current_testquality_production_plan_generator_available",
+        "current_testquality_same_interpreter_reflection_gap_eliminated",
+        "current_testquality_asynchronous_exception_micro_gap_eliminated",
+        "current_testquality_post_linearization_return_gap_eliminated",
+        "current_testquality_provider_or_network_accessed_by_codex",
+        "current_testquality_operator_command_emitted_by_codex",
+        "current_testquality_terminal_full_suite_pass_credit",
+        "current_testquality_grants_authority",
+    ):
+        assert operator_reconciliation[testquality_false_field] is False
     assert operator_reconciliation[
         "candidate_reasoning_effort_requirement_for_candidate_role_settled"
     ]
@@ -3758,6 +6164,33 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert operator_reconciliation["candidate_price_form_decision"] == (
         "CURRENT_BINARY_FLOAT_CUSTODY_REFUSAL_UPHELD"
     )
+    assert operator_reconciliation["candidate_price_form_ticket"] == "V3-PRICEFORM-001"
+    assert operator_reconciliation["candidate_price_form_ticket_status"] == (
+        "COMPLETE_DECISION_ONLY_PROVIDER_FREE_NONAUTHORIZING"
+    )
+    for price_form_true_field in (
+        "candidate_price_form_policy_decision_closure",
+        "candidate_price_form_ordinary_uncaptured_numeric_refusal_validated",
+        "candidate_price_form_captured_lexeme_canonical_string_storage_validated",
+        "candidate_price_form_exact_cost_arithmetic_parity_validated",
+    ):
+        assert operator_reconciliation[price_form_true_field] is True
+    assert operator_reconciliation["candidate_price_form_decision_validation_passed"] == 795
+    assert operator_reconciliation["candidate_price_form_decision_validation_warnings"] == 2
+    for price_form_false_field in (
+        "candidate_price_form_code_changed",
+        "candidate_price_form_configuration_changed",
+        "candidate_price_form_retry_behavior_changed",
+        "candidate_price_form_active_plan_changed",
+        "candidate_price_form_global_ledger_changed",
+        "candidate_price_form_provider_or_network_action_by_codex",
+        "candidate_price_form_operator_command_emitted_by_codex",
+        "candidate_price_form_grants_authority",
+    ):
+        assert operator_reconciliation[price_form_false_field] is False
+    assert operator_reconciliation["global_ledger_entry_count"] == 57
+    assert operator_reconciliation["global_ledger_spent_usd_exact"] == "0.68118684"
+    assert operator_reconciliation["global_ledger_changed_during_current_preflight"] is False
     assert operator_reconciliation["candidate_price_exactness_requirement_relaxed"] is False
     assert operator_reconciliation[
         "candidate_numeric_price_ordinary_json_path_remains_inadmissible"
@@ -3766,8 +6199,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "V3-PRICELEXEME-001"
     )
     assert operator_reconciliation["candidate_lossless_price_lexeme_custody_ticket_status"] == (
-        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING"
+        "PARTIAL_TERMINAL_PROVIDER_FREE_DEFENSE_IN_DEPTH_PREMISE_SUPERSEDED_NONBLOCKING_"
+        "NONAUTHORIZING"
     )
+    assert operator_reconciliation[
+        "candidate_lossless_price_lexeme_terminal_partial_timestamp"
+    ] == ("2026-09-03T08:38:00Z")
+    assert operator_reconciliation["candidate_lossless_price_lexeme_implementation_started"] is True
     assert operator_reconciliation[
         "candidate_lossless_price_lexeme_parse_float_decimal_fact_operator_reported"
     ]
@@ -3775,8 +6213,94 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         operator_reconciliation[
             "candidate_lossless_price_lexeme_parse_float_decimal_fact_independently_verified_by_codex"
         ]
+        is True
+    )
+    assert (
+        operator_reconciliation["candidate_lossless_price_lexeme_parse_phase_numeric_token_ceiling"]
+        == 100000
+    )
+    for bounded_path_true_field in (
+        "candidate_lossless_price_lexeme_parse_phase_numeric_token_ceiling_enforced_before_materialization",
+        "candidate_lossless_price_lexeme_decoder_issues_tokens_only_at_final_fixed_price_paths",
+        "candidate_lossless_price_lexeme_snapshot_admission_binds_original_layout_endpoint_index_and_price_field",
+        "candidate_lossless_price_lexeme_observed_field_index_or_layout_relocation_revokes_monotonically",
+    ):
+        assert operator_reconciliation[bounded_path_true_field] is True
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_relocation_restore_resurrects_authority"
+        ]
         is False
     )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_historical_pre_hardening_focused_unit_matrix_passed"
+        ]
+        == 795
+    )
+    assert operator_reconciliation[
+        "candidate_lossless_price_lexeme_joined_raw_http_constrained_regression_passed"
+    ]
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_fresh_current_byte_live_admissibility_proven"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_required_for_completion"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_authorized"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_fresh_current_byte_metadata_only_live_rerun_command_emitted_by_codex"
+        ]
+        is False
+    )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_historical_pre_hardening_combined_passed"
+        ]
+        == 24
+    )
+    assert (
+        operator_reconciliation[
+            "candidate_lossless_price_lexeme_historical_pre_hardening_schema_inventory_closure_passed"
+        ]
+        == 126
+    )
+    for current_pricelexeme_true_field in (
+        "candidate_lossless_price_lexeme_decoder_is_only_normal_issuer",
+        "candidate_lossless_price_lexeme_registry_only_slotless_marker",
+        "candidate_lossless_price_lexeme_exact_layout_full_path_and_price_field_bound",
+        "candidate_lossless_price_lexeme_detach_copy_and_deepcopy_preserve_same_identity",
+        "candidate_lossless_price_lexeme_construction_pickle_and_reduction_rejected",
+        "candidate_lossless_price_lexeme_setattr_and_delattr_observation_revoke_monotonically",
+        "candidate_lossless_price_lexeme_id_keyed_exact_weakref_registry",
+        "candidate_lossless_price_lexeme_observed_exact_class_mismatch_revokes_monotonically",
+        "candidate_lossless_price_lexeme_weakref_cleanup_exact_entry_and_id_reuse_bound",
+        "candidate_lossless_price_lexeme_current_provider_free_hardening_validation_passed",
+        "candidate_lossless_price_lexeme_current_focused_class_swap_regression_passed",
+        "candidate_lossless_price_lexeme_current_affected_matrix_passed",
+        "candidate_lossless_price_lexeme_current_provider_free_localhost_integration_passed",
+    ):
+        assert operator_reconciliation[current_pricelexeme_true_field] is True
+    for current_pricelexeme_false_field in (
+        "candidate_lossless_price_lexeme_raw_capture_factories_available",
+        "candidate_lossless_price_lexeme_public_split_materializer_available",
+        "candidate_lossless_price_lexeme_registry_lookup_invokes_marker_hash_or_equality",
+        "candidate_lossless_price_lexeme_observed_class_swap_restore_resurrects_authority",
+        "candidate_lossless_price_lexeme_unobserved_same_interpreter_reflection_detectable",
+    ):
+        assert operator_reconciliation[current_pricelexeme_false_field] is False
     assert operator_reconciliation["candidate_conditional_future_route"] == (
         "x-ai/grok-4.6=amazon-bedrock/us-west-2"
     )
@@ -3792,7 +6316,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         operator_reconciliation[
             "critical_path_ticket_newly_selected_started_or_marked_in_progress_this_turn"
         ]
-        is True
+        is False
     )
     assert (
         operator_reconciliation["candidate_route_restoration_ticket_selected_during_this_work_unit"]
@@ -3834,13 +6358,31 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     critical_path_status = operator_reconciliation["critical_path_ticket_status"]
     for status_component in (
-        "IN_PROGRESS_SELECTED_UNIMPLEMENTED_PROVIDER_FREE_NONAUTHORIZING",
-        "PRICEFORM_REFUSAL_UPHELD",
-        "EFFORT_HIGH_RETAINED",
-        "V3_RETRIEVAL_001_COMPLETE",
-        "V3_CANDROUTE_001_PARTIAL_DOWNSTREAM",
+        "NO_CURRENT_OR_NEXT_TICKET_SELECTED",
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "ACTIVE_REPOSITORY_PLAN_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        "EXACT_V1_PROFILE_AND_JUDGES_PRESERVED",
+        "V2_NOT_ADOPTED",
+        "OPERATOR_REPORTED_PRIVATE_V2_PLAN_96CC5301_UNSELECTED_UNADOPTED",
+        "V3_PRICECAPCACHE_001_LAST_PARTIAL",
+        "HISTORICAL_V3_AUTONOMY_001_PARTIAL_PRESERVED",
+        "NO_CURRENT_COMMAND_SUCCESSOR_CANDIDATE_ROUTE_CAMPAIGN_OR_RUN_INDEX",
+        "NO_CODEX_PROVIDER_NETWORK_COMMAND_PLAN_CONFIGURATION_RETRY_OPERATOR_LEDGER_OR_"
+        "AUTHORITY_ACTION",
     ):
         assert status_component in critical_path_status
+    next_safe_action = operator_reconciliation["next_safe_action"]
+    for next_action_component in (
+        "STOP_WITH_CURRENT_AND_NEXT_LOCAL_TICKET_UNSELECTED_AFTER_V3_PLANADOPT_001_COMPLETE",
+        "NO_SUPPORTED_AUTHENTICATED_ANCESTRY_TRANSITION_EXISTS_TODAY",
+        "RESUME_REACTIVATION_WORK_ONLY_UNDER_A_FUTURE_SEPARATELY_SELECTED_BOUNDED_TICKET",
+        "PRESERVE_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_EXACT_V1_PROFILE_AND_JUDGES_AND_NO_V2_ADOPTION",
+        "PRESERVE_UNCONDITIONAL_V3_TRUSTED_BOUNDARY_REFUSAL_AND_NO_V3_SUCCESSOR_PREVIEW_ATTEMPT_"
+        "OR_TRANSPORT",
+        "KEEP_CANDIDATE_ROUTE_RETRY_CONFIGURATION_57_ENTRY_068118684_OPERATOR_LEDGER_ZERO_REAL_"
+        "AUDITS_AND_ALL_EXTERNAL_AUTHORITY_UNCHANGED",
+    ):
+        assert next_action_component in next_safe_action
     runtime_mechanism_status = operator_reconciliation[
         "runtime_admission_local_promotion_mechanism_status"
     ]
@@ -3958,12 +6500,19 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     managed_toolchain = json.loads(managed_toolchain_bytes)
     managed_toolchain_schema_bytes = MANAGED_TOOLCHAIN_SCHEMA_PATH.read_bytes()
     managed_toolchain_schema = json.loads(managed_toolchain_schema_bytes)
+    current_engineering = validate_governance_state(ROOT)
+    # The old phase-zero record remains pinned history; current bytes have their
+    # own independently validated engineering bindings.
     current_phase_zero = runtime_status["autonomy_phase_zero_inventory"]
-    assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == (
-        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256
+    assert (
+        hashlib.sha256(autonomy_inventory_bytes).hexdigest()
+        == (
+            current_engineering.artifact_sha256s["docs/remediation/v3/autonomy_gate_inventory.json"]
+        )
     )
-    assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == (
-        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    assert (
+        hashlib.sha256(autonomy_schema_bytes).hexdigest()
+        == (current_engineering.artifact_sha256s["schemas/autonomy_gate_inventory.schema.json"])
     )
     assert hashlib.sha256(route_runtime_schema_bytes).hexdigest() == (
         ROUTE_RUNTIME_EVIDENCE_SCHEMA_RAW_SHA256
@@ -3972,40 +6521,60 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "https://mmaudit.local/schemas/route_runtime_evidence_artifact.schema.json"
     )
     assert route_runtime_schema["title"] == "mmaudit nonauthorizing exact route runtime evidence"
-    assert autonomy_inventory["inventory_sha256"] == (CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256)
+    assert autonomy_inventory["inventory_sha256"] == current_engineering.inventory.inventory_sha256
     assert autonomy_inventory["source_discovery_semantics_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+        current_engineering.inventory.source_discovery_semantics_sha256
     )
     assert autonomy_inventory["source_universe_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256
+        current_engineering.inventory.source_universe_sha256
     )
-    assert current_phase_zero["artifact_raw_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_RAW_SHA256
-    )
-    assert current_phase_zero["schema_raw_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
-    )
-    assert current_phase_zero["inventory_sha256"] == (CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SHA256)
+    assert current_phase_zero["artifact_raw_sha256"] == CURRENT_PLANADOPT_INVENTORY_RAW_SHA256
+    assert current_phase_zero["schema_raw_sha256"] == (CURRENT_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256)
+    assert current_phase_zero["inventory_sha256"] == CURRENT_PLANADOPT_INVENTORY_SHA256
     assert current_phase_zero["source_discovery_semantics_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+        CURRENT_PLANADOPT_DISCOVERY_SEMANTICS_SHA256
     )
     assert current_phase_zero["source_universe_sha256"] == (
-        CURRENT_RETRIEVAL_AUTONOMY_SOURCE_UNIVERSE_SHA256
+        CURRENT_PLANADOPT_SOURCE_UNIVERSE_SHA256
     )
-    assert current_phase_zero["source_count"] == 3_895
-    assert current_phase_zero["source_occurrence_count"] == 3_898
-    assert current_phase_zero["gate_source_count"] == 3_846
-    assert current_phase_zero["non_gating_source_count"] == 49
+    assert current_phase_zero["source_count"] == 4_000
+    assert current_phase_zero["source_occurrence_count"] == 4_003
+    assert current_phase_zero["gate_source_count"] == 3_950
+    assert current_phase_zero["non_gating_source_count"] == 50
     assert current_phase_zero["source_kind_count"] == 13
     assert current_phase_zero["logical_gate_count"] == 35
     assert current_phase_zero["unsatisfied_gate_count"] == 29
     assert current_phase_zero["current_manual_gate_count"] == 15
+    assert current_phase_zero["direct_environment_input_occurrence_count"] == 533
+    assert current_phase_zero["explicit_non_field_gate_occurrence_count"] == 2_128
+    assert current_phase_zero["audited_module_universe_occurrence_count"] == 260
     assert current_phase_zero["audit_config_leaf_locator_count"] == 513
     assert current_phase_zero["audit_config_leaf_occurrence_count"] == 516
     assert current_phase_zero["audit_config_shared_locator_count"] == 3
-    assert current_phase_zero["explicit_non_field_gate_occurrence_count"] == 2_071
-    assert current_phase_zero["completion_entrypoint_parameter_count"] == 336
+    assert current_phase_zero["explicit_non_field_gate_occurrence_count"] == 2_128
+    assert current_phase_zero["completion_entrypoint_parameter_count"] == 343
     assert current_phase_zero["cli_run_parameter_count"] == 53
+    assert current_phase_zero["artifact_reconciled_for_slice"] == (
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_CURRENT_AND_NEXT_TICKET_UNSELECTED"
+    )
+    for execution_status_component in (
+        "V3_PLANADOPT_001_COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "ACTIVE_REPOSITORY_PLAN_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        "V1_PROFILE_PRESERVED_NO_V2_ADOPTION",
+        "V3_PRICECAPCACHE_001_LAST_PARTIAL",
+        "COMBINED_UNFINISHED_TICKET_COUNT_41",
+        "ALL_PROVIDER_COMMAND_CANDIDATE_ROUTE_CAMPAIGN_RUN_INDEX_QUALIFICATION_RUNTIME_AUDIT_"
+        "RELEASE_AND_AUTHORITY_STATE_FALSE_OR_UNCHANGED",
+    ):
+        assert execution_status_component in current_phase_zero["current_execution_status"]
+    for next_action_component in (
+        "STOP_WITH_CURRENT_AND_NEXT_LOCAL_TICKET_UNSELECTED_AFTER_V3_PLANADOPT_001_COMPLETE",
+        "RESUME_ONLY_UNDER_ONE_SEPARATELY_SELECTED_BOUNDED_TICKET",
+        "FUTURE_CANDIDATE_ADOPTION_REQUIRES_SEPARATELY_AUTHENTICATED_ANCESTRY",
+        "PRESERVE_ACTIVE_SCHEMA_1_7_NO_ACTIVE_CANDIDATE_EXACT_V1_PROFILE_AND_PRIVATE_OPERATOR_"
+        "V2_NONADOPTION",
+    ):
+        assert next_action_component in current_phase_zero["current_execution_next_action"]
     assert runtime_status["real_model_calls"] == {
         "attempted": None,
         "succeeded": None,
@@ -4022,13 +6591,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "projection_scope": "LAST_RECONCILED_OPERATOR_RECORD_NOT_CURRENT_USER_OWNED_WORKTREE_STATE",
         "used_value_provenance": (
             "LAST_RECONCILED_OPERATOR_RESULTS_"
-            "4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251"
+            "215ea0f2f312b9674fb51285f6fdf758b166a0a998e2d2d621ac2da42f9a5f19"
         ),
         "used_value_operator_reported": True,
         "independently_authenticated_by_codex": False,
         "codex_private_ledger_accessed": False,
         "cap": "250.00000000",
-        "used": "0.396223",
+        "used": "0.68118684",
         "reserved": None,
         "remaining": None,
         "last_reconciled_reserved_and_remaining_reported": False,
@@ -4365,14 +6934,15 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         assert hashlib.sha256(artifact_bytes).hexdigest() == expected_sha256
         assert expected_sha256 in model_selection
     assert "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497" in (model_selection)
-    assert selection_plan["plan_sha256"] == CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
+    assert selection_plan["plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
     assert selection_plan["plan_sha256"] in model_selection
-    assert selection_plan["schema_version"] == "1.4"
-    assert selection_plan["authenticated_runner_selection"]["required_reasoning_effort"] == "high"
-    assert (
-        selection_plan["authenticated_runner_selection"]["required_completion_limit_source"]
-        == "metadata"
-    )
+    assert selection_plan["schema_version"] == "1.7"
+    assert selection_plan["authenticated_runner_selection"] is None
+    unavailable_profile = selection_plan["authenticated_runner_unavailability"][
+        "route_predicate_profile"
+    ]
+    assert unavailable_profile["reasoning_effort"] == "high"
+    assert unavailable_profile["required_completion_limit_source"] == "metadata"
     assert '`effort = "high"`' in model_selection
     assert "4,096-token atomic reasoning reserve" in normalized_model_selection
     assert "falls back to the exact frozen model-catalog inventory only when" in (
@@ -4407,7 +6977,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 0
     assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert model_selection.count("--live-route-preflight-only") == 2
+    assert "--live-route-preflight-only" in model_selection
     assert model_selection.count("--allow-metadata-egress") == 0
     assert model_selection.count("--allow-code-egress") == 0
     assert " --preflight-only " not in model_selection
@@ -4420,7 +6990,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "independent 363-test review" in normalized_model_selection
     assert 'PYTHONPATH="$PWD/src"' not in model_selection
     assert "no current command or campaign authority exists" in normalized_model_selection
-    assert "`V3-AUTONOMY-001` Phase 2 remains paused" in model_selection
+    assert "`V3-AUTONOMY-001` Phase 2 remained paused" in model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
     assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
@@ -4526,9 +7096,22 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "no genuine owned-REAL parent capability" in normalized_model_selection
     assert "`NATIVE_JSON_SCHEMA` plus literal `structured_outputs`" in model_selection
     assert "self-hashed selection plan" in normalized_model_selection
-    assert selection_plan["authenticated_runner_selection"]["role_assignment_sha256"] in (
-        model_selection
+    assert (
+        selection_plan["authenticated_runner_unavailability"]["predecessor_role_assignment_sha256"]
+        in model_selection
     )
+    for active_plan_digest in (
+        CURRENT_PLANADOPT_PLAN_SHA256,
+        CURRENT_PLANADOPT_PLAN_RAW_SHA256,
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256,
+        CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256,
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256,
+        CURRENT_PLANADOPT_V1_PROFILE_SHA256,
+    ):
+        assert active_plan_digest in model_selection
+    assert "schema-v1.7" in normalized_model_selection
+    assert "no active candidate" in normalized_model_selection
+    assert "preserves every source binding and roster entry" in normalized_model_selection
     assert "`max_json_repair_attempts = 0` is deliberate" in model_selection
     assert "noncreditable" in normalized_model_selection
     assert "route capability—not repair—is the correction" in normalized_model_selection
@@ -4562,6 +7145,19 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         capture_output=True,
     ).stdout
     historical_autonomy_inventory = json.loads(historical_autonomy_inventory_bytes)
+    historical_autonomy_schema_bytes = subprocess.run(
+        [
+            "git",
+            "show",
+            f"{HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT}:schemas/autonomy_gate_inventory.schema.json",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    historical_autonomy_schema_raw_sha256 = (
+        "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
+    )
     historical_autonomy_inventory_raw_sha256 = (
         "82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2"
     )
@@ -4579,6 +7175,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     runtime_status = historical_runtime_status
     autonomy_inventory_bytes = historical_autonomy_inventory_bytes
     autonomy_inventory = historical_autonomy_inventory
+    autonomy_schema_bytes = historical_autonomy_schema_bytes
+    autonomy_schema = json.loads(historical_autonomy_schema_bytes)
     assert runtime_status["updated_at"] == "2026-08-24T14:43:31Z"
     assert runtime_status["candidate_commit"] == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
     assert (
@@ -4649,8 +7247,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "source_checkpoint_pushed": False,
         "source_checkpoint_remote_resolved": False,
         "selection_plan_schema_version": "1.4",
-        "selection_plan_raw_sha256": hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest(),
-        "selection_plan_sha256": CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256,
+        "selection_plan_raw_sha256": hashlib.sha256(
+            HISTORICAL_V1_4_SELECTION_PLAN_PATH.read_bytes()
+        ).hexdigest(),
+        "selection_plan_sha256": HISTORICAL_V1_4_SELECTION_PLAN_SHA256,
         "candidate_selection_plan_schema_raw_sha256": (
             "d271ed3ce6ccde084653b9daaf4d56e5573c6f64a7a62f9bf198ce9cdf16b3b5"
         ),
@@ -4905,7 +7505,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         == historical_autonomy_inventory_raw_sha256
     )
     assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == (
-        CURRENT_RETRIEVAL_AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+        historical_autonomy_schema_raw_sha256
     )
     assert hashlib.sha256(managed_toolchain_bytes).hexdigest() == MANAGED_TOOLCHAIN_RAW_SHA256
     assert (
@@ -5041,35 +7641,192 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         historical_retrieval_resume
     )
     assert "Do not select a successor, route, provider action" in historical_retrieval_resume
-    current_action = pause_state["next_action_during_v3_pricelexeme_selection"]
-    current_resume = pause_state["resume_action_during_v3_pricelexeme_selection"]
-    normalized_current_action = " ".join(current_action.lower().split())
-    normalized_current_resume = " ".join(current_resume.lower().split())
-    for current_text in (normalized_current_action, normalized_current_resume):
-        assert "v3-pricelexeme-001" in current_text
-        assert "implementation_started=false" in current_text
-        assert "provider-free" in current_text
-        assert "price" in current_text and "lexeme" in current_text
-        assert "route" in current_text
-        assert "authority" in current_text
-    assert "begin" in normalized_current_action
-    assert "priceform" in normalized_current_action
-    assert "reasoning" in normalized_current_action or "effort-high" in normalized_current_action
-    assert "partial v3-candroute-001" in normalized_current_action
-    assert "provider" in normalized_current_resume
+    historical_priceform_action = pause_state["next_action_after_v3_priceform_decision_completion"]
+    historical_priceform_resume = pause_state[
+        "resume_action_after_v3_priceform_decision_completion"
+    ]
+    normalized_historical_priceform_action = " ".join(historical_priceform_action.lower().split())
+    normalized_historical_priceform_resume = " ".join(historical_priceform_resume.lower().split())
+    assert "stop after v3-priceform-001 decision-only closure" in (
+        normalized_historical_priceform_action
+    )
+    assert "current_ticket unselected" in normalized_historical_priceform_action
+    assert "no next local ticket selected" in normalized_historical_priceform_action
+    assert "partial v3-pricelexeme-001" in normalized_historical_priceform_action
+    assert "unproven fresh current-byte live admissibility" in (
+        normalized_historical_priceform_action
+    )
+    assert "requires separate authorization" in normalized_historical_priceform_action
+    assert "not an authorized or emitted command" in normalized_historical_priceform_action
+    assert "reread both queues, worklogs, and current operator evidence" in (
+        normalized_historical_priceform_resume
+    )
+    assert "before selecting any local successor" in normalized_historical_priceform_resume
+    historical_priceoverrides_action = pause_state["next_action_after_v3_priceoverrides_completion"]
+    historical_priceoverrides_resume = pause_state[
+        "resume_action_after_v3_priceoverrides_completion"
+    ]
+    normalized_historical_priceoverrides_action = " ".join(
+        historical_priceoverrides_action.lower().split()
+    )
+    normalized_historical_priceoverrides_resume = " ".join(
+        historical_priceoverrides_resume.lower().split()
+    )
+    assert "v3-priceoverrides-001 provider-free closure" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "current_ticket and next_safe_local_ticket unselected" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "bounded typed tier validation and retention" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "explicit unavailable conditional-cost projection" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "price_cap_not_expressible plus price_cap_proof_unavailable" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "do not infer sole-blocker status or conditional-route admissibility" in (
+        normalized_historical_priceoverrides_action
+    )
+    assert "input_cache_write zero-variable" in normalized_historical_priceoverrides_action
+    assert "web_search nonzero uncappable prices" in normalized_historical_priceoverrides_action
+    assert "57-entry / 0.68118684 usd ledger" in normalized_historical_priceoverrides_action
+    assert "every false external-authority state" in normalized_historical_priceoverrides_action
+    assert "do not access a provider or credential" in normalized_historical_priceoverrides_action
+    assert "at a new bounded work-unit boundary" in normalized_historical_priceoverrides_resume
+    assert "reread both queues, both worklogs, runtime status, review traceability" in (
+        normalized_historical_priceoverrides_resume
+    )
+    assert (
+        "before selecting exactly one later ticket" in normalized_historical_priceoverrides_resume
+    )
+    assert "treat v3-priceoverrides-001 as complete" in normalized_historical_priceoverrides_resume
+    assert "v3-pricelexeme-001 as terminal partial defense in depth" in (
+        normalized_historical_priceoverrides_resume
+    )
+    assert "preserving the unresolved conditional-price cap constraints" in (
+        normalized_historical_priceoverrides_resume
+    )
+    assert "do not infer or select a route" in normalized_historical_priceoverrides_resume
+    assert "emit or execute a command" in normalized_historical_priceoverrides_resume
+    assert "consume a run index" in normalized_historical_priceoverrides_resume
+    assert "grant qualification, runtime, audit, release, or other authority" in (
+        normalized_historical_priceoverrides_resume
+    )
+
+    historical_pricecaptier_action = pause_state["next_action_after_v3_pricecaptier_partial"]
+    historical_pricecaptier_resume = pause_state["resume_action_after_v3_pricecaptier_partial"]
+    normalized_historical_pricecaptier_action = " ".join(
+        historical_pricecaptier_action.lower().split()
+    )
+    normalized_historical_pricecaptier_resume = " ".join(
+        historical_pricecaptier_resume.lower().split()
+    )
+    assert (
+        "v3-pricecaptier-001 provider-free partial closure"
+        in normalized_historical_pricecaptier_action
+    )
+    assert (
+        "refresh and live preflight remain flat-only" in normalized_historical_pricecaptier_action
+    )
+    assert "v3-pricecaptier-001 as last partial" in normalized_historical_pricecaptier_resume
+
+    historical_pricecapcomp_action = pause_state["next_action_after_v3_pricecapcomp_complete"]
+    historical_pricecapcomp_resume = pause_state["resume_action_after_v3_pricecapcomp_complete"]
+    normalized_current_action = " ".join(historical_pricecapcomp_action.lower().split())
+    normalized_current_resume = " ".join(historical_pricecapcomp_resume.lower().split())
+    assert "v3-pricecapcomp-001 closes complete provider-free and nonauthorizing" in (
+        normalized_current_action
+    )
+    assert "current_ticket and next_safe_local_ticket unselected" in normalized_current_action
+    assert "opt-in v2 exact zero-web-search-unit custody" in normalized_current_action
+    assert "active v1 plan bytes" in normalized_current_action
+    assert "fail-closed input_cache_write and internal_reasoning handling" in (
+        normalized_current_action
+    )
+    assert "do not infer xai route admission" in normalized_current_action
+    assert "access a provider or credential" in normalized_current_action
+    assert "emit a command" in normalized_current_action
+    assert "select a candidate or route" in normalized_current_action
+    assert "at a new bounded work-unit boundary" in normalized_current_resume
+    assert "reread both queues, both worklogs, runtime status, review traceability" in (
+        normalized_current_resume
+    )
+    assert "before selecting exactly one later ticket" in normalized_current_resume
+    assert "input_cache_write as the remaining recorded xai component-cap blocker" in (
+        normalized_current_resume
+    )
+    assert "v3-pricekeyorder-001 as withdrawn_operator_error" in normalized_current_resume
+    assert "do not infer or select a route" in normalized_current_resume
+    assert "mutate the active plan, configuration, retry behavior, or ledger" in (
+        normalized_current_resume
+    )
+    assert "access provider or private artifacts" in normalized_current_resume
+    assert "emit or execute a command" in normalized_current_resume
+    assert "consume a run index" in normalized_current_resume
+    assert "grant qualification, runtime, audit, release, or other authority" in (
+        normalized_current_resume
+    )
     assert pause_state["non_allowlisted_pause_journal_fields_are_historical"] is True
     assert pause_state["non_allowlisted_pause_journal_fields_are_current_actions"] is False
-    assert pause_state["current_semantic_field_allowlist"] == [
-        "next_action_during_v3_pricelexeme_selection",
-        "resume_action_during_v3_pricelexeme_selection",
-    ]
+    assert pause_state["current_semantic_field_allowlist"] == []
     assert "Every field in this object" in pause_state["historical_pause_journal_scope"]
     assert "validation*" in pause_state["historical_pause_journal_scope"]
     assert "checkpoint*" in pause_state["historical_pause_journal_scope"]
     assert "timestamped_pause_journal_scope" not in pause_state
     assert "timestamped_pause_journal_entries_are_current_actions" not in pause_state
-    assert pause_state["current_action_field"] == "next_action_during_v3_pricelexeme_selection"
-    assert pause_state["current_resume_field"] == ("resume_action_during_v3_pricelexeme_selection")
+    assert pause_state["current_action_field"] is None
+    assert pause_state["current_resume_field"] is None
+    assert (
+        "next_action_after_v3_priceoverrides_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_priceoverrides_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_after_v3_price_premise_correction"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_price_premise_correction"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_after_v3_priceform_decision_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_priceform_decision_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_after_v3_pricelexeme_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_after_v3_pricelexeme_completion"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_during_v3_pricelexeme_bounded_parse_and_original_path_custody"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_during_v3_pricelexeme_bounded_parse_and_original_path_custody"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "next_action_during_v3_pricelexeme_selection"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
+    assert (
+        "resume_action_during_v3_pricelexeme_selection"
+        not in pause_state["current_semantic_field_allowlist"]
+    )
     assert (
         "next_action_during_v3_retrieval_final_validation"
         not in pause_state["current_semantic_field_allowlist"]
@@ -6364,65 +9121,137 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert historical_dcabe["operator_command_emitted_by_dcabe_plan_checkpoint"] is False
     assert historical_dcabe["authority"] is False
 
-    current_successor = exact_status["current_selection_plan_checkpoint"]
-    assert current_successor["status"] == "CURRENT_V1_4_NONAUTHORIZING_PLANCONSTRAINTS_CUSTODY"
-    assert current_successor["route_evidence_scope"] == (
-        "PROVIDER_FREE_STATIC_AND_REPLAY_CUSTODY_NOT_CURRENT_PROVIDER_ROUTE_FRESHNESS_"
+    historical_selection_plan_bytes = HISTORICAL_V1_4_SELECTION_PLAN_PATH.read_bytes()
+    historical_selection_plan = json.loads(historical_selection_plan_bytes)
+    assert hashlib.sha256(historical_selection_plan_bytes).hexdigest() == (
+        HISTORICAL_V1_4_SELECTION_PLAN_RAW_SHA256
+    )
+    assert historical_selection_plan["plan_sha256"] == HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    historical_v1_4_checkpoint = exact_status["historical_v1_4_selection_plan_checkpoint"]
+    assert historical_v1_4_checkpoint["status"] == (
+        "HISTORICAL_V1_4_NONAUTHORIZING_PLANCONSTRAINTS_CUSTODY"
+    )
+    assert historical_v1_4_checkpoint["route_evidence_scope"] == (
+        "HISTORICAL_PROVIDER_FREE_STATIC_AND_REPLAY_CUSTODY_NOT_CURRENT_PROVIDER_ROUTE_FRESHNESS_"
         "COMMAND_OR_AUTHORITY"
     )
     assert (
-        current_successor["selection_plan_raw_sha256"]
-        == hashlib.sha256(SELECTION_PLAN_PATH.read_bytes()).hexdigest()
+        historical_v1_4_checkpoint["selection_plan_raw_sha256"]
+        == hashlib.sha256(historical_selection_plan_bytes).hexdigest()
     )
-    assert current_successor["selection_plan_sha256"] == selection_plan["plan_sha256"]
-    assert current_successor["selection_plan_sha256"] == (
-        CURRENT_NONAUTHORIZING_SUCCESSOR_PLAN_SHA256
+    assert (
+        historical_v1_4_checkpoint["selection_plan_sha256"]
+        == (historical_selection_plan["plan_sha256"])
     )
-    assert current_successor["selection_plan_schema_version"] == "1.4"
-    assert current_successor["checkpoint_commit"] == HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT
-    assert current_successor["checkpoint_parent"] == (
+    assert historical_v1_4_checkpoint["selection_plan_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    )
+    assert historical_v1_4_checkpoint["selection_plan_schema_version"] == "1.4"
+    assert historical_v1_4_checkpoint["checkpoint_commit"] == (
+        HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT
+    )
+    assert historical_v1_4_checkpoint["checkpoint_parent"] == (
         HISTORICAL_PLANCONSTRAINTS_BASE_PARENT_CHECKPOINT
     )
-    assert current_successor["checkpoint_status"] == "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
-    assert current_successor["checkpoint_pushed"] is False
-    assert current_successor["checkpoint_remote_resolved"] is False
-    assert current_successor["role_assignment_sha256"] == (
-        CURRENT_NONAUTHORIZING_SUCCESSOR_ROLE_SHA256
+    assert historical_v1_4_checkpoint["checkpoint_status"] == (
+        "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
+    )
+    assert historical_v1_4_checkpoint["checkpoint_pushed"] is False
+    assert historical_v1_4_checkpoint["checkpoint_remote_resolved"] is False
+    assert historical_v1_4_checkpoint["role_assignment_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_ROLE_SHA256
     )
     assert (
-        current_successor["role_assignment_sha256"]
-        == (selection_plan["authenticated_runner_selection"]["role_assignment_sha256"])
+        historical_v1_4_checkpoint["role_assignment_sha256"]
+        == historical_selection_plan["authenticated_runner_selection"]["role_assignment_sha256"]
     )
     assert (
-        current_successor["route_predicate_profile_sha256"]
+        historical_v1_4_checkpoint["route_predicate_profile_sha256"]
         == (
-            selection_plan["authenticated_runner_selection"]["route_predicate_profile"][
+            historical_selection_plan["authenticated_runner_selection"]["route_predicate_profile"][
                 "profile_sha256"
             ]
         )
     )
-    assert current_successor["route_predicate_count"] == 29
-    assert current_successor["required_output_mode"] == "NATIVE_JSON_SCHEMA"
-    assert current_successor["required_supported_parameters"] == ["structured_outputs"]
-    assert current_successor["required_reasoning_effort"] == "high"
-    assert current_successor["required_completion_limit_source"] == "metadata"
-    assert current_successor["required_completion_tokens"] == 8192
-    assert current_successor["required_output_tokens"] == 4096
-    assert current_successor["reserved_reasoning_tokens"] == 4096
-    assert current_successor["candidate_model_id"] == "deepseek/deepseek-v4-pro-0813"
-    assert current_successor["candidate_endpoint_tag"] == "parasail/fp8"
-    assert current_successor["primary_model_id"] == "z-ai/glm-5.2"
-    assert current_successor["primary_endpoint_tag"] == "sail-research/fp8"
-    assert current_successor["replay_model_id"] == "moonshotai/kimi-k3"
-    assert current_successor["replay_allowed_endpoint_tags"] == ["modal/mxfp4", "phala"]
-    assert current_successor["replay_route_selection_mode"] == (
+    assert historical_v1_4_checkpoint["route_predicate_count"] == 29
+    assert historical_v1_4_checkpoint["required_output_mode"] == "NATIVE_JSON_SCHEMA"
+    assert historical_v1_4_checkpoint["required_supported_parameters"] == ["structured_outputs"]
+    assert historical_v1_4_checkpoint["required_reasoning_effort"] == "high"
+    assert historical_v1_4_checkpoint["required_completion_limit_source"] == "metadata"
+    assert historical_v1_4_checkpoint["required_completion_tokens"] == 8192
+    assert historical_v1_4_checkpoint["required_output_tokens"] == 4096
+    assert historical_v1_4_checkpoint["reserved_reasoning_tokens"] == 4096
+    assert historical_v1_4_checkpoint["candidate_model_id"] == "deepseek/deepseek-v4-pro-0813"
+    assert historical_v1_4_checkpoint["candidate_endpoint_tag"] == "parasail/fp8"
+    assert historical_v1_4_checkpoint["primary_model_id"] == "z-ai/glm-5.2"
+    assert historical_v1_4_checkpoint["primary_endpoint_tag"] == "sail-research/fp8"
+    assert historical_v1_4_checkpoint["replay_model_id"] == "moonshotai/kimi-k3"
+    assert historical_v1_4_checkpoint["replay_allowed_endpoint_tags"] == [
+        "modal/mxfp4",
+        "phala",
+    ]
+    assert historical_v1_4_checkpoint["replay_route_selection_mode"] == (
         "EXPLICIT_EXACT_ROUTE_NO_AUTOMATIC_FALLBACK"
     )
-    assert current_successor["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
-    assert current_successor["token_detail_convention_disposition"] == "UNAVAILABLE"
-    assert current_successor["full_admission_authorized"] is False
-    assert current_successor["operator_command_emitted_by_checkpoint"] is False
-    assert current_successor["authority"] is False
+    assert historical_v1_4_checkpoint["empirical_schema_conformance_disposition"] == "UNAVAILABLE"
+    assert historical_v1_4_checkpoint["token_detail_convention_disposition"] == "UNAVAILABLE"
+    assert historical_v1_4_checkpoint["full_admission_authorized"] is False
+    assert historical_v1_4_checkpoint["operator_command_emitted_by_checkpoint"] is False
+    assert historical_v1_4_checkpoint["authority"] is False
+
+    current_plan_checkpoint = exact_status["current_selection_plan_checkpoint"]
+    assert current_plan_checkpoint["status"] == (
+        "CURRENT_SCHEMA_1_7_UNAVAILABLE_CANDIDATE_PLAN_NONAUTHORIZING"
+    )
+    assert current_plan_checkpoint["route_evidence_scope"] == (
+        "PROVIDER_FREE_STATIC_UNAVAILABLE_PLAN_CUSTODY_NOT_CURRENT_PROVIDER_ROUTE_FRESHNESS_"
+        "COMMAND_OR_AUTHORITY"
+    )
+    assert current_plan_checkpoint["selection_plan_schema_version"] == "1.7"
+    assert current_plan_checkpoint["candidate_selection_plan_schema_raw_sha256"] == (
+        CURRENT_CANDIDATE_SELECTION_PLAN_SCHEMA_RAW_SHA256
+    )
+    assert current_plan_checkpoint["selection_plan_raw_sha256"] == (
+        CURRENT_PLANADOPT_PLAN_RAW_SHA256
+    )
+    assert current_plan_checkpoint["selection_plan_sha256"] == CURRENT_PLANADOPT_PLAN_SHA256
+    assert current_plan_checkpoint["predecessor_plan_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_SHA256
+    )
+    assert current_plan_checkpoint["authenticated_runner_selection"] is None
+    assert current_plan_checkpoint["unavailable_state_sha256"] == (
+        CURRENT_PLANADOPT_UNAVAILABLE_STATE_SHA256
+    )
+    assert current_plan_checkpoint["unavailable_disposition"] == (
+        "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    )
+    assert current_plan_checkpoint["matched_revocation_set_sha256"] == (
+        CURRENT_PLANADOPT_MATCHED_REVOCATION_SET_SHA256
+    )
+    assert current_plan_checkpoint["historical_predecessor_fixture_path"] == (
+        "tests/fixtures/model_selection/revoked-active-plan-v1.4.json"
+    )
+    assert current_plan_checkpoint["historical_predecessor_fixture_raw_sha256"] == (
+        HISTORICAL_V1_4_SELECTION_PLAN_RAW_SHA256
+    )
+    assert current_plan_checkpoint["retained_v1_profile_sha256"] == (
+        CURRENT_PLANADOPT_V1_PROFILE_SHA256
+    )
+    assert current_plan_checkpoint["route_predicate_profile_decision"] == (
+        "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"
+    )
+    assert current_plan_checkpoint["active_candidate_present"] is False
+    assert current_plan_checkpoint["v1_price_cap_profile_preserved"] is True
+    assert current_plan_checkpoint["judge_constraints_preserved"] is True
+    assert current_plan_checkpoint["v2_price_cap_profile_adopted"] is False
+    assert current_plan_checkpoint["supported_authenticated_ancestry_transition_exists"] is False
+    assert current_plan_checkpoint[
+        "future_reactivation_requires_separately_authenticated_ancestry_transition"
+    ]
+    assert current_plan_checkpoint["future_reactivation_ticket_selected"] is False
+    assert current_plan_checkpoint["full_admission_authorized"] is False
+    assert current_plan_checkpoint["operator_command_emitted_by_checkpoint"] is False
+    assert current_plan_checkpoint["authority"] is False
     assert "historical_full_r2_r5_r2_candidate_admission" in exact_status
     assert exact_status["zero_command_evidence_checkpoint"] == (
         "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"

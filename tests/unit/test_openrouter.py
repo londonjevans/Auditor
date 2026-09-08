@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 import mmaudit.config as config_module
 import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.price_lexemes as price_lexemes_module
 import mmaudit.models.truncation as truncation_module
 import mmaudit.models.usage as usage_module
 import mmaudit.orchestration.budgets as budgets_module
@@ -50,6 +51,7 @@ from mmaudit.models.discovery import (
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
     openrouter_model_query,
+    validate_openrouter_constrained_model_discovery,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -101,6 +103,10 @@ from mmaudit.models.openrouter import (
     trusted_openrouter_execution_evidence,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.price_lexemes import (
+    captured_openrouter_json_number_raw,
+    decode_openrouter_price_metadata_json,
+)
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
@@ -114,6 +120,7 @@ from mmaudit.models.retrieval import SolidityRetrievalRolePolicy
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
+    RoutePredicateProfile,
     normalize_exact_route_pricing,
     project_provider_price_cap,
     project_route_emitted_request_parameters,
@@ -164,6 +171,7 @@ from mmaudit.orchestration.budgets import (
     AtomicTokenReservationEvidence,
     BudgetExhaustedError,
     BudgetManager,
+    EndpointRequestCostBound,
     TokenReservationOverrunError,
     _issue_trusted_request_limit_scope,
 )
@@ -1655,19 +1663,24 @@ def _model_discovery_run(
     model_reasoning: dict[str, Any] | None = None,
     endpoint_reasoning_requested: bool = False,
     endpoint_pricing: dict[str, str] | None = None,
+    route_predicate_profile: RoutePredicateProfile | None = None,
+    route_reasoning_policy: ReasoningPolicyArtifact | None = None,
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
-    endpoint_snapshot = _endpoint_snapshot(
-        model=exact_model,
-        provider=provider,
-        provider_name=provider_name,
-        supported_parameters=(
-            list(endpoint_supported_parameters)
-            if endpoint_supported_parameters is not None
-            else None
-        ),
-        reasoning_requested=endpoint_reasoning_requested,
-        structured_output_required=False,
-        pricing=endpoint_pricing,
+    selected_endpoint_parameters = (
+        list(endpoint_supported_parameters) if endpoint_supported_parameters is not None else None
+    )
+    endpoint_snapshot = (
+        _endpoint_snapshot(
+            model=exact_model,
+            provider=provider,
+            provider_name=provider_name,
+            supported_parameters=selected_endpoint_parameters,
+            reasoning_requested=endpoint_reasoning_requested,
+            structured_output_required=False,
+            pricing=endpoint_pricing,
+        )
+        if route_predicate_profile is None
+        else None
     )
     catalog_model: dict[str, Any] = {
         "id": exact_model,
@@ -1682,12 +1695,56 @@ def _model_discovery_run(
     if model_reasoning is not None:
         catalog_model["reasoning"] = model_reasoning
     catalog = {"data": [catalog_model]}
-    payload = validate_openrouter_model_discovery(
-        exact_model_id=exact_model,
-        models_payload=catalog,
-        single_model_payload={"data": dict(catalog["data"][0])},
-        endpoint_snapshot=endpoint_snapshot,
-    )
+    if route_predicate_profile is None:
+        assert endpoint_snapshot is not None
+        payload = validate_openrouter_model_discovery(
+            exact_model_id=exact_model,
+            models_payload=catalog,
+            single_model_payload={"data": dict(catalog["data"][0])},
+            endpoint_snapshot=endpoint_snapshot,
+        )
+    else:
+        if route_reasoning_policy is None:
+            raise ValueError("constrained test discovery requires its reasoning policy")
+        endpoint_record: dict[str, Any] = {
+            "tag": provider,
+            "provider_name": provider_name,
+            "status": 0,
+            "context_length": 200_000,
+            "max_prompt_tokens": 180_000,
+            "max_completion_tokens": 20_000,
+            "supported_parameters": selected_endpoint_parameters
+            or ["max_tokens", "response_format", "temperature"],
+            "pricing": endpoint_pricing
+            or {
+                "prompt": "0.000001",
+                "completion": "0.00001",
+                "request": "0",
+            },
+        }
+        if model_reasoning is not None:
+            endpoint_record["reasoning"] = model_reasoning
+        constraint = ExactRouteConstraint.build(
+            role=ExactRouteRole.CANDIDATE,
+            exact_model_id=exact_model,
+            provider_endpoint=provider,
+            profile=route_predicate_profile,
+        )
+        payload = validate_openrouter_constrained_model_discovery(
+            exact_model_id=exact_model,
+            models_payload=catalog,
+            single_model_payload={"data": dict(catalog["data"][0])},
+            configured_provider_endpoints=(provider,),
+            provider_policy_mode="only",
+            endpoint_payload={"data": {"id": exact_model, "endpoints": [endpoint_record]}},
+            require_zdr=True,
+            zdr_payload={"data": [{**endpoint_record, "model_id": exact_model}]},
+            route_predicate_profile=route_predicate_profile,
+            exact_route_constraint=constraint,
+            expected_selection_plan_sha256="1" * 64,
+            reasoning_policy=route_reasoning_policy,
+            automatic_fallbacks_allowed=False,
+        )
     route = DiscoveryCandidateRoute(
         exact_model_id=exact_model,
         approved_provider_endpoint=provider,
@@ -3975,6 +4032,18 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             "_TRUSTED_PROJECT_PROVIDER_PRICE_CAP",
         ),
         ("_assemble_structured_request_body", "_TRUSTED_ASSEMBLE_STRUCTURED_REQUEST_BODY"),
+        (
+            "_require_exact_openrouter_request_body",
+            "_TRUSTED_REQUIRE_EXACT_OPENROUTER_REQUEST_BODY",
+        ),
+        (
+            "_require_registered_zero_unit_request_shape",
+            "_TRUSTED_REQUIRE_REGISTERED_ZERO_UNIT_REQUEST_SHAPE",
+        ),
+        (
+            "_registered_price_component_policy",
+            "_TRUSTED_REGISTERED_PRICE_COMPONENT_POLICY",
+        ),
         ("_routing_max_price", "_TRUSTED_ROUTING_MAX_PRICE"),
         ("_revalidate_openrouter_discovery_payload",),
         (
@@ -4195,6 +4264,9 @@ def test_model_retry_policy_model_validate_retarget_is_rejected_without_executio
         "_attest_authrunner_generation_origin",
         "_has_authrunner_generation_origin",
         "_assemble_structured_request_body",
+        "_require_exact_openrouter_request_body",
+        "_require_registered_zero_unit_request_shape",
+        "_registered_price_component_policy",
         "_routing_max_price",
         "project_route_emitted_request_parameters",
         "normalize_exact_route_pricing",
@@ -12123,6 +12195,585 @@ async def test_refresh_exact_endpoint_metadata_preserves_withdrawn_empty_set(
     finally:
         await http_client.aclose()
     assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_metadata_numeric_price_lexemes_remain_exact_through_snapshot(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    model_id = "alpha/atlas-secure"
+    endpoint_json = (
+        b'{"data":{"id":"alpha/atlas-secure","endpoints":[{'
+        b'"tag":"approved-provider","provider_name":"Approved Provider","status":0,'
+        b'"context_length":200000,"max_prompt_tokens":180000,'
+        b'"max_completion_tokens":20000,'
+        b'"supported_parameters":["max_tokens","response_format","temperature"],'
+        b'"pricing":{"prompt":0.0000012,"completion":0.00001,"request":0,'
+        b'"discount":0.1}}]}}'
+    )
+    zdr_json = (
+        b'{"data":[{"model_id":"alpha/atlas-secure","tag":"approved-provider",'
+        b'"provider_name":"Approved Provider","status":0,"context_length":200000,'
+        b'"max_prompt_tokens":180000,"max_completion_tokens":20000,'
+        b'"supported_parameters":["max_tokens","response_format","temperature"],'
+        b'"pricing":{"prompt":0.0000012,"completion":0.00001,"request":0,'
+        b'"discount":0.1}}]}'
+    )
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        content = zdr_json if request.url.path.endswith("/endpoints/zdr") else endpoint_json
+        return httpx.Response(200, content=content)
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        endpoint_payload = await client.get_refresh_model_endpoint_metadata(model_id)
+        inventory = await client.list_model_endpoint_inventory(model_id)
+        zdr_payload = await client.get_zdr_endpoint_metadata()
+    finally:
+        await http_client.aclose()
+
+    pricing = endpoint_payload["data"]["endpoints"][0]["pricing"]
+    assert captured_openrouter_json_number_raw(pricing["prompt"]) == "0.0000012"
+    assert captured_openrouter_json_number_raw(pricing["completion"]) == "0.00001"
+    assert captured_openrouter_json_number_raw(pricing["request"]) == "0"
+    assert captured_openrouter_json_number_raw(pricing["discount"]) == "0.1"
+    assert type(endpoint_payload["data"]["endpoints"][0]["context_length"]) is int
+    assert captured_openrouter_json_number_raw(inventory[0]["pricing"]["prompt"]) == ("0.0000012")
+
+    numeric_snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id=model_id,
+        configured_provider_endpoints=("approved-provider",),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=True,
+        zdr_payload=zdr_payload,
+    )
+    string_snapshot = _endpoint_snapshot(
+        model=model_id,
+        pricing={
+            "prompt": "0.0000012",
+            "completion": "0.00001",
+            "request": "0",
+            "discount": "0.1",
+        },
+    )
+    assert numeric_snapshot == string_snapshot
+    assert numeric_snapshot.model_dump_json() == string_snapshot.model_dump_json()
+    assert numeric_snapshot.endpoint("approved-provider").pricing == {
+        "completion": "0.00001",
+        "prompt": "0.0000012",
+        "request": "0",
+    }
+    maximum_units = {"completion": 20_000, "prompt": 180_000, "request": 1}
+    numeric_bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=model_id,
+        provider_endpoint="approved-provider",
+        request_material='{"synthetic":true}',
+        pricing=numeric_snapshot.endpoint("approved-provider").pricing,
+        maximum_units=maximum_units,
+    )
+    string_bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=model_id,
+        provider_endpoint="approved-provider",
+        request_material='{"synthetic":true}',
+        pricing=string_snapshot.endpoint("approved-provider").pricing,
+        maximum_units=maximum_units,
+    )
+    assert numeric_bound == string_bound
+    assert numeric_bound.maximum_cost_usd == string_bound.maximum_cost_usd
+    numeric_ledger = AtomicCostLedger.initialize(
+        tmp_path / "numeric-costs.json",
+        cap_usd=Decimal("10"),
+    )
+    string_ledger = AtomicCostLedger.initialize(
+        tmp_path / "string-costs.json",
+        cap_usd=Decimal("10"),
+    )
+    numeric_reservation = numeric_ledger.reserve(
+        "numeric-price-request",
+        numeric_bound.maximum_cost_usd,
+    )
+    string_reservation = string_ledger.reserve(
+        "string-price-request",
+        string_bound.maximum_cost_usd,
+    )
+    actual_cost = numeric_bound.maximum_cost_usd / Decimal(2)
+    numeric_entry = numeric_ledger.reconcile(numeric_reservation, actual_cost)
+    string_entry = string_ledger.reconcile(string_reservation, actual_cost)
+
+    assert numeric_entry.reserved_usd == string_entry.reserved_usd
+    assert numeric_entry.actual_cost_usd == string_entry.actual_cost_usd
+    assert numeric_entry.accounted_cost_usd == string_entry.accounted_cost_usd
+    numeric_ledger_snapshot = numeric_ledger.snapshot()
+    string_ledger_snapshot = string_ledger.snapshot()
+    assert numeric_ledger_snapshot.spent_usd == string_ledger_snapshot.spent_usd
+    assert numeric_ledger_snapshot.active_reserved_usd == (
+        string_ledger_snapshot.active_reserved_usd
+    )
+    assert numeric_ledger_snapshot.remaining_usd == string_ledger_snapshot.remaining_usd
+    assert [request.url.path for request in observed] == [
+        "/api/v1/models/alpha/atlas-secure/endpoints",
+        "/api/v1/models/alpha/atlas-secure/endpoints",
+        "/api/v1/endpoints/zdr",
+    ]
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_xai_numeric_prices_reach_constrained_discovery_from_metadata_client(
+    config_factory,
+) -> None:
+    model_id = "x-ai/grok-4.6"
+    endpoint_id = "amazon-bedrock/us-west-2"
+    endpoint_json = (
+        b'{"data":{"id":"x-ai/grok-4.6","endpoints":[{'
+        b'"tag":"amazon-bedrock/us-west-2","provider_name":"Amazon Bedrock",'
+        b'"status":0,"context_length":200000,"max_prompt_tokens":180000,'
+        b'"max_completion_tokens":20000,'
+        b'"supported_parameters":["max_tokens","reasoning","response_format",'
+        b'"structured_outputs","temperature"],'
+        b'"reasoning":{"supported_efforts":["none","minimal","low","medium",'
+        b'"high","xhigh","max"]},'
+        b'"pricing":{"prompt":0.0000012,"completion":0.000002,"request":0,'
+        b'"discount":0.1}}]}}'
+    )
+    zdr_json = (
+        b'{"data":[{"model_id":"x-ai/grok-4.6",'
+        b'"tag":"amazon-bedrock/us-west-2","provider_name":"Amazon Bedrock",'
+        b'"status":0,"context_length":200000,"max_prompt_tokens":180000,'
+        b'"max_completion_tokens":20000,'
+        b'"supported_parameters":["max_tokens","reasoning","response_format",'
+        b'"structured_outputs","temperature"],'
+        b'"reasoning":{"supported_efforts":["none","minimal","low","medium",'
+        b'"high","xhigh","max"]},'
+        b'"pricing":{"prompt":0.0000012,"completion":0.000002,"request":0,'
+        b'"discount":0.1}}]}'
+    )
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        content = zdr_json if request.url.path.endswith("/endpoints/zdr") else endpoint_json
+        return httpx.Response(200, content=content)
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        privacy_models=(model_id,),
+    )
+    try:
+        endpoint_payload = await client.get_model_endpoint_metadata(model_id)
+        zdr_payload = await client.list_zdr_endpoints()
+    finally:
+        await http_client.aclose()
+
+    endpoint_pricing = endpoint_payload["data"]["endpoints"][0]["pricing"]
+    zdr_pricing = zdr_payload["data"][0]["pricing"]
+    for pricing in (endpoint_pricing, zdr_pricing):
+        assert type(pricing["prompt"]) is price_lexemes_module.CapturedOpenRouterJSONNumber
+        assert captured_openrouter_json_number_raw(pricing["prompt"]) == "0.0000012"
+        assert captured_openrouter_json_number_raw(pricing["completion"]) == "0.000002"
+        assert captured_openrouter_json_number_raw(pricing["request"]) == "0"
+
+    model = {
+        "id": model_id,
+        "canonical_slug": "x-ai/grok-4.6-20260830",
+        "context_length": 200_000,
+        "top_provider": {
+            "context_length": 200_000,
+            "max_completion_tokens": 20_000,
+            "is_moderated": False,
+        },
+        "supported_parameters": [
+            "structured_outputs",
+            "temperature",
+            "response_format",
+            "reasoning",
+            "max_tokens",
+        ],
+        "reasoning": {
+            "mandatory": False,
+            "default_enabled": True,
+            "supported_efforts": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ],
+        },
+    }
+    control = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    policy = ReasoningPolicyArtifact.build(
+        controls_by_role={role: control for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+    role_policy = policy.role_policy_for_request("model_benchmark")
+    profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=policy.artifact_sha256,
+        reasoning_role_profile_sha256=policy.role_profile.profile_sha256,
+        reasoning_role_binding_sha256=role_policy.binding_sha256,
+        reasoning_control_profile_sha256=control.profile_sha256,
+        reserved_reasoning_tokens=4_096,
+        minimum_prompt_tokens=100_000,
+        required_output_tokens=4_096,
+        minimum_context_tokens=120_000,
+    )
+    constraint = ExactRouteConstraint.build(
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id=model_id,
+        provider_endpoint=endpoint_id,
+        profile=profile,
+    )
+
+    discovery = validate_openrouter_constrained_model_discovery(
+        exact_model_id=model_id,
+        models_payload={"data": [model]},
+        single_model_payload={"data": model},
+        configured_provider_endpoints=(endpoint_id,),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=True,
+        zdr_payload=zdr_payload,
+        route_predicate_profile=profile,
+        exact_route_constraint=constraint,
+        expected_selection_plan_sha256="1" * 64,
+        reasoning_policy=policy,
+        automatic_fallbacks_allowed=False,
+    )
+
+    endpoint = discovery.endpoint_snapshot.endpoint(endpoint_id)
+    assert discovery.exact_model_id == model_id
+    assert discovery.approved_provider_endpoint == endpoint_id
+    assert endpoint.provider_endpoint == endpoint_id
+    assert endpoint.pricing == {
+        "completion": "0.000002",
+        "prompt": "0.0000012",
+        "request": "0",
+    }
+    assert [request.url.path for request in observed] == [
+        "/api/v1/models/x-ai/grok-4.6/endpoints",
+        "/api/v1/endpoints/zdr",
+    ]
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_numeric_price_lexemes_do_not_collapse_through_binary_float(
+    config_factory,
+) -> None:
+    exact_prices = ("0.100000000000000004", "0.100000000000000005")
+    assert float(exact_prices[0]) == float(exact_prices[1])
+    observed_hashes: list[str] = []
+    pricing_hashes: list[str] = []
+
+    for ordinal, exact_price in enumerate(exact_prices):
+        raw = (
+            '{"data":{"id":"alpha/atlas-secure","endpoints":[{'
+            '"tag":"approved-provider","provider_name":"Approved Provider","status":0,'
+            '"context_length":200000,"max_prompt_tokens":180000,'
+            '"max_completion_tokens":20000,'
+            '"supported_parameters":["max_tokens","response_format","temperature"],'
+            f'"pricing":{{"prompt":{exact_price},"completion":0.00001}}}}]}}'
+            "}"
+        ).encode()
+        client, http_client, usage = _client(
+            config_factory(),
+            lambda _request, content=raw: httpx.Response(200, content=content),
+        )
+        try:
+            payload = await client.get_refresh_model_endpoint_metadata("alpha/atlas-secure")
+        finally:
+            await http_client.aclose()
+        snapshot = validate_openrouter_endpoint_snapshot(
+            exact_model_id="alpha/atlas-secure",
+            configured_provider_endpoints=("approved-provider",),
+            provider_policy_mode="only",
+            endpoint_payload=payload,
+            require_zdr=False,
+        )
+        endpoint = snapshot.endpoint("approved-provider")
+        assert endpoint.pricing["prompt"] == exact_price
+        pricing_hashes.append(endpoint.pricing_sha256)
+        observed_hashes.append(
+            client._metadata_observations["/models/alpha/atlas-secure/endpoints"]
+        )
+        assert usage.records == []
+        assert ordinal == len(pricing_hashes) - 1
+
+    assert len(set(pricing_hashes)) == 2
+    assert len(set(observed_hashes)) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_coordinate_numeric_price_transplant_misses_transport_observation(
+    config_factory,
+) -> None:
+    exact_model_id = "alpha/atlas-secure"
+    observation_path = "/models/alpha/atlas-secure/endpoints"
+    payloads: list[dict[str, Any]] = []
+    observed_hashes: list[str] = []
+
+    for exact_price in ("0.000001", "0.000009"):
+        raw = (
+            '{"data":{"id":"alpha/atlas-secure","endpoints":[{'
+            '"pricing":{"completion":0,"prompt":'
+            f"{exact_price}"
+            "}}]}}"
+        ).encode()
+        client, http_client, usage = _client(
+            config_factory(),
+            lambda _request, content=raw: httpx.Response(200, content=content),
+        )
+        try:
+            payload = await client.get_refresh_model_endpoint_metadata(exact_model_id)
+            assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
+            observed_hash = client._metadata_observations[observation_path]
+            assert observed_hash == openrouter_module._canonical_sha256(payload)
+            payloads.append(payload)
+            observed_hashes.append(observed_hash)
+        finally:
+            await http_client.aclose()
+        assert usage.records == []
+
+    first_prompt = payloads[0]["data"]["endpoints"][0]["pricing"]["prompt"]
+    second_prompt = payloads[1]["data"]["endpoints"][0]["pricing"]["prompt"]
+    assert captured_openrouter_json_number_raw(first_prompt) == "0.000001"
+    assert captured_openrouter_json_number_raw(second_prompt) == "0.000009"
+
+    payloads[0]["data"]["endpoints"][0]["pricing"]["prompt"] = second_prompt
+    transplanted_hash = openrouter_module._canonical_sha256(payloads[0])
+
+    assert transplanted_hash == observed_hashes[1]
+    assert transplanted_hash != observed_hashes[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_price",
+    ("1e-6", "1E+02", "-0", "-0.0", "0.0", "1.20"),
+)
+async def test_noncanonical_captured_endpoint_price_fails_without_retry(
+    config_factory,
+    raw_price: str,
+) -> None:
+    calls = 0
+    raw = (
+        '{"data":{"id":"alpha/atlas-secure","endpoints":[{'
+        '"tag":"approved-provider","provider_name":"Approved Provider","status":0,'
+        '"context_length":200000,"max_prompt_tokens":180000,'
+        '"max_completion_tokens":20000,'
+        '"supported_parameters":["max_tokens","response_format","temperature"],'
+        f'"pricing":{{"prompt":{raw_price},"completion":0.00001}}}}]}}'
+        "}"
+    ).encode()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=raw)
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        payload = await client.get_refresh_model_endpoint_metadata("alpha/atlas-secure")
+        with pytest.raises(EndpointSnapshotValidationError):
+            validate_openrouter_endpoint_snapshot(
+                exact_model_id="alpha/atlas-secure",
+                configured_provider_endpoints=("approved-provider",),
+                provider_policy_mode="only",
+                endpoint_payload=payload,
+                require_zdr=False,
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert usage.records == []
+
+
+def _decoded_price_payload(
+    *,
+    prompt: str = "1",
+    completion: str = "0",
+    reverse_pricing_order: bool = False,
+) -> dict[str, Any]:
+    pricing = (
+        f'"prompt":{prompt},"completion":{completion}'
+        if reverse_pricing_order
+        else f'"completion":{completion},"prompt":{prompt}'
+    )
+    return decode_openrouter_price_metadata_json(
+        (
+            f'{{"data":{{"id":"alpha/atlas-secure","endpoints":[{{"pricing":{{{pricing}}}}}]}}}}'
+        ).encode(),
+        layout="model_endpoints",
+    )
+
+
+def test_captured_number_hash_domain_cannot_collide_with_native_json_marker() -> None:
+    captured = _decoded_price_payload()
+    native_marker = {
+        "data": {
+            "id": "alpha/atlas-secure",
+            "endpoints": [
+                {
+                    "pricing": {
+                        "completion": 0,
+                        "prompt": {"__mmaudit_exact_json_number_lexeme_v1__": "1"},
+                    }
+                }
+            ],
+        }
+    }
+    token_free = {
+        "data": {
+            "id": "alpha/atlas-secure",
+            "endpoints": [{"pricing": {"completion": 0, "prompt": "1"}}],
+        }
+    }
+
+    assert openrouter_module._canonical_sha256(captured) != (
+        openrouter_module._canonical_sha256(native_marker)
+    )
+    assert openrouter_module._canonical_sha256(captured) != (
+        openrouter_module._canonical_sha256(token_free)
+    )
+    assert (
+        openrouter_module._canonical_sha256(token_free)
+        == hashlib.sha256(
+            json.dumps(
+                token_free,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    )
+
+
+def test_captured_number_hash_is_independent_of_object_insertion_order() -> None:
+    first = _decoded_price_payload(prompt="0.000002", completion="1")
+    reversed_order = _decoded_price_payload(
+        prompt="0.000002",
+        completion="1",
+        reverse_pricing_order=True,
+    )
+
+    assert openrouter_module._canonical_sha256(first) == openrouter_module._canonical_sha256(
+        reversed_order
+    )
+
+
+def test_unregistered_or_instance_modified_number_marker_cannot_be_hashed() -> None:
+    unregistered = object.__new__(price_lexemes_module.CapturedOpenRouterJSONNumber)
+
+    with pytest.raises(ValueError, match="provider price-lexeme token lost decoder custody"):
+        openrouter_module._canonical_sha256({"price": unregistered})
+
+    captured_payload = _decoded_price_payload(prompt="0.000003")
+    captured = captured_payload["data"]["endpoints"][0]["pricing"]["prompt"]
+    with pytest.raises(AttributeError, match="immutable"):
+        captured._raw = "0.000009"
+    with pytest.raises(ValueError, match="provider price-lexeme token lost decoder custody"):
+        openrouter_module._canonical_sha256(captured_payload)
+
+
+def test_provider_graph_detects_price_lexeme_helper_binding_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+    with monkeypatch.context() as context:
+        context.setattr(
+            openrouter_module,
+            "openrouter_json_number_digest_channels",
+            lambda _value: None,
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    with monkeypatch.context() as context:
+        context.setattr(
+            price_lexemes_module,
+            "openrouter_json_number_is_price_path",
+            lambda _path, *, layout: layout == "model_endpoints",
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    with monkeypatch.context() as context:
+        context.setattr(
+            price_lexemes_module.CapturedOpenRouterJSONNumber,
+            "raw",
+            property(lambda _value: "0"),
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+
+    raw_property = vars(price_lexemes_module.CapturedOpenRouterJSONNumber)["raw"]
+    assert type(raw_property) is property
+    raw_getter = raw_property.fget
+    assert raw_getter is not None
+    original_code = raw_getter.__code__
+
+    def substituted_raw_getter(_value: object) -> str:
+        return "0"
+
+    captured = _decoded_price_payload()
+    raw_getter.__code__ = substituted_raw_getter.__code__
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(TypeError, match="provider price-lexeme digest custody changed"):
+            openrouter_module._canonical_sha256(captured)
+    finally:
+        raw_getter.__code__ = original_code
+
+    with monkeypatch.context() as context:
+        captured = _decoded_price_payload()
+        context.setattr(openrouter_module, "_debug_json_default", lambda _value: "0")
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(TypeError, match="provider price-lexeme digest custody changed"):
+            openrouter_module._canonical_sha256(captured)
+
+    debug_default = openrouter_module._debug_json_default
+    original_debug_code = debug_default.__code__
+
+    def substituted_debug_default(
+        _value: object,
+        *,
+        _captured_type: object = None,
+        _hash_required_type: object = None,
+    ) -> str:
+        return "0"
+
+    debug_default.__code__ = substituted_debug_default.__code__
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        captured = _decoded_price_payload()
+        with pytest.raises(TypeError, match="provider price-lexeme digest custody changed"):
+            openrouter_module._canonical_sha256(captured)
+    finally:
+        debug_default.__code__ = original_debug_code
+
+    with monkeypatch.context() as context:
+        captured = _decoded_price_payload()
+        context.setattr(openrouter_module, "CapturedOpenRouterJSONNumber", object)
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(TypeError, match="provider price-lexeme digest custody changed"):
+            openrouter_module._canonical_sha256(captured)
+
+    with monkeypatch.context() as context:
+        context.setattr(openrouter_module, "_OpenRouterPriceLexemeHashRequired", TypeError)
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+
+    with monkeypatch.context() as context:
+        context.setattr(openrouter_module, "MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT", "mutated")
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+
+    assert openrouter_module._openrouter_client_callables_are_pristine()
 
 
 @pytest.mark.asyncio

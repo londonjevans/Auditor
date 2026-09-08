@@ -1,0 +1,49 @@
+{
+  "$id": "https://mmaudit.local/schemas/development_cost_policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicit target budgets, not hard guarantees; defaults keep retries off.",
+  "properties": {
+    "maximum_attempts": {
+      "default": 1,
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Maximum Attempts",
+      "type": "integer"
+    },
+    "overspend_risk_accepted": {
+      "const": true,
+      "title": "Overspend Risk Accepted",
+      "type": "boolean"
+    },
+    "per_attempt_budget_usd": {
+      "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+      "title": "Per Attempt Budget Usd",
+      "type": "string"
+    },
+    "purpose": {
+      "const": "DEVELOPMENT_ONLY_ESTIMATED",
+      "default": "DEVELOPMENT_ONLY_ESTIMATED",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "safety_multiplier": {
+      "default": "2",
+      "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+      "title": "Safety Multiplier",
+      "type": "string"
+    },
+    "total_budget_usd": {
+      "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+      "title": "Total Budget Usd",
+      "type": "string"
+    }
+  },
+  "required": [
+    "overspend_risk_accepted",
+    "total_budget_usd",
+    "per_attempt_budget_usd"
+  ],
+  "title": "DevelopmentCostPolicy",
+  "type": "object"
+}

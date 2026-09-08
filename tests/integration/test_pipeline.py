@@ -51,6 +51,7 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditedSuiteEntityCatalog,
     AuditProfile,
     AuditQualityStatus,
     AuditReport,
@@ -250,13 +251,14 @@ class StaticScannerRunner:
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]:
         del root, private_dir, skip_codeql, allow_fork_probing, projects
         self.calls += 1
         self.audited_relative_paths = tuple(audited_relative_paths)
         self.expected_repository_sha256 = expected_repository_sha256
         self.repository_exclusion_root = repository_exclusion_root
-        del allow_custom_repository_exclusion
+        del allow_custom_repository_exclusion, audited_suite_entity_catalog
         now = datetime.now(UTC)
         findings = []
         if self.status is ScannerStatus.SUCCESS and self.emit_finding:

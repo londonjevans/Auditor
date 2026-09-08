@@ -1,0 +1,532 @@
+{
+  "$defs": {
+    "ManagedHostToolFile": {
+      "additionalProperties": false,
+      "description": "One declared direct host file; its version string is not a probe result.",
+      "oneOf": [
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "solc"
+              ]
+            },
+            "role": {
+              "const": "solc"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "anvil"
+              ]
+            },
+            "role": {
+              "const": "anvil"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "semgrep"
+              ]
+            },
+            "role": {
+              "const": "semgrep"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "gitleaks"
+              ]
+            },
+            "role": {
+              "const": "gitleaks"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "trivy"
+              ]
+            },
+            "role": {
+              "const": "trivy"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "osv-scanner"
+              ]
+            },
+            "role": {
+              "const": "osv-scanner"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "codeql"
+              ]
+            },
+            "role": {
+              "const": "codeql"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "slither"
+              ]
+            },
+            "role": {
+              "const": "slither"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "forge"
+              ]
+            },
+            "role": {
+              "const": "forge"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "myth"
+              ]
+            },
+            "role": {
+              "const": "mythril"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "echidna"
+              ]
+            },
+            "role": {
+              "const": "echidna"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "medusa"
+              ]
+            },
+            "role": {
+              "const": "medusa"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "halmos"
+              ]
+            },
+            "role": {
+              "const": "halmos"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "z3"
+              ]
+            },
+            "role": {
+              "const": "halmos-z3"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "certoraRun"
+              ]
+            },
+            "role": {
+              "const": "certora-cli"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "kontrol"
+              ]
+            },
+            "role": {
+              "const": "kontrol"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "python3"
+              ]
+            },
+            "role": {
+              "const": "python-runtime"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "git"
+              ]
+            },
+            "role": {
+              "const": "git"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "sandbox-exec"
+              ]
+            },
+            "role": {
+              "const": "sandbox-exec"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "bwrap"
+              ]
+            },
+            "role": {
+              "const": "bubblewrap"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        },
+        {
+          "properties": {
+            "locator": {
+              "enum": [
+                "docker",
+                "podman"
+              ]
+            },
+            "role": {
+              "const": "container-runtime"
+            }
+          },
+          "required": [
+            "role",
+            "locator"
+          ]
+        }
+      ],
+      "properties": {
+        "locator": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Locator",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ManagedToolchainRole"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 4294967296,
+          "minimum": 1,
+          "title": "Size",
+          "type": "integer"
+        },
+        "version": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/ -]{0,199}$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "locator",
+        "version",
+        "sha256",
+        "size"
+      ],
+      "title": "ManagedHostToolFile",
+      "type": "object"
+    },
+    "ManagedToolchainRole": {
+      "description": "Closed first-class managed identities covered by this declaration.",
+      "enum": [
+        "solc",
+        "anvil",
+        "semgrep",
+        "gitleaks",
+        "trivy",
+        "osv-scanner",
+        "codeql",
+        "slither",
+        "forge",
+        "mythril",
+        "echidna",
+        "medusa",
+        "halmos",
+        "halmos-z3",
+        "certora-cli",
+        "kontrol",
+        "python-runtime",
+        "git",
+        "sandbox-exec",
+        "bubblewrap",
+        "container-runtime",
+        "rootless-toolchain-image",
+        "hardhat-image-hardhat",
+        "hardhat-image-node",
+        "hardhat-image-loopback",
+        "hardhat-reporter",
+        "hardhat-reporter-inventory-schema",
+        "hardhat-reporter-test-schema"
+      ],
+      "title": "ManagedToolchainRole",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/managed_host_tool_material.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-consistent direct-file material inventory, never installed-toolchain trust.",
+  "properties": {
+    "architecture_verified": {
+      "const": false,
+      "default": false,
+      "title": "Architecture Verified",
+      "type": "boolean"
+    },
+    "artifact_kind": {
+      "const": "managed-host-tool-material",
+      "default": "managed-host-tool-material",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "effective_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Effective Config Sha256",
+      "type": "string"
+    },
+    "execution_evidence_verified": {
+      "const": false,
+      "default": false,
+      "title": "Execution Evidence Verified",
+      "type": "boolean"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/ManagedHostToolFile"
+      },
+      "maxItems": 21,
+      "minItems": 1,
+      "title": "Files",
+      "type": "array"
+    },
+    "image_side_attestation_verified": {
+      "const": false,
+      "default": false,
+      "title": "Image Side Attestation Verified",
+      "type": "boolean"
+    },
+    "independently_trusted": {
+      "const": false,
+      "default": false,
+      "title": "Independently Trusted",
+      "type": "boolean"
+    },
+    "installed_members_verified": {
+      "const": false,
+      "default": false,
+      "title": "Installed Members Verified",
+      "type": "boolean"
+    },
+    "managed_run_ready": {
+      "const": false,
+      "default": false,
+      "title": "Managed Run Ready",
+      "type": "boolean"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "required_roles": {
+      "items": {
+        "$ref": "#/$defs/ManagedToolchainRole"
+      },
+      "maxItems": 28,
+      "minItems": 1,
+      "title": "Required Roles",
+      "type": "array"
+    },
+    "runtime_authority": {
+      "const": false,
+      "default": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Bundle Sha256",
+      "type": "string"
+    },
+    "status": {
+      "const": "DIRECT_HOST_FILES_PREPARED_NONAUTHORIZING",
+      "default": "DIRECT_HOST_FILES_PREPARED_NONAUTHORIZING",
+      "title": "Status",
+      "type": "string"
+    },
+    "transitive_dependency_closure_verified": {
+      "const": false,
+      "default": false,
+      "title": "Transitive Dependency Closure Verified",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "source_bundle_sha256",
+    "effective_config_sha256",
+    "required_roles",
+    "files",
+    "manifest_sha256"
+  ],
+  "title": "mmaudit nonauthorizing direct host-file material inventory",
+  "type": "object"
+}

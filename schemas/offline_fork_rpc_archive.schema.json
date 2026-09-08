@@ -1,0 +1,128 @@
+{
+  "$defs": {
+    "JsonValue": {},
+    "OfflineForkRpcRead": {
+      "additionalProperties": false,
+      "description": "One supplied canonical hash-bound read, not a cryptographic state proof.",
+      "properties": {
+        "method": {
+          "enum": [
+            "eth_call",
+            "eth_getAccountInfo",
+            "eth_getBalance",
+            "eth_getBlockByHash",
+            "eth_getBlockByNumber",
+            "eth_getBlockReceipts",
+            "eth_getBlockTransactionCountByHash",
+            "eth_getBlockTransactionCountByNumber",
+            "eth_getCode",
+            "eth_getLogs",
+            "eth_getStorageAt",
+            "eth_getTransactionByBlockHashAndIndex",
+            "eth_getTransactionByBlockNumberAndIndex",
+            "eth_getTransactionCount",
+            "eth_getUncleByBlockHashAndIndex",
+            "eth_getUncleByBlockNumberAndIndex",
+            "eth_getUncleCountByBlockHash",
+            "eth_getUncleCountByBlockNumber"
+          ],
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Method",
+          "type": "string"
+        },
+        "params": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "maxItems": 64,
+          "title": "Params",
+          "type": "array"
+        },
+        "result": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "method",
+        "params",
+        "result"
+      ],
+      "title": "OfflineForkRpcRead",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/offline_fork_rpc_archive.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict offline input declaration; provenance and state completeness are not attested.",
+  "properties": {
+    "artifact_kind": {
+      "const": "MMAUDIT_OFFLINE_FORK_RPC_ARCHIVE",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "block_hash": {
+      "pattern": "^0x[0-9a-f]{64}$",
+      "title": "Block Hash",
+      "type": "string"
+    },
+    "block_number": {
+      "exclusiveMaximum": 18446744073709551616,
+      "minimum": 0,
+      "title": "Block Number",
+      "type": "integer"
+    },
+    "chain_id": {
+      "exclusiveMaximum": 18446744073709551616,
+      "minimum": 1,
+      "title": "Chain Id",
+      "type": "integer"
+    },
+    "complete_state": {
+      "const": false,
+      "title": "Complete State",
+      "type": "boolean"
+    },
+    "reads": {
+      "items": {
+        "$ref": "#/$defs/OfflineForkRpcRead"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "title": "Reads",
+      "type": "array"
+    },
+    "runtime_authority": {
+      "const": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_kind": {
+      "enum": [
+        "SYNTHETIC_FIXTURE",
+        "OPERATOR_SUPPLIED_OFFLINE"
+      ],
+      "title": "Source Kind",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "source_kind",
+    "chain_id",
+    "block_number",
+    "block_hash",
+    "complete_state",
+    "runtime_authority",
+    "reads"
+  ],
+  "title": "mmaudit incomplete nonauthorizing offline fork reads",
+  "type": "object"
+}

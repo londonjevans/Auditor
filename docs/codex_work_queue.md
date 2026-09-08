@@ -8,23 +8,1426 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 
 ## Queue governance
 
+### Current operator priority — 2026-09-08
+
+Latest operator report labelled `2026-09-08T13:18Z` reports one complete scored planted-corpus observation on the together route: 3/3 shards, USD 0.0849096, 77.9 seconds, one matched root, two duplicates, six total claims and structural precision 5/26. Two guarded attempts remain incomplete after INVALID_RESPONSE on different shards; their unobserved scope is not a pass, and the suspected nullability cause is not verified. These are operator-reported development measurements, not independently authenticated private evidence, semantic precision, qualification or real audits.
+
+Two earlier HTTP 429 attempts are reported with USD 0.4064568 in uncertain reservations across separate development ledgers. No reported charge is not proof of no charge. The report's development totals are inconsistent: its USD 0.4129770 and five-entry ledger #3 header omit the later b-4 table row; the earlier USD 0.2606400 plus the three listed priced runs instead sum to USD 0.5163672. This arithmetic is not private-ledger authentication. Cross-ledger accounting and the v2 shard-rate denominator remain INCONCLUSIVE. Cumulative accounting is still explicitly reported at 57 entries / USD 0.68118684 and zero completed real audits.
+
+Exact current report `f27d3d33266149475aec787e6087c08f964538b0c245ac560980453abfcc6e82` (226836 bytes / 3934 lines) preserves original history. Reported route switches, new ledgers, billing classifications, settlement and retry requests grant no authority here. No uncertainty is cleared, replacement ledger approved as a reset, provider retry selected or billing/decoder behavior changed during this Git task. Earlier fixture timings remain missing. `V3-DEVTRIAL-001` remains PARTIAL for non-secret evidence review; no new provider command is selected.
+
+`V3-DEVBENCH-001` is locally COMPLETE for its non-qualifying versioned observations and deterministic synthetic score artifacts. The frozen implementation has every one of 11825 test identities reconciled: 11768 passed and 57 skipped, including a 1953-case serial completion. This is not a qualified benchmark or a completed audit. DEVAUDIT, DEVROUTE, EVIDENCEFORMAT and PIPEPERF retain their recorded local completion and limitations. The previous checkpoint f0e35e0 is pushed; the user's direct request selects the broader tested checkpoint plus validated records, with final record checks and Git readback still pending. Both repository workflows remain manual-only; no hosted CI, route/lineage adoption or release is selected.
+
+The historical accepted operator entry labelled September-7 10:40 reports both DEVREASON input shapes now
+prepare and accepts the complete-discovery-file handoff. It reports unchanged ledger totals and
+no paid trial; fresh discovery/estimate claims remain operator-supplied, not independently verified.
+DEVREASON and the GOVSYNC-002 format repair are tested COMPLETE. The latest wrapped/inline
+accounting now validates with original history and exact current bytes preserved. The AUTONOMY
+toolchain-pin config handoff, scanner executable-pin-before-probe prerequisite and exact local
+host-material provisioning, verified scanner/solc path consumption and automatic managed Linux
+backend construction are locally tested. Six Linux kernel cases remain INCONCLUSIVE on this Mac.
+Prepared compiler, formal, local-invariant and reproduction tool handoffs are locally tested.
+Prepared pipeline composition is now locally tested with fixed offline controls; actual engines,
+fork/Linux isolation and a complete unattended audit remain unverified. The maximum-assurance
+run-override/report repair and prepared clean-Anvil executable handoff are locally tested.
+Prepared matrix scanner/clean-launcher composition and the fifth managed pipeline consumer are
+now locally tested. The offline fork-read archive/replay prerequisite is also locally tested.
+The owned offline replay lease and exact archive preparation-to-managed-matrix handoff are now
+locally tested. Exact primary archive-to-Foundry-baseline handoff is now also locally tested.
+Per-attempt reproduction and independent invariant archive/lease handoffs are now locally tested.
+AUTONOMY remains PARTIAL. Independent capture and exact inventory/source/selection/test joins
+are locally tested. Request-bound, single-use phase output/runtime layouts are also locally
+tested under the retained live bridge. The owned two-phase lifecycle now automatically joins both
+phases with shared budgets and bridge shutdown before results. Exact bounded rootless cleanup now
+rejects runtime-error-as-absence and distinguishes missing CID from successful scoped absence.
+Single-use phase finalization now retains the exact launch-to-cleanup selection and refuses
+missing/incomplete/late cleanup. V3-HARDHAT-001 remains PARTIAL for trusted production admission,
+image-side identity and actual image/container evidence. Exact offline image index/manifest/config
+metadata, tar/gzip layer-byte consumption and restricted in-memory file membership are now locally
+tested. Actual image provisioning, executed file identity and container execution remain unproved.
+Real Hardhat/fork execution and supported Linux isolation remain unproven; no private input, route, provider command or spend is selected.
+
+The operator accepted the review's change in development priorities: establish a real sharded
+single-model audit (`V3-SINGLE-AUDIT-001`), then measure the ensemble against that baseline using
+held-out targets, validated findings, misses, false positives, completion rate, cost, and runtime.
+Resolve the required route, execution, and qualification dependencies in bounded tickets; additional
+mechanisms must identify the audit path they unblock or the measured failure they address. This
+does not change the frozen objective, authorize unsupported provider routes, or claim qualification.
+
+The operator explicitly requested CI spending be addressed first. The CI-cost ticket below is
+complete. The earlier paused `V3-PLANANCESTRY-001` blockers and subsequent repair evidence are
+preserved in its ticket and worklog; consult that current status instead of historical WIP warnings.
+The `V3-CANDROUTE-001` diagnostic slice below is finished; the parent ticket remains `PARTIAL`
+because no real route has passed admission. The operator subsequently approved the distinct
+development-only estimated-cost policy below, explicitly accepting overspend risk; strict
+qualification, release, and the frozen hard-cost objective are unchanged. No paid run is selected.
+Older next-action and stop statements describe their historical ticket boundaries.
+
+**2026-09-07 goal continuation:** The user requested continued implementation of the complete
+autonomous product objective and authorized improvements to the build plan. Resume the existing
+`V3-AUTONOMY-001` provisioning work, one bounded local slice at a time, now that the
+`V3-PLANANCESTRY-001` integrity repair and `V3-GOVSYNC-001` coordination repair are tested and
+recorded complete. The operator reports fresh trial input, not independently inspected here; the
+real fixture trial remains unselected. This is not live route selection,
+plan adoption, credential access, or paid execution. Keep the
+empirical single-model baseline and subsequent measured ensemble comparison as the product priority.
+
+### V3-DEVROUTE-001 — Development routing identity and bounded refusal diagnostics
+
+- **Objective:** Reproduce the operator-reported development identity refusal safely and improve bounded refusal diagnostics without weakening exact route, secret, accounting or qualification boundaries.
+- **Files/modules:** Existing development_review.py/development_transport.py and relevant discovery/production identity readers; synthetic response fixtures, unit/mock-HTTP integration, development schemas, inventory, guidance and current records as needed.
+- **Acceptance criteria:** Establish a synthetic failing/passing matrix for requested versus independently metadata-bound canonical identity. Accept no response-authored aliases or arbitrary model strings. Determine absent/false/true/malformed BYOK semantics from authoritative documentation and actual existing contracts before changing any rule. Retain only an explicitly allowlisted bounded redacted diagnostic projection and named refusal codes; never assume arbitrary router metadata is secret-free. Known/unknown/overrun costs, no retries/fallback, revocation and all false authority markers remain intact. Both fixture and shard paths stay compatible; latest real response bytes were not retained, so a synthetic reproduction is not proof of that call's cause.
+- **Dependencies:** V3-DEVAUDIT-001 local capability tested and recorded before selection. The 2026-09-08T06:23Z operator result is nonauthorizing reported evidence. Any paid verification remains separately selected operator work.
+- **Status:** `COMPLETE`
+- **Local capability COMPLETE 2026-09-08T07:31:09Z:** 121 new routing/schema/real-file CLI checks, 383 compatibility checks, two inventory-focused checks and the seven-file 315-test terminal matrix pass. Ten-file Ruff/format, strict mypy (268 files), canonical generation and governance pass. Sixteen request/estimate comparisons across eight input cases and ten protected source/schema files remain exact. Complete supplied discovery binds canonical identities; absent/conflicting BYOK is not fabricated; bounded named diagnostics retain refusal/accounting without raw metadata. Actual provider confirmation remains unverified and separately queued.
+- **Negative/CLI validation 2026-09-08T07:25:39Z:** 121 new routing/schema and real-file CLI checks pass. Malformed/missing/conflicting BYOK, unbound aliases, revocation, redaction, structural/header refusals, legacy observation compatibility and retained known/unknown/overrun costs are exercised with mock HTTP only. Four affected schemas and the exact two-source inventory extension are regenerated and reviewed; production compatibility and final governance/static checks follow.
+- **Initial repair 2026-09-08T07:09:07Z:** Ten synthetic compatibility failures were reproduced before editing (eight canonical-ID locations across fixture/shard plus two explicit-usage-BYOK controls). The repaired shared path passes 123 focused checks and four-module strict mypy. New typed bounded routing context/projection, refusal codes, canonical revocation checks and parent observation/generation-reuse joins are implemented. Full negative/real-file integration, affected schemas/inventory and terminal checks remain pending.
+- **Selected 2026-09-08T06:56:17Z:** Local synthetic reproduction and routing/diagnostic implementation under the standing user product goal. Baseline 245 development checks pass. Bind accepted canonical identities only to independently supplied validated discovery; endpoint-only metadata permits only the request ID. Require explicit false BYOK evidence in at least one documented response location, reject any true/malformed marker and retain absence as unknown. Persist only bounded allowlisted diagnostic fields, never arbitrary router payloads. No paid verification or production admission change.
+- **Next action:** Local capability COMPLETE. V3-DEVTRIAL-001 has reviewed the report and remains PARTIAL for missing or unverified empirical evidence. Next V3-DEVBENCH-001 is QUEUED for a versioned measured synthetic baseline. No private response authentication, paid replay, publishing or qualification is inferred.
+
+### V3-DEVAUDIT-001 — Bounded non-qualifying sharded development audit
+
+- **Objective:** Implement one usable development-only multi-file audit path, advancing the first real single-model baseline while preserving qualified-audit and strict cost-proof boundaries.
+- **Files/modules:** models/development_audit.py; orchestration/development_audit.py; existing development_review.py, development_transport.py and development_cli.py; frozen synthetic multi-file corpus and guarded counterpart, unit/mock-HTTP real-file integration, schemas, inventory and documentation/records.
+- **Acceptance criteria:** Exact allowlisted corpus bytes; deterministic complete primary-file partition with shared corpus context and source-line binding; one exact model/endpoint and rebuilt native-schema requests; preflight every request and the aggregate estimate before sending; durable cost reservation before each sequential attempt; no automatic retries/fallback, no continuation after incomplete/unknown/overrun accounting; exclusive plan/per-shard/aggregate output and no output clobber; missing shards remain explicit. Development outputs retain false audit/validation/qualification/release markers. Existing fixture transport and strict production contracts stay compatible.
+- **Dependencies:** V3-DEVCOST-001 and V3-DEVRUN-001 complete. Real provider trial and qualified V3-SINGLE-AUDIT-001 completion remain separate empirical dependencies. Local implementation may proceed without a paid call or private input; no report-file instruction grants authority.
+- **Status:** `COMPLETE`
+- **Local capability COMPLETE 2026-09-08T06:44:35Z:** Exact frozen three-file plans, shared context, rebuilt protected dispatch, sequential single attempts, durable cost/output joins, explicit gaps and no replay are implemented and locally tested. Focused 116 pass; legacy development/cost-ledger 269 pass; documentation/objective repair 29 pass. Fourteen-file Ruff/format, strict mypy 267 files, canonical generation and governance pass. No actual multi-shard provider run, validated finding, qualification or release is claimed. Final recorded-state matrix follows; the reported fixture routing mismatch remains separately queued as V3-DEVROUTE-001.
+- **Final recorded-state validation:** 314/314 pass in 72.08s; current operator/report/queue/plan/history and all false authority fields reconcile. Full application-suite and real multi-shard/qualified-audit claims remain absent.
+- **Pre-terminal review 2026-09-08T06:40:19Z:** All 116 focused checks and 269 compatibility checks pass; thirteen-file Ruff/format, strict mypy 267 files, read-only canonical, eight exact legacy request/estimate controls, six protected byte comparisons and five routing/decoding AST comparisons pass. Initial terminal matrix 311 pass/three documentation-state failures; restore the full CANDROUTE header ID and extend the exact closed ticket set for DEVAUDIT plus the queued DEVROUTE follow-up, then rerun without weakening assertions.
+- **Local tests 2026-09-08T06:36:09Z:** Models/runner 91 pass and real-file/mock-HTTP CLI integration 19 pass; existing development/cost-ledger compatibility 269 pass. Three new schemas and reviewed five-source inventory extension are published locally. No live multi-shard result, qualification or paid replay is claimed; final strict/canonical/terminal checks remain pending.
+- **Implementation slice 2026-09-08T06:26:29Z:** Frozen paired three-file corpus, deterministic complete-primary/shared-context plans, reusable protected transport, sequential durable runner and CLI are implemented. Initial models: 48 pass; legacy development compatibility: 131 pass. Runner/CLI failure integration, schemas, inventory and final validation remain in progress. Latest operator fixture-call mismatch is reconciled as nonauthorizing reported evidence, not fixed or rerun in this slice.
+- **Selected 2026-09-08T05:45:13Z:** User's standing request authorizes local build-plan improvements and implementation toward the full objective. Existing product priority is the first real sharded baseline; no further static image slice is selected. This is source/CLI/test implementation only, not paid execution, plan/lineage adoption or publishing.
+- **Latest reported empirical observation:** The 2026-09-08T09:22Z operator entry reports both exact three-shard variants OBSERVED_ALL_SHARDS, costs USD 0.1147896/0.1117830 and wall times 86.5s/102.7s. Unguarded shards repeat one primary defect; guarded output has a design advisory. The author reports a pre-reservation output-parent refusal followed by successful runs. These are non-qualifying reports, not independently authenticated raw results or aggregate quality scores.
+- **Current next action:** DEVAUDIT and DEVROUTE local capabilities remain COMPLETE. V3-DEVTRIAL-001 is reviewed PARTIAL; next V3-DEVBENCH-001 is QUEUED for conservative source-bound scoring, explicit advisory semantics and complete cost/runtime/failure denominators. The queue records the output-parent guidance follow-up. No new provider call, private-input read or publishing is selected.
+
+### V3-PIPEPERF-001 — Profile and reduce measured synthetic pipeline overhead
+
+- **Objective:** Reduce measured CPU overhead in the synthetic audit portfolio/resume path while preserving defensive checks and exact accounting. This addresses local build feedback and potential audit latency; it is not a new assurance mechanism.
+- **Files/modules expected:** tests/integration/test_coverage_pipeline_integration.py; profile-identified owning boundary in orchestration/pipeline.py, scheduler or model validation only after attribution; deterministic unit regressions; current queue/worklog and canonical artifacts only if changed runtime source requires them.
+- **Acceptance criteria:** Retain an exact-source local baseline and use bounded local Python profiling to identify the owning hot path before editing. Demonstrate a material same-host/same-runtime reduction on the unchanged synthetic scenario and a deterministic work-count regression at the repaired boundary. Preserve the full 24-role request set, exact request/estimate/usage/ledger conservation, byte-bound output custody, resume without new transport, explicit incomplete coverage and false authority. Exercise malformed, drifted, incomplete and resumed state; no stale authority caches, removed validation, skipped assertions, test-scope reduction or timeout-only repair. Run focused compatibility and the normal full check when its local execution prerequisites permit; unavailable checks stay incomplete.
+- **Status:** `COMPLETE`
+- **Local capability COMPLETE 2026-09-08T09:32:41Z:** Profile-led fresh multi-model schema generation plus bounded per-invocation input/renderer custody is implemented. Final 38 new controls, original/parser checks pass 90; compatibility passes 905; final governance/documentation/objective/schema/inventory/CI/formatter matrix passes 358. All eleven unchanged coverage integrations pass; the tightened guard's slow case is 344.96s versus 815.051s baseline (57.68% lower). Its integration run preceded only the final allocation-edge bound, separately covered by final 90/905/358 checks. Full lint, strict typing, canonical generation and integrity checks pass. No cached pass, parser/wire/ledger change, weakened assertion, full-suite/hosted or real-audit claim.
+- **Final review and tested input custody 2026-09-08T09:29:02Z:** Two further red cases exposed substituted batch generation and late mutation of an earlier shared definition. Explicit batch-renderer custody and a fresh bounded input-edge snapshot repair both; 38 new plus legacy/parser checks pass 90 and final eight-file compatibility passes 905. Input-custody coverage integrations pass all eleven in 427.10s, with the slow case at 344.96s versus 815.051s baseline. Final allocation-only edge bound is covered by the final 90/905 matrices. No public parser, wire-schema or test scope changes; final canonical/current-state checks follow.
+- **Measured integration result 2026-09-08T08:53:29Z:** The unchanged full 24-role synthetic portfolio/resume test passes in 277.50s (278.07s total), versus the retained 815.051s baseline: 65.95% less call time. Final 26 new controls plus existing truncation/parser checks pass 78; eight-file compatibility passes 893. Runtime change is confined to fresh schema-inventory guard construction; all public protocol classes/functions except the guard and seven protected source/test files remain exact. Final full-file integration and recorded-state validation are still running/pending; no full-suite or hosted claim.
+- **Profile-led repair slice 2026-09-08T08:45:06Z:** A bounded 120s cProfile run attributes 101.650s of 123.141s to 1,391 truncation integrity checks and over 20,000 schema generations. Fresh batch generation preserves cross-call freshness while sharing definitions within one guard invocation. Twenty probe iterations take 0.104s versus 0.346s for individual roots. The local repair passes 76 focused cases; unchanged 24-role integration timing is live, not yet a result. Two typing errors remain to correct; canonical inventory review follows.
+- **Selected 2026-09-08T08:29:22Z:** Previous EVIDENCEFORMAT turn is PROGRESS: repair tested, full-check diagnostic retained and profile-led next action supported by exact timing evidence. Current source hashes still match the 815.051s baseline. Begin bounded provider-free Python profiling of that unchanged 24-role synthetic portfolio/resume case before any runtime edit. No full-suite pass, paid call or hosted-CI action is selected.
+- **Dependencies:** V3-EVIDENCEFORMAT-001 is tested COMPLETE. Independent of paid DEVTRIAL selection and real engine availability: the measured case uses FakeOpenRouter and StaticScannerRunner over a fixed synthetic local fixture. No provider or remote CI execution is authorized by this ticket.
+- **Measured evidence:** Terminal full-local-check.xml records test_clean_solidity_runtime_executes_exact_candidate_independent_specialist_portfolio at 815.051s, compact-surface resume at 80.414s and portfolio-release resume at 59.875s on local Python 3.13.15/macOS. A one-second sample of the exact owned pytest child shows active Python/Pydantic/JSON work and about 99% CPU, not a known owning function or proof of repeated validation. The workflow quality job uses Python 3.12/Ubuntu and a 20-minute timeout; this is a performance lead, not reproduced GitHub failure causality.
+- **Baseline custody:** Validation directory /private/tmp/mmaudit-local-validation.UhMS78. Full XML SHA-256 7e864ee2c61c2b6ecc35a1e273cf01dc604f42c7c309758e0ec25f3186d4b529; sample c5bb60646e2e7b482bdae2d4d0c88670991580278e44858137ab236266318e95. Test source f88560b8dd72b3199b947027002a6889e578e47abc56f53147afe4e5a9cd4941; pipeline 33ca32b08ccb72e5f14b75b71bc8d6552c634a69c0e6af74f9f324017762f004; model schemas 6d6ffd180100d9d118bc289751b2491234aaab367ffe5f4b5e8ef2b8fea2a2f6. These are diagnostic fingerprints, not release provenance.
+- **Next action:** Local PIPEPERF acceptance is COMPLETE. DEVTRIAL evidence review is now recorded PARTIAL; next V3-DEVBENCH-001 is QUEUED for measured local development scoring. No new paid command or private-input read. Full-suite, hosted validation and real-audit/quality claims remain incomplete until actual evidence supports them.
+
+### V3-EVIDENCEFORMAT-001 — Keep external operator evidence outside automatic formatting
+
+- **Objective:** Make local/hosted lint and formatting preserve externally authored operator evidence while continuing to reject defects in owned source.
+- **Files/modules:** pyproject.toml; focused configuration/unit and disposable formatter integration tests; README and current queue/worklog/runtime records. Do not edit operator_results.md or the governance validator.
+- **Acceptance criteria:** Reproduce the actual make lint failure under the installed formatter. Extend only the exact external-evidence path exclusion; do not exclude owned source or all documentation. Prove directory formatting leaves synthetic operator bytes exact, still formats/checks adjacent owned Python, and does not silence lint failures. Full make lint and relevant schema/governance/history checks pass. Existing workflow dispatch-only and protected provider settings stay unchanged. No hosted run, evidence rewriting or passing full-suite/real-provider claim without a result.
+- **Dependencies:** V3-DEVROUTE-001 tested COMPLETE; current unmodified report ba14df00 is bound by governance. This independent build blocker was exposed while DEVTRIAL execution/scope/spend selection remains pending.
+- **Status:** `COMPLETE`
+- **Post-closure local diagnostic 2026-09-08T08:23:11Z:** Normal make check passes lint, strict source typing and governance, then stops at 179 passed / seven skipped / one setup error in 1077.84s. The first error is a denied synthetic 127.0.0.1 listener; the exact inspected eleven-case file passes with scoped host permission in 7.53s. Full suite remains incomplete. One unchanged mocked portfolio/resume test takes 815.051s; queue V3-PIPEPERF-001 for profile-led local repair, not a presumed root cause or hosted-CI diagnosis. EVIDENCEFORMAT remains COMPLETE.
+- **Local repair COMPLETE 2026-09-08T07:51:11Z:** All five new unit/real formatter regressions pass after reproducing five failures before repair. make lint now passes with761 formatted files and no lint errors; make type passes260 source files. Canonical release/inventory generation and current governance pass. Parsed pyproject changes only the one exact evidence exclusion; operator bytes ba14df00, inventory71eee0f8, active plan and immutable history are retained. No hosted run or actual-provider outcome is claimed. Broader local test validation follows.
+- **Selected 2026-09-08T07:43:48Z:** Current make lint stops at Ruff 0.16.0 formatting of Python snippets in operator_results.md; 759 other discovered files were already formatted. Preserve raw external evidence rather than reformatting it. Local only, no provider/CI action.
+- **Next action:** EVIDENCEFORMAT is COMPLETE; keep its exact exclusion and negative controls. Next bounded local ticket is V3-PIPEPERF-001. Full-suite completion, hosted validation and real audit quality remain unverified.
+
+### V3-HARDHAT-001 — Independent phase supervision and protocol consumption
+
+- **Objective:** Supply the missing parent-side process/output supervision prerequisite for the
+  two-phase Hardhat protocol without promoting unverified image or reporter observations.
+- **Files/modules:** scanners/hardhat_supervision.py; safe unit/local integration tests, canonical
+  inventory, protocol/report joins where needed, lifecycle/finalization helpers,
+  orchestration/managed_image_metadata.py, managed_image_layers.py, release_io.py,
+  README, operator guide and current records.
+- **Acceptance criteria:** Exact typed request binding, bounded finite output and phase deadlines,
+  actual exit observation, cleanup on normal/error/interrupt paths, and no success on incomplete
+  capture. Keep production Hardhat/image/isolation refusals and every serialized authority false.
+- **Dependencies:** Existing locally tested reporter/source/two-phase/Unix-bridge contracts.
+  Managed image identity, supported Linux boundary and actual Hardhat evidence remain unproven.
+- **Status:** `PARTIAL`
+- **Image file membership partial closure 2026-09-08T05:33:03Z:** 193 focused checks pass in 9.09s; existing eleven-file compatibility 624 in 3.65s; ten-file Ruff/format, strict mypy (265 files), read-only canonical and exact source/history checks pass. The seven-file terminal matrix records 308 pass/five failures in 71.19s because the operator report changed during the run; its latest revision separately refuses the existing ambiguous-accounting guard. Do not treat current consistency as passing. No validator or operator evidence was edited to suppress that refusal.
+- **Result/limitation:** This bounded static membership capability is locally tested; HARDHAT remains PARTIAL for actual image provisioning, reporter launch consumption, transitive closure and runtime admission. All authority remains false.
+- **Current next action:** Leave HARDHAT PARTIAL; author-corrected operator evidence is now reconciled under DEVAUDIT. Finish the selected local development capability, then address queued V3-DEVROUTE-001. No additional image slice, provider run or publishing is selected.
+- **Image file membership locally tested 2026-09-08T05:20:13Z:** 191 local checks pass in 1.25s: 172 units and nineteen real-file integrations. Bounded USTAR/local-PAX parsing, whiteout/replacement semantics, in-image symbolic lookup and earlier same-layer hardlinks join the four selected pins without extraction/execution. Current source/canonical review adds four gated sources, removes/reclassifies none and preserves all readiness fields.
+- **Current next action:** Finish compatibility/inventory/terminal validation and exact source/operator/current/history reconciliation before the parent returns PARTIAL.
+- **Image file membership selected 2026-09-08T04:57:07Z:** Reuse retained verified raw/gzip streams to parse bounded local tar records and compute effective file membership in memory. Bind existing Hardhat/Node/relay paths and define one fixed reporter image path; handle supported whiteouts/replacements/links explicitly. No extraction, executable launch, provisioning or runtime authority.
+- **Files expected:** isolation/oci_layer.py; orchestration/managed_image_files.py, managed_image_layers.py, managed_toolchain.py; inert fixtures and unit/real-file integration tests; reviewed inventory, README/operator guide and current records.
+- **Current next action:** Implement, test and record this one static prerequisite; all image/production admission gates remain false.
+- **Layer-byte terminal validation 2026-09-08T04:36:45Z:** 126 focused checks pass in 9.06s; eight-file compatibility 500 in 2.75s; terminal seven-file consistency 312 in 73.11s. Eight-file Ruff/format, strict mypy (263 files), read-only canonical, governance and exact source/artifact/operator/history/diff checks pass. Eleven inventory sources added, none removed/reclassified; no readiness promoted. Actual local tar/gzip byte identities are observed without extraction or execution; parent HARDHAT remains PARTIAL for filesystem/executable membership and runtime admission.
+- **Current next action:** V3-HARDHAT-001: inspect and implement a bounded layer-to-file membership verifier using the current metadata/stream pins, including explicit handling or refusal of overlay, whiteout and link semantics. Bind the selected Hardhat/Node/relay/reporter paths without host extraction or execution. Image provisioning, unsupported codecs and real runtime admission remain separate unproved work; no private input, provider or hosted CI.
+- **Layer-byte identity locally tested 2026-09-08T04:33:33Z:** 126 focused checks pass in 9.06s: 104 stream/layer units, twenty real-file integrations and two inventory/freeze checks. Read-only raw authentication precedes bounded gzip processing; complete consumption, repeated-layer accounting, exact diff IDs, final custody/metadata/deadline and closure are checked. No extraction/runtime. Eight-file Ruff/format and strict mypy (263 files) pass. Eleven inventory sources added, none removed/reclassified; readiness unchanged.
+- **Current next action:** Existing compatibility, canonical/terminal consistency and exact operator/current/history reconciliation; leave the parent PARTIAL for filesystem membership and actual runtime admission.
+- **Layer-byte verification selected 2026-09-08T04:14:30Z:** Extend existing descriptor-safe evidence I/O with a retained read-only stream: authenticate exact bytes before yielding, bound and rehash complete consumption, recheck path/inode custody and close on all exits. Consume current image metadata to hash uncompressed tar or bounded gzip bytes against ordered diff IDs, with shared byte/time limits. No extraction, runtime or image admission; unavailable codecs refuse explicitly.
+- **Files expected:** release_io.py; orchestration/managed_image_layers.py; inert synthetic fixtures, unit/real-file integration, reviewed inventory and current documentation/records.
+- **Current next action:** Implement and test this one layer-identity prerequisite. Filesystem overlays, executable/reporter membership, image provisioning and real runtime admission remain unproved.
+- **Offline image metadata terminal validation 2026-09-08T04:07:35Z:** 142 focused metadata/inventory checks pass in 8.64s; compatibility 360 in 2.33s; terminal consistency 311 in 70.42s. Six-file Ruff/format, strict mypy (262 files), read-only canonical, governance and exact source/artifact/history/diff checks pass. Groups overlap; initial test-harness/header corrections are recorded. Only two inventory sources are added, no prior input removed/reclassified and no readiness promoted. The metadata prerequisite is locally tested; HARDHAT remains PARTIAL for layer/file identity and actual runtime admission.
+- **Current next action:** V3-HARDHAT-001: consume this exact metadata chain to verify bounded local layer bytes and uncompressed diff IDs, as the next prerequisite for executable/reporter membership. Revalidate current pins and retained bytes; refuse unsupported content. Image construction/import and real runtime admission remain separate unproved work. No private input, build/pull, provider or hosted CI.
+- **Offline image metadata locally tested 2026-09-08T04:01:48Z:** 140 new checks pass in 0.96s, including sixteen real-file integrations. Exact raw digest/size/platform/index/config joins retain ordered layer references; no layer bytes or runtime executes. Six-file Ruff/format and strict mypy (262 files) pass. Reviewed inventory adds only the module and explicit toolchain anchor; no prior input removed/reclassified or gate readiness changed.
+- **Current next action:** Focused inventory and compatibility, then terminal consistency and exact current/operator/history reconciliation. Parent image-side/executed identity remains unproved.
+- **Offline image metadata selected 2026-09-08T03:49:00Z:** Read exact locally supplied SHA-256-addressed metadata through existing safe evidence I/O, validate the declared image-to-platform-manifest-to-config chain and preserve ordered layer descriptors/diff IDs for subsequent content verification. Reuse the managed bundle; do not infer layer contents, executed identity or runtime authority. Reject unsupported metadata rather than fall back to tags, host PATH or config IDs.
+- **Current next action:** Implement this bounded prerequisite with synthetic local blobs, unit/refusal and real-file integration checks. Image construction/loading, full layer/filesystem interpretation and runtime-bound executable evidence remain separate unproved work.
+- **Terminal finalizer validation 2026-09-08T03:39:34Z:** Seven-file consistency passes 310 in 70.04s; all 84
+  new finalizer/handoff/inventory checks pass in 17.68s, compatibility 292 in 32.07s. Nine-file
+  Ruff/format, strict mypy (261 files), canonical, governance and exact source/artifact/history/diff
+  checks pass. Groups overlap. Phase finalization is locally tested, not whole-ticket completion:
+  image-side identity and actual runtime/launch admission remain unproved. No full-suite/real audit.
+- **Current next action:** V3-HARDHAT-001: inspect container-side executable/reporter identity and runtime-bound launch admission, then implement one bounded in-repo attestation-consumer prerequisite. Preserve unsupported/unproved runtime refusal and distinguish manifest digest from config identity. Image construction belongs to AUTONOMY; no image build/pull, private input, provider or hosted CI.
+- **Phase finalizer locally tested 2026-09-08T03:36:34Z:** Single-use request/layout/live-binding custody now
+  retains exact launch environment/client home, host executable observation and full CID through
+  typed cleanup. Phase drift cannot skip original safe cleanup; unsafe cleanup-root/executable
+  drift refuses to invoke another runtime. Late/missing/incomplete results cannot pass; primary
+  errors/interrupts/exits survive secondary failure with a fixed non-sensitive incompleteness note.
+- **Finalizer validation:** All 84 new checks pass in 17.68s; thirteen-file compatibility 292 in
+  32.07s. Nine-file Ruff/format, strict mypy (261 files), canonical and exact source/history checks
+  pass. Terminal consistency pending. Seven inventory sources added, none removed/reclassified;
+  readiness stays 35 logical/29 unsatisfied/15 manual, all authority false. Actual runtime unavailable.
+- **Current next action:** V3-HARDHAT-001: run terminal governance/documentation/objective/schema/inventory/CI consistency and reconcile exact current records before closing this locally tested finalizer prerequisite. Keep the parent PARTIAL for real image/runtime admission, durable launch identity and supported containment; no private input, provider or hosted CI.
+- **Phase finalizer selected 2026-09-08T03:06:57Z:** Retain the exact phase/backend/runtime environment and
+  executable observation from prelaunch through bounded cleanup. The current helper rebuilds its
+  environment; bind the handoff explicitly so changed ambient routing cannot redirect finalization.
+  Missing or changed CID, stale/reused phase, drift and incomplete cleanup cannot pass.
+- **Selected files/acceptance:** scanners/hardhat_finalization.py; existing container_cleanup.py
+  handoff; synthetic units and owned local integration; inventory, README/operator/current records.
+  Finalization is a prerequisite, not image admission. Preserve original errors/interrupts/exits,
+  retain single-use state and run safe cleanup even when shared result eligibility expires.
+- **Current next action:** V3-HARDHAT-001: implement and test a single-use phase finalizer that retains exact launch environment, executable/phase/CID custody and consumes bounded typed cleanup on every exit without suppressing primary failures. No production image admission, private input, provider or hosted CI.
+- **Terminal exact-cleanup validation 2026-09-08T02:58:36Z:** All 79 focused cleanup/isolation/inventory checks
+  pass in 9.11s; 214 lifecycle/layout checks pass in 30.99s with owned local listeners. Final seven-
+  file consistency passes 309 in 70.28s. Ten-file Ruff/format, strict mypy (260 files), canonical
+  verification, governance and exact artifact/history/diff checks pass. Groups overlap; no full-
+  suite or real container/Hardhat/audit result. This cleanup prerequisite is locally tested, not
+  whole-ticket completion. Actual runtime is unavailable; all authorities remain false.
+- **Current next action:** V3-HARDHAT-001: inspect and implement one bounded trusted per-phase finalizer retaining exact phase/backend/runtime custody and consuming typed cleanup. A started phase with no retained CID or incomplete finalization must refuse; preserve original capture errors. Keep production image admission and real container execution unproved; fixed local controls only. No private input, provider or hosted CI.
+- **Exact cleanup locally tested 2026-09-08T02:53:59Z:** Successful full-ID scoped absence queries now replace
+  runtime-error-as-absence; failed removal/query, ambiguous replies, drift, deadlines and output
+  limits refuse. Missing CID is not verified absence. CID/runtime identity and owned process cleanup
+  are bounded/rechecked. No image/daemon/launch authority is conferred by a cleanup observation.
+- **Cleanup validation:** 79 focused checks pass in 9.11s; 214 lifecycle/layout checks pass in 30.99s
+  with approved owned-local listeners after sandbox setup refusals. Ten-file Ruff/format, strict
+  mypy (260 files), canonical verification and source/history integrity pass. Terminal pending.
+- **Cleanup inventory/limitation:** 4144 sources/4147 occurrences/4092 gate/52 nongating; 35 logical/
+  29 unsatisfied/15 manual unchanged. Three obsolete cleanup loci are explicitly replaced; retained
+  classifications stay exact. Actual runtime unavailable here; fixed Python controls MOCK runtime
+  replies. Real image/container/Hardhat evidence and trusted production launch/finalizer remain
+  unproved. A late failure after confirmed-absence CID unlink cannot restore it; missing CID on
+  retry remains noncrediting. No private input, provider, paid run or hosted CI.
+- **Current next action:** V3-HARDHAT-001: run terminal governance/documentation/objective/schema/inventory/CI consistency, record exact results and close only this cleanup prerequisite. The parent remains PARTIAL for trusted launch/finalizer admission and real image/container/isolation evidence; no private input, provider or hosted CI.
+- **Exact cleanup selected 2026-09-08T02:37:38Z:** Repair inspect-error-as-absence before trusted launch wiring.
+  Require successful exact full-ID queries, bounded capture/deadline and stable CID/runtime custody;
+  retain evidence on error. Missing CID is not verified absence. Actual runtime is unavailable here.
+- **Current next action:** V3-HARDHAT-001: implement and test exact-ID rootless cleanup with successful scoped absence queries, bounded process/output/deadline handling and retained evidence on failure. This repairs the concrete trusted-finalizer prerequisite; keep image/runtime admission and real container execution unproved. No private input, provider or hosted CI.
+- **Terminal lifecycle validation 2026-09-08T02:16:16Z:** All 69 new checks pass in 15.92s;
+  seven-file consistency passes 308 in 70.29s, Hardhat compatibility 219 in 2.65s and bridge/layout
+  compatibility 98 in 22.42s (overlapping groups). Nine-file Ruff/format, strict mypy (259 files),
+  canonical verification, governance and exact artifact/history/diff reconciliation pass. No
+  actual image/container/Hardhat, supported Linux isolation or full-audit evidence is claimed.
+- **Owned lifecycle locally tested 2026-09-08T02:14:10Z:** One exact live bridge/binding owns inventory and test
+  phases through automatic source-bound selection and protocol consumption. Each phase uses its
+  single-use layout and only the remaining shared deadline/output allowance. Source/request/config/
+  phase custody is rechecked around trusted preparation, capture, finalization and bridge shutdown.
+  Original errors/interrupts/exits survive cleanup failure or suppression. No late result can pass;
+  bounded emergency cleanup cannot be skipped when the shared deadline expires.
+- **Lifecycle validation:** 69 new checks pass in 15.92s: 54 unit, eleven real owned-bridge/fixed-Node
+  reporter integrations, three actual finite-Python shared-bound controls and one inventory case.
+  Eight-file Hardhat compatibility passes 219 in 2.65s; bridge/layout compatibility passes 98 in
+  22.42s (groups overlap with other recorded runs). Nine-file Ruff/format, strict mypy (259 files),
+  read-only canonical verification and diff integrity pass. Terminal consistency is pending.
+- **Lifecycle integrity:** Inventory adds two sources and preserves every prior classification and
+  occurrence. Only three prior module semantic hashes and the supervisor anchor change. All eight
+  unaffected baseline scanner/protocol/bridge/config/schema/generator files are byte-exact; existing
+  backend/layout/cleanup classes and supervisor helpers are AST-exact. Inventory is 4134 sources/
+  4137 occurrences/4082 gate/52 nongating; readiness remains 35 logical/29 unsatisfied/15 manual.
+- **Lifecycle limitation:** The required programmatic launch context must independently admit the
+  image/command and perform bounded container finalization; no production implementation exists
+  yet. The driver rejects late observations but cannot preempt trusted Python callbacks or prove a
+  real container hard lifetime. Prior bridge startup is outside this owned handoff. Real Hardhat/
+  Mocha, image admission, per-test attribution, supported Linux isolation and a full audit remain
+  unproven. Production Hardhat remains UNAVAILABLE; every authority stays false. Parent PARTIAL.
+- **Current next action:** V3-HARDHAT-001: inspect and implement one bounded trusted per-phase launch/finalizer boundary, joining exact phase custody to existing runtime/image admission and finite cleanup. Refuse unproved image or unsupported runtime; use safe local controls and claim real execution only from verified runtime evidence. No private input, provider or hosted CI.
+
+
+- **Owned lifecycle selected 2026-09-08T01:53:17Z:** Consume one exact live bridge/binding through both phases,
+  wrapping separate single-use layouts and automatically preparing/consuming the protocol. Extend
+  independent capture with narrowing-only shared deadline/output allowances. Check elapsed time
+  through trusted preparation, phase boundaries, cleanup and bridge shutdown; no late result can
+  pass. Bounded emergency cleanup still runs after expiry, and original exceptions survive cleanup.
+- **Selected files/acceptance:** scanners/hardhat_execution.py, hardhat_supervision.py and exact
+  binding verification in isolation/container.py; safe units/owned local integrations, inventory,
+  README/operator/current records. A programmatic trusted phase boundary owns launch admission
+  and container finalization; serialized flags or unverified wrapper output never grant that
+  authority. Actual image/Hardhat/container execution stays refused. Tests must cover both actual
+  fixed-reporter phases plus deadline/output exhaustion, changed custody, preparation failures,
+  cleanup failures and interrupts. Actual container hard-lifetime enforcement remains unproven.
+- **Lifecycle selection-boundary action (historical):** V3-HARDHAT-001: implement and test the owned two-phase capture lifecycle with exact bridge ownership, shared absolute deadline and remaining output budget, automatic protocol consumption, and cleanup/error preservation. Trusted programmatic launch boundary and fixed local controls only; keep production image/execution refusals and no private input, provider or hosted CI.
+
+- **Terminal layout validation 2026-09-08T01:44:52Z:** Final 61 new checks pass in 25.51s after a
+  portable short-POSIX-temp fixture repair. Seven-file consistency passes 307 in 70.02s; 219
+  compatibility and 66 initial layout/backend checks also pass (overlapping groups). Six-file
+  Ruff/format, strict mypy (258 files), read-only canonical verification, governance and exact
+  artifact/history/diff reconciliation pass. Actual Linux/container/Hardhat evidence is unproven.
+- **Phase layout locally tested 2026-09-08T01:41:00Z:** Exact request/backend/policy/pinned-state joins and retained
+  handle checks surround exclusive phase-directory creation. Inventory and test share the read-only
+  source/socket, not writable output, seccomp or CID state. Reuse, links, overlaps, cross-phase
+  arguments and mid-construction drift refuse; failed phase directories remain for inspection.
+- **Layout validation:** 61 new tests pass in 26.12s (28 unit, 32 local integration, one inventory).
+  Existing backend plus initial new integrations pass 66 in 19.99s; eight-file Hardhat compatibility
+  passes 219 in 2.80s (overlapping groups). Six-file Ruff/format, strict mypy over 258 source/script
+  files, read-only canonical verification and diff integrity pass. Terminal consistency is pending.
+- **Layout inventory/integrity:** Three inputs added and one existing socket observation relocated
+  into the shared wrapper with identical expression/gate. Prior authorization/mount logic is AST-
+  exact apart from forwarding the optional layout. Only container/inventory prior module semantic
+  hashes change; schemas, production scanner, protocol, supervisor and live bridge code are unchanged.
+  Inventory is 4132 sources/4135 occurrences/4080 gate/52 nongating; readiness stays 35 logical/
+  29 unsatisfied/15 manual with all authority false.
+- **Layout limitation:** These are UNVERIFIED command constructions and real owned local bridge/
+  fixed-Python capture controls. Cleanup routing is mocked; no image/Hardhat/Mocha/container or
+  supported Linux isolation is proven. The production scanner remains UNAVAILABLE. Parent ticket
+  stays PARTIAL; no private input, operator/provider command, paid run or hosted CI is selected.
+- **Current next action:** V3-HARDHAT-001: implement one bounded owned two-phase executor lifecycle retaining the exact live backend binding and enforcing an aggregate elapsed-time deadline through phase gaps and cleanup. Exercise fixed local controls only; preserve image admission and production execution refusals. No private input, provider or hosted CI.
+
+
+- **Phase-layout prerequisite selected 2026-09-08T01:16:59Z:** Inspection of _wrap_hardhat_command shows
+  one fixed container-output directory and one container-runtime/container.cid for the entire
+  bridge-private root. The supervisor deliberately claims output once; a second phase cannot
+  safely reuse it. Moving all private state breaks the existing exact bridge seal. Resolve this
+  concrete layout prerequisite before wiring the aggregate two-phase executor deadline.
+- **Selected files/acceptance:** Extend isolation/container.py with request-bound, single-use
+  phase output/runtime layout and exact retained binding checks, keeping the bridge/source root
+  stable. Verify distinct mounts, CID/cleanup targets, rejected reuse/links/overlap and request/
+  backend/bridge drift using safe unit/local loopback/Unix controls. Reuse the existing wrapper,
+  protocol and supervisor; no image/engine admission or broader network capability. Update exact
+  inventory, README/operator guidance and current records. Real container cleanup remains unproven.
+- **Layout selection-boundary action (historical):** V3-HARDHAT-001: implement and test single-use request-bound phase output/runtime layouts sharing the exact retained live bridge, with pre/post binding validation and separate cleanup targets. Keep commands UNVERIFIED and production execution refused; no private input, container, provider or hosted CI.
+
+- **Capture/protocol join locally tested 2026-09-08T01:03:00Z:** Captured inventory now automatically
+  derives source-bound selection and the exact test-phase request. Both captured phases rejoin
+  current source/configuration, committed schema/reporter/request pins and original source seals;
+  combined retained bytes/durations and observed normal exits must agree with reported outcomes.
+  Changed captures/models/config/source, identical-tree root substitution, timeout/signals,
+  incomplete cleanup and contradictory exits refuse. Consistent failure/skip observations remain
+  untrusted and noncrediting. No production Hardhat command or new execution authority is admitted.
+- **Join validation:** All 84 new tests pass in 9.49s (75 unit, eight real finite Node/reference-
+  reporter integrations and one inventory case). Eight-file compatibility passes 219 in 2.78s;
+  groups overlap. Six-file Ruff/format, Node syntax, strict mypy over 258 source/script files and
+  read-only canonical verification pass. Terminal seven-file governance/documentation/objective/
+  schema/inventory/CI consistency passes 306 in 70.44s; terminal governance and diff integrity pass.
+- **Join inventory/integrity:** Two explicit inputs added; no prior source removed/reclassified.
+  Only prior protocol/inventory module semantic hashes change. All three original protocol
+  functions are AST-exact; ten unaffected baseline files and schema/input-locus shapes are exact.
+  Counts are 4129 sources/4132 occurrences/4077 gate/52 nongating; 35 logical/29 unsatisfied/
+  15 manual and all false authorities remain unchanged. Real Hardhat/Mocha behavior, live backend/
+  image admission, inter-phase wall time, container teardown and per-test attribution remain gaps.
+- **Next action:** V3-HARDHAT-001: inspect and implement one bounded owned two-phase executor lifecycle retaining live backend binding and an aggregate deadline through cleanup; exercise fixed local controls without admitting unverified image execution. No private input, provider or hosted CI.
+
+- **Capture/protocol join selected 2026-09-08T00:44:52Z:** Connect retained parent captures to the existing
+  parsers, process-local source seal and exact two-phase request contract. Inventory consumption
+  must prepare the test selection/request automatically. Test consumption must rebind source and
+  configuration, enforce report/request/schema pins, actual exit/outcome consistency and combined
+  capture ceilings, and refuse changed/incomplete observations. All reports remain untrusted and
+  noncrediting; this does not admit a command, attest an image or establish Mocha behavior.
+- **Selected files/acceptance:** Extend scanners/hardhat_protocol.py and reuse existing parsers,
+  source binding and supervisor. Add safe unit/local reporter integration regressions, exact
+  inventory coverage, README/operator guidance and current records. No production scanner refusal,
+  reporter source, request/report schema, private input, route, provider or hosted CI is relaxed.
+- **Join selection-boundary action (historical):** V3-HARDHAT-001: implement and test captured inventory-to-source/selection/test-request preparation and captured test-report consumption, with exact pins, exit/outcome consistency, aggregate ceilings and source/custody revalidation. Fixed local controls only; retain production image/isolation refusals and no provider or hosted CI.
+
+- **Parent capture locally tested 2026-09-08T00:33:11Z:** Exact typed request binding, bounded explicit launch
+  inputs, separate private roots and single-use output claims are implemented. Anonymous streams
+  and stable no-follow reports share a retained-byte ceiling; startup/draining/report deadlines,
+  actual exit and owned process-group cleanup are observed before detached capture. Residual
+  descendants, missing/linked reports and custody changes cannot pass. Original failures survive
+  secondary cleanup errors, including claim-descriptor close failures.
+- **Validation:** All 47 new tests pass in 8.04s (36 unit, ten real finite Python controls and one
+  inventory case). The five-file offline compatibility matrix passes 134 in 1.11s; groups overlap.
+  Six-file Ruff/format, strict mypy over 258 source/script files and read-only canonical generation
+  pass. Terminal seven-file governance/documentation/objective/schema/inventory/CI checks
+  pass 305 in 70.62s. Final governance and diff integrity pass; no full-suite or engine claim.
+- **Inventory review:** Fourteen sources added: one module, two host observations, ten metadata
+  observations and one explicit capture anchor. No prior source removed or reclassified; only the
+  prior inventory-module semantic hash changes. All 35 logical gates, 29 unsatisfied gates,
+  15 manual gates and every false authority remain unchanged. Schema shape is unchanged.
+- **Remaining limitation:** This is an independent capture primitive, not an admitted Hardhat
+  executor, semantic report authentication, image identity, container teardown or real audit.
+  Production refusal code remains byte-exact and UNAVAILABLE. The parent ticket stays PARTIAL.
+- **Prior supervisor next action (historical):** V3-HARDHAT-001: join detached inventory/test captures to the existing two-phase protocol with exact request, report, source and selection binding; keep real image/isolation execution refused. Use fixed local controls only; no private input, provider or hosted CI.
+
+- **Independent supervisor selected 2026-09-08T00:01:16Z:** Inspection shows HardhatForkScanner is preflight-only
+  and its capability-attestation function always returns no credit. An archive-only handoff would
+  still have no execution consumer. Select the missing independent phase output/exit supervisor
+  before archive integration, retaining all production image-side and isolation refusals.
+- **Files/acceptance:** Dedicated deterministic supervision module, focused unit and safe local
+  process integration controls; protocol/report observation joins as applicable, exact inventory,
+  README/operator guidance and work records. Bind the exact typed request, bound combined output
+  and wall time, retain real exit status, reject incomplete captures, and clean the owned process
+  group before results. Capture must not grant engine, isolation, image identity or audit credit.
+  Use fixed trusted local controls only; no repository JavaScript, actual Hardhat, container, model,
+  public RPC or hosted CI. Missing production authority remains unavailable.
+- **Selection-boundary action (historical):** V3-HARDHAT-001: implement and test independent bounded phase output/exit supervision, with exact request binding, fixed local controls, deadline/output ceilings and cleanup before nonauthorizing capture. Preserve production image/isolation refusals; no private input, actual Hardhat, provider or hosted CI.
+
+### V3-GOVSYNC-002 — Reconcile appended operator evidence without rewriting history
+
+- **Objective:** Repair the current-state validator's equality between a fresh operator-result
+  digest and immutable September-4 evidence, exposed by the legitimate September-7 appended result.
+- **Files/modules:** Governance validator and focused unit/local CLI tests; current records and guide.
+- **Acceptance criteria:** Bind current summaries to exact latest operator bytes and reported facts;
+  independently preserve historical JSON and original operator evidence. Reject tampering, drift,
+  fabricated accounting and authority promotion. Do not alter the active plan or access a ledger.
+- **Dependencies:** Tested and recorded AUTONOMY handoff slice; operator reports labelled 09:25Z and 10:40Z.
+- **Status:** `COMPLETE`
+- **Selected 2026-09-07T09:45:42Z:** Baseline reproduces eight stale-digest failures (90 pass).
+  Independently verify reconstructed original operator bytes, current exact bytes, latest-entry
+  identity and explicit reported accounting facts; preserve all historical JSON and false authority.
+  No production source, provider call or DEVREASON implementation is selected in this ticket.
+- **Result:** Current report bytes, latest dated identity and explicit reported accounting now
+  validate separately from the independently pinned original introduction/history. Bounded parsing
+  ignores quoted/code/comment examples and rejects malformed extra statements, ambiguous dates,
+  stale/fabricated summaries, coherently re-digested history edits and authority promotion.
+- **Validation:** Terminal seven-file governance/documentation/objective/schema/inventory/CI
+  matrix passes 230 in 64.86s, including 53 new cases (48 unit and five real local CLI). Focused
+  151 in 10.20s overlaps. Ruff, five-file formatting, strict mypy over 243 source/script files,
+  canonical verification, terminal governance and diff integrity pass. Two malformed-extra-
+  statement regressions were reproduced red before repair. No full-suite result is claimed.
+- **Limitation:** This verifies local report consistency, not ledger authenticity, a cryptographic
+  append-only journal for subsequent reports, audit completion or execution authority. No production source,
+  schema, active plan, operator-result record, ledger, hosted CI or provider action was changed.
+- **Reopened boundary (2026-09-07):** The new operator entry labelled 10:40Z wraps the ledger
+  count onto the following line and places the audit-count sentence on the ledger line. Exact
+  current digest rebinding still fails the rigid prose grammar; original history remains exact.
+  The completed DEVREASON implementation is unaffected. Do not rewrite the operator record or
+  treat the refusal as a provider/audit result. No new implementation has begun at this boundary.
+- **Reselected 2026-09-07T10:45:00Z:** Implement only the explicit accounting format repair; synthetic
+  positive and ambiguity/example-negative regressions precede the parser change. DEVTRIAL stays
+  unselected. Preserve source/artifact/history bytes and every false authority field.
+- **Format repair COMPLETE (2026-09-07T10:54:16Z):** Accept horizontal spacing, a single LF/CRLF
+  wrap per accounting-token gap and inline audit sentences. Recognized duplicate/malformed prefixes
+  are counted inline or wrapped. Non-whitespace masking and bounded wraps prevent stitching a fact
+  across paragraphs or hidden examples. Original report/history, exact amounts and false authority
+  remain intact. The latest operator report now passes without editing its bytes.
+- **Format validation:** Final terminal-state seven-file governance/documentation/objective/
+  schema/inventory/CI matrix passes 270 in 69.07s, including 40 new cases (35 unit / five CLI).
+  Focused 162 in 12.49s and documentation/objective 29 in 2.48s overlap. Pre-repair regressions and
+  the repaired current-header omission are recorded in the worklog; no assertions were weakened.
+  Ruff, four-file formatting, strict mypy over 243 source/script files, read-only canonical
+  verification, terminal governance and diff integrity pass. No full-suite or live result is claimed.
+- **Next action:** V3-AUTONOMY-001 is next safe local engineering work, still PARTIAL and unselected.
+  Select only one provisioning-to-audit handoff after this tested closure. DEVTRIAL remains queued
+  and unselected; no private input, provider command, paid execution or hosted-CI action.
+
+
+### V3-DEVREASON-001 — Repair development reasoning metadata resolution
+
+- **Objective:** Reproduce and repair the operator-reported fixture-transport rejection of
+  endpoint-level null reasoning metadata when the exact model-level inventory supports high.
+- **Files/modules:** Development review, shared reasoning resolver if appropriate, synthetic endpoint
+  fixtures and unit/local mocked integration tests, producer documentation and work records.
+- **Acceptance criteria:** Apply endpoint-level inventory when present, otherwise model-level;
+  preserve explicit negative/unknown refusals, exact snapshot/route bindings, high reasoning, ZDR,
+  source scope, no fallback, accounting and all non-qualifying limits. Identify the intended public
+  local snapshot producer or document the verified supported extraction path. Never read private
+  discovery artifacts, secrets or the real ledger, or select/call a provider to reproduce this.
+- **Dependencies:** V3-GOVSYNC-002; operator-reported 09:25Z defect. DEVTRIAL stays unselected.
+- **Status:** `COMPLETE`
+- **Selected 2026-09-07T10:12:43Z:** Existing shared resolver is confirmed; baseline development
+  unit/transport/CLI integration matrix passes 98 in 1.92s. Add synthetic regressions before repair.
+  Ordinary discovery stores model reasoning outside its nested snapshot; preserve that evidence
+  by accepting the complete validated discovery file on the existing input, alongside standalone
+  snapshots. Retain exact model/endpoint joins and revalidate at dispatch; no snapshot-schema or
+  production admission relaxation, private discovery read, ledger access or paid action is selected.
+- **Result:** Development preparation now uses the existing endpoint-first, absence-only resolver.
+  Complete validated discovery JSON is accepted on the existing input, preserving the model facts
+  that ordinary nested-snapshot extraction loses. Standalone constrained snapshots retain their
+  bound model inventory. Parent/source/snapshot/estimate custody is revalidated before dispatch;
+  negative/unknown/contradictory inventories and negative model parameters remain refusals.
+- **Validation:** 12-file compatibility matrix passes 1118 in 19.34s with two pre-existing code-
+  retarget deprecation warnings; final focused development matrix passes 131 in 2.64s, including
+  33 new cases (20 unit and 13 local integration). The real local discovery publisher feeds the
+  CLI with synthetic evidence and MOCK_HTTP only. Ruff, seven-file formatting, strict mypy over
+  243 source/script files and canonical verification pass. Terminal seven-file governance/schema/
+  inventory/documentation/CI matrix passes 230 in 64.91s. Matrices overlap; no full-suite or live
+  provider result is claimed. Exact final state and operator reconciliation are in the worklog.
+- **Producer:** Use the complete models-discover candidate JSON through --endpoint-snapshot;
+  no manual extraction or new input flag. list-endpoints JSON is diagnostic, not this input.
+  Existing snapshot/discovery/output schemas, production admission and strict cost proof are intact.
+- **Limitation:** Metadata is supplied, not fetched, refreshed or independently authenticated here.
+  Serialized REAL provenance grants no review/audit/qualification/release credit. No paid trial,
+  private artifact/credential/ledger, route selection, public chain or hosted-CI action occurred.
+- **Next action:** V3-AUTONOMY-001 is next safe local engineering work, still PARTIAL and unselected
+  at this tested closure. DEVTRIAL remains QUEUED and requires separate explicit real-input selection.
+
+
+### V3-GOVSYNC-001 — Separate current engineering state from historical operator evidence
+
+- **Objective:** Repair the four stale governance checks exposed by the local ancestry validation,
+  so automation can distinguish current code/ticket state from immutable September-4 operator
+  observations and detect genuine drift without pretending a provider or audit result exists.
+- **Files/modules:** Read-only governance validator, Makefile, unit/local CLI integration tests,
+  product-documentation tests, primary and V3 queues/worklogs, runtime/traceability coordination
+  metadata, README and V3 operator guidance.
+- **Acceptance criteria:** Derive and cross-check shared ticket status and unfinished counts;
+  identify the latest local completion and exact current inventory/schema separately from historical
+  PLANADOPT records; preserve exact operator-result bytes, no active candidate, retained V1,
+  private V2 nonadoption, zero completed real audits, and every false authority flag. Do not rewrite
+  history, weaken integrity assertions, infer paid permission, or restart hosted CI.
+- **Tests:** Scoped documentation/objective/inventory/schema checks, strict governance JSON and
+  diff integrity; any remaining external prerequisite stays explicit and nonauthorizing.
+- **Dependencies:** `V3-PLANANCESTRY-001` terminal local validation and worklog recording.
+- **Status:** `COMPLETE`
+- **Selected:** `2026-09-07T06:11:12Z` under the continuing product goal. PLANANCESTRY is tested and
+  recorded COMPLETE. The fresh baseline reproduces the four stale checks (`24 passed, 4 failed`).
+- **Selected implementation:** Add a read-only governance validator and strict current-engineering
+  record, mirrored in runtime/traceability metadata. Check exact current artifacts and queue-derived
+  counts while preserving the previous documents' historical payloads; replace stale current-header
+  assertions with current-state checks and retain historical assertions in their correct scope.
+- **Result:** Added strict mirrored current-engineering state with exact queue/artifact/operator
+  bindings, digest-bound current worklog headers and pinned, preserved historical JSON payloads.
+  The read-only validator rejects conflicting counts/statuses, artifact drift, malformed or
+  authority-promoting state, and historical mutation. Repaired all four stale documentation checks
+  with current-versus-historical scopes. `make test` and `make check` require the cheap local
+  governance check before pytest, including parallel make. Hosted CI remains untouched.
+- **Validation:** Seven-file governance/documentation/objective/schema/inventory/CI matrix passed
+  `177 tests in 57.07s` after the terminal metadata transition, including 64 new unit and five local
+  CLI cases. Repository-wide Ruff,
+  scoped formatting and strict mypy over 242 source/script files pass. Terminal metadata and exact
+  canonical-artifact rechecks are recorded in the worklog. No full-suite or hosted-CI pass is claimed.
+- **Limitation:** Mutable developer coordination is not an authenticated seal or provider/audit/
+  qualification/release evidence. Zero completed real audits, the exact operator-result record,
+  active v1.7 plan with no candidate, retained V1 and private V2 nonadoption remain unchanged.
+- **Next action:** Resume existing PARTIAL `V3-AUTONOMY-001` with one bounded local provisioning
+  capability after this tested closure; no current implementation ticket is selected at this
+  boundary. The real single-model audit remains the product milestone, not this repair.
+
+### V3-DEVCOST-001 — Explicit non-qualifying development cost estimates
+
+- **Objective:** Implement the operator-approved development-only exception to provider-enforced
+  price guarantees, keeping estimated spending and overspend risk distinct from certification.
+- **Files/modules:** Typed development cost policy/estimator, a small development accounting
+  adapter over the existing atomic ledger, offline CLI preview, focused unit/local integration tests,
+  README/operator guidance, generated inventory, and work records.
+- **Acceptance criteria:** Explicit risk acknowledgement; exact decimal prices and tier maxima;
+  default 2x margin including cache-write allowance at least the prompt rate when quoted zero,
+  with a nonzero minimum total estimate; bounded text-only
+  requests, retries, per-attempt estimates and aggregate target (at most USD 250). No tools/search
+  or automatic fallback. Durable reservation precedes use; unsettled/unknown costs stop subsequent
+  development reservations; actual overages are recorded and stop further reservations. Estimates
+  cannot enter existing strict cost-proof, qualification, or release types. Offline CLI does not
+  read credentials, contact a provider, create a ledger, adopt a plan, or emit qualifying evidence.
+- **Dependencies:** User's explicit approval on 2026-09-06 after `V3-CANDROUTE-001` diagnosis.
+- **Status:** `COMPLETE`
+- **Selected:** `2026-09-06T07:27:19Z`.
+- **Scope limit:** This is the usable policy/preview/accounting slice. Paid development transport
+  integration and the first audit remain separate work; no provider call is selected this turn.
+- **Result:** Separate strict development types, offline `development preview-cost`, and atomic
+  estimate-backed reserve/reconcile accounting are implemented. Risk acknowledgement is required;
+  all provider-enforcement/qualification/release markers remain false. No strict pricing algorithm,
+  production transport, active plan, real ledger, or qualification/release control was relaxed.
+- **Validation:** Final compatibility matrix passed `1080` tests in `25.21s`, including all `84`
+  new development cases and existing provider/CI regressions. Scoped Ruff check/format and strict
+  mypy over seven source/script files pass. Inventory/schema/governance checks report `87 passed,
+  6 failed`; the six identities match previously recorded documentation and paused candidate-schema
+  failures. Only the two new schemas and the exact inventory were generated; canonical verification
+  still refuses the unchanged stale candidate-selection schema. No full-suite pass is claimed.
+- **Limitation:** Paid development transport is not integrated. Estimates are not guarantees;
+  overspend can occur, and unknown or over-reservation actual costs stop further reservations.
+  Existing private ledger setup/recovery and all source/route/privacy/execution prerequisites
+  remain required for future transport. No provider call or audit was performed.
+- **Next action:** `V3-DEVRUN-001`, the separate development transport integration below. Do not
+  treat the preview as a paid-run command or strict cost-proof evidence.
+
+### V3-DEVRUN-001 — Integrate explicit non-qualifying development transport
+
+- **Objective:** Connect the approved estimated-cost policy to a bounded single-model development
+  request path, advancing the empirical audit baseline without awarding qualification or release.
+- **Files/modules:** Dedicated development transport adapter, existing request/context and report
+  interfaces where reusable, focused synthetic unit/local mocked-transport integration tests,
+  operator guidance, and work records.
+- **Acceptance criteria:** Bind dispatch to the exact estimated request bytes and pinned endpoint;
+  durable reservation before dispatch; known/uncertain/overrun accounting on every exit; bounded
+  retries and aggregate spending targets; explicit consent, secret isolation, ZDR, no fallback,
+  revocation checks, and synthetic/local scope controls. Development outputs stay unmistakably
+  non-qualifying and cannot enter strict production cost proofs or release paths. Do not mutate
+  the active candidate plan or bypass unresolved ancestry WIP. Validate the transport locally first;
+  no paid execution is authorized merely by this queue entry.
+- **Dependencies:** `V3-DEVCOST-001` complete; inspect the current request/route and audit pipeline
+  boundaries before selecting the smallest implementation slice. Any additional policy relaxation
+  or paid-run authority needs separate explicit direction.
+- **Status:** `COMPLETE`
+- **Selected:** `2026-09-06T12:45:52Z`, following the user's instruction to proceed.
+- **Selected slice:** Dedicated estimated-cost transport and a fixture-review entry point, using
+  only exact pinned synthetic local Solidity inputs, fixed request construction, and typed
+  non-qualifying observations. Exercise the complete path with mocked HTTP and a real temporary
+  ledger. No live credential or provider call is selected; ordinary audit and release paths remain
+  unchanged. This is request-path integration, not a sharded audit or qualification campaign.
+- **Result:** The separate `development review-fixture` CLI constructs requests only from two
+  byte-pinned abstract fixtures and dispatches one explicit attempt with the approved development
+  policy. Exact-byte reservation, explicit credential/egress selection, no fallback/redirect/proxy
+  or automatic retry, negative revocation checks, bounded responses, strict decoding, and durable
+  known/uncertain/overrun accounting are implemented. Cancellation and persistence failures do not
+  create free retry credit. Observations cannot grant finding-validation, audit, qualification,
+  or release authority. The ordinary audit transport and active candidate plan are unchanged.
+- **Validation:** The final 16-file local compatibility matrix passed `1218` tests in `26.55s`;
+  scoped Ruff check/format over 11 Python files and strict mypy over six source/script files pass.
+  Inventory/schema/governance checks report `87 passed, 6 failed in 52.48s`, with the same six
+  previously recorded documentation and paused candidate-schema failure identities. Both new
+  schemas and the exact inventory projection validate; canonical schema verification still refuses
+  only the unchanged stale candidate-selection schema. No full-suite pass is claimed.
+- **Limitation:** Validation uses synthetic credentials and mocked HTTP only. No real provider call,
+  billing reconciliation, dynamic Solidity execution, sharded audit, held-out benchmark, or
+  deployment result exists. Estimated targets can be exceeded. Missing routing/cost/finish evidence
+  is incomplete, not a pass. CLI output is a non-qualifying observation, not a durable audit report.
+- **Next action:** `V3-DEVTRIAL-001` below, a separately selected operator-run fixture trial. A first
+  real audit remains later work and cannot satisfy the qualified `V3-SINGLE-AUDIT-001` milestone
+  by relabelling a fixture observation.
+
+### V3-DEVBENCH-001 — Measured non-qualifying synthetic development baseline
+
+- **Defensive objective:** Make the existing synthetic sharded development path produce an honest, reproducible engineering baseline for later model/ensemble comparison: declared invariant findings must be distinguishable from advisories, repeated consequences must not inflate root-cause counts, and incomplete attempts must remain measurable.
+- **Files expected to change:** Existing development finding/request/observation models and shared transport/runner only as needed for versioned semantics and owned elapsed-time reporting; a deterministic scorer separate from model reasoning; synthetic paired corpus and response-independent agent-constructed development truth under tests/fixtures; score schema/CLI and local tests; canonical artifacts and current records.
+- **Acceptance criteria:** Freeze source and independent constructed-truth pins before scoring; never infer truth from the model's output, name-match a fixture into a pass or put the truth manifest in the model prompt. Add explicit advisory versus invariant-violation semantics with consistent nullable invariant rules and bounded originating source locations; retain or version existing v1 observation/request compatibility rather than reinterpreting historical findings. Validate locations against the frozen corpus and bind primary/consequence relationships independently of model-authored labels. Report unique matched roots, duplicates, unmatched claims, misses and advisories separately; declared kind/root refs or severity filters cannot erase false positives or failed attempts. Publish exact metric definitions and denominators, including first-attempt completion, all actual/uncertain costs, owned monotonic elapsed time and missing shards; missing truth/harness/response/runtime stays explicit. Exercise planted/guarded, duplicate, mismatched-class/location, falsely advisory-labelled violation, malformed, unknown-cost and partial-shard controls with unit and real-file/mock-HTTP integration. Keep scoring deterministic; no paid run is needed for local capability. Before a publishable baseline, verify a dependency-complete clean snapshot contains the exact corpus, runtime and tests. Public labelled controls measure engineering behavior only: no blind/held-out score, qualification, strict-cost proof, frozen-objective L completion, validated audit or superiority claim.
+- **Dependencies:** DEVTRIAL evidence review recorded before selection; V3-DEVAUDIT-001 and V3-DEVROUTE-001 local capabilities complete. Missing old fixture runtime does not block implementing truthful future metrics. Real non-qualifying observations and strict qualified campaigns remain distinct; no report-file instruction authorizes a call.
+- **Status:** `COMPLETE`
+- **Publication acceptance 2026-09-08T13:39:29Z:** The exact implementation has 11768 passed / 57 skipped across all 11825 reconciled identities. Final record and chronology-fixture matrix passes all 328 cases in 76.94s, with lint771/type261/governance/canonical checks passing. Preserve the concurrent operator-report-only commit 865932c as parent; it contains the same f27d3d33 report already tested. Publish the dependency-complete reviewed checkpoint without force; this is not provider, qualification or release authority.
+- **Publication test-fixture maintenance 2026-09-08T13:31:23Z:** Current record checks pass 323 and fail five: three required header reminders were shortened, and two positive synthetic append cases used a fixed 10:00 timestamp older than the new 13:18 report. Restore explicit no-provider/full-ticket reminders and derive each synthetic append date as copied report date plus one second, without a host-clock read. Production chronology/accounting validation and every negative assertion remain unchanged; rerun the same matrix.
+- **Latest operator reconciliation and header repair 2026-09-08T13:23:12Z:** Reconcile the 13:18 report as nonauthorizing evidence: one complete planted observation, two incomplete guarded attempts, two uncertain 429 reservations and inconsistent development accounting. Do not infer free requests, settlement, route adoption or retries. Restore the exact contain 42 header grammar and PROVIDER_FREE/NONAUTHORIZING markers without changing code, tests or status. Final record verification precedes the user-authorized Git publication.
+- **Local capability COMPLETE 2026-09-08T13:06:45Z:** Frozen response-independent, explicitly agent-constructed truth; versioned advisory/origin semantics; deterministic all-claim/root/duplicate/cost/time metrics; automatic pre-dispatch binding and post-run score artifacts; canonical schemas and scoped negative/real-file/mock-HTTP tests are complete. Corrected dependency-complete snapshot passes351 development/328 terminal cases; exact full11825-node reconciliation records11768 passed/57 skipped, with all six earlier failed identities passing later unchanged checks. Publication records/readback follow; no provider, qualified benchmark or release claim.
+- **Serial completion check 2026-09-08T12:50:13Z:** All parallel workers are terminal. Integration continuation475 pass/29 skips in2918.96s; resumed groups0/2 pass2003/1904. Original group1 stops at2202 passes/one release-directory-custody failure. Five distinct parallel custody failures remain recorded. Run all failed/unexecuted identities plus the whole forensic file in one serial process, then reconcile exact full collection coverage.
+- **Parallel custody results 2026-09-08T12:25:20Z:** Initial groups0/2/3 stop after696/769/760 passes and one forensic-export parent-directory-custody failure each. The unchanged first failing test passes a focused recheck. Resumed group3 reaches621 passes, then the same custody guard refuses a manifest test. These failures remain recorded; defer filesystem-sensitive verification to a serial run and reconcile every still-unexecuted case before publication.
+- **Complete-unit partition custody 2026-09-08T12:12:54Z:** Serial prefix stops deliberately after231 passes/one filesystem skip; no assertion failure. Four temporary local test partitions all collect the same11100 unit nodes (79ae684d), excluding only232 already recorded terminal cases. Assigned counts2704/2810/2680/2674 sum10868; every remaining node belongs to exactly one partition. All outcomes remain pending; no product test or runtime is edited.
+- **Publication verification 2026-09-08T12:03:14Z:** Frozen snapshot full-suite attempt reaches186 passed/27 skipped and one sandbox-denied synthetic loopback setup error in662.39s. No product failure is inferred or assertion changed. Continue the failing and later45 integration files with explicit local-listener permission; the complete unit suite runs separately. Broader checkpoint publication remains pending.
+- **Publication validation 2026-09-08T11:48:44Z:** Corrected dependency-complete snapshot d7f001471c0fef1d2369978dd1399945f0a1d980 passes351 development tests and328 governance/documentation/schema/inventory/CI tests; full lint/type/governance pass. The user directly requests commit/push of tested work. Run the complete provider-free local suite before selecting the broader318-path checkpoint; no provider call, release qualification or hosted-CI action is selected.
+- **Snapshot record repair 2026-09-08T11:33:29Z:** Exact isolated source snapshot passes351 development checks, lint/type and canonical generation. Its terminal matrix reports317 passes/11 governance failures: last_partial_ticket incorrectly still named DEVBENCH after it resumed IN_PROGRESS. Restore DEVTRIAL as the most recent still-PARTIAL ticket; keep DEVBENCH active, all statuses and the validator unchanged. Retest the corrected snapshot before closure. No runtime/scorer failure or provider action is inferred.
+- **Canonical/compatibility slice 2026-09-08T11:22:05Z:** All351 development/scoring/schema/CLI checks now pass in9.76s; full lint/format (771 files), strict mypy (261 sources) and read-only canonical generation pass. The three prior stale-schema failures are resolved by reviewed generation, not waived. Inventory adds one pure module and three gated producer anchors only, with no removals/reclassifications or changed logical gate definitions;4179 sources/4182 occurrences,4127 gate/52 nongating,35 logical/29 unsatisfied/15 manual. The isolated dependency-complete snapshot remains the final local capability acceptance item.
+- **Scorer/CLI slice 2026-09-08T11:05:26Z:** Source-pinned agent-constructed truth and deterministic matching now feed automatic pre-dispatch benchmark-plan.json and post-run score.json through the existing runner. Every returned claim, duplicate, guarded-control allegation and advisory remains counted; complete/partial scope, exact costs and missing timing are retained. Local scorer/CLI matrix55 passes/5.21s and earlier scorer/v2 matrix66 passes/1.67s; no provider was called. Canonical artifacts, further negative checks and a dependency-complete clean snapshot remain pending.
+- **Resumed 2026-09-08T10:50:30Z:** Previous turn is PROGRESS: the v2 slice is recorded with actual281-pass/three stale-schema failures and preserved v1 bytes; the existing narrow Git checkpoint is independently remote-verified. Continue the same ticket, not a second capability: inspect all frozen corpus bytes, freeze explicitly agent-constructed non-qualifying truth before any scored response, implement deterministic source/class/origin matching with complete claim/cost/scope denominators, and integrate automatic local score artifacts. Schema/inventory regeneration and a clean dependency-complete snapshot remain required.
+- **Partial tested slice 2026-09-08T10:45:02Z:** Version-bound v2 advisory/violation and origin models, shared transport decoding, exact prepared-plan revalidation and owned shard duration are implemented locally. Twenty model cases plus nine mock-HTTP/real-file integrations and ten prior review cases pass (39 total). The final nine-file compatibility matrix has 281 passes and three canonical-schema freshness failures; generated artifacts are intentionally still pending, not waived. Seven v1 request/plan/observation groups remain byte-exact. Deterministic truth/scoring, CLI score output, reviewed schema/inventory generation and a dependency-complete clean snapshot remain unfinished. Direct commit/push request is fulfilled by the already published tested checkpoint f0e35e0, freshly remote-verified; this incomplete slice stays local.
+- **Selected 2026-09-08T10:26:47Z:** The previous DEVTRIAL turn is PROGRESS: exact reported evidence, cost arithmetic and the v1 advisory/schema gap are tested and recorded PARTIAL. Select this local capability now. Preserve v1 request bytes and historical observation meaning; add an explicitly selected v2 response/plan path through the same dispatch/accounting boundary, constructed-truth/source-bound deterministic scoring and owned duration evidence. No model-authored label alone can promote a claim; retain all claims, duplicates, advisories, failures and missing scope separately. No paid call or qualified benchmark is selected.
+- **Next action:** Publish only the exact locally tested checkpoint under the direct user Git request, after final record validation. Next engineering review is V3-DEVTRIAL-001 PARTIAL for non-secret empirical gaps; no new provider call, private input, route/lineage adoption or CI activation is selected. The local scorer is complete, not a qualified benchmark or semantic audit.
+
+### V3-DEVTRIAL-001 — Observe the first operator-run development fixture trial
+
+- **Objective:** Determine whether the implemented request path works with an explicitly approved
+  real model/endpoint and whether it distinguishes the pinned invariant violation from its guarded
+  counterpart, before extending the development path to full audits.
+- **Files/modules:** Operator guidance and operator-supplied non-secret observations, primary
+  queue/worklog; record any transport defect as a separate bounded implementation ticket.
+- **Acceptance criteria:** Separately select operator execution, exact fixture scope, supplied fresh
+  endpoint metadata, cumulative accounting and explicit spending/risk controls. No credential or
+  private-ledger access by Codex. Reconcile operator-reported outcomes, response validity, declared
+  invariant findings, false positives on the guarded fixture, completion/failure, cost, and runtime.
+  No automatic retries after unknown costs. Missing evidence is INCONCLUSIVE. Preserve false
+  assurance markers and do not turn this two-fixture observation into a quality benchmark,
+  completed audit, candidate adoption, qualification, or release result.
+- **Dependencies:** `V3-DEVRUN-001` complete; separate explicit operator selection and approved
+  non-secret endpoint/accounting inputs. The queue entry alone authorizes no external action.
+- **Status:** `PARTIAL`
+- **Reviewed PARTIAL 2026-09-08T10:12:45Z:** Documentation-only review 277b3af9 binds the exact operator sections, checks local fixture hashes/line counts and reconciles reported Decimal costs without private access. Ten new review/v1 characterization cases, 255 development compatibility checks and 368 final current-state checks pass; lint/type/canonical/governance pass. Preserve the rejected paid attempt, two strict guarded false positives, absent fixture elapsed times and uninspected remote request/metadata bytes. The reported response and corpus observations are useful non-qualifying evidence, not independently validated discrimination or a completed audit. Local ControlB has 18 lines. Next V3-DEVBENCH-001 is QUEUED; no paid rerun or second implementation selected.
+- **Review slice 2026-09-08T10:06:16Z:** Added documentation-only development_trial_review.json with exact dated report-section pins, independently checked local fixture bytes, retained failed-attempt costs and explicit missing runtime/quality evidence. Ten local checks pass, including a synthetic v1 schema characterization: advisory text structurally decodes only by filling the mandatory violated_invariant field; missing/null refuse. This demonstrates a representation gap, not validated vulnerability evidence. No runtime behavior or strict authority gate changed. Local fixture/corpus compatibility and final governance checks follow.
+- **Selected 2026-09-08T09:58:39Z:** The prior turn is PROGRESS: measured local guard/CI fixes were tested, committed and independently verified on the remote. Now select only non-secret DEVTRIAL evidence review against existing criteria. The report remains 5c03c47b; local fixture/source inspection confirms forced violated_invariant semantics, absent fixture elapsed time, and an 18-line guarded source despite the report's 17-line description. No raw private response, discovery, ledger or credential access; no paid rerun. Preserve missing evidence as INCONCLUSIVE and bound the scoring follow-up separately.
+- **Latest reported outcome:** The 2026-09-08T09:15Z entry reports ControlA and ControlB OBSERVED,
+  costs USD0.009957 and USD0.0130962, and three reconciled development entries/USD0.0340674 total.
+  A finds the planted high violation at14–16. B has two advisories, counted as two false positives
+  under the current strict invariant field; do not substitute a severity-weighted score for that.
+  Cumulative57/USD0.68118684 and zero real audits remain reported. Per-call elapsed time is absent;
+  private response/ledger bytes were not read. The author's DONE claim is not automatic authority.
+- **Next action:** Keep DEVTRIAL PARTIAL for the recorded empirical gaps; do not infer missing
+  runtime, request-byte freshness or validated invariant discrimination. The non-secret timing
+  request needs no rerun. Next V3-DEVBENCH-001 implements a versioned measured synthetic baseline
+  with explicit finding semantics, conservative source-bound deduplication and complete failure,
+  cost and runtime denominators. No new paid command, private-input read, route adoption or
+  qualification is selected. Review: docs/remediation/v3/development_trial_review.json.
+
+### V3-CICOST-001 — Pause automatic hosted CI during engine stabilization
+
+- **Objective:** Stop repeated GitHub Actions execution while retaining intentional validation.
+- **Files/modules:** Both `.github/workflows/mmaudit*.yml` files, existing workflow tests, README,
+  and the primary queue/worklog; the two exact GitHub workflow enablement settings.
+- **Acceptance criteria:** Both existing workflows are disabled on GitHub immediately; no queued
+  or running instances remain. Local workflow definitions retain only manual dispatch. Local checks,
+  failure propagation, provider isolation, and protected-environment requirements remain intact.
+  Record that manual dispatch also requires workflow re-enablement and publication of these changes.
+- **Tests:** Existing workflow contract and local shell-fixture regressions, scoped Ruff, workflow
+  syntax inspection, and read-back of GitHub workflow states. No hosted run is launched to test this.
+- **Dependencies:** Operator's explicit 2026-09-06 CI-first priority.
+- **Status:** `COMPLETE`
+- **Selected:** `2026-09-06T05:46:50Z`.
+- **Result:** GitHub workflow IDs `321333250` and `323880294` both read back as
+  `disabled_manually`. All 88 existing runs were inspected; none was nonterminal, so no cancellation
+  was needed. Local definitions are manual-only. Existing workflow/shell-fixture tests passed `34`;
+  scoped Ruff check/format, safe YAML parsing with exact trigger inspection, and diff checks passed.
+- **Limitation:** Local trigger changes are not committed or pushed. GitHub's immediate disablement
+  is already effective; manual checkpoints require publishing these definitions and re-enabling the
+  selected workflow. Existing failed checks, past charges, and artifact storage are not repaired or
+  erased. The broader product-documentation/objective check reports `23 passed, 5 failed` against
+  old worklog-boundary, unfinished-count, and candidate-schema expectations. Those checks are not
+  claimed green; the full application suite was not run for this configuration-only change.
+- **Next action:** Resume `V3-CANDROUTE-001` only to establish a satisfiable route and its minimum
+  required evidence before further ancestry work. The next product milestone is
+  `V3-SINGLE-AUDIT-001`; route and qualification dependencies remain required. Do not use the
+  unresolved PLANANCESTRY WIP command.
+
 ### V3-AUTONOMY-001 — Resume typed managed provisioning
 
-- **Objective:** Resume only the bounded Phase-2 provisioning slice: derive strict,
-  nonauthorizing plan/state/refusal evidence from the exact managed-toolchain bundle and effective
-  configuration, and make local cost-ledger setup idempotently create-or-verify without resetting
-  or repairing incompatible state.
-- **Files/modules:** Managed provisioning models, cost-ledger provisioning, CLI setup surface,
-  generated schema/inventory, and focused regressions.
+- **Objective:** Continue Phase-2 setup toward a zero-operator-input audit. Managed host material,
+  scanner/solc handoff and automatic Linux backend construction are implemented and locally tested;
+  real Linux kernel evidence and complete provisioning remain unverified. Preserve profile,
+  explicit-pin conflicts, selected roles, source custody and false serialized authority.
+- **Files/modules:** Prepared-tool consumers, provisioning and isolation modules; synthetic unit/
+  local integration tests; canonical autonomy inventory, guidance and work records.
 - **Acceptance criteria:** Missing fork, CodeQL, dependency-snapshot, installed-toolchain, or other
   required inputs remain explicit closed refusals. Existing exact ledgers verify; corrupt, linked,
-  incomplete, or cap-mismatched state fails closed. Every provider, spend-admission, execution,
-  runtime, completion, and release authority remains literal false.
+  incomplete, or cap-mismatched state fails closed. Every provisioning provider, spend-admission,
+  execution, runtime, completion and release authority remains literal false. Existing process-local
+  isolation evidence still requires the unchanged launcher/policy and all six actual boundary probes;
+  it does not establish installed closure or authorize a complete audit.
 - **Tests:** Provisioning model/CLI and ledger create, repeat, collision, corruption, identity-drift,
   schema, inventory, Ruff, and strict-mypy regressions using local synthetic state only.
 - **Dependencies:** Phase 0 and Phase 1 of `V3-AUTONOMY-001` are complete. This provider-free slice
   does not depend on REAL `V3-AUTHRUNNER-001` or `V3-HARDHAT-001` evidence and cannot satisfy them.
 - **Status:** `PARTIAL`
+- **Invariant terminal verification 2026-09-07T23:52:32Z:** Seven-file governance/documentation/objective/
+  schema/inventory/CI passes 304 in 69.74s. All 76 new cases, 580 offline compatibility, 39 archive
+  integration and 32 trusted-Python tool checks pass (overlapping groups). Ruff, ten-file formatting,
+  strict mypy (257 files), read-only canonical verification, terminal governance and diff integrity
+  pass. No full-suite or engine/audit result. State d665484896851c53d2a81f9e91400e55bd46ce7cdbb7d77f581bc52e8c62edb6;
+  42 unfinished, nine false authorities, original histories/operator/plan/objective/schema exact.
+  Parent PARTIAL, implementation UNSELECTED; next AUTONOMY managed Hardhat handoff inspection.
+
+- **Invariant archive handoff locally tested 2026-09-07T23:49:36Z:** Explicit invariant selection now joins
+  enabled generated invariants, acknowledgement and exact final chain/block/config independently
+  of primary/reproduction/matrix roles. The fixed pipeline/runner retains it and missing managed
+  reads cannot use ambient RPC. Fork attempts use prepared Forge/Solc and explicit block pins;
+  source-local attempts remain network-free even when archives are present.
+- **Lifecycle:** Fresh leases start after admission/workspace preparation, preserving the original
+  child timeout plus bounded startup/process/service cleanup. Checks surround startup/Popen;
+  child errors trigger cleanup and lease/source postflight precedes evidence. Secondary shutdown
+  errors cannot replace original child exceptions. Occupied private workspaces still refuse reuse.
+- **Files/validation:** Managed archives, invariant runner, fixed pipeline, inventory implementation/
+  test/artifact, synthetic helper, two new unit modules and owned-loopback integration, one existing
+  refusal assertion, README, guide and records. All 76 new cases pass in 19.39s; thirteen-file offline
+  compatibility passes 580 in 34.55s; four-file archive integration passes 39 in 25.02s; existing
+  trusted-Python tool integrations pass 32 in 14.68s. Groups overlap. Ruff, ten-file formatting,
+  strict mypy (257 files), read-only canonical verification and diff integrity pass. Terminal
+  governance/documentation/objective/schema/inventory/CI checks follow record reconciliation.
+- **Integrity/limits:** One explicit selection source is added; nine previous semantic hashes change.
+  Inventory has 4113 sources / 4116 occurrences / 4061 gate / 52 nongating, with 35 logical,
+  29 unsatisfied and 15 manual gates unchanged. All authorities remain false. Eleven unaffected
+  baseline files are byte-exact; 26 archive and 37 invariant functions remain AST-exact. Controls
+  do not prove Solidity execution, complete state, source authority, installed closure, supported
+  Linux fork isolation, best-in-class performance or an unattended audit. Hardhat reads remain a gap.
+- **Next action:** V3-AUTONOMY-001: inspect the remaining managed Hardhat fork-data/lease handoff and its tests; select one bounded offline consumer slice without weakening scope, isolation, tool pins or full execution budgets. No upstream, private input, engine, provider or hosted CI.
+  This capability is tested; parent PARTIAL and implementation UNSELECTED, with 42 unfinished tickets.
+  No private input/provider/live chain, hosted CI, commit, push or remote query.
+
+- **Invariant archive handoff selected 2026-09-07T23:33:12Z:** Managed invariants currently refuse nonlocal
+  harnesses and the legacy fork path reads ambient RPC. Add an independent invariant_archive_sha256
+  role for enabled/acknowledged generated invariants with exact final chain/block/config binding.
+  Keep source-local execution unchanged. Managed fork attempts require their explicit archive,
+  pinned Forge/Solc preflight and block argument, normal scope/isolation policy and fresh leases.
+- **Files/acceptance:** Managed archive material, invariant runner, fixed pipeline and inventory;
+  synthetic helper, focused preparation/consumer units and owned-loopback integration, existing
+  local/legacy compatibility, README/guide and records. Reserve unchanged child timeout plus bounded
+  startup/cleanup; child errors and lease/source postflight must precede attempt evidence. Missing
+  input cannot read environment. Preserve exact receipts/config, primary/reproduction/matrix and
+  real-evidence policies. No actual engine or supported Linux fork-isolation claim.
+- **Selected next action:** V3-AUTONOMY-001: implement explicit invariant archive preparation and fresh per-attempt owned leases, retaining managed tool/config custody, local-only behavior, scope/isolation checks and full child timeouts. No upstream, private input, engine, provider or hosted CI.
+
+- **Reproduction terminal verification 2026-09-07T23:29:16Z:** Seven-file governance/documentation/objective/
+  schema/inventory/CI passes 303 in 69.28s. All 70 new cases, 531 offline compatibility and 45 local
+  integration compatibility pass; groups overlap. Ruff, 11-file formatting, strict mypy (257 files),
+  read-only canonical verification, terminal governance and diff integrity pass. No full-suite,
+  actual engine/audit, source authority or hosted-CI/billing result. State remains
+  8e3100fb2fe76ca1fcb7da457c3868a1bb7076f7128c286353c669030dc79453; 42 unfinished and nine false authorities.
+  Original histories, operator report, active plan and frozen objective/schema pins remain exact.
+  Parent PARTIAL, current implementation UNSELECTED; next AUTONOMY invariant handoff inspection.
+
+- **Reproduction archive handoff locally tested 2026-09-07T23:25:47Z:** Explicit reproduction selection now
+  binds the final enabled/acknowledged chain/block/config independently of primary and matrix roles.
+  The fixed pipeline/runner retains the prepared source; no managed ambient RPC fallback remains.
+  Each attempt owns a fresh lease after preflight/workspace preparation, reserves the unchanged
+  child timeout plus bounded startup/cleanup, and closes/reverifies before recording evidence.
+  Unexpected child errors enter cleanup; secondary shutdown errors preserve the original error.
+- **Files/validation:** Managed archive material, reproduction runner, fixed pipeline, inventory
+  implementation/test/artifact; synthetic helper, two new unit modules and owned-loopback integration;
+  migrated existing tool controls, README, operator guide and current records. All 70 new cases pass
+  together in 17.36s; 12-file offline compatibility passes 531 in 22.89s and four-file local integration
+  compatibility passes 45 in 23.74s. Groups overlap. Ruff, 11-file formatting, strict mypy (257 files),
+  read-only canonical verification and diff integrity pass. Terminal record checks follow.
+- **Integrity/limits:** One explicit selection source is added; nine old semantic hashes change.
+  Inventory is 4112 sources / 4115 occurrences / 4060 gate / 52 nongating, with unchanged 35 logical,
+  29 unsatisfied and 15 manual gates and no authority promotion. Config, receipt/schema, primary,
+  matrix and replay/service semantics are unchanged. Transport controls are not Solidity execution,
+  complete state, source authority, installed closure, supported Linux fork isolation or an audit.
+  Invariant/Hardhat fork consumers remain separate gaps. Original failed checks are in the worklog.
+- **Next action:** V3-AUTONOMY-001: inspect the remaining managed invariant fork-data/lease handoff and its tests; select one bounded offline consumer slice while preserving source pins, isolation and full execution budgets. No upstream, private input, engine, provider or hosted CI.
+  This capability is tested; parent PARTIAL and current implementation UNSELECTED. There remain
+  42 unfinished tickets and nine false authorities; no private input/provider/hosted-CI action.
+
+- **Reproduction archive handoff selected 2026-09-07T22:50:19Z:** The current managed reproduction runner
+  still reads an ambient RPC variable and has a separate child timeout per replay. Add an explicit
+  reproduction_archive_sha256 role with exact final chain/block/config binding. A fresh owned
+  read lease per attempt must preserve the original timeout, reserve bounded startup/cleanup,
+  reject missing/drifted inputs and close before recording attempt/result evidence.
+- **Files/acceptance:** Managed archive source/material, reproduction runner and fixed pipeline;
+  existing tool-handoff fixtures, focused unit/owned-local integration regressions, exact inventory
+  and records. Retain eligibility, tool pins, scope/isolation policy and UNVERIFIED control evidence.
+  No ambient fallback for managed reproduction. Child cleanup on unexpected interruption belongs
+  to the same owned lifecycle. Legacy config/receipt and baseline/matrix semantics remain unchanged.
+- **Boundary:** This supplies reproduction reads only. Invariant/Hardhat forks, supported managed
+  Linux fork isolation, source authority, installed closure and real end-to-end audits remain gaps.
+- **Selected next action:** V3-AUTONOMY-001: implement explicit reproduction archive preparation and per-attempt owned lease consumption; preserve exact source/config, eligibility/isolation checks and full child timeouts, with cleanup before evidence. No upstream, private input, engine, provider or hosted CI.
+
+- **Primary Foundry terminal verification 2026-09-07T22:42:55Z:** Seven-file governance/documentation/
+  objective/schema/inventory/CI passes 302 in 70.56s; all 82 new cases, 512 offline compatibility
+  and 41 local integration compatibility pass. Static, canonical, governance, CLI-help and diff
+  checks pass. Groups overlap; no full-suite or engine/audit credit. Current state remains
+  41b04bc3bf48aa1cb841ac86ba0633141446151fd401591476cbf295b6734654; 42 unfinished and
+  nine false authorities, original histories/operator/plan exact. Parent PARTIAL; next AUTONOMY.
+- **Primary Foundry archive handoff locally tested 2026-09-07T22:41:18Z:** Exact primary archive selection is
+  now prepared independently or alongside matrix states and retained through the fixed scanner and
+  pipeline. Managed Foundry cannot fall back to ambient RPC. Both direct and captured execution
+  own fresh leases, source/config postflight and normal/exception/interrupt cleanup before return.
+- **Files/validation:** Managed archive material, Foundry scanner, ScannerRunner, managed pipeline,
+  helper/two unit modules/owned-loopback integration, one existing custody test-double signature,
+  inventory implementation/test/artifact, README, guide and current records. Final 12-file offline compatibility passes 512 in 16.25s. All 82 new regressions pass together in 17.03s (34 preparation unit, 33 consumer unit, 14 actual local integration and one inventory). Expanded integration 14 in 6.70s and unit 67 in 3.94s overlap. Ruff, 12-file formatting, strict mypy (257 files), read-only canonical generation and diff integrity pass. Terminal governance/documentation/schema checks follow; no full-suite or real-engine/audit result.
+- **Integrity/limits:** Config, setup runtime, pipeline constructor, matrix, replay/service, generator
+  and legacy/autonomy schemas are byte-exact to this slice baseline. Child policies remain exact;
+  primary startup consumes the original absolute deadline. New transport tests do not attest an
+  engine or backend. Reproduction/invariant/Hardhat forks and default Linux fork RPC remain gaps.
+  Complete state, source authority, installed closure and a complete unattended audit are unproven.
+- **Next action:** V3-AUTONOMY-001: inspect the remaining managed reproduction fork-data handoff and its tests; select one bounded offline archive/lease consumer slice without changing isolation, source pins or declared execution budgets. No upstream, private input, engine, provider or hosted CI.
+  Current implementation is UNSELECTED after this tested capability; parent PARTIAL, 42 unfinished
+  and nine false authorities. No private input/provider/live chain, hosted CI, commit or push.
+
+
+- **Primary Foundry archive handoff selected 2026-09-07T22:05:03Z:** The fixed primary scanner still reads
+  an ambient RPC endpoint. Prepare an explicit primary_archive_sha256 against the final config's
+  chain/block, including primary-only configurations; retain existing matrix selection separately.
+  Pass prepared material through the fixed scanner/pipeline and open an owned lease only after
+  normal scope/isolation admission. Managed missing primary input cannot fall back to environment.
+- **Files/acceptance:** Managed archive source/material, fixed Foundry scanner and ScannerRunner,
+  managed pipeline, synthetic unit/owned-loopback integration tests, exact inventory and records.
+  Fresh leases, exact full config and source rechecks, declared child timeout ceilings, no mixed
+  endpoint override and cleanup on every exit are required. Legacy receipt/config schemas retain
+  their semantics; preparation cannot attest a chain, engine, isolation or completed audit.
+- **Boundary:** This supplies the primary Foundry baseline path required by the managed matrix.
+  Reproduction, invariant and Hardhat fork execution, default Linux local-RPC support and installed
+  closure remain separate unfinished capabilities. No incomplete source or unavailable engine passes.
+- **Selected next action:** V3-AUTONOMY-001: implement exact primary archive preparation and owned Foundry baseline-scanner consumption; preserve source/config custody, original scanner deadlines, isolation/tool admission and exceptional cleanup. No upstream, private input, engine, provider or hosted CI.
+
+
+- **Managed archive terminal validation 2026-09-07T21:54:55Z:** Seven-file governance/documentation/
+  objective/schema/inventory/CI passes 301 in 70.58s; all 74 new cases together, 469 final offline
+  compatibility and 27 local integration compatibility pass. Static, canonical, governance and
+  diff checks pass. Matrices overlap; no full-suite, actual engine or unattended-audit claim.
+  Current state 5abe7034111a177747a9e6d1086a8933691cd2c61272a176aadd9f0e3a48dc6c;
+  42 unfinished, nine false authorities and immutable histories/operator bytes intact. Both local
+  workflows stay manual-only; remote billing is unverified. Parent PARTIAL; next AUTONOMY.
+- **Managed archive handoff locally tested 2026-09-07T21:51:12Z:** Exact hash-named archive preparation now
+  returns detached full-config/state material through setup to fixed pipeline/matrix consumers.
+  Managed pinned states have no ambient URL fallback. Fresh owned leases close on normal/error
+  paths; source drift, missing reads, insufficient whole-state budgets and invalid inputs refuse.
+  Invalid archive type/source now refuses before automatic backend setup; two regressions proved
+  the original ordering error. Supported-isolation, qualifying baseline and child deadlines remain.
+- **Files/validation:** New managed_fork_archives.py and synthetic helper/unit/integration tests;
+  setup/result, fixed pipeline and matrix, inventory/schema, README, guide and current records.
+  Final ten-file offline compatibility passes 469 in 11.49s; all 74 new regressions together pass in 14.09s (42 preparation unit, 26 consumer unit, five actual local integration, one inventory). Three-file local integration compatibility passes 27 in 7.59s. Ruff, 11-file formatting and strict mypy (257 files) pass. Earlier checks overlap; final terminal governance/documentation/schema checks follow. No full-suite or real-engine/audit result.
+- **Integrity/limits:** Config, existing replay/service, managed matrix tool factory, generator and
+  legacy receipt/state schemas are byte-exact to this slice baseline. The inventory adds six
+  classified inputs; its schema changes only the constructor count from 28 to 29. No gate state
+  or authority is promoted. Preparation is not provenance, complete state or execution evidence.
+  Primary-fork preparation, supported Linux fork RPC, installed closure and an unattended audit
+  remain unproven. Parent PARTIAL; current implementation UNSELECTED after this tested slice.
+- **Next action:** V3-AUTONOMY-001: inspect one bounded primary-fork archive/lease handoff for fixed managed consumers; retain exact state/source, full child budgets and supported-isolation/baseline refusals. No upstream, private input, engine, provider or hosted CI.
+
+
+- **Managed offline archive handoff selected 2026-09-07T21:17:48Z:** Reuse each declared pinned state's
+  state_source_sha256 as the exact archive-file digest. Prepare only named hash-addressed local
+  files, bind full effective config and disjoint control/source/output roots, then hand off to the
+  fixed managed pipeline/matrix. The matrix owns fresh read leases and cleanup; it must not consult
+  ambient RPC URLs for managed states. Missing, drifted, conflicting or over-budget inputs refuse.
+- **Files/acceptance:** New managed_fork_archives.py plus provisioning/pipeline/matrix consumers;
+  synthetic unit and local service/refusal integration tests; exact inventory and current records.
+  Repeated runs get fresh leases. State identity, source hash, scope accounting, child timeouts,
+  cleanup and supported-backend/baseline gates remain mandatory. No config/state-kind or legacy
+  provisioning-receipt schema promotion; archive readiness is not fork/runtime/audit readiness.
+- **Selected next action:** V3-AUTONOMY-001: implement exact hash-selected offline archive preparation and managed matrix lease consumption; preserve source/config custody, existing timeout ceilings, baseline and isolation refusals. No upstream, private input, engine, provider or hosted CI.
+
+- **Owned offline replay lease locally tested 2026-09-07T20:58:56Z:** A one-shot fixed numeric-loopback
+  listener serves only an admitted frozen archive on an OS-assigned port. One worker, strict HTTP,
+  absolute request deadlines, automatic expiry and hard framing/body/response/traffic/connection
+  caps prevent unbounded service operation. Source verifies before bind and after closure; expired,
+  exhausted, drifted or unsuccessfully closed leases cannot return clean success or be restarted.
+- **Files/results:** New offline_fork_service.py, unit and actual local integration modules;
+  inventory implementation/test/artifact, README, guide and current records. All 83 new cases pass
+  (62 unit, 20 local integration, one inventory) in overlapping checks. Offline compatibility 390
+  passes in 16.51s; service/unchanged bridge compatibility 106 in 46.71s. Ruff, five-file formatting,
+  strict mypy (256 files), read-only canonical generation and diff checks pass. Original missing-
+  module, two oversized-integer and one shutdown-lock failures are recorded separately, not green.
+- **Terminal validation 2026-09-07T21:02:31Z:** Seven-file governance/documentation/objective/
+  schema/inventory/CI matrix passes 300 in 72.07s. All 83 new cases together pass in 9.24s after
+  renaming the integration module to test_offline_fork_service_consumption.py to repair a pytest
+  basename collision. Original collection/lifecycle failures remain separately recorded. Static,
+  canonical, governance and diff checks pass; counts overlap the compatibility matrices above.
+- **Evidence/limits:** Real synthetic clients and the unchanged scoped bridge consume recorded
+  reads; absent data creates a violation, never zero state or an external request. This proves local
+  transport/lifecycle controls, not an EVM state snapshot, real chain/engine, backend attestation,
+  installed closure or complete audit. Replay/bridge and all existing schema bytes are unchanged.
+  Two sources are added; only the prior inventory-module semantic hash changes. All old source
+  classifications and gate states persist: 4103/4106/4051/52, 35 logical/29 unsatisfied/15 manual.
+  Parent PARTIAL; implementation UNSELECTED at this tested local closure. Every authority is false.
+- **Next action:** V3-AUTONOMY-001: integrate exact declared offline archive selection and owned lease lifecycle into the managed fork-state handoff; retain source, scope, baseline and supported-isolation refusals. No upstream, private input, provider, live chain or hosted CI.
+
+- **Offline replay endpoint selected 2026-09-07T20:34:48Z:** Serve only an admitted frozen archive on a fixed
+  numeric loopback listener with an OS-assigned port. Bound HTTP framing, body/response/total bytes,
+  accepted connections, per-connection absolute deadlines, lease lifetime and shutdown. Reverify
+  source before opening and after closure; reject reuse, invalid lifecycle and missing reads.
+- **Files/acceptance:** New scanner endpoint/lease and synthetic unit/local socket integration tests;
+  existing replay and scoped bridge consumers, canonical inventory, README and current records.
+  Actual local client/bridge controls must prove reading, refusal, expiry and resource cleanup;
+  no URL from the target, external origin, EVM engine, backend seal or completion credit is allowed.
+- **Selected next action:** V3-AUTONOMY-001: implement and test a bounded owned loopback lease for admitted offline reads, including expiry, source rechecks and unchanged bridge consumption. No upstream, private input, engine, provider or hosted CI.
+- **Offline fork-read archive/replay locally tested 2026-09-07T20:18:31Z:** A bounded exact-pin
+  loader consumes stable unlinked archive bytes; immutable replay shares the existing pure RPC
+  read policy. Canonical blocks, response shapes and cross-read account fields are checked;
+  duplicate/contradictory or absent data, invalid paths/pins, partial batches and cap excess refuse.
+  Lifetime budgets saturate under a lock; response construction is incrementally bounded.
+- **Files/results:** New offline_fork_rpc.py, archive schema and synthetic fixture/README; pure
+  policy extraction in read_only_rpc.py; generator, two new test modules, schema/inventory tests,
+  exact inventory and docs. Final 73-case focus includes all 72 new regressions plus exact inventory
+  shape and passes in 14.56s. Nine-file offline compatibility passes 328 in 19.01s; unchanged
+  local bridge tests 86 in 45.45s; relay tests 14 in 1.46s. Counts overlap. Ruff, eight-file formatting,
+  strict mypy (255 files), canonical generation and diff checks pass after explicit type repairs.
+- **Terminal verification 2026-09-07T20:27:16Z:** Completed JUnit reports 299 passes in 78.241s
+  for the seven-file governance/documentation/objective/schema/inventory/CI matrix and 328 in
+  18.746s for final offline compatibility, with no failures/errors/skips. Scoped process inspection
+  found no remaining verification jobs after observation recovery; original launcher exit codes
+  were not recovered. Fresh static, canonical, governance and all 117 unchanged qualified RPC
+  function AST checks pass. All artifact/history pins and 42 unfinished/nine false authorities
+  remain exact. These results overlap the earlier checks; detailed provenance is in the worklog.
+- **Failures/limits:** An expanded matrix originally passed 337 with five socket-permission
+  failures; the scoped local relay retry above passes all 14. This is not a full-suite pass or real
+  chain/engine/isolation evidence. Source-kind labels and hashes do not prove provenance or state-root
+  correctness. Replay creates no listener/process, executes no contract and has no upstream; an
+  owned endpoint/lease, managed-state selection and supported fork backend are still required.
+- **Inventory:** Two classified sources added (offline module and explicit loader input), two old
+  semantic hashes changed. All prior IDs, occurrences, classifications and gate states persist:
+  4101 sources / 4104 occurrences / 4049 gate / 52 nongating; 35 logical / 29 unsatisfied / 15 manual.
+  Filesystem loci, completion parameters and existing autonomy schema are unchanged. All serialized
+  authority remains false; parent PARTIAL, implementation UNSELECTED at this local closure.
+- **Next action:** V3-AUTONOMY-001: connect admitted frozen reads to a bounded owned local endpoint/lease, then a managed-state handoff; retain source, scope, baseline and supported-isolation gates. No upstream, private input, provider, live chain or hosted CI.
+
+- **Offline fork-read archive selected 2026-09-07T19:47:51Z:** Implement a bounded hash-pinned
+  offline RPC read archive and deterministic in-process replay using the existing read-only method,
+  canonical block-binding and response-validation policy. Extract only that pure shared policy;
+  preserve the live bridge's admission, accounting and lifecycle unchanged. Missing reads and
+  contradictory or malformed entries refuse; no fabricated zero state or upstream fallback.
+- **Files/acceptance:** read_only_rpc.py and new offline_fork_rpc.py; generated archive schema,
+  focused inert/real in-process client integration tests, existing synthetic bridge compatibility,
+  exact autonomy inventory and current records. Bind supplied chain/block/source pins and retained
+  archive bytes; cap files, entries, depth, request/response sizes and replay counts. No endpoint,
+  process, EVM engine or network is started by replay, and archive declarations grant no runtime,
+  scope-completeness or audit authority. This is the data prerequisite for a later owned local
+  endpoint/managed-state lease, not a replacement for that execution path or its remaining gates.
+- **Next action:** Red tests, one cohesive archive/replay capability and validation before another
+  major slice. Keep Linux network denial, matrix baseline gates and all existing completion checks.
+
+- **Prepared fork-matrix composition locally tested 2026-09-07T19:35:09Z:** Fixed prepared Forge/Solc
+  scanners and the prepared clean-Anvil launcher are composed in the matrix runner and as the fifth
+  shared-backend managed pipeline consumer. Only paired declared state overrides enter detached
+  child configs. Material, retained identities, roots, fixed dependencies and backend selection
+  are rechecked; exact baseline Forge/current isolation pins join the unchanged execution gates.
+- **Files/results:** New managed_fork_matrix.py; fork_matrix.py, managed_pipeline.py and pipeline.py;
+  two new test modules, expanded managed-pipeline/inventory controls, exact inventory and docs.
+  Eleven-file offline compatibility passes 281 in 26.28s; two unchanged local bridge modules pass
+  86 in 45.01s with permission for synthetic localhost/Unix sockets. Inventory passes 61 in 58.94s.
+  All 53 new cases pass in these overlapping checks. Ruff, nine-file formatting, strict mypy
+  (254 source/script files), read-only canonical generation and diff checks pass. No full-suite,
+  real-engine, chain, Linux isolation or unattended-audit result is claimed.
+- **Terminal verification:** Seven-file governance/documentation/objective/schema/inventory/CI
+  checks pass 297 in 74.37s; final new-module focus passes 47 in 6.35s. Exact mirrors, artifact pins,
+  unchanged schema, operator bytes and immutable history validate; all authorities remain false.
+- **Environment failures:** The first thirteen-file matrix passed 286 but 81 socket cases errored
+  under the sandbox; the scoped local-socket retry above passed all 86. A prior command selected
+  a nonexistent test filename and ran no tests. Neither failed command is credited as green.
+- **Inventory/limits:** 4099 sources / 4102 occurrences / 4047 gate / 52 nongating; two classified
+  sources added and 33 old semantic hashes changed, with every old classification and gate state
+  preserved. Schema unchanged. Default managed Linux still denies fork RPC; declared pinned-state
+  RPC provisioning, real engines, installed closure and a complete audit remain unverified.
+- **Next action:** V3-AUTONOMY-001: inspect and select one bounded offline fork-state or supported local-RPC backend prerequisite; retain attested isolation and baseline refusals. No provider, private input, live chain, paid trial or hosted CI.
+
+- **Prepared fork-matrix composition selected 2026-09-07T19:11:53Z:** Compose exact prepared Forge/Solc
+  scanners and the prepared clean-Anvil launcher in the matrix runner, then integrate that fixed
+  runner into the managed pipeline. Retain material/config/tool/dependency/backend identity checks
+  across run, state, attempt and result boundaries, including exact baseline tool pins.
+- **Files/acceptance:** Dedicated managed-fork composition helper; fork_matrix.py, managed_pipeline.py
+  and pipeline.py; inert unit/offline integration controls; inventory/schema and current records.
+  Replace the blanket unprepared-consumer refusal only with a complete fixed-consumer handoff.
+  Unsupported or unattested local-RPC backends, missing baseline evidence, config/tool drift and
+  unprepared roles still refuse. No baseline, isolation, scope, lifecycle or completion gate relaxes.
+- **Next action:** Add red regressions, implement this cohesive composition and run affected tests
+  before another slice. Baseline: /tmp/mmaudit-managed-matrix-baseline.DFhp77. No real engine/chain,
+  provider/private input, public RPC, hosted CI, operator .new, commit or push.
+- **Prepared clean-Anvil handoff locally tested 2026-09-07T18:57:20Z:** The launcher consumes exact prepared
+  ANVIL material without an executable environment lookup, rejects mixed environment overrides and
+  rechecks full material, retained file identity, selected clean-state config and root separation
+  before copy and dispatch. A detached prepared config enters the unchanged private-copy lifecycle.
+- **Files/results:** clean_chain.py, two new test modules, one version-only synthetic fixture,
+  inventory implementation/tests/artifact, README and current records. Final focus passes 35 in
+  2.63s (30 unit / five local controls); two new inventory tests plus exact shape pass three in 7.79s.
+  Twelve-file compatibility passes 420 in 28.03s, including all 35 launcher cases. Matrices overlap.
+  Ruff, five-file formatting, strict mypy over 253 files and read-only canonical generation pass.
+- **Boundary:** One root metadata input is added; all old source identities/classifications and
+  logical gate states remain. No schema or existing copy/version/spawn/state/listener/cleanup method
+  changes. Version-only subprocess controls cannot establish an Anvil engine, chain or authority.
+  Parent PARTIAL, implementation UNSELECTED, 42 unfinished; earlier dated notes are historical.
+- **Next action:** V3-AUTONOMY-001: inspect and select prepared scanner/clean-launcher composition for the repository fork-matrix runner; retain unsupported local-RPC/backend refusals. No provider, private input, real engine/RPC, paid trial or hosted CI.
+- **Prepared clean-Anvil handoff selected 2026-09-07T18:37:39Z:** Supply the exact provisioned ANVIL path
+  to TrustedCleanAnvilLauncher without an ambient executable environment lookup. Revalidate full
+  material, selected clean-state config, pins and retained file identity before copying and before
+  dispatch to the existing private-copy lifecycle. Reject mixed environment overrides and root drift.
+- **Files/acceptance:** scanners/clean_chain.py; inert unit and synthetic local version-only/copy
+  integration regressions; inventory/schema and current records. Existing version, descriptor,
+  private-workspace, genesis/listener, deadline and cleanup checks remain unchanged. No real engine,
+  public RPC or provider is selected; managed pipeline fork matrices remain explicitly refused.
+- **Next action:** Implement and validate this producer-to-launcher handoff before selecting another
+  slice. Baseline: /tmp/mmaudit-managed-anvil-baseline.IzZbUU. Preserve unrelated dirty changes.
+- **Run-override report repair locally tested 2026-09-07T18:29:09Z:** Both quality evaluations now receive
+  the same resolved maximum-assurance requirement as preflight and assessment. Standard profile and
+  prepared config remain unchanged; missing analysis produces validated non-complete reports.
+  Explicit contradictory require/downgrade options still refuse. No report validator is weakened.
+- **Files/results:** pipeline.py; 43 new policy/offline/fixture tests and eight existing prepared
+  controls strengthened; one owned temporary-root test-fixture canonicalization; canonical inventory,
+  README and current records. Focus passes 51 in 18.18s, twelve-file compatibility 376 in 30.79s,
+  repaired assurance cases five in 634.86s, pipeline/CLI six in 867.58s and seven-file governance/
+  schema matrix 293 in 89.97s. Matrices overlap; the interrupted thirteen-file suite is not a pass.
+  Ruff, five-file formatting, strict mypy (253 files), canonical generation and diff checks pass.
+- **Boundary:** Only two existing pipeline source semantic hashes change; 4096 sources / 4099
+  occurrences and 35/29/15 logical gate states remain. No authority, real engine or complete audit
+  is established. Parent PARTIAL, implementation UNSELECTED, 42 unfinished; earlier dated notes
+  below retain their historical selection context.
+- **Next action:** V3-AUTONOMY-001: inspect prepared Anvil/offline fork-matrix handoff and select one bounded local integration slice, retaining current refusals until tested. No private input, provider command, paid trial or hosted CI.
+- **Run-override report repair selected 2026-09-07T17:44:20Z:** Resolve the maximum-assurance gate policy
+  from the same run contract used by preflight and the final assessment. The saved profile alone
+  currently leaves taxonomy optional while the report correctly requires it for an explicit run
+  requirement. Apply the resolved requirement to both quality evaluations and their maximum-only
+  gates; preserve config/provisioning identity and all strict report/assurance validators.
+- **Files/acceptance:** pipeline.py; deterministic gate-policy unit tests and real offline pipeline
+  report tests, including the existing prepared blocked controls without their stop sentinel;
+  canonical inventory and current records. Required+standard-profile and missing-analysis runs must
+  emit non-complete reports and exact failed clauses, not claim maximum completion or spend. Cover
+  explicit true/false/None, configured requirement, profile selection, downgrade and repeat use.
+- **Next action:** Add red-first source-only tests and complete this reporting slice before another
+  major ticket. No live engine/provider, credentials/private ledger, RPC, hosted CI, commit or push.
+- **Prepared pipeline composition locally tested 2026-09-07T17:37:32Z:** AuditPipeline consumes exact prepared
+  material, constructs four fixed consumers with one backend even when reproduction is disabled,
+  and passes material to compilation. Config/root/tool identity and consumer/backend changes refuse
+  at phase/run/publication boundaries. Custom consumers and configured fork matrices refuse;
+  failed preflight cannot invoke a compiler with downgraded config. Refusal closes logs after
+  credential cleanup, including a regression for log-close failure.
+- **Files/tests:** managed_pipeline.py, pipeline.py, new unit/offline integration; inventory/schema,
+  README and current records. New focus passes 45 in 7.23s (37 unit / eight offline pipeline controls);
+  four new inventory cases pass in 8.14s. Compatibility passes 587 / six Linux-only INCONCLUSIVE in
+  57.18s; 15 existing pipeline scenarios pass in 20.55s. Matrices overlap. Ruff, formatting, strict
+  mypy over 253 files and diff checks pass; final seven-file matrix passes 293 in 71.08s.
+- **Inventory:** Seven classified sources added (two constructor parameters, one module, four root
+  metadata loci); every old source classification and all 35/29/15 gate states remain. Actual
+  4096 sources / 4099 occurrences exceeded the old 4096 occurrence bound, so the shared ceiling is
+  explicitly 8192 with upper-bound rejection tests. No gate or authority is relaxed or promoted.
+- **Remaining defect/next:** A scanner-only solidity-evm run with require_maximum_assurance=True
+  reproduces a taxonomy-quality/report mismatch in the saved pre-edit pipeline, without tools or
+  providers. Two new preflight controls stop after proving zero compiler dispatch, not after report
+  completion. Next AUTONOMY slice: repair that retained run-override report boundary. Fork matrices,
+  real engines/Linux, installed closure and an unattended audit remain unverified. Parent PARTIAL,
+  implementation UNSELECTED, 42 unfinished; no private input, provider/RPC, hosted CI, commit or push.
+- **Prepared pipeline composition selected 2026-09-07T17:12:23Z:** Add an explicit prepared-material pipeline
+  input and one shared managed backend, construct fixed scanner/formal/invariant/reproduction
+  consumers and pass prepared material to compilation. Reverify matching config, retained tool
+  identities and consumer selection at run/phase/result boundaries. No mixed custom consumers or
+  ambient fallback. Configured fork matrices remain explicitly refused until their prepared-tool
+  consumer exists; do not relax fork, dependency, privacy, provider, scope or readiness gates.
+- **Files/tests:** managed pipeline composition module; pipeline; unit/offline integration tests;
+  classified constructor/module inventory, its schema and current records. Failed preflight cannot
+  execute a compiler or fabricate a downgraded prepared config. Exercise a real scanner-only pipeline
+  with fixed offline process controls and zero provider/RPC use before another major ticket.
+- **Prepared reproduction handoff locally tested 2026-09-07T16:59:15Z:** Existing ForkReproductionRunner
+  consumes exact prepared Forge/Solc and matching config with pins before isolated versions, direct
+  Solc selection and auto-detection disabled. Detached typed inputs and retained identities guard
+  probes, private streams, launch, clean replay and result publication. Disabled/unacknowledged mode
+  performs no backend construction/RPC read; chain/block pins and compatible local isolation remain
+  mandatory. Existing targets/capabilities/RPC validation remain; no fork endpoint is provisioned.
+- **Validation:** Twenty-one-file compatibility passes 759 / six Linux-only INCONCLUSIVE in 57.53s;
+  new unit/local integration passes 65 in 11.03s, inventory focus three in 7.81s. All 67 new cases pass
+  (49 unit / 16 real offline process controls / two inventory), overlapping matrices. Ruff, six-file
+  formatting, strict mypy (252 files), read-only canonical and diff checks pass. Final reproduction
+  seven-file matrix passes 289 in 71.71s; no full-suite or actual-engine evidence is claimed.
+- **Inventory:** Exactly two tool-root metadata loci added, four existing source semantic hashes
+  changed and one bounded toolchain-description updated. Counts 4089/4092/4037/52; 35 logical /
+  29 unsatisfied / 15 manual gates. Every old classification/state and all false authorities remain.
+- **Limit/next:** Parent PARTIAL, current implementation UNSELECTED, 42 unfinished. Actual engines,
+  fork/Linux isolation, installed closure and unattended audit remain unverified. Default managed
+  Linux remains network-denied and refuses this fork consumer. Next V3-AUTONOMY-001: connect prepared
+  tools to audit-pipeline construction with these unresolved gates intact. No private input, paid
+  trial, provider/public RPC, hosted CI, operator .new, commit or push. Full goal stays active.
+- **Prepared reproduction handoff selected 2026-09-07T16:40:35Z:** Connect existing ForkReproductionRunner
+  to prepared Forge/Solc with matching config, pin-before-probe, direct compiler selection and
+  identity rechecks through clean replay/outcomes. Preserve existing target/capability/RPC checks;
+  managed mode also requires enabled reproduction, explicit fork acknowledgment and chain/block pins.
+  Disabled/unacknowledged or incompatible isolation refuses before tools/RPC. No endpoint is started.
+- **Files/tests:** reproduction.py, new inert unit and trusted-Python local integration tests,
+  inventory and records. Baseline reproduction/invariant/material/toolchain: 254 pass in 6.96s.
+- **Next action:** Add red-first regressions and implement this handoff. Real engine/fork execution,
+  managed Linux loopback isolation and full pipeline composition remain unverified; no network,
+  provider, private input, paid trial or CI action is selected.
+- **Prepared local invariant handoff locally tested 2026-09-07T16:33:25Z:** FoundryInvariantRunner consumes exact
+  prepared Forge/Solc and matching config for enabled source-local generated invariants. Pins precede
+  isolated versions; prepared Solc stays outside writable generated source, with auto-detection off.
+  Detached typed inputs and retained identities are checked around probes, streams, launches,
+  repeated campaigns and recursive minimization. Path overrides, root overlap, drift and nonlocal
+  managed mode refuse; disabled mode performs no probe. Legacy fork behavior remains unchanged.
+- **Validation:** Twenty-one-file compatibility passes 727 with six prior Linux-only INCONCLUSIVE
+  cases in 47.25s. New unit/local control focus passes 59 in 10.05s; focused inventory passes three
+  in 7.57s, including two new cases. All 61 new cases pass (43 unit / 16 real offline process controls /
+  two inventory), with overlapping matrices. Ruff, six-file formatting, strict mypy over 252 files
+  and diff checks pass. Final local invariant seven-file matrix passes 287 in 70.36s; no full-suite credit.
+- **Inventory:** Exact canonical replacement adds only two root metadata inputs, preserves every
+  old classification/gate and changes four existing source semantic hashes. Counts 4087 sources /
+  4090 occurrences / 4035 gate / 52 nongating; 35 logical / 29 unsatisfied / 15 manual gates remain.
+  Schemas and all nine current authority flags remain unchanged/false.
+- **Limitation/next:** Parent PARTIAL, implementation UNSELECTED, 42 unfinished. Real Forge/Solc,
+  Linux kernel isolation, installed closure and complete managed-pipeline audit remain unverified.
+  Next V3-AUTONOMY-001: inspect remaining prepared reproduction-tool consumption using only
+  synthetic local inputs and unchanged RPC admission refusals. No private input, provider, paid
+  trial, public RPC, hosted CI, operator .new, commit or push. Full product goal remains active.
+- **Local invariant handoff selected 2026-09-07T16:08:50Z:** Bind the existing typed local invariant runner to
+  exact prepared Forge/Solc and matching config. Check pins before isolated versions, retain both
+  identities across execution/replay/minimization, and use read-only prepared Solc directly rather
+  than copying it into writable source. Reject mixed path overrides and source/private overlap.
+  Managed mode supports source-local deployments only; retain legacy fork behavior without using it.
+- **Files/tests:** solidity/invariant_execution.py, new inert unit and trusted-control local
+  integrations, inventory and records. Baseline four-file invariant/formal/material/toolchain
+  matrix: 269 pass in 14.88s. No real engine, provider, private input, ledger, public RPC or hosted CI.
+- **Next action:** Add red-first path/identity/local-only/replay tests, implement and validate this
+  consumer before another major slice. Missing/disabled preparation remains a refusal, not a pass.
+- **Prepared formal handoff locally tested 2026-09-07T15:59:36Z:** FormalRunner accepts exact prepared material,
+  binds all eight fixed primary adapters without PATH discovery, sends prepared Z3 to Halmos and
+  prepared Solc to Foundry invariants with auto-detection disabled. Primary versions and dependency
+  pins are checked before execution. Bounded retained identities are rechecked around probes,
+  stream preparation, target launch and outcomes; config/custom-adapter/overlap/drift refusals stay.
+  Disabled/no-project, existing trust/property/service prerequisites and explicit backends remain.
+  Omitted backend uses the matching-Linux factory; no transitive closure or service authority added.
+- **Validation:** Twenty-file engine/managed/compiler/isolation/scanner/reproduction/CI and selected
+  pipeline-refusal matrix: 525 pass / six prior Linux-only INCONCLUSIVE in 31.28s. New unit/local
+  integration plus full inventory matrix: 103 pass in 68.86s, including all 56 new cases (40 unit,
+  14 fixed trusted-Python controls, two inventory). Ruff, five-file formatting, strict mypy over
+  252 source/script files, diff and read-only canonical checks pass. Final seven-file terminal
+  governance/documentation/objective/schema/inventory/CI matrix passes 285 in 71.69s. Matrices
+  overlap; real formal-engine operation and full-suite coverage are not claimed.
+- **Inventory:** Exactly two metadata observations added; three existing source semantic hashes
+  changed (formal/inventory modules and the FormalRunner-bound Certora environment selector), with
+  every old classification and gate retained. Counts 4085 sources / 4088 occurrences / 4033 gate /
+  52 nongating; 35 logical / 29 unsatisfied / 15 manual gates remain. No schema or authority promotion.
+- **Incomplete expansion:** Optional full-pipeline matrix stopped after 542 pass / six Linux skips
+  and one already-repaired disabled-index fixture failure in 544.07s. It is not a full-suite pass;
+  the fresh bounded matrix above passes on final files. The stopped process is closed.
+- **Next action:** V3-AUTONOMY-001: inspect and select prepared Forge/Solc handoff into the local
+  invariant runner, preserving local-only execution. Current implementation UNSELECTED, parent
+  PARTIAL, 42 unfinished. Reproduction/pipeline wiring, real engines/Linux, installed closure and
+  unattended audit remain unproven. No private input, provider, paid trial, public RPC, hosted CI,
+  operator .new, commit or push. Full product goal stays active.
+- **Formal handoff selected 2026-09-07T15:32:00Z:** Bind the fixed eight-engine portfolio and explicit
+  Z3/Solc dependencies to prepared material. Reject mixed config/custom adapters; retain bounded
+  identities and version/pin checks around probes, target execution and outcomes. Preserve property,
+  trust and service prerequisites; no ambient fallback, installed-closure or provider authority.
+- **Scope/tests:** Formal adapters/runner, synthetic unit and trusted-control local integrations,
+  inventory and work records. Baseline: 252 pass in 7.10s. No private input or hosted CI selected.
+- **Next action:** Add red-first path/identity/dependency cases, implement and validate this handoff
+  before reproduction or pipeline-wide composition. Actual engine runs remain separate evidence.
+- **Final compiler verification 2026-09-07T15:20:22Z:** Seven-file governance/local CLI,
+  documentation/objective, schema, inventory and CI matrix passes 283 in 70.49s. Read-only
+  canonical verification and exact current operator/artifact/history bindings pass. All 57 new
+  cases pass; real compiler execution and six Linux cases remain unverified. Parent PARTIAL,
+  next AUTONOMY formal-tool handoff; no paid call, hosted CI or whole-audit claim.
+- **Managed compiler handoff tested 2026-09-07T15:18:10Z:** Existing compilation consumes exact prepared
+  Forge/Solc, requires fixed build arguments and explicit compiler selection, and validates both
+  versions before target execution. Retained bounded file identities and full material/config are
+  rechecked around probes/build/outcomes; replacement, drift and unsafe path overlap refuse.
+  Explicit backends and disabled/plain/off-host Hardhat behavior remain; no PATH fallback added.
+- **Validation:** Final 27-file compatibility passes 851 with six prior Linux-only INCONCLUSIVE
+  cases in 22.37s. The separately inspected Hardhat boundary file passes 38 in 3.97s with reviewed
+  local loopback permission; earlier seven EPERM setup errors are not credited. New focus: 55 pass
+  in 5.18s (45 unit / ten real offline setup and trusted-Python controls); two new inventory checks
+  pass in the three-case focus. All 57 new cases pass. Ruff, five-file formatting, strict mypy
+  (252 source/script files) and diff checks pass. Final seven-file terminal verification passes
+  283 in 70.49s; read-only canonical verification also passes.
+- **Inventory/limits:** Exactly two metadata inputs added; only compiler/inventory module semantic
+  hashes change among old sources. No old source, classification or mandatory gate is removed.
+  Counts 4083 sources / 4086 occurrences / 4031 gate / 52 nongating / 269 modules; 35 logical /
+  29 unsatisfied / 15 manual gates remain. Real Forge exists locally, but no usable Solc was found
+  in checked locations; real compiler execution remains unverified, not a control-test pass.
+- **Next action:** V3-AUTONOMY-001: inspect and select the remaining formal-tool prepared-material
+  handoff. Current implementation UNSELECTED, parent PARTIAL, 42 unfinished. Reproduction and
+  pipeline-wide wiring, actual Linux execution, closure and a full audit remain unproven.
+  No paid/provider command, private input, hosted CI, account/chain, commit or push.
+- **Managed compiler handoff selected 2026-09-07T14:55:50Z:** Feed exact prepared Forge/Solc into the
+  existing compiler without PATH or arbitrary repository command tails; recheck material and
+  identities before invocations/probes and after outcomes. Preserve off-host Hardhat requirements.
+- **Scope/tests:** Compiler, synthetic unit/trusted-system-control integration tests, inventory
+  and records. Baseline: 248 pass in 5.23s. No installed closure or full-audit claim.
+- **Next action:** Add red-first cases, implement and test the handoff. Formal/reproduction and
+  pipeline-wide prepared-tool wiring remain subsequent work; no provider or hosted CI.
+- **Final managed Linux verification 2026-09-07T14:47:33Z:** Seven-file governance/documentation/
+  objective/schema/inventory/CI matrix passes 281 in 71.68s. Read-only canonical verification,
+  exact state/artifact/operator/history bindings and diff checks pass. The 1086 compatibility
+  passes and 11 real local/macOS integrations do not substitute for six unrun Linux kernel cases.
+  Parent remains PARTIAL; next AUTONOMY; no hosted CI, paid call or full-audit claim.
+- **Managed Linux consumer implemented/tested locally 2026-09-07T14:36:35Z:** ScannerRunner now
+  constructs selected pinned Bubblewrap from matching Linux/CPU material when no explicit backend
+  is supplied. Exact launcher admission is retained through all six probes. Each wrap reverifies
+  complete material and adds only its closed read-only directory; writable-private overlap fails.
+  Explicit backend behavior, source/config/pin conflicts, rootless/image refusals and no-fallback
+  behavior remain. This is not installed closure, independent trust, or managed audit readiness.
+- **Tests:** 31-file compatibility: 1086 pass / six Linux-only INCONCLUSIVE in 30.18s; focused
+  46 unit + two native setup/refusal cases pass in 2.48s. Existing real local/macOS integration:
+  11 pass in 1.00s with reviewed local permission. Three new inventory cases pass in the five-case
+  focus. Fifty-seven new cases total: 51 pass / six Linux kernel cases not run on this Darwin host.
+  Ruff, ten-file formatting, strict mypy (252 files), canonical generation and diff checks pass;
+  final seven-file governance/documentation/objective/schema/inventory/CI passes 281 in 71.68s.
+- **Inventory/result:** One runtime module and two OS/CPU inputs added; all 2165 filesystem
+  observations and existing gate classifications unchanged. Counts: 4081 sources / 4084 occurrences /
+  4029 gate / 52 nongating / 269 modules; 35 logical / 29 unsatisfied / 15 manual remain.
+  AUTONOMY PARTIAL, current implementation UNSELECTED, next AUTONOMY, 42 unfinished.
+- **Next action:** Inspect prepared-tool handoff for remaining compiler/formal consumers and select
+  one bounded gap. The six real Linux tests remain required evidence in an approved local Linux
+  environment. No paid command, provider/CI action or claim of unattended audit completion.
+- **Managed Linux isolation selected 2026-09-07T14:09:09Z:** Construct Bubblewrap from exact
+  prepared host material on a matching declared Linux platform, bind its selected digest to the
+  admission retained through all six mandatory probes, and expose only the verified tool directory
+  read-only. Reject material/private overlap, unsupported platforms/backends and drift; no fallback.
+- **Scope/acceptance:** isolation managed factory/provenance; Bubblewrap wrapper; detached bundle
+  view; managed ScannerRunner automatic backend construction; unit/local integration, inventory and
+  records. No arbitrary mount roots, host-home mount, PATH selection, installer, provider or CI.
+  Existing explicit backends and legacy non-managed behavior remain; no readiness or closure claim.
+- **Baseline:** Six-file host/scanner/admission/provenance/reproduction/toolchain matrix passes 306
+  in 5.65s. Host Darwin arm64 cannot establish Linux runtime evidence; add a real Linux-only test
+  and mark any unavailable integration INCONCLUSIVE, never pass by substituting a mock.
+- **Next action:** Add red-first managed factory, mount and runner tests; implement this one cohesive
+  consumer path, validate exact inventory and records, then record parent PARTIAL before more work.
+- **Final isolation-admission verification 2026-09-07T14:02:28Z:** Terminal seven-file governance/
+  documentation/objective/schema/inventory/CI passes 278 in 71.53s. Final 21-file compatibility
+  passes 697; all 11 local integrations and all 67 new cases pass. Static/canonical/governance/
+  diff checks pass. Parent PARTIAL, current implementation UNSELECTED, next AUTONOMY; no paid or CI
+  action. Linux managed factory and complete unattended audit remain unfinished.
+- **Isolation launcher admission tested 2026-09-07T13:58:03Z:** Bounded canonical/no-follow
+  identity observation now precedes policy/probes, is retained through each invocation and is
+  rechecked on evidence lookup. The wrapper must retain the admitted launcher. Policy drift,
+  invalid files, replacement and byte restoration refuse old evidence. All failed reseal requests,
+  including malformed identity, revoke previous seals; all six mandatory properties remain.
+- **Validation:** Final 21-file compatibility: 697 pass in 18.93s, with the real system sandbox
+  check run separately with local permission: all 11 integrations pass in 1.07s. The inspected
+  loopback/backend matrix passes 49 in 39.95s with permission; earlier seven socket-permission
+  errors and one inconclusive sandbox observation are not credited as passes. Sixty-seven new
+  cases: 54 unit / 11 local integration / two inventory; terminal combined checks follow.
+  Ruff, seven-file formatting, strict mypy over 251 source/script files and diff checks pass.
+- **Inventory:** Four old unbounded/metadata observation sites consolidate into the existing
+  bounded observer; new AST regressions retain sealing, evidence lookup and every probe admission.
+  No logical gate, required probe or authority is removed/promoted. Counts: 4078 sources / 4081
+  occurrences / 4026 gate / 52 nongating / 268 modules; 35 logical / 29 unsatisfied / 15 manual.
+- **Result/next:** Parent AUTONOMY PARTIAL; current implementation UNSELECTED; next AUTONOMY.
+  Inspect a Linux-only managed backend factory, exact pin-to-admission custody and minimal read-only
+  material exposure. No factory, Linux runtime, helper/dependency closure, atomic exec or full audit
+  is claimed. No provider, private input, hosted-CI restart or paid command is selected.
+- **Isolation-admission prerequisite selected 2026-09-07T13:40:21Z:** Before managed backend
+  construction, bind the built-in launcher identity before policy/probes, recheck before and after
+  each invocation, and refuse drift or byte-restoration without a fresh successful preflight.
+  Reuse bounded no-follow executable observation; keep all six mandatory isolation properties.
+- **Scope/tests:** Isolation provenance; inert unit and trusted-Python local control tests; exact
+  inventory and records. Reject invalid/changed launchers before invocation; an admission failure
+  is never a successful negative probe. Preserve every serialized authority false flag.
+  Four-file baseline: 121 pass in 2.37s. Managed Linux factory/read-only exposure remains unimplemented.
+- **Next action:** Reproduce drift, implement bounded identity admission, validate and record before
+  selecting managed factory work. No provider, paid audit, private input or hosted-CI action.
+- **Final managed scanner-path verification 2026-09-07T13:27:46Z:** Terminal seven-file governance/
+  documentation/objective/schema/inventory/CI passes 276 in 70.13s. Main 28-file compatibility
+  passes 1059; all 42 new cases and static/canonical/governance/diff checks pass. Parent PARTIAL,
+  current implementation UNSELECTED, next AUTONOMY; no provider or hosted-CI action.
+- **Managed scanner-path handoff tested 2026-09-07T13:23:37Z:** Fixed configured scanners now consume
+  reverified primary host paths and Slither/Foundry solc paths from the exact prepared material/
+  config. Foundry runtime clones retain both paths. Absolute path absence cannot fall back to
+  PATH, and explicit compiler selection cannot fall back to its environment variable. Managed
+  runner construction requires an explicit existing backend and rejects mixed configs/custom
+  adapters; per-run fixed adapters and queued/terminal material checks retain source/pin refusals.
+- **Validation:** 28-file scanner/toolchain/provisioning/config/compiler/formal/dependency/ledger/
+  I/O/CI/source/doctor/Slither/typed-outcome/Foundry/runtime-evidence/coverage compatibility passes
+  1059 in 27.93s; new unit/local control matrix passes 40 in 4.18s. Forty-two new regressions
+  including two inventory cases; combined terminal checks follow. Strict mypy passes 244 files;
+  Ruff passes. No full-suite, actual Semgrep/Foundry/Solidity audit or installed-readiness claim.
+- **Inventory delta:** Four direct PATH lookup sites now call one reviewed shared resolver;
+  all four call sites remain tested. Two absolute-path metadata observations join the same existing
+  toolchain gate; no filesystem observation is removed. Counts: 4082 sources / 4085 occurrences /
+  4030 gate sources / 52 nongating / 268 modules / 355 completion parameters. The 35 logical,
+  29 unsatisfied and 15 manual gates remain unchanged; no schema or authority is promoted.
+- **Result/next:** This existing-runner handoff is implemented and tested; AUTONOMY remains PARTIAL.
+  Current implementation UNSELECTED at closure; next V3-AUTONOMY-001: inspect deterministic
+  isolation-backend construction from prepared host material, preserving existing attestation/
+  refusal checks. Child PATH/dependency closure, other compiler/formal/doctor/fork-matrix paths,
+  architecture/image identity and a full managed audit remain unfinished. No paid or CI action.
+
+- **Selected managed scanner handoff 2026-09-07T13:02:32Z:** Connect exact prepared host material to
+  the existing configured scanner portfolio and runner. Bind primary host executable paths and
+  Slither/Foundry compiler paths without PATH/environment fallback; preserve Foundry runtime clones.
+  Require matching derived config and an explicit existing isolation backend, and reverify material
+  before dispatch. Preserve disabled/image-side behavior, source custody, pin checks and refusals.
+- **Scope/tests:** Scanner runner/base, Slither and Foundry adapters, shared role mapping if needed;
+  synthetic unit and real local harmless consumer integration; canonical inventory and records.
+  Baseline six-file runner/source/pin/preflight/Slither/material/consumer matrix passes 149 in 4.60s.
+  No compiler/formal/doctor-wide trust claim, installer, live fork, provider call or paid audit.
+- **Next action:** Implement this one config-bound managed host-path consumer; verify missing,
+  mutated and mismatched material refuses without fallback, including before queued dispatch.
+  Complete image/interpreter/dependency closure and full unattended audits remain unproven.
+
+- **Final host-material verification 2026-09-07T12:55:27Z:** Terminal seven-file governance/
+  documentation/objective/schema/inventory/CI passes 274 in 70.11s after reconciliation. Main
+  compatibility passes 874; all 92 new regressions and static/canonical/governance/diff checks pass.
+  Parent PARTIAL, current implementation UNSELECTED, next AUTONOMY; no paid or hosted-CI action.
+- **Host-material slice tested 2026-09-07T12:51:17Z:** Required pinned host files now materialize
+  from explicit local blobs into private content-addressed output. Exact repeats can verify without
+  the source store; partial/corrupt/linked/unexpected material is refused without overwrite. The
+  setup API hands reverified host paths and the same final dependency-derived config to consumers,
+  rechecking material around receipt publication. Fresh receipt rollback preserves old receipts.
+- **Host-material validation:** 19-file compatibility passes 874 in 20.63s; ten safe local
+  integrations pass in 2.04s. Inventory/schema passes 69 in 53.86s before capability-prose refresh;
+  terminal combined recheck follows. Ninety-two new cases: 72 material unit, six setup runtime,
+  two streaming I/O, ten local integration and two inventory. Ruff, 11-file formatting and strict
+  mypy over 244 source/script files pass. Matrices overlap; no full-suite/audit result.
+- **Source/schema integrity:** One new module, two host-identity inputs and 15 filesystem inputs
+  are classified; no source was removed. Existing streamed-copy source open is now nonblocking
+  and copying is bounded to the exact binding size plus a sentinel byte. Counts: 4083 sources /
+  4086 occurrences / 4031 gate sources / 52 nongating / 268 modules. The 35 logical gates,
+  29 unsatisfied gates, 15 manual gates and 355 completion parameters are unchanged. New direct
+  host-material schema is canonical; legacy provisioning schemas and false authority remain exact.
+- **Result/limit:** This bounded API-level preparation capability is tested; AUTONOMY remains
+  PARTIAL. Default bundle pins, architecture, interpreter/shared-library/image closure and a
+  complete managed audit remain unresolved. No CLI installer, installed readiness or completed real
+  audit is claimed. The operator's latest report still records zero real audits and unchanged
+  57 entries / USD 0.68118684; no provider, private input, real ledger, route adoption or CI action.
+- **Exact next safe action:** Inspect selected scanner construction for an explicit managed
+  host-path resolver that consumes the verified result without ambient PATH fallback. Select only
+  that bounded AUTONOMY follow-up after terminal checks and recording; no second ticket is started.
+
+- **Selected host-material provisioning 2026-09-07T12:08:32Z:** Build an actual private, content-
+  addressed set of already pinned required host executable files from an explicit local blob store.
+  Verify exact existing material without overwrite; reject partial/corrupt/linked output and
+  unresolved required host roles. Return current verified executable paths and the derived config,
+  and compose that result with local setup. No PATH search, download, install script or execution.
+- **Selected files/acceptance:** New managed host-material module and canonical manifest schema;
+  provisioning runtime/result handoff; synthetic unit/local material-consumer integration tests;
+  schema generator, exact inventory classifier/catalog, guidance and work records. Supplied hashes
+  authenticate bytes against the declaration only. Transitive/image/architecture trust, installed
+  readiness and every execution/provider/release authority remain false. Legacy receipts keep
+  their original semantics. Missing material is never converted into a ready managed audit.
+- **Baseline/next:** Seven-file toolchain/provisioning/runtime/CLI/dependency-consumer/scanner-
+  identity/release-I/O matrix passes 307 in 4.09s. Implement this bounded offline provisioning
+  capability with safe fixtures; no provider, credential, real ledger, route adoption or CI action.
+
+- **Final executable-admission verification 2026-09-07T12:00:23Z:** Terminal seven-file governance/
+  documentation/objective/schema/inventory/CI passes 272 in 71.91s after reconciliation. Main
+  compatibility 784 and all 50 new regressions pass; static/canonical/governance/diff checks pass.
+  Parent PARTIAL, current implementation UNSELECTED, next AUTONOMY; no provider or CI action.
+- **Executable admission tested 2026-09-07T11:57:04Z:** Incomplete/mismatched pins now refuse before
+  copying or any version probe. Bounded, nonblocking/no-follow host-file observations detect inode,
+  mode, ownership, link-count, timestamp, size and byte drift before probing, after probe preparation
+  and before scanner invocation. Full version/isolation/source checks remain; image-side identity
+  cannot be substituted with a host observation. This is not atomic exec custody or tool closure.
+- **Admission validation:** 17-file compatibility passes 784 in 19.04s; focused scanner four-file
+  matrix passes 253 in 9.38s; inventory/schema 67 in 61.68s and governance/documentation/objective/CI
+  205 in 18.79s pass. There are 50 new cases (40 unit / eight real local trusted-Python integrations /
+  two inventory), including 21 regressions reproduced red before their fixes. Matrices overlap.
+  Ruff, five-file formatting, strict mypy (243 files), canonical generation and governance pass.
+- **Optional broad-run limit:** The extra complete pipeline file was interrupted at 816 passes,
+  one unavailable-isolation skip, 527.61s; the targeted 784-test matrix completed independently.
+  No full-suite, installed-toolchain, real engine, provider or audit-completion result is claimed.
+- **Exact inventory/result:** Seven new filesystem loci join the existing managed-toolchain gate;
+  removing them reproduces the exact previous filesystem universe. Counts: 4065 sources / 4068
+  occurrences / 4013 gate sources; 52 nongating / 35 logical / 29 unsatisfied / 15 manual / 267
+  modules / 355 completion parameters unchanged. No gate disposition or authority is promoted.
+  AUTONOMY remains PARTIAL. Next: inspect bounded exact host-material provisioning and handoff;
+  installation, dependency/image closure and full unattended audits remain unfinished.
+
+- **Selected executable identity prerequisite 2026-09-07T11:33:47Z:** Inspection found the scanner's
+  installed-file hash pin is checked only after its version probe has executed. Reject incomplete
+  or mismatched pins before probing, then recheck the observed host executable before the probe
+  and target invocation. Preserve version checks, copied-source custody, image-side refusals and
+  all false authority/readiness flags. This measured consumer defect is on the managed pin-handoff
+  path and precedes tool installation. No installation, provider or CI action is selected.
+- **Selected files/tests:** Scanner base; focused synthetic unit and safe local integration tests;
+  exact inventory, guidance and current records. Baseline scanner/workspace/toolchain/runtime
+  matrix passes 335 in 10.85s. Prove rejected material is never probed or scanned and unchanged
+  matching pins still reach the normal consumer. Full toolchain closure remains unverified.
+
+- **Toolchain-config slice tested 2026-09-07T11:21:49Z:** Exact bundle pins now reach existing
+  compiler/scanner/formal consumer fields and compatible selected image/runtime fields through a
+  shared conflict/derivation map. The returned config is detached, revalidated, role-preserving
+  and receipt-bound; explicit conflicts stop before writes. Partial bundles retain absent-role
+  refusals and all installed-tool/closure/authority/readiness limits. No engine/profile is enabled.
+- **Pin-handoff validation:** 15-file toolchain/provisioning/config/compiler/formal/scanner/
+  dependency/ledger/I/O/CI compatibility passes 736 in 20.58s; focused five-file matrix passes
+  195 in 4.91s, including 46 new cases (42 unit / four local integration). Initial two propagation
+  tests were reproduced red. Ruff, six-file formatting, strict mypy over 243 source/script files
+  and read-only canonical verification pass. Final seven-file terminal governance/documentation/
+  objective/schema/inventory/CI validation passes 270 in 78.33s. Only the exact inventory was
+  regenerated; every count, source-discovery semantics hash and disposition is unchanged.
+  Matrices overlap; no full-suite, installed-tool or live audit result is claimed.
+- **Pin-handoff limit:** This derives already declared pins; it does not install or attest tools,
+  supply transitive/image identity, bootstrap fields required during config parsing, persist a
+  full audit profile or execute a managed audit. AUTONOMY remains PARTIAL; no input or authority
+  is inferred from a synthetic bundle or a nonauthorizing receipt.
+
+- **Selected toolchain-config handoff 2026-09-07T11:06:46Z:** The bundle resolver records declared pins,
+  but provision_managed_local_run returns a config without applying them. Derive only existing
+  compiler/scanner/formal/image pin fields from the selected exact bundle; preserve explicit-pin
+  conflicts, selected roles/profile, source custody and unresolved-role refusals. Bind the returned
+  detached config into the existing receipt and prove real local dependency consumption still works.
+  Baseline five-file managed toolchain/provisioning/CLI/integration matrix passes 149 in 3.01s.
+  Files: managed toolchain and provisioning runtime, focused unit/local integration tests, exact
+  canonical inventory and current records/guidance. No new CLI option, schema, installed-tool trust,
+  provider/credential/real-ledger access, route adoption, execution authority or hosted CI action.
+
+- **Automatic handoff slice tested 2026-09-07T09:34:33Z:** Final 13-file compatibility passes 581
+  in 25.48s, focused matrix 201 in 4.71s, schema/inventory 65 in 55.07s. Ruff, seven-file formatting
+  and strict mypy over 243 source/script files pass. New operator evidence exposed a separate
+  governance historical-digest pin; terminal governance is not credited green. AUTONOMY remains
+  PARTIAL. Next V3-GOVSYNC-002, then V3-DEVREASON-001; no second implementation or paid run starts.
+
+- **Selected automatic config handoff 2026-09-07T09:18:03Z:** Compose local archive construction,
+  dependency-only config derivation and receipt verification in one setup operation. Preserve the
+  original profile, reject conflicting explicit pins before writes, honor tighter selected limits,
+  return a receipt-bound config for the existing dependency consumer, and create nothing in
+  verify-only mode except the existing refusal-receipt behavior. Files: provisioning runtime/CLI,
+  focused tests, canonical inventory/schema and work records. Baseline 175 tests passes. No network,
+  provider, real credential/ledger, account, chain or hosted CI action is selected.
+
+- **Receipt integration tested 2026-09-07T08:05:53Z:** Local slice complete; parent PARTIAL. The 13-file
+  affected matrix passes 555 in 24.04s, including 46 new cases. Ruff, ten-file formatting and strict
+  mypy over 243 source/script files pass. Terminal canonical/governance checks are recorded in the
+  worklog. All absent-input refusals and false authority/readiness flags remain. Next is bounded
+  automatic config handoff inspection, not paid execution or a full-product completion claim.
+
+- **Final receipt verification 2026-09-07T08:08:41Z:** Compatibility 555 passes; terminal
+  governance/documentation/objective/schema/inventory/CI 177 passes in 57.09s. Canonical generation,
+  governance, Ruff, formatting, strict mypy and diff integrity pass. Operator-results/active plan
+  and historical JSON payloads are unchanged; no provider or hosted CI action. Parent PARTIAL.
+
+- **Selected receipt integration 2026-09-07T07:46:30Z:** Verify configured local snapshots against all
+  detected Hardhat roots, exact lockfiles and bounded inert package trees; reject matching supplied
+  advisories and recheck verified material around receipt publication. Reuse typed nonauthorizing
+  observations, version the setup policy without relabeling historical receipts, and preserve every
+  unavailable-tool refusal. Files: snapshot verifier, provisioning model/runtime, focused tests,
+  canonical artifacts and work records. Baseline: 129 relevant tests pass. No external action.
+
+- **Selected continuation 2026-09-07T06:53:32Z:** Local snapshot construction only, with no package
+  downloads, lifecycle execution, credentials, provider calls or installed-toolchain trust. Require
+  a hash-pinned supplied advisory input; do not invent advisory completeness or freshness. Discover
+  all local Hardhat roots, verify every exact lock/archive/package identity, reject unsafe members
+  and resource excess, publish content-addressed output, and verify completed repeats without
+  overwriting partial or incompatible output. Prove existing dependency preparation consumes it.
+  The existing provisioning baseline passes 75 tests; no current operator trial result exists.
 - **Selected:** `2026-09-03T22:26:22Z`; implementation started at
   `2026-09-03T22:37:51Z`. The parked prototype was not applied wholesale.
 - **Result:** The bounded provider-free slice now emits a strict, self-contained typed receipt
@@ -52,7 +1455,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   over `588` discovered files, repository-wide Ruff, strict mypy over `235` source files, strict
   JSON, and diff integrity passed. The closure-time metrics above remain immutable history; no
   terminal full-suite credit is claimed.
-- **Remaining limitation:** This slice provisions only local evidence and an empty local cost
+- **Historical ledger-slice limitation:** This slice provisions only local evidence and an empty local cost
   ledger. It does not install or attest the 25 unresolved toolchain roles, start or verify a fork,
   build CodeQL or dependency inputs, derive targets, approve invariant templates, capture client
   consent, execute an audit, access a provider, or establish runtime readiness. The ticket therefore
@@ -60,10 +1463,38 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   point-in-time and honors explicit audited-workspace exclusions; stat-to-unlink rollback assumes
   writers cooperate with the publication lease; and a same-UID actor able to delete the marker,
   state, and ordinary lock can defeat the purely local reset anchor.
-- **Next action:** `STOP`. Current and next tickets are `UNSELECTED`; no successor is selected.
-  Begin any later bounded ticket only after rereading current governance and operator evidence. Do
-  not infer a route or run index, mutate the active V1 plan or operator ledger, issue a command, or
-  grant authority.
+- **Snapshot-construction result 2026-09-07T07:20:06Z:** Implemented the separate provider-free
+  `managed build-dependency-snapshot` CLI. It discovers all bounded local Hardhat roots, verifies
+  actual supplied archives against lockfile SHA-512, enforces inert member/package/resource policy,
+  and publishes exact content-addressed snapshot, provenance and dependency configuration. Completed
+  repeats verify without overwrite; incomplete output is preserved. Real local tests prove existing
+  dependency preparation consumes the output and still refuses a supplied negative advisory.
+- **Snapshot validation:** The 13-file compatibility matrix passes `506 in 22.54s`, including
+  ancestry, selection, I/O, CI, dependency, provisioning, toolchain and ledger regressions. Added
+  48 builder unit cases, three real local preparation/CLI cases and two shared I/O cases. Ruff,
+  ten-file formatting, strict mypy over 243 source/script files and read-only canonical generation
+  pass. Terminal inventory/governance rechecks are recorded in the worklog; no full-suite pass exists.
+- **Snapshot-slice limitations (historical):** Inputs must already be supplied locally. Archive/feed distribution,
+  advisory freshness/completeness, integration into the Phase-2 receipt, installed tooling, CodeQL,
+  fork/target/template setup and the zero-input audit are still unfinished. The output is a
+  dependency-config fragment, not a complete audit profile or runtime authority. Publication is
+  point-in-time, not crash-atomic, and incomplete output is not automatically reset. No provider,
+  real ledger, route selection, qualification, audit or release action occurred.
+- **Final validation 2026-09-07T07:35:51Z:** Final review reproduced three raw lock-path collisions;
+  canonical raw-key validation now rejects them before normalization or output. Final compatibility
+  passes `509 in 22.20s` including 56 new cases; terminal governance/schema/inventory/CI passes
+  `177 in 57.37s`. Ruff, formatting, strict mypy, canonical artifact and governance checks pass.
+  The parent remains PARTIAL, not closed by these scoped results.
+- **Current receipt-slice result:** Exact private snapshot verification and typed observations are
+  implemented. New policy v2 is explicit; v1 identity is retained. Initial six-file matrix passes
+  174, including 45 new local cases. Final review reproduced an earlier-package mutation/restore
+  gap; aggregate metadata retention/rechecks now cover it. Terminal validation follows in the log.
+- **Current limitations:** Explicit local archives/advisories/config are still required. Receipts
+  do not authenticate original archives, feed freshness/completeness, installations or execution.
+  Missing toolchain, fork, CodeQL and other inputs remain refusals; no readiness is granted.
+- **Next action:** Inspect one bounded installed-toolchain provisioning capability under AUTONOMY.
+  Preserve declared pins, source scope and downstream per-run checks; absent material remains
+  refused. No new implementation, private input, provider command or paid audit is selected.
 
 ### V3-OBJECTIVE-002 — Freeze explicit autonomous completion objective
 
@@ -1611,6 +3042,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** Operator sweep of `2026-08-30`, provider-free at `$0`, covering every
   plan-allowed candidate route. Results recorded in the operator record.
 - **Status:** `PARTIAL`
+- **2026-09-06 bounded resumption:** Selected at `2026-09-06T06:06:14Z` after the operator
+  prioritized the first real single-model audit and completed CI pause. Expose the actual
+  price-contract refusal through existing discovery, without relaxing admission or spending money.
+  Change only route-constraint/endpoint-snapshot error paths, their unit and mocked CLI tests,
+  operator guide, and work records; refresh derived inventory only if those source changes require it.
+- **Slice acceptance criteria:** Retain original predicate codes, name the selected price-cap
+  algorithm and failed component or unavailable schedule, and reproduce the supplied tiered-price
+  shape through local CLI integration. Require no completion call, spend, or discovery/registry
+  publication; preserve successful evidence bytes, active plan, privacy, lineage, and revocation.
+- **Slice baseline:** Three affected unit/CLI files passed `277` tests in `3.39s` before edits.
+  Existing pricing and ancestry WIP is preserved; PLANANCESTRY remains unsafe and unused.
+- **Slice limitation:** This diagnosis cannot establish a fresh live route or provider-enforced
+  cache-write ceiling. The parent ticket's real-route/live-preflight acceptance criteria remain unmet.
+- **Slice result:** The diagnostic implementation and local CLI integration are complete. Both V1
+  and verified V2 name `input_cache_write` as the first unbounded component; unavailable schedules
+  and non-dominated cache reads are distinct. Focused tests pass `287`; the wider affected matrix
+  passes `519`. Scoped Ruff and strict mypy pass. The autonomy inventory was mechanically refreshed
+  without changing gate counts or readiness; unrelated paused candidate-schema drift is not repaired.
 - **Reasoning-effort decision:** `REASONING_EFFORT_SUPPORT` is genuinely required for the candidate
   under the current shared AUTHRUNNER profile. Candidate benchmark and smoke requests emit exact
   `effort=high`, reserve reasoning tokens, and independently require compatible endpoint inventory
@@ -1622,13 +3071,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   discovery evidence, grants no endpoint authority, and requires fresh constrained discovery. A
   lineage-distinct synthetic Gemma route passes constrained discovery and the mocked live-route
   preflight; missing-effort, revoked, nonconforming, tampered, and schema-null routes fail closed.
-- **Remaining limitation:** The synthetic proof does not establish a current real endpoint. The
-  latest operator record still reports zero admissible real candidates, the active v1.4 plan is
-  unchanged, and no replacement is selected. The route-restoration objective therefore remains
-  `PARTIAL` despite the completed provider-free mechanism.
-- **Next action:** Stop this work unit. Resume `V3-CANDROUTE-001` only with fresh nonauthorizing
-  operator evidence for a current real route, then replay schema v1.6 constrained discovery and
-  provider-free live-route preflight. Do not launch a campaign, emit a command, or grant authority.
+- **Remaining limitation:** The current active schema-v1.7 plan still has no candidate. Operator
+  evidence reports the sole otherwise-conforming route failing caps even under private V2. Current
+  documentation provides no separate cache-write cap; the quoted zero does not prove enforcement.
+  Synthetic evidence does not qualify a live route, and the unsafe ancestry WIP remains unused.
+- **Next action:** `V3-CANDROUTE-001` remains the prerequisite to `V3-SINGLE-AUDIT-001`. Establish
+  a fresh route whose complete charge contract is expressible, or an equivalent enforceable provider
+  cap, before resuming selection/qualification. Any deliberate relaxation of the strict price
+  guarantee requires an explicit operator policy decision, not an error-handler change. Do not
+  repeat paid attempts, erase metadata fields, or use PLANANCESTRY to conceal this independent blocker.
 
 ### V3-ENDPOINTLIST-001 — Provider-free endpoint enumeration for candidate selection
 
@@ -2198,7 +3649,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   maximum and refresh-custody slices inside `V3-PRICECAPTIER-001` and
   `V3-MODELREFRESH-001`. Official OpenRouter documentation distinguishes free or
   prompt-dominated cache writes from providers whose cache-write rate is 1.25× or 2× prompt;
-  the mechanism is therefore conditional per exact route rather than a universal exemption.
+  those provider-specific ratios motivated the attempted condition but do not establish a
+  request-bound provider ceiling for cache-write units or total cost.
 - **Status:** `PARTIAL`
 - **Selected:** `2026-09-04T00:56:31Z`; implementation started at `2026-09-04T01:00:32Z`. The active repository plan
   remains V1, the operator-reported private V2 plan remains unadopted, and no candidate, route,
@@ -2214,8 +3666,14 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   Metadata-time cache-write dominance is non-atomic and can race provider repricing; local
   reconciliation observes an overage only after spend. The requested provider-enforced dominance
   therefore is not established, so this ticket cannot close `COMPLETE`.
+- **Closure validation:** The post-cutoff affected matrix passed `1436` tests with two known
+  `DeprecationWarning`s in `245.19s`; the focused product-governance contract passed `27` tests.
+  Canonical release-schema verification, Ruff format over `588` discovered Python files,
+  repository-wide Ruff, strict mypy over `235` source files, strict duplicate-key parsing of `20`
+  changed JSON files, diff integrity, and independent no-blocker review passed. No terminal
+  repository-wide suite credit is claimed.
 - **Next action:** `STOP`. Current and next tickets are `UNSELECTED`; this ticket is last partial,
-  `V3-PRICECAPCOMP-001` remains last complete, and the combined unfinished count is `41`. Resume
+  `V3-PRICECAPCOMP-001` remains last complete, and the combined unfinished count is `42`. Resume
   only if the provider supplies a request-bound cache-write/total-cost cap or an equivalent
   enforceable atomic contract. Do not emit or adopt a successor artifact, access a provider or
   operator ledger, or claim route admission.
@@ -2314,12 +3772,100 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** `V3-REVOKERECON-001` `COMPLETE`, `V3-PLANSUCCESSOR-001` `COMPLETE`. Operator
   verification `2026-09-04`: repository plan `bb3d60c3…` contains no V2 marker and pins the revoked
   deepseek route.
-- **Status:** `QUEUED`
-- **Next action:** Resolve the revoked pin and record the V2 adoption decision. Do not select a
-  replacement candidate on the operator's behalf, launch a campaign, emit an operator command, or
-  grant any authority — candidate choice remains an operator decision informed by a provider-free
-  sweep, and the operator has already reported that exactly one route of 112 surveyed live endpoints
-  meets every substantive constraint.
+- **Status:** `COMPLETE`
+- **Selected:** `2026-09-04T02:44:26Z`; implementation started at `2026-09-04T02:56:04Z`. The
+  bounded local design is a deterministic, predecessor-bound no-admissible-candidate successor
+  that preserves the exact V1 judge profile and judge constraints, records that V2 was not
+  adopted, and grants no authority.
+- **Result:** Completed provider-free at `2026-09-04T03:27:47Z`. The active canonical schema-v1.7
+  plan `14566de1…` (raw `4e7fff76…`) deterministically succeeds exact predecessor `bb3d60c3…` and
+  records `NO_ACTIVE_CANDIDATE_AFTER_REVOCATION` under state `98941c32…` and matched tombstone-set
+  digest `7c0118f5…`. It retains the exact V1 profile and judge constraints, does not adopt V2, and
+  keeps every authority false. The former v1.4 bytes remain an exact historical fixture.
+- **Limitation:** Structural loading and private `models discover` staging do not authenticate a
+  plan's claimed predecessor. Any lineage or repository-adoption claim requires exact two-plan
+  successor validation. A future selected candidate therefore needs a separately authenticated
+  ancestry transition; this ticket does not select one.
+- **Next action:** `STOP`. Do not select a replacement candidate, issue a provider/operator command,
+  launch a campaign, mutate the ledger, or grant authority. A later explicitly selected ticket may
+  design the authenticated transition after current non-revoked candidate evidence exists.
+
+### V3-PLANANCESTRY-001 — Authenticate the unavailable-plan predecessor chain
+
+- **Objective:** Add one provider-free, repository-pinned verifier for the exact active schema-v1.7
+  unavailable plan and its archived selected schema-v1.4 predecessor. Issue only a PID-local opaque
+  ancestry capability after replaying exact canonical bytes, deterministic successor validation,
+  and current negative-only revocation custody.
+- **Files/modules:** Candidate-plan ancestry model/verifier, CLI verification surface, generated
+  schema and inventory where applicable, and focused synthetic/local regressions.
+- **Acceptance criteria:**
+  - The verifier accepts only the compiled active-plan and archived-predecessor raw and semantic
+    hashes, and replays the exact v1.4-to-v1.7 unavailable successor transition against the current
+    pinned revocation registry.
+  - Coherent reseals, ancestor substitution, wrong direction, filesystem-link substitution,
+    read-time drift, runtime callable replacement, forged/copied/serialized capabilities, and
+    post-issuance byte drift fail closed.
+  - A fresh projection binds both plan hashes, the unavailable-state and matched-revocation-set
+    hashes, the withdrawn candidate constraints, and retained V1 profile and judge constraints.
+  - A distinct capability-consuming derivation emits only a private schema-v1.8 nonauthorizing
+    reactivation successor. Its immediate predecessor is the active v1.7 plan; its embedded ancestry
+    binding covers both exact raw/internal ancestors, retained custody, and one existing listed,
+    currently non-revoked replacement constraint. Endpoint refresh and V2/V3 upgrades are absent.
+  - Durable evidence and CLI output remain explicitly nonauthorizing. The mechanism does not adopt
+    the successor, alter active config, access a provider or credential, touch the operator ledger,
+    or grant qualification, runner, audit, release, or other authority.
+  - Ordinary `emit-selection-plan-successor` behavior remains unchanged and continues to reject an
+    unavailable predecessor without this separately scoped transition.
+- **Tests:** Provider-free nominal replay and private successor publication plus exact-hash,
+  coherent-reseal, substitution, TOCTOU, revoked-route resurrection, monkeypatch,
+  capability-forgery/copy/serialization/fork-scope, output collision, CLI pre-egress, schema, Ruff,
+  and strict-mypy regressions.
+- **Dependencies:** `V3-PLANADOPT-001` and `V3-PLANSUCCESSOR-001` `COMPLETE`; the exact archived
+  predecessor fixture and pinned negative-only revocation registry are present. Fresh candidate
+  evidence is intentionally not required for this mechanism-only slice and remains required before
+  any later candidate-bearing transition or adoption.
+- **Status:** `COMPLETE`
+- **Completion:** `2026-09-07`: all five recorded integrity blocker groups now have reproduced
+  regressions and tested local repairs. The 23-file ancestry/selection/route/release/development
+  compatibility matrix passes `785 in 41.61s`; ancestry/I/O/local CLI custody passes `172`, including
+  58 cases added in this continuation. Inventory passes `34`; objective/schema checks pass `37`.
+  Exact canonical generation, repository-wide Ruff, strict mypy over 241 source files, scoped
+  formatting and diff integrity pass. Four older governance expectations remain for GOVSYNC;
+  no full-suite, real-audit, provider, benchmark, qualification or release result is claimed.
+- **Current continuation:** `2026-09-07T05:30:32Z`: repair listed-endpoint narrowing and verify
+  source/generated-schema V1 parity, then address private publication and transitive I/O custody
+  within the same ticket. No live route, adopted plan, provider command or external authority.
+- **Resumed:** `2026-09-07T05:10:02Z` under the user's active completion goal. The selected slice
+  repairs exact opaque-capability identity and class/callable/closure integrity using local
+  adversarial regressions. Publication, route-narrowing and schema issues remain explicit until
+  separately tested within this ticket; the command is not cleared for use by selection alone.
+- **Reprioritized:** `2026-09-06` by the operator's CI-first request and audit-baseline priority.
+  Existing implementation and recorded validation are retained; the five reproduced integrity
+  blocker groups remain unresolved and the WIP command must not be used.
+- **Selected:** `2026-09-04T04:15:36Z`; implementation started at `2026-09-04T04:22:00Z`. This is the sole bounded
+  work unit selected after the operator exposed the unsupported ancestry gate and the user requested
+  continued ticket completion.
+- **Previously tested custody slice:** Exact-ID/weak-reference registration, custody-class dictionary and
+  descriptor-body guards, nested/exported function state and closure checks, and a separately
+  checked guard-code identity now reject the reproduced forged-instance and mutation cases.
+  The baseline passed 158 tests; 18 initial negative regressions failed before the repair, followed
+  by six no-op-guard and two descriptor-body failures that were also reproduced and repaired.
+  The expanded ancestry/selection/revocation/CLI matrix passes 196 tests; broader compatibility
+  passes 506 in 9.28s. Scoped Ruff check/format and strict mypy pass. All tests are local; none
+  adopts a plan or accesses a credential/provider. This closes a custody slice, not the ticket.
+- **Final mechanism:** Only the chosen existing roster entry is narrowed and resealed. Source and
+  generated schemas require a v1.8 assignment with the retained exact V1 profile. Ancestry checks
+  transitive repository I/O helpers, direct platform bindings and custody classes. Root/parent/file
+  descriptors remain held through final ancestry and filesystem validation, with exact-inode
+  cleanup on handled failures and explicit refusal when cleanup is incomplete.
+- **Limitation:** Bounded in-process mutation detection is not a Python or operating-system sandbox.
+  Publication is not crash-atomic; an unknown extra inode alias is reported, never searched for or
+  deleted. This mechanism neither refreshes endpoint evidence nor admits the operator-reported
+  unlisted route, upgrades V1, resolves the independent price-cap blocker, adopts a plan or grants
+  authority. The active plan and operator ledger remain unchanged; completed real audits remain zero.
+- **Next action:** `V3-GOVSYNC-001`, queued for current-versus-historical state reconciliation.
+  `V3-DEVTRIAL-001` still requires separate operator selection and fresh approved inputs. No paid
+  command or production use follows from this mechanism's completion.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
 
@@ -3220,46 +4766,50 @@ and report serialization.
 
 ## Current next action
 
-`V3-PRICECAPCACHE-001` closes `PARTIAL`, provider-free, and nonauthorizing at
-`2026-09-04T01:48:46Z`. OpenRouter's documented `max_price` object caps prompt, completion,
-request, and image pricing but exposes no cache-write or total-cost member. A metadata-time
-cache-write-to-prompt comparison is not an atomic provider ceiling and can become stale before
-POST; reconciliation detects any excess only after spend. The ticket's provider-enforced dominance
-acceptance criterion is therefore unmet.
+`V3-PLANADOPT-001` is `COMPLETE`, provider-free, and nonauthorizing at
+`2026-09-04T03:27:47Z`. The active repository artifact is now canonical schema `1.7`, internal
+SHA-256 `14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3`, raw SHA-256
+`4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695`. It records no active
+candidate after exact revocation reconciliation, while preserving the predecessor's exact V1
+price-cap profile and unchanged judge constraints. The private operator V2 profile was not adopted.
 
-The safe local result reserves V3 but rejects it unconditionally at the trusted
-`project_provider_price_cap` boundary. Successor derivation and the CLI emit no V3 plan, and preview
-schema `1.3` plus pricing-attempt schema `1.2` are removed. V1/V2 behavior and the active repository
-V1 plan remain unchanged. A second old schema-`1.2` understatement affecting both prompt and
-cache-write units was reproduced, but is neutralized because V3 attempt publication and transport
-are unreachable.
+The unavailable state binds predecessor `bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`,
+state `98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae`, and exact matched
+revocation-set digest `7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5`.
+The prior v1.4 bytes remain an immutable historical fixture. Discovery, registry, and CLI use of
+the unavailable active plan fails closed before staged-source, output, secret, client, or provider
+access. Ordinary successor emission cannot reactivate it; future adoption requires an explicit
+separately authenticated ancestry transition.
 
 The exact latest operator record is
-`63bfe90b281a6382b921c63669e817e65220c81b629fc75a7cb35b3f3e429d5b` (187,993 bytes / 3,335
-lines; latest `2026-09-03T22:31Z`, remote-resolved commit
-`c8a46b9b53a77fcdd4241d8fadeecbebc876346d`). It operator-reports that private plan
-`96cc5301111c7b60cf9b8235870d8051e2ece737c80dc5321662a1f6adfa3aea` genuinely exercised the
-V2 selector in metadata-only discovery and still failed
-`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`; the 57-entry / `0.68118684` USD ledger
-and zero completed real audits were unchanged. That private artifact is not checked in, inspected,
-adopted, or selected as the repository's active plan. The active repository plan remains V1, and
-the result grants no route admission or authority. Codex issued no provider or operator command.
+`215ea0f2f312b9674fb51285f6fdf758b166a0a998e2d2d621ac2da42f9a5f19` (190,177 bytes / 3,377
+lines; latest `2026-09-04T03:39Z`, remote-resolved commit
+`810ed7f32a9f39df104a6959e84b71c59966fb44`). It verifies the active schema-v1.7 plan, null
+selection, removed revoked constraint, retained V1 profile, and no V2 adoption. It observes the
+intentional authenticated-ancestry gate and asks whether a supported transition exists. None exists
+today: that transition is deferred to a future separately selected bounded ticket, so the current
+answer is `STOP` and no command follows. The prior `63bfe90b…` record and private V2 plan
+`96cc5301…` remain historical, unselected, and unadopted. The 57-entry / `0.68118684` USD ledger
+and zero completed real audits are unchanged. The record grants no route admission or authority;
+Codex issued no provider or operator command.
 
-Post-cutoff focused validation is recorded in the worklog and runtime status; no terminal
+After current operator reconciliation, the PLANADOPT direct affected matrix passed `319` tests in
+`67.34s`; its focused selection, revocation, CLI, and schema matrix passed `213` in `7.09s`, and the
+product-governance matrix passed `28` in `1.85s`. Canonical generation, scoped Ruff check/format,
+strict mypy, strict JSON, diff integrity, and independent no-blocker review passed. No terminal
 repository-wide suite credit is claimed. The current autonomy inventory records `4000/4003/3950/50`
 sources/occurrences/gate-sources/non-gating controls and `35/29/15` logical/unsatisfied/manual gates.
 
-`STOP`: current and next tickets are `UNSELECTED`; `V3-PRICECAPCOMP-001` is last complete,
+`STOP`: current and next tickets are `UNSELECTED`; `V3-PLANADOPT-001` is last complete,
 `V3-PRICECAPCACHE-001` is last partial, `V3-AUTONOMY-001` remains historically partial,
 `V3-CANDROUTE-001` remains partial, and the combined queues retain `41` unfinished tickets. Resume
-only after a provider supplies a request-bound cache-write/total-cost cap or equivalent enforceable
-atomic contract. No successor, current command, candidate, route, campaign, or run index is
-selected, and all provider, spend-admission, execution, qualification, runtime, audit, completion,
-release, and other authority remains false.
+only under a separately selected bounded ticket. No successor, current command, candidate, route,
+campaign, or run index is selected, and all provider, spend-admission, execution, qualification,
+runtime, audit, completion, release, and other authority remains false.
 
 ## Historical next action — c627 replay boundary (superseded)
 
-### V3-AUTHRUNNER-001 — provider-free canonical-replay datetime continuation complete
+### Historical V3-AUTHRUNNER-001 note — provider-free canonical-replay datetime continuation complete
 
 - **Objective:** Preserve historical checkpoint `03d6e8a` and the operator-owned bundle while fixing
   the provider-free canonical-replay datetime contract without weakening strict validation or exact

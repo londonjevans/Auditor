@@ -28,7 +28,7 @@
     },
     "AuditedSuiteCoverage": {
       "additionalProperties": false,
-      "description": "Source-only coverage and assertion-strength evidence from repository-owned tests.",
+      "description": "Comparison-only source coverage projection from repository-owned tests.",
       "properties": {
         "contract_statement_coverage": {
           "$ref": "#/$defs/CoverageMetric"
@@ -81,14 +81,30 @@
           "type": "integer"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "default": "1.1",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
         "source_classification_complete": {
           "title": "Source Classification Complete",
           "type": "boolean"
+        },
+        "statement_coverage_authority": {
+          "anyOf": [
+            {
+              "const": "comparison_only",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "comparison_only",
+          "title": "Statement Coverage Authority"
         },
         "surfaces": {
           "items": {
@@ -283,7 +299,7 @@
     },
     "AuditedSuiteSurfaceCoverage": {
       "additionalProperties": false,
-      "description": "Coverage evidence for one exact indexed audited-source entity.",
+      "description": "Comparison-only projection for one exact indexed audited-source entity.",
       "properties": {
         "assertion_status": {
           "$ref": "#/$defs/AuditedSuiteAssertionStatus"

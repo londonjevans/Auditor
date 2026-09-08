@@ -14,6 +14,10 @@ from pydantic import TypeAdapter
 
 from mmaudit.config import AuditConfig
 from mmaudit.constants import ALL_MODEL_ROLES
+from mmaudit.models.endpoint_snapshots import (
+    canonicalize_openrouter_pricing_schedule,
+    openrouter_pricing_schedule_sha256,
+)
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.policy_selection import (
     AuditModelSelectionEvidenceBundle,
@@ -128,9 +132,9 @@ def synthetic_refresh_runtime(
     excluded_ids: frozenset[str] = frozenset(),
     extra_unselected_candidate: bool = False,
     source_sha256_override: str | None = None,
-    qualified_pricing: dict[str, str] | None = None,
-    previous_pricing: dict[str, str] | None = None,
-    current_pricing: dict[str, str] | None = None,
+    qualified_pricing: dict[str, Any] | None = None,
+    previous_pricing: dict[str, Any] | None = None,
+    current_pricing: dict[str, Any] | None = None,
 ) -> SyntheticRefreshRuntime:
     """Issue coherent refresh and bounded-pricing authorities without provider I/O."""
 
@@ -220,7 +224,7 @@ def synthetic_refresh_runtime_for_authorities(
     audit_selection_evidence: AuditModelSelectionEvidenceBundle,
     audit_selection: VerifiedAuditModelSelection,
     verified_at: datetime,
-    current_pricing: dict[str, str] | None = None,
+    current_pricing: dict[str, Any] | None = None,
 ) -> SyntheticRefreshRuntime:
     """Issue exact CURRENT refresh custody for already-resolved synthetic authorities."""
 
@@ -526,7 +530,7 @@ def _candidate_registry(
     created_at: datetime,
     provider_endpoint: str | None = None,
     provider_name: str = "Synthetic Provider",
-    pricing: dict[str, str] | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> CandidateRegistry:
     roles = (*ALL_MODEL_ROLES, *tuple(sorted(config.models.specialists)))
     approved_roles = tuple(sorted({*roles, "falsifier", "whole_protocol_review"}))
@@ -558,6 +562,9 @@ def _candidate_registry(
         )
         for root, reviewed_model_ids in model_ids_by_root.items()
     }
+    raw_pricing = _PRICING if pricing is None else pricing
+    base_pricing, pricing_overrides = canonicalize_openrouter_pricing_schedule(raw_pricing)
+    pricing_sha256 = openrouter_pricing_schedule_sha256(base_pricing, pricing_overrides)
     candidates: list[CandidateModel] = []
     for index, model_id in enumerate(model_ids):
         root = configured_roots[model_id]
@@ -574,7 +581,7 @@ def _candidate_registry(
                 endpoint_snapshot_sha256=_sha(["endpoint", model_id]),
                 output_capability_sha256=_sha(["output", model_id]),
                 model_metadata_snapshot_sha256=_sha(["metadata", model_id]),
-                pricing_snapshot_sha256=_sha(_PRICING if pricing is None else pricing),
+                pricing_snapshot_sha256=pricing_sha256,
                 context_size=100_000,
                 max_prompt_tokens=91_808,
                 max_prompt_tokens_source="metadata",
@@ -605,8 +612,8 @@ def _history(
     registry: CandidateRegistry,
     technical: VerifiedProductionQualification,
     current_at: datetime,
-    previous_pricing: dict[str, str] | None = None,
-    current_pricing: dict[str, str] | None = None,
+    previous_pricing: dict[str, Any] | None = None,
+    current_pricing: dict[str, Any] | None = None,
 ) -> ValidatedModelRefreshHistory:
     previous_at = current_at - timedelta(hours=1)
     previous_source, previous_snapshot = _source_snapshot(
@@ -689,7 +696,7 @@ def _source_snapshot(
     registry: CandidateRegistry,
     retrieved_at: datetime,
     *,
-    pricing: dict[str, str] | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> tuple[ModelRefreshSourceEvidence, ModelRefreshSnapshot]:
     catalog = [_catalog_model(candidate.exact_model_id) for candidate in registry.candidates]
     endpoints = [
@@ -742,7 +749,7 @@ def _endpoint(
     model_id: str,
     endpoint: str,
     *,
-    pricing: dict[str, str] | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "model_id": model_id,

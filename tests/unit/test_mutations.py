@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from inspect import signature
 from pathlib import Path
 
@@ -37,6 +41,22 @@ from mmaudit.benchmark.mutations import (
     score_planned_mutation_campaigns,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
+from tests.unit.test_foundry_mutation_executor import _executor as _shared_domain_executor
+from tests.unit.test_foundry_mutation_executor import (
+    _repository_suite_run as _shared_domain_repository_suite_run,
+)
+from tests.unit.test_foundry_mutation_executor import (
+    _specification as _shared_domain_specification,
+)
+from tests.unit.test_foundry_mutation_executor import (
+    _synthetic_execution_path as _shared_domain_execution_path,
+)
+from tests.unit.test_foundry_mutation_executor import (
+    _SyntheticIsolation as _SharedDomainSyntheticIsolation,
+)
+from tests.unit.test_foundry_mutation_executor import (
+    _workspace_pair as _shared_domain_workspace_pair,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "mutations"
 SOURCE_PATH = "solidity/SafeMutationTargets.sol"
@@ -342,6 +362,7 @@ class _ObservedExecutor(MutationCampaignExecutor):
         executor_binding_valid: bool = True,
         isolation_policy_binding_valid: bool = True,
         selection_binding_valid: bool = True,
+        execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.MOCK,
     ) -> None:
         self.baseline_status = baseline_status
         self.mutant_status = mutant_status
@@ -352,6 +373,8 @@ class _ObservedExecutor(MutationCampaignExecutor):
         self.executor_binding_valid = executor_binding_valid
         self.isolation_policy_binding_valid = isolation_policy_binding_valid
         self.selection_binding_valid = selection_binding_valid
+        self.execution_evidence = execution_evidence
+        self.last_observation: MutationSuiteObservation | None = None
 
     def execute(
         self,
@@ -365,7 +388,7 @@ class _ObservedExecutor(MutationCampaignExecutor):
         baseline_source_sha256 = mutation_repository_sha256(baseline_workspace)
         mutant_source_sha256 = mutation_repository_sha256(mutant_workspace)
         selection_sha256 = MutationSuiteObservation.calculate_selection_sha256([test_id])
-        return MutationSuiteObservation.sealed(
+        observation = MutationSuiteObservation.sealed(
             mutation_id=specification.id,
             baseline_source_sha256=(
                 baseline_source_sha256 if self.source_binding_valid else "0" * 64
@@ -378,8 +401,8 @@ class _ObservedExecutor(MutationCampaignExecutor):
                 if self.isolation_policy_binding_valid
                 else "3" * 64
             ),
-            baseline_execution_evidence=ExecutionEvidenceKind.MOCK,
-            mutant_execution_evidence=ExecutionEvidenceKind.MOCK,
+            baseline_execution_evidence=self.execution_evidence,
+            mutant_execution_evidence=self.execution_evidence,
             baseline_isolation_attestation_sha256=("f" * 64 if self.isolation_attested else None),
             mutant_isolation_attestation_sha256=("1" * 64 if self.isolation_attested else None),
             baseline_compilation_succeeded=self.compilation_succeeded,
@@ -397,6 +420,8 @@ class _ObservedExecutor(MutationCampaignExecutor):
                 )
             ],
         )
+        self.last_observation = observation
+        return observation
 
 
 def test_suite_observation_rejects_selection_hash_not_derived_from_test_inventory() -> None:
@@ -525,6 +550,33 @@ def test_loader_accepts_only_declarative_scorecards(tmp_path: Path) -> None:
         load_mutation_scorecard(planned_path)
 
 
+def test_legacy_v1_scorecard_bytes_remain_exact_after_comparison_extension() -> None:
+    scorecards = {
+        "declarative": (
+            _declarative_killed_scorecard(),
+            844,
+            "761ab8f419dfe8ffe306e66a5280d50d1604323819281a312500102d7c172abd",
+        ),
+        "planned": (
+            score_planned_mutation_campaigns(
+                plan=_applicability_plan(),
+                campaigns=[],
+                minimum_property_kill_score=1,
+            ),
+            1_408,
+            "e191b548ac6c0e8aa381dde02cf39dae46fbbadc5527fc31bb1e57cb0ebaa492",
+        ),
+    }
+
+    for scorecard, expected_bytes, expected_sha256 in scorecards.values():
+        raw = scorecard.model_dump_json().encode("utf-8")
+        assert scorecard.schema_version == "1.0"
+        assert scorecard.projection_authority is None
+        assert b"projection_authority" not in raw
+        assert len(raw) == expected_bytes
+        assert hashlib.sha256(raw).hexdigest() == expected_sha256
+
+
 @pytest.mark.parametrize(
     ("executor", "expected"),
     [
@@ -630,6 +682,710 @@ def test_mock_campaign_exercises_only_pure_status_derivation(tmp_path: Path) -> 
     assert production_outcome.outcome is MutationTestOutcome.INCONCLUSIVE
 
 
+def _synthetic_process_local_campaign(
+    tmp_path: Path,
+    *,
+    compilation_succeeded: bool = True,
+) -> tuple[
+    MutationApplicabilityPlan,
+    MutationCampaignEvidence,
+    object,
+    object,
+    object,
+    object,
+    set[int],
+]:
+    """Exercise authority closures without pretending synthetic runs are production evidence."""
+
+    plan, declared_real, _observation, live_observation_ids = _synthetic_declared_real_campaign(
+        tmp_path,
+        compilation_succeeded=compilation_succeeded,
+    )
+
+    def return_exact_campaign(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, preserving_copy, subscribe, _campaign_lease = (
+        mutation_module._build_mutation_campaign_runtime_authority(
+            campaign_body=return_exact_campaign,
+            observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+            executor_authority_resolver=lambda candidate: candidate is not None,
+            disposal_authority_resolver=lambda private_root, executor: bool(
+                private_root is not None and executor is not None
+            ),
+        )
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    assert contains(campaign)
+    return (
+        plan,
+        campaign,
+        contains,
+        preserving_copy,
+        subscribe,
+        _campaign_lease,
+        live_observation_ids,
+    )
+
+
+def test_process_local_scorer_derives_kill_only_while_campaign_seal_is_live(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, live_observation_ids = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    score, has_score_authority, preserving_score_copy = (
+        mutation_module._build_runtime_mutation_scorer(
+            campaign_authority_resolver=contains,
+            campaign_copy_preserver=preserving_copy,
+            campaign_revocation_registrar=subscribe,
+        )
+    )
+
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    outcome = next(item for item in scorecard.outcomes if item.mutation_id == "mut-access-control")
+    assert scorecard.schema_version == "1.1"
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+    assert scorecard.projection_authority == "comparison_only"
+    assert outcome.outcome is MutationTestOutcome.KILLED
+    assert has_score_authority(scorecard)
+    assert preserving_copy(campaign) is campaign
+    preserved_scorecard = preserving_score_copy(scorecard)
+    assert preserved_scorecard is scorecard
+    assert has_score_authority(preserved_scorecard)
+
+    serialized = MutationScorecard.model_validate_json(scorecard.model_dump_json())
+    assert not has_score_authority(serialized)
+    assert not has_score_authority(scorecard.model_copy())
+
+    if hasattr(os, "fork"):
+        read_fd, write_fd = os.pipe()
+        child_pid = os.fork()
+        if child_pid == 0:  # pragma: no cover - asserted through the parent-side pipe
+            os.close(read_fd)
+            try:
+                mutation_module.os.getpid = lambda: os.getppid()
+                child_scorecard = score(
+                    plan=plan,
+                    campaigns=[campaign],
+                    minimum_property_kill_score=1,
+                )
+                fork_result = b"".join(
+                    (
+                        b"1" if contains(campaign) else b"0",
+                        b"1" if has_score_authority(scorecard) else b"0",
+                        (
+                            b"1"
+                            if child_scorecard.evidence_origin
+                            is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+                            else b"0"
+                        ),
+                    )
+                )
+                os.write(write_fd, fork_result)
+            finally:
+                os.close(write_fd)
+                os._exit(0)
+        os.close(write_fd)
+        try:
+            fork_result = os.read(read_fd, 3)
+        finally:
+            os.close(read_fd)
+        waited_pid, status = os.waitpid(child_pid, 0)
+        assert waited_pid == child_pid
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert fork_result == b"000"
+
+    live_observation_ids.clear()
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
+
+
+def test_process_local_scorer_keeps_compilation_failure_inconclusive(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(
+            tmp_path,
+            compilation_succeeded=False,
+        )
+    )
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    outcome = next(item for item in scorecard.outcomes if item.mutation_id == "mut-access-control")
+    assert outcome.outcome is MutationTestOutcome.INCONCLUSIVE
+    assert has_score_authority(scorecard)
+    assert not scorecard.gate_passed
+
+
+def test_process_local_scorer_downgrades_when_campaign_authority_expires_before_seal(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    authority_checks = 0
+
+    def expiring_authority(candidate: MutationCampaignEvidence) -> bool:
+        nonlocal authority_checks
+        authority_checks += 1
+        return authority_checks == 1 and contains(candidate)
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=expiring_authority,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    assert authority_checks == 2
+    assert scorecard.schema_version == "1.0"
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert all(item.outcome is MutationTestOutcome.INCONCLUSIVE for item in scorecard.outcomes)
+    assert not has_score_authority(scorecard)
+
+
+def test_process_local_scorer_rejects_transient_self_hashed_campaign_snapshot(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    original_observation = campaign.executor_observation
+    assert original_observation is not None
+    transient_observation_values = original_observation.model_dump(
+        mode="python",
+        exclude={"observation_sha256"},
+    )
+    transient_observation_values["baseline_tests"] = list(original_observation.baseline_tests)
+    transient_observation_values["mutant_tests"] = [
+        item.model_copy(update={"status": MutationSuiteTestStatus.PASSED})
+        for item in original_observation.mutant_tests
+    ]
+    transient_observation = MutationSuiteObservation.sealed(**transient_observation_values)
+    transient_campaign_values = campaign.model_dump(
+        mode="python",
+        exclude={"evidence_sha256", "executor_observation"},
+    )
+    transient_campaign = MutationCampaignEvidence.sealed(
+        **transient_campaign_values,
+        executor_observation=transient_observation,
+    )
+    original_evidence_sha256 = campaign.evidence_sha256
+    mutation_injected = False
+
+    @contextmanager
+    def transient_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        nonlocal mutation_injected
+        with campaign_lease(candidate) as authority_sha256:
+            if not mutation_injected:
+                mutation_injected = True
+                object.__setattr__(candidate, "executor_observation", transient_observation)
+                object.__setattr__(candidate, "evidence_sha256", transient_campaign.evidence_sha256)
+            try:
+                yield authority_sha256
+            finally:
+                object.__setattr__(candidate, "executor_observation", original_observation)
+                object.__setattr__(candidate, "evidence_sha256", original_evidence_sha256)
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=transient_campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    assert mutation_injected
+    assert scorecard.schema_version == "1.0"
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert all(item.outcome is MutationTestOutcome.INCONCLUSIVE for item in scorecard.outcomes)
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
+
+
+def test_process_local_scorer_never_rekeys_decisive_credit_from_mutable_projection(
+    tmp_path: Path,
+) -> None:
+    plan, declared_campaign, original_observation, _ = _synthetic_declared_real_campaign(tmp_path)
+    shared_test_ids = ["testAccess", "testReplay"]
+
+    def observation_for(mutation_id: str) -> MutationSuiteObservation:
+        values = original_observation.model_dump(
+            mode="python",
+            exclude={
+                "baseline_tests",
+                "mutant_tests",
+                "observation_sha256",
+                "suite_selection_sha256",
+            },
+        )
+        values["mutation_id"] = mutation_id
+        return MutationSuiteObservation.sealed(
+            **values,
+            suite_selection_sha256=MutationSuiteObservation.calculate_selection_sha256(
+                shared_test_ids
+            ),
+            baseline_tests=[
+                MutationSuiteTestObservation(
+                    test_id=test_id,
+                    status=MutationSuiteTestStatus.PASSED,
+                )
+                for test_id in shared_test_ids
+            ],
+            mutant_tests=[
+                MutationSuiteTestObservation(
+                    test_id=test_id,
+                    status=MutationSuiteTestStatus.FAILED,
+                )
+                for test_id in shared_test_ids
+            ],
+        )
+
+    access_observation = observation_for("mut-access-control")
+    replay_observation = observation_for("mut-replay-state")
+    access_values = declared_campaign.model_dump(
+        mode="python",
+        exclude={"evidence_sha256", "executor_observation"},
+    )
+    access_campaign = MutationCampaignEvidence.sealed(
+        **access_values,
+        executor_observation=access_observation,
+    )
+    replay_specification = next(
+        item for item in plan.specifications if item.id == "mut-replay-state"
+    )
+    replay_values = {
+        **access_values,
+        "mutation_id": replay_specification.id,
+        "mutation_specification_sha256": replay_specification.specification_sha256(),
+    }
+    replay_projection = MutationCampaignEvidence.sealed(
+        **replay_values,
+        executor_observation=replay_observation,
+    )
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(
+            values,
+            campaign=access_campaign,
+            observation=access_observation,
+        )
+        return access_campaign
+
+    executor = _ObservedExecutor()
+    invoke, contains, _, subscribe, campaign_lease = (
+        mutation_module._build_mutation_campaign_runtime_authority(
+            campaign_body=body,
+            observation_authority_resolver=lambda candidate: candidate is access_observation,
+            executor_authority_resolver=lambda candidate: candidate is executor,
+            disposal_authority_resolver=lambda _root, _executor: True,
+        )
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=executor,
+    )
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=lambda _candidate: replay_projection,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    outcomes = {item.mutation_id: item.outcome for item in scorecard.outcomes}
+
+    assert outcomes["mut-access-control"] is MutationTestOutcome.KILLED
+    assert outcomes["mut-replay-state"] is MutationTestOutcome.INCONCLUSIVE
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+    assert has_score_authority(scorecard)
+
+
+def test_process_local_scorer_never_rebinds_live_campaign_to_projected_plan(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, _preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    projected_plan_values = plan.model_dump(
+        mode="python",
+        exclude={
+            "bindings",
+            "kind_accounting",
+            "non_applicability",
+            "plan_sha256",
+            "specifications",
+        },
+    )
+    projected_plan_values["property_corpus_hash"] = "d" * 64
+    projected_plan = MutationApplicabilityPlan.sealed(
+        **projected_plan_values,
+        specifications=list(plan.specifications),
+        bindings=list(plan.bindings),
+        non_applicability=list(plan.non_applicability),
+        kind_accounting=list(plan.kind_accounting),
+    )
+    projected_campaign_values = campaign.model_dump(
+        mode="python",
+        exclude={"evidence_sha256", "executor_observation"},
+    )
+    projected_campaign_values["plan_sha256"] = projected_plan.plan_sha256
+    projected_campaign = MutationCampaignEvidence.sealed(
+        **projected_campaign_values,
+        executor_observation=campaign.executor_observation,
+    )
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=lambda _candidate: projected_campaign,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=campaign_lease,
+    )
+
+    scorecard = score(
+        plan=projected_plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    assert scorecard.schema_version == "1.0"
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert all(item.outcome is MutationTestOutcome.INCONCLUSIVE for item in scorecard.outcomes)
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_registration_rolls_back_when_campaign_lease_expires(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    lease_entered = threading.Event()
+    release_lease = threading.Event()
+
+    @contextmanager
+    def blocking_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        with campaign_lease(candidate) as authority_sha256:
+            lease_entered.set()
+            if not release_lease.wait(timeout=5):
+                raise RuntimeError("score registration lease timed out")
+            yield authority_sha256
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=blocking_campaign_lease,
+    )
+    scorecards: list[MutationScorecard] = []
+
+    def score_campaign() -> None:
+        scorecards.append(
+            score(
+                plan=plan,
+                campaigns=[campaign],
+                minimum_property_kill_score=1,
+            )
+        )
+
+    scoring = threading.Thread(target=score_campaign, daemon=True)
+    scoring.start()
+    if not lease_entered.wait(timeout=5):
+        release_lease.set()
+        scoring.join(timeout=5)
+        pytest.fail("score registration did not acquire the campaign lease")
+    object.__setattr__(campaign, "failure_kind", "ExpiredDuringScoreRegistration")
+    release_lease.set()
+    scoring.join(timeout=5)
+    object.__setattr__(campaign, "failure_kind", None)
+
+    assert not scoring.is_alive()
+    assert len(scorecards) == 1
+    assert scorecards[0].schema_version == "1.0"
+    assert scorecards[0].evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert all(
+        outcome.outcome is MutationTestOutcome.INCONCLUSIVE for outcome in scorecards[0].outcomes
+    )
+    assert not contains(campaign)
+    assert not has_score_authority(scorecards[0])
+
+
+def test_scorecard_registration_rechecks_local_seal_after_campaign_lease_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    dependency_exit_entered = threading.Event()
+    release_dependency_exit = threading.Event()
+    lease_calls = 0
+    created_scorecards: list[MutationScorecard] = []
+    returned_scorecards: list[MutationScorecard] = []
+    scoring_errors: list[type[BaseException]] = []
+    original_score_outcomes = mutation_module._score_mutation_outcomes
+
+    @contextmanager
+    def blocking_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        nonlocal lease_calls
+        lease_calls += 1
+        current_call = lease_calls
+        with campaign_lease(candidate) as authority_sha256:
+            yield authority_sha256
+            if current_call == 2:
+                dependency_exit_entered.set()
+                if not release_dependency_exit.wait(timeout=5):
+                    raise RuntimeError("score registration dependency exit timed out")
+
+    def capture_scorecard(**values: object) -> MutationScorecard:
+        scorecard = original_score_outcomes(**values)
+        created_scorecards.append(scorecard)
+        return scorecard
+
+    monkeypatch.setattr(mutation_module, "_score_mutation_outcomes", capture_scorecard)
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=blocking_campaign_lease,
+    )
+
+    def score_campaign() -> None:
+        try:
+            returned_scorecards.append(
+                score(
+                    plan=plan,
+                    campaigns=[campaign],
+                    minimum_property_kill_score=1,
+                )
+            )
+        except BaseException as exc:
+            scoring_errors.append(type(exc))
+
+    scoring = threading.Thread(target=score_campaign, daemon=True)
+    scoring.start()
+    if not dependency_exit_entered.wait(timeout=5):
+        release_dependency_exit.set()
+        scoring.join(timeout=5)
+        pytest.fail("score registration did not reach campaign-lease exit")
+    assert len(created_scorecards) == 1
+    object.__setattr__(created_scorecards[0], "projection_authority", None)
+    release_dependency_exit.set()
+    scoring.join(timeout=5)
+    object.__setattr__(created_scorecards[0], "projection_authority", "comparison_only")
+
+    assert not scoring.is_alive()
+    assert scoring_errors == []
+    assert len(returned_scorecards) == 1
+    assert returned_scorecards[0].schema_version == "1.0"
+    assert (
+        returned_scorecards[0].evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    )
+    assert not has_score_authority(created_scorecards[0])
+    assert not has_score_authority(returned_scorecards[0])
+
+
+def test_process_local_scorer_base_exception_after_registration_revokes_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    authority_checks = 0
+    created_scorecards: list[MutationScorecard] = []
+    original_score_outcomes = mutation_module._score_mutation_outcomes
+
+    def interrupting_authority(candidate: MutationCampaignEvidence) -> bool:
+        nonlocal authority_checks
+        authority_checks += 1
+        if authority_checks == 3:
+            raise KeyboardInterrupt("synthetic interrupt after scorecard registration")
+        return contains(candidate)
+
+    def capture_scorecard(**values: object) -> MutationScorecard:
+        scorecard = original_score_outcomes(**values)
+        created_scorecards.append(scorecard)
+        return scorecard
+
+    monkeypatch.setattr(mutation_module, "_score_mutation_outcomes", capture_scorecard)
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=interrupting_authority,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="after scorecard registration"):
+        score(
+            plan=plan,
+            campaigns=[campaign],
+            minimum_property_kill_score=1,
+        )
+
+    assert authority_checks == 3
+    assert len(created_scorecards) == 1
+    assert not has_score_authority(created_scorecards[0])
+
+
+def test_process_local_scorer_revocation_registrar_interrupt_revokes_and_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, campaign, contains, preserving_copy, _, _lease, _ = _synthetic_process_local_campaign(
+        tmp_path
+    )
+    created_scorecards: list[MutationScorecard] = []
+    original_score_outcomes = mutation_module._score_mutation_outcomes
+
+    def interrupting_registrar(
+        candidate: MutationCampaignEvidence,
+        dependent_revoker: object,
+    ) -> object:
+        del candidate, dependent_revoker
+        raise KeyboardInterrupt("synthetic scorecard revocation registrar interrupt")
+
+    def capture_scorecard(**values: object) -> MutationScorecard:
+        scorecard = original_score_outcomes(**values)
+        created_scorecards.append(scorecard)
+        return scorecard
+
+    monkeypatch.setattr(mutation_module, "_score_mutation_outcomes", capture_scorecard)
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=interrupting_registrar,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="revocation registrar interrupt"):
+        score(
+            plan=plan,
+            campaigns=[campaign],
+            minimum_property_kill_score=1,
+        )
+
+    assert len(created_scorecards) == 1
+    assert not has_score_authority(created_scorecards[0])
+
+
+def test_process_local_scorer_lock_interrupt_after_final_dependency_check_revokes_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    created_scorecards: list[MutationScorecard] = []
+    original_score_outcomes = mutation_module._score_mutation_outcomes
+    original_rlock = threading.RLock
+
+    class InterruptingRLock:
+        def __init__(self) -> None:
+            self._lock = original_rlock()
+            self._acquisitions = 0
+
+        def __enter__(self) -> InterruptingRLock:
+            self._acquisitions += 1
+            if self._acquisitions == 3:
+                raise KeyboardInterrupt("synthetic interrupt after final score dependency check")
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._lock.release()
+
+    def capture_scorecard(**values: object) -> MutationScorecard:
+        scorecard = original_score_outcomes(**values)
+        created_scorecards.append(scorecard)
+        return scorecard
+
+    monkeypatch.setattr(mutation_module, "_score_mutation_outcomes", capture_scorecard)
+    monkeypatch.setattr(mutation_module.threading, "RLock", InterruptingRLock)
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="after final score dependency check"):
+        score(
+            plan=plan,
+            campaigns=[campaign],
+            minimum_property_kill_score=1,
+        )
+
+    assert len(created_scorecards) == 1
+    assert not has_score_authority(created_scorecards[0])
+
+
+def test_public_process_local_scorer_cannot_credit_reconstructed_real_campaign(
+    tmp_path: Path,
+) -> None:
+    plan = _applicability_plan()
+    mock = run_owned_mutation_campaign(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    declared_real = _self_hashed_declared_real_campaign(mock)
+
+    scorecard = mutation_module.score_process_local_mutation_campaigns(
+        plan=plan,
+        campaigns=[declared_real],
+        minimum_property_kill_score=1,
+    )
+
+    assert scorecard.schema_version == "1.0"
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert all(item.outcome is MutationTestOutcome.INCONCLUSIVE for item in scorecard.outcomes)
+    assert not mutation_module.has_host_mutation_scorecard_runtime_authority(scorecard)
+
+
 def _self_hashed_declared_real_campaign(
     evidence: MutationCampaignEvidence,
 ) -> MutationCampaignEvidence:
@@ -651,6 +1407,1537 @@ def _self_hashed_declared_real_campaign(
     )
     campaign_values["executor_observation"] = declared_observation
     return MutationCampaignEvidence.sealed(**campaign_values)
+
+
+def _synthetic_declared_real_campaign(
+    tmp_path: Path,
+    *,
+    compilation_succeeded: bool = True,
+) -> tuple[
+    MutationApplicabilityPlan,
+    MutationCampaignEvidence,
+    MutationSuiteObservation,
+    set[int],
+]:
+    plan = _applicability_plan()
+    mock = run_owned_mutation_campaign(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(compilation_succeeded=compilation_succeeded),
+    )
+    declared_real = _self_hashed_declared_real_campaign(mock)
+    observation = declared_real.executor_observation
+    assert observation is not None
+    return plan, declared_real, observation, {id(observation)}
+
+
+def _stage_synthetic_campaign_cleanup(
+    values: dict[str, object],
+    *,
+    campaign: MutationCampaignEvidence,
+    observation: MutationSuiteObservation | None = None,
+) -> None:
+    """Drive the private one-shot stage callback without granting production authority."""
+
+    stage = values["_stage_cleanup_handoff"]
+    plan = values["plan"]
+    mutation_id = values["mutation_id"]
+    source_repository = values["source_repository"]
+    private_root = values["private_root"]
+    executor = values["executor"]
+    assert callable(stage)
+    assert type(plan) is MutationApplicabilityPlan
+    assert isinstance(mutation_id, str)
+    assert isinstance(source_repository, Path)
+    assert isinstance(private_root, Path)
+    assert executor is not None
+    specification = next(item for item in plan.specifications if item.id == mutation_id)
+    root_stat = private_root.lstat()
+    live_observation = observation or campaign.executor_observation
+    stage(
+        campaign=campaign,
+        observation=live_observation,
+        plan=plan,
+        specification=specification,
+        source_repository=source_repository,
+        private_root=private_root,
+        private_root_device=root_stat.st_dev,
+        private_root_inode=root_stat.st_ino,
+        executor=executor,
+    )
+
+
+def test_shared_revocation_domain_cascades_run_expiry_through_score(
+    tmp_path: Path,
+) -> None:
+    baseline_workspace, mutant_workspace = _shared_domain_workspace_pair(tmp_path)
+    baseline_run = _shared_domain_repository_suite_run(baseline_workspace)
+    mutant_run = _shared_domain_repository_suite_run(mutant_workspace)
+    block_reader = False
+    reader_at_baseline_exit = threading.Event()
+    release_reader = threading.Event()
+
+    def run_lease_exit_hook(run: object) -> None:
+        if block_reader and run is baseline_run:
+            reader_at_baseline_exit.set()
+            assert release_reader.wait(timeout=5)
+
+    (
+        execution_path,
+        contains_observation,
+        _preserve_observation,
+        _calls,
+        contains_run,
+        _run_authority_lease,
+        observation_authority_lease,
+        revocation_lease,
+    ) = _shared_domain_execution_path(
+        [baseline_run, mutant_run],
+        run_lease_exit_hook=run_lease_exit_hook,
+    )
+    specification = _shared_domain_specification()
+    observation = _shared_domain_executor(
+        execution_path,
+        _SharedDomainSyntheticIsolation(),
+    ).execute(
+        baseline_workspace=baseline_workspace,
+        mutant_workspace=mutant_workspace,
+        specification=specification,
+    )
+    test_id = observation.baseline_tests[0].test_id
+    kind_accounting = []
+    for kind in sorted(REQUIRED_MUTATION_KINDS, key=lambda item: item.value):
+        candidate_ids = [specification.id] if kind is specification.kind else []
+        kind_accounting.append(
+            MutationKindAccounting(
+                kind=kind,
+                status=(
+                    MutationKindInventoryStatus.CANDIDATES_DECLARED
+                    if candidate_ids
+                    else MutationKindInventoryStatus.NO_CANDIDATE_DECLARED
+                ),
+                candidate_count=len(candidate_ids),
+                candidate_ids=candidate_ids,
+                limitation=(
+                    None
+                    if candidate_ids
+                    else "No candidate is declared for this synthetic shared-domain plan."
+                ),
+            )
+        )
+    plan = MutationApplicabilityPlan.sealed(
+        property_corpus_hash="c" * 64,
+        source_repository_sha256=observation.baseline_source_sha256,
+        approved_executor_sha256=observation.executor_sha256,
+        approved_isolation_policy_sha256=observation.isolation_policy_sha256,
+        property_repositories={PROPERTY_ACCESS: "synthetic-shared-domain"},
+        specifications=[specification],
+        bindings=[
+            MutationApplicabilityBinding(
+                property_id=PROPERTY_ACCESS,
+                mutation_id=specification.id,
+                test_ids=[test_id],
+            )
+        ],
+        non_applicability=[],
+        kind_accounting=kind_accounting,
+    )
+    declared_campaign = MutationCampaignEvidence.sealed(
+        plan_sha256=plan.plan_sha256,
+        mutation_id=specification.id,
+        mutation_specification_sha256=specification.specification_sha256(),
+        source_repository_sha256=plan.source_repository_sha256,
+        pristine_workspace_sha256=observation.baseline_source_sha256,
+        mutated_workspace_sha256=observation.mutant_source_sha256,
+        restored_workspace_sha256=observation.baseline_source_sha256,
+        executor_observation=observation,
+        restoration_verified=True,
+        workspace_disposed=True,
+        source_preserved=True,
+        disposal_entry_count=1,
+        failure_kind=None,
+    )
+
+    def campaign_body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(
+            values,
+            campaign=declared_campaign,
+            observation=observation,
+        )
+        return declared_campaign
+
+    campaign_executor = _ObservedExecutor()
+    (
+        invoke_campaign,
+        contains_campaign,
+        preserve_campaign,
+        subscribe_campaign_revocation,
+        campaign_authority_lease,
+    ) = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=campaign_body,
+        observation_authority_lease=observation_authority_lease,
+        observation_authority_resolver=contains_observation,
+        executor_authority_resolver=lambda candidate: candidate is campaign_executor,
+        disposal_authority_resolver=lambda _root, _executor: True,
+        revocation_lease=revocation_lease,
+    )
+    private_root = tmp_path / "campaign-private"
+    private_root.mkdir(mode=0o700)
+    campaign = invoke_campaign(
+        source_repository=baseline_workspace,
+        private_root=private_root,
+        plan=plan,
+        mutation_id=specification.id,
+        executor=campaign_executor,
+    )
+    score, contains_score, _preserve_score = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains_campaign,
+        campaign_copy_preserver=preserve_campaign,
+        campaign_revocation_registrar=subscribe_campaign_revocation,
+        campaign_authority_lease=campaign_authority_lease,
+        revocation_lease=revocation_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+
+    assert contains_run(baseline_run)
+    assert contains_observation(observation)
+    assert contains_campaign(campaign)
+    assert contains_score(scorecard)
+
+    downstream_results: list[bool] = []
+    original_duration_seconds = baseline_run.duration_seconds
+    block_reader = True
+    reader = threading.Thread(
+        target=lambda: downstream_results.append(contains_score(scorecard)),
+        daemon=True,
+    )
+    invalidator = threading.Thread(
+        target=lambda: setattr(
+            baseline_run,
+            "duration_seconds",
+            original_duration_seconds + 1,
+        ),
+        daemon=True,
+    )
+    try:
+        reader.start()
+        assert reader_at_baseline_exit.wait(timeout=5)
+        invalidator.start()
+        invalidator.join(timeout=5)
+        assert not invalidator.is_alive()
+        release_reader.set()
+        reader.join(timeout=5)
+        assert not reader.is_alive()
+        assert downstream_results == [False]
+        assert not contains_run(baseline_run)
+        assert not contains_observation(observation)
+        assert not contains_campaign(campaign)
+        assert not contains_score(scorecard)
+
+        baseline_run.duration_seconds = original_duration_seconds
+        assert not contains_run(baseline_run)
+        assert not contains_observation(observation)
+        assert not contains_campaign(campaign)
+        assert not contains_score(scorecard)
+    finally:
+        release_reader.set()
+        reader.join(timeout=5)
+        invalidator.join(timeout=5)
+        baseline_run.duration_seconds = original_duration_seconds
+
+
+def test_owned_body_handoff_retains_live_observation_across_nested_normalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mmaudit.benchmark.foundry_mutation_executor as executor_module
+    import mmaudit.scanners.base as scanner_base
+
+    plan = _applicability_plan()
+    executor = _ObservedExecutor(execution_evidence=ExecutionEvidenceKind.REAL)
+    live_observation_ids: set[int] = set()
+    source_custody_finalized = False
+    cleanup_observed_at_stage = False
+
+    original_finalize = scanner_base.ScannerWorkspaceSourceCustody.finalize
+
+    def tracked_finalize(custody: scanner_base.ScannerWorkspaceSourceCustody) -> str:
+        nonlocal source_custody_finalized
+        result = original_finalize(custody)
+        source_custody_finalized = True
+        return result
+
+    def tracked_body(**values: object) -> MutationCampaignEvidence:
+        nonlocal cleanup_observed_at_stage
+        original_stage = values["_stage_cleanup_handoff"]
+        private_root = values["private_root"]
+        mutation_id = values["mutation_id"]
+        assert callable(original_stage)
+        assert isinstance(private_root, Path)
+        assert isinstance(mutation_id, str)
+
+        def tracked_stage(**stage_values: object) -> None:
+            nonlocal cleanup_observed_at_stage
+            campaign = stage_values["campaign"]
+            assert type(campaign) is MutationCampaignEvidence
+            assert source_custody_finalized
+            assert not (private_root / f"mmaudit-campaign-{mutation_id}").exists()
+            assert campaign.workspace_disposed
+            assert campaign.source_preserved
+            cleanup_observed_at_stage = True
+            original_stage(**stage_values)
+
+        body_values = dict(values)
+        body_values["_stage_cleanup_handoff"] = tracked_stage
+        return mutation_module._run_owned_mutation_campaign_body(**body_values)
+
+    def preserve(observation: MutationSuiteObservation) -> MutationSuiteObservation:
+        live_observation_ids.add(id(observation))
+        return observation
+
+    monkeypatch.setattr(
+        executor_module,
+        "validated_mutation_suite_observation_copy_preserving_runtime_authority",
+        preserve,
+    )
+    monkeypatch.setattr(
+        scanner_base.ScannerWorkspaceSourceCustody,
+        "finalize",
+        tracked_finalize,
+    )
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=tracked_body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is executor,
+        disposal_authority_resolver=lambda private_root, candidate: bool(
+            private_root == tmp_path and candidate is executor
+        ),
+    )
+
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=executor,
+    )
+
+    assert executor.last_observation is not None
+    assert id(executor.last_observation) in live_observation_ids
+    assert campaign.executor_observation is not executor.last_observation
+    assert campaign.executor_observation is not None
+    assert id(campaign.executor_observation) not in live_observation_ids
+    assert campaign.executor_observation.model_dump(mode="json") == (
+        executor.last_observation.model_dump(mode="json")
+    )
+    assert cleanup_observed_at_stage
+    assert contains(campaign)
+    assert not contains(campaign.model_copy())
+    assert not contains(MutationCampaignEvidence.model_validate_json(campaign.model_dump_json()))
+
+
+@pytest.mark.parametrize(
+    "handoff_failure",
+    ["missing", "duplicate", "returned_copy", "body_exception"],
+)
+def test_campaign_cleanup_handoff_failure_never_registers_authority(
+    tmp_path: Path,
+    handoff_failure: str,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+
+    def invalid_body(**values: object) -> MutationCampaignEvidence:
+        if handoff_failure != "missing":
+            _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        if handoff_failure == "duplicate":
+            _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        if handoff_failure == "returned_copy":
+            return declared_real.model_copy()
+        if handoff_failure == "body_exception":
+            raise RuntimeError("synthetic post-stage failure")
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=invalid_body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: bool(
+            private_root is not None and executor is not None
+        ),
+    )
+
+    expected_error = RuntimeError if handoff_failure == "body_exception" else ValueError
+    with pytest.raises(expected_error):
+        invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+    assert not contains(declared_real)
+
+
+@pytest.mark.parametrize("substitution", ["plan", "mutation", "source", "root", "executor"])
+def test_campaign_cleanup_handoff_binds_the_exact_invocation(
+    tmp_path: Path,
+    substitution: str,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    alternate_root = tmp_path / "alternate"
+    alternate_root.mkdir(mode=0o700)
+
+    def substituted_body(**values: object) -> MutationCampaignEvidence:
+        staged_values = dict(values)
+        if substitution == "plan":
+            staged_values["plan"] = plan.model_copy(update={"approved_executor_sha256": "1" * 64})
+        elif substitution == "mutation":
+            staged_values["mutation_id"] = "mut-replay-state"
+        elif substitution == "source":
+            staged_values["source_repository"] = tmp_path / "different-source"
+        elif substitution == "root":
+            staged_values["private_root"] = alternate_root
+        elif substitution == "executor":
+            staged_values["executor"] = _ObservedExecutor()
+        _stage_synthetic_campaign_cleanup(staged_values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=substituted_body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    with pytest.raises(ValueError, match="changed invocation identity"):
+        invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+    assert not contains(declared_real)
+
+
+def test_campaign_cleanup_handoff_rechecks_observation_authority_before_registration(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    authority_checks = 0
+
+    def expiring_authority(candidate: MutationSuiteObservation) -> bool:
+        nonlocal authority_checks
+        authority_checks += 1
+        return authority_checks == 1 and id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=expiring_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    assert authority_checks == 2
+    assert not contains(campaign)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("workspace_disposed", False),
+        ("source_preserved", False),
+        ("restoration_verified", False),
+        ("failure_kind", "SyntheticCleanupFailure"),
+    ],
+)
+def test_campaign_cleanup_handoff_cannot_seal_failed_cleanup_claims(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    plan, declared_real, live_observation, live_observation_ids = _synthetic_declared_real_campaign(
+        tmp_path
+    )
+    campaign_values = {
+        name: getattr(declared_real, name)
+        for name in MutationCampaignEvidence.model_fields
+        if name != "evidence_sha256"
+    }
+    campaign_values[field] = value
+    failed_campaign = MutationCampaignEvidence.sealed(**campaign_values)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(
+            values,
+            campaign=failed_campaign,
+            observation=live_observation,
+        )
+        return failed_campaign
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    assert campaign is failed_campaign
+    assert not contains(campaign)
+
+
+def test_campaign_cleanup_handoff_rechecks_private_root_after_staging(tmp_path: Path) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        private_root = values["private_root"]
+        assert isinstance(private_root, Path)
+        private_root.chmod(0o755)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    try:
+        campaign = invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+    finally:
+        tmp_path.chmod(0o700)
+
+    assert not contains(campaign)
+
+
+def test_campaign_cleanup_handoff_rechecks_private_root_after_disposal_gate(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    private_root = tmp_path / "private-root"
+    displaced_root = tmp_path / "displaced-root"
+    private_root.mkdir(mode=0o700)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    def swapping_disposal(root: Path, executor: MutationCampaignExecutor) -> bool:
+        del executor
+        root.rename(displaced_root)
+        root.mkdir(mode=0o700)
+        return True
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=swapping_disposal,
+    )
+
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=private_root,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    assert not contains(campaign)
+
+
+def test_campaign_registration_rechecks_local_seal_after_observation_lease_exit(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    exit_check_entered = threading.Event()
+    release_exit_check = threading.Event()
+    observation_checks = 0
+    invocation_results: list[MutationCampaignEvidence] = []
+    invocation_errors: list[type[BaseException]] = []
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        nonlocal observation_checks
+        observation_checks += 1
+        if observation_checks == 2:
+            exit_check_entered.set()
+            if not release_exit_check.wait(timeout=5):
+                return False
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=observation_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    def invoke_campaign() -> None:
+        try:
+            invocation_results.append(
+                invoke(
+                    source_repository=FIXTURE,
+                    private_root=tmp_path,
+                    plan=plan,
+                    mutation_id="mut-access-control",
+                    executor=_ObservedExecutor(),
+                )
+            )
+        except BaseException as exc:
+            invocation_errors.append(type(exc))
+
+    invocation = threading.Thread(target=invoke_campaign, daemon=True)
+    invocation.start()
+    if not exit_check_entered.wait(timeout=5):
+        release_exit_check.set()
+        invocation.join(timeout=5)
+        pytest.fail("campaign registration did not reach observation-lease exit")
+    object.__setattr__(declared_real, "failure_kind", "ChangedDuringRegistrationExit")
+    release_exit_check.set()
+    invocation.join(timeout=5)
+    object.__setattr__(declared_real, "failure_kind", None)
+
+    assert not invocation.is_alive()
+    assert observation_checks == 2
+    assert invocation_errors == []
+    assert invocation_results == [declared_real]
+    assert not contains(declared_real)
+
+
+def test_campaign_cleanup_handoff_replay_during_finalization_poisoned_atomically(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    staged_values: dict[str, object] = {}
+    replay_errors: list[type[BaseException]] = []
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        staged_values.update(values)
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    def replay() -> None:
+        try:
+            _stage_synthetic_campaign_cleanup(staged_values, campaign=declared_real)
+        except BaseException as exc:
+            replay_errors.append(type(exc))
+
+    def replaying_disposal(private_root: Path, executor: MutationCampaignExecutor) -> bool:
+        del private_root, executor
+        thread = threading.Thread(target=replay)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        return True
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=replaying_disposal,
+    )
+
+    with pytest.raises(ValueError, match="absent or invalid"):
+        invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+
+    assert replay_errors == [ValueError]
+    assert not contains(declared_real)
+
+
+def test_campaign_cleanup_handoff_base_exception_after_registration_revokes_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    original_event = threading.Event
+
+    class InterruptingEvent:
+        def __init__(self) -> None:
+            self._event = original_event()
+            self._checks = 0
+
+        def is_set(self) -> bool:
+            self._checks += 1
+            if self._checks == 5:
+                raise KeyboardInterrupt("synthetic interrupt after campaign registration")
+            return self._event.is_set()
+
+        def set(self) -> None:
+            self._event.set()
+
+    events: list[object] = [original_event(), InterruptingEvent()]
+
+    def event_factory() -> object:
+        return events.pop(0)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    monkeypatch.setattr(mutation_module.threading, "Event", event_factory)
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="after campaign registration"):
+        invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+
+    assert not contains(declared_real)
+
+
+def test_campaign_cleanup_handoff_rejects_a_previously_issued_campaign_identity(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+    invocation = {
+        "source_repository": FIXTURE,
+        "private_root": tmp_path,
+        "plan": plan,
+        "mutation_id": "mut-access-control",
+        "executor": _ObservedExecutor(),
+    }
+
+    first = invoke(**invocation)
+    assert contains(first)
+    with pytest.raises(ValueError, match="replayed an issued campaign"):
+        invoke(**invocation)
+
+    assert contains(first)
+
+
+def test_campaign_cleanup_handoff_child_process_cannot_stage_parent_authority(
+    tmp_path: Path,
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("fork is unavailable")
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    child_result = b""
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        nonlocal child_result
+        read_fd, write_fd = os.pipe()
+        child_pid = os.fork()
+        if child_pid == 0:  # pragma: no cover - asserted through the parent-side pipe
+            os.close(read_fd)
+            try:
+                mutation_module.os.getpid = lambda: os.getppid()
+                try:
+                    _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+                except ValueError:
+                    os.write(write_fd, b"0")
+                else:
+                    os.write(write_fd, b"1")
+            finally:
+                os.close(write_fd)
+                os._exit(0)
+        os.close(write_fd)
+        try:
+            child_result = os.read(read_fd, 1)
+        finally:
+            os.close(read_fd)
+        waited_pid, status = os.waitpid(child_pid, 0)
+        assert waited_pid == child_pid
+        assert os.waitstatus_to_exitcode(status) == 0
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+
+    with pytest.raises(ValueError, match="absent or invalid"):
+        invoke(
+            source_repository=FIXTURE,
+            private_root=tmp_path,
+            plan=plan,
+            mutation_id="mut-access-control",
+            executor=_ObservedExecutor(),
+        )
+
+    assert child_result == b"0"
+    assert not contains(declared_real)
+
+
+def test_captured_production_disposal_gate_stays_closed_after_module_alias_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    monkeypatch.setattr(
+        mutation_module,
+        "_has_portable_mutation_campaign_disposal_authority",
+        lambda private_root, executor: True,
+    )
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+    )
+
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    assert not contains(campaign)
+
+
+def test_invalidated_campaign_seal_cannot_regain_authority_after_restoration(
+    tmp_path: Path,
+) -> None:
+    _, campaign, contains, _, _, _lease, _ = _synthetic_process_local_campaign(tmp_path)
+
+    object.__setattr__(campaign, "failure_kind", "ChangedAfterIssuance")
+    assert not contains(campaign)
+    object.__setattr__(campaign, "failure_kind", None)
+    assert not contains(campaign)
+
+
+def test_campaign_authority_read_cannot_outlive_concurrent_invalidation(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    reader_identifier: int | None = None
+    reader_results: list[bool] = []
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        if threading.get_ident() == reader_identifier:
+            reader_entered.set()
+            if not release_reader.wait(timeout=5):
+                return False
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=observation_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    assert contains(campaign)
+
+    def read_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(contains(campaign))
+
+    reader = threading.Thread(target=read_authority, daemon=True)
+    reader.start()
+    if not reader_entered.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        pytest.fail("campaign authority reader did not reach its validation barrier")
+    try:
+        object.__setattr__(campaign, "failure_kind", "ChangedDuringAuthorityRead")
+    finally:
+        release_reader.set()
+    reader.join(timeout=5)
+    object.__setattr__(campaign, "failure_kind", None)
+
+    assert not reader.is_alive()
+    assert reader_results == [False]
+    assert not contains(campaign)
+
+
+def test_campaign_authority_rechecks_local_seal_after_observation_lease_exit(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    exit_check_entered = threading.Event()
+    release_exit_check = threading.Event()
+    reader_identifier: int | None = None
+    reader_checks = 0
+    reader_results: list[bool] = []
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        nonlocal reader_checks
+        if threading.get_ident() == reader_identifier:
+            reader_checks += 1
+            if reader_checks == 2:
+                exit_check_entered.set()
+                if not release_exit_check.wait(timeout=5):
+                    return False
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=observation_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    def read_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(contains(campaign))
+
+    reader = threading.Thread(target=read_authority, daemon=True)
+    reader.start()
+    if not exit_check_entered.wait(timeout=5):
+        release_exit_check.set()
+        reader.join(timeout=5)
+        pytest.fail("campaign reader did not reach observation-lease exit")
+    object.__setattr__(campaign, "failure_kind", "ChangedDuringObservationLeaseExit")
+    release_exit_check.set()
+    reader.join(timeout=5)
+    object.__setattr__(campaign, "failure_kind", None)
+
+    assert not reader.is_alive()
+    assert reader_checks == 2
+    assert reader_results == [False]
+    assert not contains(campaign)
+
+
+def test_campaign_dependency_exit_interrupt_revokes_without_becoming_restorable(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    interrupt_enabled = False
+    authority_checks = 0
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        nonlocal authority_checks
+        authority_checks += 1
+        if interrupt_enabled and authority_checks == 2:
+            raise KeyboardInterrupt("synthetic observation dependency exit interrupt")
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=observation_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    authority_checks = 0
+    interrupt_enabled = True
+
+    with pytest.raises(KeyboardInterrupt, match="dependency exit interrupt"):
+        contains(campaign)
+
+    interrupt_enabled = False
+    assert not contains(campaign)
+
+
+def test_campaign_lease_preserves_primary_interrupt_and_revokes_on_recheck_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, campaign, contains, _, _, campaign_lease, _ = _synthetic_process_local_campaign(tmp_path)
+    original_model_dump = MutationCampaignEvidence.model_dump
+    validation_interrupt_armed = False
+
+    def interrupting_model_dump(
+        candidate: MutationCampaignEvidence,
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        if validation_interrupt_armed and candidate is campaign:
+            raise SystemExit("synthetic secondary campaign validation interrupt")
+        return original_model_dump(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(MutationCampaignEvidence, "model_dump", interrupting_model_dump)
+
+    with (
+        pytest.raises(KeyboardInterrupt, match="synthetic primary campaign interrupt"),
+        campaign_lease(campaign),
+    ):
+        validation_interrupt_armed = True
+        raise KeyboardInterrupt("synthetic primary campaign interrupt")
+
+    validation_interrupt_armed = False
+    assert not contains(campaign)
+
+
+def test_campaign_and_scorecard_read_cannot_outlive_observation_revocation(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, live_observation, live_observation_ids = _synthetic_declared_real_campaign(
+        tmp_path
+    )
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    reader_identifier: int | None = None
+    reader_observation_checks = 0
+    reader_results: list[bool] = []
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        nonlocal reader_observation_checks
+        if threading.get_ident() == reader_identifier:
+            reader_observation_checks += 1
+            if reader_observation_checks == 2:
+                reader_entered.set()
+                if not release_reader.wait(timeout=5):
+                    return False
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, preserving_copy, subscribe, campaign_lease = (
+        mutation_module._build_mutation_campaign_runtime_authority(
+            campaign_body=body,
+            observation_authority_resolver=observation_authority,
+            executor_authority_resolver=lambda candidate: candidate is not None,
+            disposal_authority_resolver=lambda private_root, executor: True,
+        )
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert contains(campaign)
+    assert has_score_authority(scorecard)
+
+    def read_campaign_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(contains(campaign))
+
+    reader = threading.Thread(target=read_campaign_authority, daemon=True)
+    reader.start()
+    if not reader_entered.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        pytest.fail("campaign reader did not reach observation-lease exit")
+    live_observation_ids.clear()
+    release_reader.set()
+    reader.join(timeout=5)
+    live_observation_ids.add(id(live_observation))
+
+    assert not reader.is_alive()
+    assert reader_results == [False]
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
+
+
+def test_campaign_authority_read_cannot_outlive_completed_handoff_replay(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    staged_values: dict[str, object] = {}
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    replay_started = threading.Event()
+    replay_finished = threading.Event()
+    reader_identifier: int | None = None
+    reader_results: list[bool] = []
+    replay_errors: list[type[BaseException]] = []
+
+    def observation_authority(candidate: MutationSuiteObservation) -> bool:
+        if threading.get_ident() == reader_identifier:
+            reader_entered.set()
+            if not release_reader.wait(timeout=5):
+                return False
+        return id(candidate) in live_observation_ids
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        staged_values.update(values)
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, _, _, _lease = mutation_module._build_mutation_campaign_runtime_authority(
+        campaign_body=body,
+        observation_authority_resolver=observation_authority,
+        executor_authority_resolver=lambda candidate: candidate is not None,
+        disposal_authority_resolver=lambda private_root, executor: True,
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+    assert contains(campaign)
+
+    def read_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(contains(campaign))
+
+    reader = threading.Thread(target=read_authority, daemon=True)
+    reader.start()
+    if not reader_entered.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        pytest.fail("campaign authority reader did not reach its replay barrier")
+
+    def replay_handoff() -> None:
+        replay_started.set()
+        try:
+            _stage_synthetic_campaign_cleanup(staged_values, campaign=declared_real)
+        except BaseException as exc:
+            replay_errors.append(type(exc))
+        finally:
+            replay_finished.set()
+
+    replayer = threading.Thread(target=replay_handoff, daemon=True)
+    replayer.start()
+    if not replay_started.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        replayer.join(timeout=5)
+        pytest.fail("campaign replay thread did not start")
+    try:
+        assert not replay_finished.is_set()
+    finally:
+        release_reader.set()
+    reader.join(timeout=5)
+    replayer.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not replayer.is_alive()
+    assert reader_results == [True]
+    assert replay_errors == [ValueError]
+    assert not contains(campaign)
+
+
+def test_invalidated_scorecard_seal_cannot_regain_authority_after_restoration(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+
+    object.__setattr__(scorecard, "projection_authority", None)
+    assert not has_score_authority(scorecard)
+    object.__setattr__(scorecard, "projection_authority", "comparison_only")
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_authority_read_cannot_outlive_concurrent_invalidation(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, _lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    reader_identifier: int | None = None
+    reader_results: list[bool] = []
+
+    def campaign_authority(candidate: MutationCampaignEvidence) -> bool:
+        if threading.get_ident() == reader_identifier:
+            reader_entered.set()
+            if not release_reader.wait(timeout=5):
+                return False
+        return contains(candidate)
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=campaign_authority,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+
+    def read_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(has_score_authority(scorecard))
+
+    reader = threading.Thread(target=read_authority, daemon=True)
+    reader.start()
+    if not reader_entered.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        pytest.fail("scorecard authority reader did not reach its validation barrier")
+    try:
+        object.__setattr__(scorecard, "projection_authority", None)
+    finally:
+        release_reader.set()
+    reader.join(timeout=5)
+    object.__setattr__(scorecard, "projection_authority", "comparison_only")
+
+    assert not reader.is_alive()
+    assert reader_results == [False]
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_authority_rechecks_local_seal_after_campaign_lease_exit(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    exit_barrier_enabled = False
+    exit_barrier_entered = threading.Event()
+    release_exit_barrier = threading.Event()
+
+    @contextmanager
+    def blocking_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        with campaign_lease(candidate) as authority_sha256:
+            yield authority_sha256
+            if exit_barrier_enabled:
+                exit_barrier_entered.set()
+                if not release_exit_barrier.wait(timeout=5):
+                    raise RuntimeError("campaign dependency exit timed out")
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=blocking_campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+    exit_barrier_enabled = True
+    reader_results: list[bool] = []
+    reader = threading.Thread(
+        target=lambda: reader_results.append(has_score_authority(scorecard)),
+        daemon=True,
+    )
+    reader.start()
+    if not exit_barrier_entered.wait(timeout=5):
+        release_exit_barrier.set()
+        reader.join(timeout=5)
+        pytest.fail("score reader did not reach campaign-lease exit")
+    object.__setattr__(scorecard, "projection_authority", None)
+    release_exit_barrier.set()
+    reader.join(timeout=5)
+    object.__setattr__(scorecard, "projection_authority", "comparison_only")
+
+    assert not reader.is_alive()
+    assert reader_results == [False]
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_dependency_exit_interrupt_revokes_without_becoming_restorable(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    interrupt_enabled = False
+
+    @contextmanager
+    def interrupting_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        with campaign_lease(candidate) as authority_sha256:
+            yield authority_sha256
+            if interrupt_enabled:
+                raise KeyboardInterrupt("synthetic campaign dependency exit interrupt")
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=interrupting_campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+    interrupt_enabled = True
+
+    with pytest.raises(KeyboardInterrupt, match="dependency exit interrupt"):
+        has_score_authority(scorecard)
+
+    interrupt_enabled = False
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_read_cannot_outlive_campaign_lease_revocation(
+    tmp_path: Path,
+) -> None:
+    plan, campaign, contains, preserving_copy, subscribe, campaign_lease, _ = (
+        _synthetic_process_local_campaign(tmp_path)
+    )
+    lease_entered = threading.Event()
+    release_lease = threading.Event()
+    blocking_enabled = False
+
+    @contextmanager
+    def blocking_campaign_lease(
+        candidate: MutationCampaignEvidence,
+    ) -> Iterator[str]:
+        with campaign_lease(candidate) as authority_sha256:
+            if blocking_enabled:
+                lease_entered.set()
+                if not release_lease.wait(timeout=5):
+                    raise RuntimeError("score authority lease timed out")
+            yield authority_sha256
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=contains,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+        campaign_authority_lease=blocking_campaign_lease,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+    blocking_enabled = True
+    reader_results: list[bool] = []
+    reader = threading.Thread(
+        target=lambda: reader_results.append(has_score_authority(scorecard)),
+        daemon=True,
+    )
+    reader.start()
+    if not lease_entered.wait(timeout=5):
+        release_lease.set()
+        reader.join(timeout=5)
+        pytest.fail("score reader did not acquire the campaign lease")
+    object.__setattr__(campaign, "failure_kind", "ExpiredDuringScoreRead")
+    release_lease.set()
+    reader.join(timeout=5)
+    object.__setattr__(campaign, "failure_kind", None)
+
+    assert not reader.is_alive()
+    assert reader_results == [False]
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
+
+
+def test_scorecard_authority_read_cannot_outlive_completed_campaign_handoff_replay(
+    tmp_path: Path,
+) -> None:
+    plan, declared_real, _, live_observation_ids = _synthetic_declared_real_campaign(tmp_path)
+    staged_values: dict[str, object] = {}
+
+    def body(**values: object) -> MutationCampaignEvidence:
+        staged_values.update(values)
+        _stage_synthetic_campaign_cleanup(values, campaign=declared_real)
+        return declared_real
+
+    invoke, contains, preserving_copy, subscribe, _campaign_lease = (
+        mutation_module._build_mutation_campaign_runtime_authority(
+            campaign_body=body,
+            observation_authority_resolver=lambda candidate: id(candidate) in live_observation_ids,
+            executor_authority_resolver=lambda candidate: candidate is not None,
+            disposal_authority_resolver=lambda private_root, executor: True,
+        )
+    )
+    campaign = invoke(
+        source_repository=FIXTURE,
+        private_root=tmp_path,
+        plan=plan,
+        mutation_id="mut-access-control",
+        executor=_ObservedExecutor(),
+    )
+
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    replay_started = threading.Event()
+    replay_finished = threading.Event()
+    reader_identifier: int | None = None
+    reader_campaign_checks = 0
+    reader_results: list[bool] = []
+    replay_errors: list[type[BaseException]] = []
+
+    def campaign_authority(candidate: MutationCampaignEvidence) -> bool:
+        nonlocal reader_campaign_checks
+        result = contains(candidate)
+        if threading.get_ident() == reader_identifier:
+            reader_campaign_checks += 1
+        if threading.get_ident() == reader_identifier and reader_campaign_checks == 2:
+            reader_entered.set()
+            if not release_reader.wait(timeout=5):
+                return False
+        return result
+
+    score, has_score_authority, _ = mutation_module._build_runtime_mutation_scorer(
+        campaign_authority_resolver=campaign_authority,
+        campaign_copy_preserver=preserving_copy,
+        campaign_revocation_registrar=subscribe,
+    )
+    scorecard = score(
+        plan=plan,
+        campaigns=[campaign],
+        minimum_property_kill_score=1,
+    )
+    assert has_score_authority(scorecard)
+
+    def read_authority() -> None:
+        nonlocal reader_identifier
+        reader_identifier = threading.get_ident()
+        reader_results.append(has_score_authority(scorecard))
+
+    reader = threading.Thread(target=read_authority, daemon=True)
+    reader.start()
+    if not reader_entered.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        pytest.fail("scorecard authority reader did not reach its replay barrier")
+
+    def replay_handoff() -> None:
+        replay_started.set()
+        try:
+            _stage_synthetic_campaign_cleanup(staged_values, campaign=declared_real)
+        except BaseException as exc:
+            replay_errors.append(type(exc))
+        finally:
+            replay_finished.set()
+
+    replayer = threading.Thread(target=replay_handoff, daemon=True)
+    replayer.start()
+    if not replay_started.wait(timeout=5):
+        release_reader.set()
+        reader.join(timeout=5)
+        replayer.join(timeout=5)
+        pytest.fail("scorecard campaign replay thread did not start")
+    try:
+        assert not replay_finished.is_set()
+    finally:
+        release_reader.set()
+    reader.join(timeout=5)
+    replayer.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not replayer.is_alive()
+    assert reader_results == [True]
+    assert replay_errors == [ValueError]
+    assert not contains(campaign)
+    assert not has_score_authority(scorecard)
 
 
 def test_self_hashed_declared_real_evidence_remains_inconclusive(

@@ -10,9 +10,12 @@ import tempfile
 import weakref
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from mmaudit.models.schemas import ExecutionEvidenceKind
+
+if TYPE_CHECKING:
+    from mmaudit.scanners.base import _ScannerExecutableObservation
 
 _PROBE_TIMEOUT_SECONDS = 5.0
 _POLICY_PROBE_PORT = 43_179
@@ -25,8 +28,11 @@ _SECRET_ENVIRONMENT_NAMES = (
 class _BuiltInBackend(Protocol):
     """The subset of the built-in backend interface used by attestation."""
 
-    executable: str
-    name: str
+    @property
+    def executable(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
 
     def wrap(
         self,
@@ -56,12 +62,21 @@ class _IsolationProbeResults:
 
 
 @dataclass(frozen=True)
+class _IsolationExecutableAdmission:
+    """Bounded launcher identity, not atomic exec or dependency-closure evidence."""
+
+    executable: Path
+    observation: _ScannerExecutableObservation
+
+
+@dataclass(frozen=True)
 class _IsolationAttestation:
     """Immutable process-local evidence bound to an executable and policy."""
 
     backend_kind: str
     executable: Path
     executable_sha256: str
+    executable_identity: tuple[int, ...]
     policy_sha256: str
     probes: _IsolationProbeResults
     verification_sha256: str
@@ -92,12 +107,25 @@ def _built_in_backend_name(backend_type: type[object]) -> str | None:
     return None
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _admit_isolation_executable(backend: _BuiltInBackend) -> _IsolationExecutableAdmission:
+    """Observe the exact canonical launcher before any policy work or invocation."""
+
+    # Scanner construction imports this module; share its bounded observer lazily.
+    from mmaudit.scanners.base import _observe_scanner_executable
+
+    try:
+        executable = Path(backend.executable)
+        observation = _observe_scanner_executable(executable)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("built-in isolation executable admission failed") from exc
+    return _IsolationExecutableAdmission(executable=executable, observation=observation)
+
+
+def _require_isolation_executable_unchanged(
+    backend: _BuiltInBackend, admission: _IsolationExecutableAdmission
+) -> None:
+    if _admit_isolation_executable(backend) != admission:
+        raise ValueError("built-in isolation executable identity changed")
 
 
 def _trusted_helper(*candidates: str) -> Path:
@@ -200,16 +228,21 @@ def _execute_probe(
     private_dir: Path,
     rpc_port: int,
     environment: dict[str, str],
+    admission: _IsolationExecutableAdmission,
 ) -> int | None:
-    """Execute one fixed preflight command and retain no command output."""
+    """Recheck launcher custody around one probe; refusal is never a denial pass."""
 
     try:
+        _require_isolation_executable_unchanged(backend, admission)
         wrapped = backend.wrap(
             command,
             workspace=workspace,
             private_dir=private_dir,
             rpc_port=rpc_port,
         )
+        if not wrapped or wrapped[0] != str(admission.executable):
+            raise ValueError("isolation wrapper substituted the admitted launcher")
+        _require_isolation_executable_unchanged(backend, admission)
         result = subprocess.run(
             wrapped,
             cwd=workspace,
@@ -219,7 +252,8 @@ def _execute_probe(
             env=environment,
             shell=False,
         )
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+        _require_isolation_executable_unchanged(backend, admission)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError):
         return None
     return result.returncode
 
@@ -231,10 +265,13 @@ def _network_probe_denied(
     workspace: Path,
     private_dir: Path,
     environment: dict[str, str],
+    admission: _IsolationExecutableAdmission | None = None,
 ) -> bool:
     """Require the boundary to reject a connection to a reachable unapproved port."""
 
     try:
+        admission = admission or _admit_isolation_executable(backend)
+        _require_isolation_executable_unchanged(backend, admission)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", 0))
@@ -279,6 +316,7 @@ def _network_probe_denied(
                 private_dir=private_dir,
                 rpc_port=approved_port,
                 environment=environment,
+                admission=admission,
             )
             connected = False
             try:
@@ -288,15 +326,19 @@ def _network_probe_denied(
             else:
                 connected = True
                 connection.close()
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError):
         return False
     return return_code is not None and return_code != 0 and not connected
 
 
-def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults | None:
+def _run_builtin_preflight(
+    backend: _BuiltInBackend, *, admission: _IsolationExecutableAdmission | None = None
+) -> _IsolationProbeResults | None:
     """Run benign and adversarial probes through the exact production wrapper."""
 
     try:
+        admission = admission or _admit_isolation_executable(backend)
+        _require_isolation_executable_unchanged(backend, admission)
         true_executable = _trusted_helper("/usr/bin/true", "/bin/true")
         shell_executable = _trusted_helper("/bin/sh", "/usr/bin/sh")
         network_executable = _trusted_helper("/usr/bin/nc", "/bin/nc")
@@ -321,6 +363,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     private_dir=private_dir,
                     rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
+                    admission=admission,
                 )
                 == 0
             )
@@ -338,6 +381,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     private_dir=private_dir,
                     rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
+                    admission=admission,
                 )
                 == 0
                 and workspace_target.is_file()
@@ -356,6 +400,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                 private_dir=private_dir,
                 rpc_port=_POLICY_PROBE_PORT,
                 environment=environment,
+                admission=admission,
             ) not in (None, 0)
             outside_write_denied = (
                 _execute_probe(
@@ -371,6 +416,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     private_dir=private_dir,
                     rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
+                    admission=admission,
                 )
                 not in (None, 0)
                 and not outside_target.exists()
@@ -386,6 +432,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     private_dir=private_dir,
                     rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
+                    admission=admission,
                 )
                 == 0
             )
@@ -395,8 +442,10 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                 workspace=workspace,
                 private_dir=private_dir,
                 environment=environment,
+                admission=admission,
             )
-    except (OSError, UnicodeError, ValueError):
+            _require_isolation_executable_unchanged(backend, admission)
+    except (OSError, RuntimeError, UnicodeError, ValueError):
         return None
 
     results = _IsolationProbeResults(
@@ -415,6 +464,7 @@ def _attestation_verification_sha256(
     backend_kind: str,
     executable: Path,
     executable_sha256: str,
+    executable_identity: tuple[int, ...],
     policy_sha256: str,
     probes: _IsolationProbeResults,
 ) -> str:
@@ -422,6 +472,7 @@ def _attestation_verification_sha256(
         "backend_kind": backend_kind,
         "executable": str(executable),
         "executable_sha256": executable_sha256,
+        "executable_identity": executable_identity,
         "policy_sha256": policy_sha256,
         "probes": asdict(probes),
     }
@@ -429,45 +480,49 @@ def _attestation_verification_sha256(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _seal_builtin_isolation_backend[BackendT](backend: BackendT) -> BackendT:
-    """Seal an exact built-in backend only after every adversarial probe succeeds."""
+def _seal_builtin_isolation_backend[BackendT](
+    backend: BackendT, *, admission: _IsolationExecutableAdmission | None = None
+) -> BackendT:
+    """Bind one unchanged launcher and policy through all mandatory boundary probes."""
 
+    _SEALED_BACKENDS.pop(id(backend), None)
     backend_type = type(backend)
     expected_name = _built_in_backend_name(backend_type)
     name = getattr(backend, "name", None)
     executable_value = getattr(backend, "executable", None)
     if expected_name is None or name != expected_name or not isinstance(executable_value, str):
         raise ValueError("only exact built-in isolation backends may receive provenance")
-    executable = Path(executable_value)
-    if not executable.is_absolute():
-        raise ValueError("sealed isolation executables must use absolute paths")
-    try:
-        resolved_executable = executable.resolve(strict=True)
-    except OSError as exc:
-        raise ValueError("sealed isolation executable could not be resolved") from exc
-    if not resolved_executable.is_file():
-        raise ValueError("sealed isolation executable must be a regular file")
-
     typed_backend = cast("_BuiltInBackend", backend)
-    probes = _run_builtin_preflight(typed_backend)
+    admission = admission or _admit_isolation_executable(typed_backend)
+    _require_isolation_executable_unchanged(typed_backend, admission)
+    try:
+        policy_sha256 = _current_policy_sha256(typed_backend)
+        _require_isolation_executable_unchanged(typed_backend, admission)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        raise ValueError("built-in isolation policy admission failed") from exc
+    probes = _run_builtin_preflight(typed_backend, admission=admission)
     if probes is None or not probes.all_required_passed():
         raise ValueError("built-in isolation backend failed mandatory adversarial preflight")
     try:
-        executable_sha256 = _file_sha256(resolved_executable)
-        policy_sha256 = _current_policy_sha256(typed_backend)
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise ValueError("built-in isolation attestation hashing failed") from exc
+        _require_isolation_executable_unchanged(typed_backend, admission)
+        if _current_policy_sha256(typed_backend) != policy_sha256:
+            raise ValueError("built-in isolation policy changed during preflight")
+        _require_isolation_executable_unchanged(typed_backend, admission)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        raise ValueError("built-in isolation attestation identity changed") from exc
     verification_sha256 = _attestation_verification_sha256(
         backend_kind=expected_name,
-        executable=resolved_executable,
-        executable_sha256=executable_sha256,
+        executable=admission.executable,
+        executable_sha256=admission.observation.sha256,
+        executable_identity=admission.observation.identity,
         policy_sha256=policy_sha256,
         probes=probes,
     )
     attestation = _IsolationAttestation(
         backend_kind=expected_name,
-        executable=resolved_executable,
-        executable_sha256=executable_sha256,
+        executable=admission.executable,
+        executable_sha256=admission.observation.sha256,
+        executable_identity=admission.observation.identity,
         policy_sha256=policy_sha256,
         probes=probes,
         verification_sha256=verification_sha256,
@@ -494,22 +549,27 @@ def _seal_builtin_isolation_backend[BackendT](backend: BackendT) -> BackendT:
 def _attestation_still_valid(backend: _BuiltInBackend, seal: _IsolationSeal) -> bool:
     attestation = seal.attestation
     try:
-        executable = Path(backend.executable).resolve(strict=True)
-        executable_sha256 = _file_sha256(executable)
+        admission = _admit_isolation_executable(backend)
+        if (
+            admission.executable != attestation.executable
+            or admission.observation.sha256 != attestation.executable_sha256
+            or admission.observation.identity != attestation.executable_identity
+        ):
+            return False
         policy_sha256 = _current_policy_sha256(backend)
-    except (OSError, UnicodeError, ValueError):
+        _require_isolation_executable_unchanged(backend, admission)
+    except (OSError, RuntimeError, UnicodeError, ValueError):
         return False
     expected_verification = _attestation_verification_sha256(
         backend_kind=seal.name,
-        executable=executable,
-        executable_sha256=executable_sha256,
+        executable=admission.executable,
+        executable_sha256=admission.observation.sha256,
+        executable_identity=admission.observation.identity,
         policy_sha256=policy_sha256,
         probes=attestation.probes,
     )
     return (
         attestation.probes.all_required_passed()
-        and executable == attestation.executable
-        and executable_sha256 == attestation.executable_sha256
         and policy_sha256 == attestation.policy_sha256
         and expected_verification == attestation.verification_sha256
     )

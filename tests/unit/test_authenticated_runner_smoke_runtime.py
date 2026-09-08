@@ -1397,6 +1397,7 @@ def _fake_run_validator_subject(
         selection_sha256="b" * 64,
         case_id="case-df79ea132113b863",
         request_preview=SimpleNamespace(
+            schema_version="1.1",
             logical_request_id=candidate_usage.request_id,
             exact_model_id=candidate.exact_model_id,
         ),
@@ -1430,6 +1431,7 @@ def _fake_run_validator_subject(
         selection_sha256=candidate_plan.selection_sha256,
         case_id=candidate_plan.case_id,
         request_preview=SimpleNamespace(
+            schema_version="1.1",
             logical_request_id=judge_usage.request_id,
             exact_model_id=judge.exact_model_id,
         ),
@@ -3815,6 +3817,19 @@ def test_run_requires_monotonic_generation_refetch_timestamps(
 
     run.judge_generation_refetch.retrieved_at = NOW - timedelta(seconds=1)
     with pytest.raises(ValueError, match="refetch is not fresh"):
+        _validate_fake_run(monkeypatch, run)
+
+
+def test_run_rejects_v2_preview_profile_hash_different_from_selected_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, _prepared, _candidate_report = _fake_run_validator_subject()
+    preview = run.candidate_cost_plan.request_preview
+    preview.schema_version = "1.2"
+    preview.route_predicate_profile_sha256 = "f" * 64
+    assert preview.route_predicate_profile_sha256 != run.candidate.route_predicate_profile_sha256
+
+    with pytest.raises(ValueError, match="differs from its exact pair"):
         _validate_fake_run(monkeypatch, run)
 
 

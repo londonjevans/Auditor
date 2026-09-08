@@ -27,14 +27,22 @@ from mmaudit.models.candidate_revocation import (
     seal_candidate_selection_revocation_entry,
     seal_candidate_selection_revocation_registry,
 )
-from mmaudit.models.candidate_selection import load_candidate_selection_plan
+from mmaudit.models.candidate_selection import (
+    load_candidate_selection_plan,
+    require_candidate_selection_plan_currently_eligible,
+)
 from mmaudit.models.route_constraints import ExactRouteRole
 from mmaudit.reporting.json_report import stable_json
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
+ACTIVE_SELECTION_PLAN_PATH = ROOT / "config" / "models.selection-plan.json"
+REVOKED_SELECTION_PLAN_PATH = (
+    ROOT / "tests" / "fixtures" / "model_selection" / "revoked-active-plan-v1.4.json"
+)
 PLAN_SHA256 = "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
 CONSTRAINT_SHA256 = "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a"
+MATCHED_REVOCATION_SET_SHA256 = "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5"
 REQUESTED_MODEL = "deepseek/deepseek-v4-pro-0813"
 CANONICAL_MODEL = "deepseek/deepseek-v4-pro-20260813"
 ENDPOINT = "parasail/fp8"
@@ -107,7 +115,7 @@ def test_pinned_resource_is_exact_canonical_negative_only_evidence() -> None:
 
 
 def test_historical_selection_plan_remains_parseable_evidence_but_is_not_runnable() -> None:
-    plan = load_candidate_selection_plan(ROOT / "config/models.selection-plan.json")
+    plan = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     assert plan.plan_sha256 == PLAN_SHA256
     assert plan.status == "NONAUTHORIZING"
     assert plan.provider_call_authorized is False
@@ -124,6 +132,39 @@ def test_historical_selection_plan_remains_parseable_evidence_but_is_not_runnabl
     )
     with pytest.raises(CandidateSelectionRevocationError, match="route is revoked"):
         require_selection_plan_routes_eligible(plan.plan_sha256, routes)
+
+
+def test_active_unavailable_plan_cannot_resurrect_the_revoked_candidate_route() -> None:
+    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    unavailable = plan.authenticated_runner_unavailability
+    assert plan.authenticated_runner_selection is None
+    assert unavailable is not None
+    assert require_candidate_selection_plan_currently_eligible(plan) == plan
+    assert plan.plan_sha256 != PLAN_SHA256
+
+    retained_routes = {
+        (constraint.role.value, constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in unavailable.judge_route_constraints
+    }
+    revoked_routes = {
+        (role, exact_model_id, provider_endpoint)
+        for (
+            _plan_sha256,
+            role,
+            exact_model_id,
+            _canonical_slug,
+            provider_endpoint,
+            _constraint,
+            _reason,
+        ) in CANDIDATE_SELECTION_REVOCATION_PROJECTION
+    }
+    assert retained_routes.isdisjoint(revoked_routes)
+    assert {item[0] for item in CANDIDATE_SELECTION_REVOCATION_PROJECTION} == {PLAN_SHA256}
+    assert unavailable.withdrawn_candidate_constraint_sha256s == (CONSTRAINT_SHA256,)
+    assert unavailable.matched_revocation_set_sha256 == MATCHED_REVOCATION_SET_SHA256
+    assert unavailable.revocation_entry_sha256s == (
+        "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4",
+    )
 
 
 def test_entry_and_registry_self_hash_tampering_is_rejected() -> None:

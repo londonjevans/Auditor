@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -10,9 +11,10 @@ import re
 import stat
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation, localcontext
@@ -58,6 +60,8 @@ _PORTFOLIO_SLOT_KEYS: Final = frozenset({"request_id", "maximum_cost_usd", "stat
 _MAX_PORTFOLIO_HOLDS: Final = 256
 _MAX_PORTFOLIO_SLOTS_PER_HOLD: Final = 1024
 _MAX_PORTFOLIO_SLOTS_TOTAL: Final = 4096
+_INITIALIZATION_LOCK_TIMEOUT_SECONDS: Final = 5.0
+_INITIALIZATION_LOCK_RETRY_SECONDS: Final = 0.01
 
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[Path, threading.RLock] = {}
@@ -73,6 +77,10 @@ class CostBudgetExceededError(CostLedgerError):
 
 class CostLedgerConfigurationError(CostLedgerError):
     """Raised when a ledger cannot safely use its configured path or cap."""
+
+
+class _CostLedgerInitializationCollision(CostLedgerConfigurationError):
+    """Raised only when another state entry wins one-time initialization."""
 
 
 class CostLedgerCorruptError(CostLedgerError):
@@ -300,7 +308,7 @@ class AtomicCostLedger:
         self._thread_lock = _thread_lock_for(self.path)
         initializing = _open_mode is _LedgerOpenMode.INITIALIZE
         if initializing and (_path_entry_exists(self.path) or _path_entry_exists(self.lock_path)):
-            raise CostLedgerConfigurationError(
+            raise _CostLedgerInitializationCollision(
                 "cost ledger or lock already exists; initialization is one-time"
             )
         with self._locked(create_lock=initializing):
@@ -324,7 +332,26 @@ class AtomicCostLedger:
     def initialize(cls, path: Path, *, cap_usd: Decimal) -> AtomicCostLedger:
         """Create one new operator-controlled ledger exactly once."""
 
-        return cls(path, cap_usd=cap_usd, _open_mode=_LedgerOpenMode.INITIALIZE)
+        cap = _validate_money(cap_usd, field="cap_usd", positive=True)
+        parent = _validate_operator_ledger_parent(path)
+        canonical_path = parent / path.name
+        if any(
+            _path_entry_exists(candidate)
+            for candidate in (
+                canonical_path,
+                parent / f".{path.name}.lock",
+                _provision_lock_path(canonical_path),
+            )
+        ):
+            raise _CostLedgerInitializationCollision(
+                "cost ledger or lock already exists; initialization is one-time"
+            )
+        with _initialization_guard(canonical_path) as (guard_created, _guard_identity):
+            if not guard_created:
+                raise _CostLedgerInitializationCollision(
+                    "cost ledger provisioning marker already exists; initialization is one-time"
+                )
+            return cls(canonical_path, cap_usd=cap, _open_mode=_LedgerOpenMode.INITIALIZE)
 
     @classmethod
     def open_existing(cls, path: Path, *, cap_usd: Decimal) -> AtomicCostLedger:
@@ -332,9 +359,96 @@ class AtomicCostLedger:
 
         return cls(path, cap_usd=cap_usd, _open_mode=_LedgerOpenMode.OPEN_EXISTING)
 
-    def reserve(self, request_id: str, maximum_cost_usd: Decimal) -> CostReservation:
-        """Atomically reserve a request's maximum possible provider cost."""
+    @classmethod
+    def provision(cls, path: Path, *, cap_usd: Decimal) -> tuple[AtomicCostLedger, bool]:
+        """Create one missing ledger or verify the exact existing state.
 
+        The boolean result is true only for the caller that created the state. Existing,
+        corrupt, incomplete, mismatched, or linked state is never reset or repaired. Concurrent
+        creators serialize on a durable private guard, so each loser inspects only the winner's
+        completed initialization.
+        """
+
+        with cls.provisioning_lease(path, cap_usd=cap_usd, create_missing=True) as leased:
+            ledger, created, _marker_identity = leased
+            return ledger, created
+
+    @classmethod
+    @contextmanager
+    def provisioning_lease(
+        cls,
+        path: Path,
+        *,
+        cap_usd: Decimal,
+        create_missing: bool,
+    ) -> Iterator[tuple[AtomicCostLedger, bool, str]]:
+        """Retain the durable no-reset marker while creating or observing exact state."""
+
+        if type(create_missing) is not bool:
+            raise CostLedgerConfigurationError(
+                "cost ledger provisioning create-missing flag must be a boolean"
+            )
+        cap = _validate_money(cap_usd, field="cap_usd", positive=True)
+        parent = _validate_operator_ledger_parent(path)
+        canonical_path = parent / path.name
+        lock_path = parent / f".{path.name}.lock"
+        provision_lock_path = _provision_lock_path(canonical_path)
+        prior_initialization_evidence = any(
+            _path_entry_exists(candidate)
+            for candidate in (canonical_path, lock_path, provision_lock_path)
+        )
+        with _initialization_guard(
+            canonical_path,
+            create=create_missing,
+        ) as (guard_created, guard_identity):
+            state_exists = _path_entry_exists(canonical_path)
+            lock_exists = _path_entry_exists(lock_path)
+            if state_exists or lock_exists:
+                ledger = cls.open_existing(canonical_path, cap_usd=cap)
+                initial_identity, _initial_snapshot = ledger.snapshot_with_identity_sha256()
+                yield ledger, False, guard_identity
+                final_ledger = cls.open_existing(canonical_path, cap_usd=cap)
+                final_identity, _final_snapshot = final_ledger.snapshot_with_identity_sha256()
+                if final_identity != initial_identity:
+                    raise CostLedgerConfigurationError(
+                        "cost ledger lock identity changed during provisioning"
+                    )
+                return
+            if not guard_created or prior_initialization_evidence:
+                raise CostLedgerConfigurationError(
+                    "cost ledger initialization evidence exists without ledger state; "
+                    "automatic repair is forbidden"
+                )
+            ledger = cls(
+                canonical_path,
+                cap_usd=cap,
+                _open_mode=_LedgerOpenMode.INITIALIZE,
+            )
+            initial_identity, _initial_snapshot = ledger.snapshot_with_identity_sha256()
+            yield ledger, True, guard_identity
+            final_ledger = cls.open_existing(canonical_path, cap_usd=cap)
+            final_identity, _final_snapshot = final_ledger.snapshot_with_identity_sha256()
+            if final_identity != initial_identity:
+                raise CostLedgerConfigurationError(
+                    "cost ledger lock identity changed during provisioning"
+                )
+
+    def reserve(
+        self,
+        request_id: str,
+        maximum_cost_usd: Decimal,
+        *,
+        require_settled_prior_costs: bool = False,
+    ) -> CostReservation:
+        """Atomically reserve the supplied amount; optionally require settled history.
+
+        The opt-in settled-cost check excludes pending or uncertain costs under the
+        same lock as reservation. It does not turn a development estimate into a
+        provider-enforced maximum; existing callers retain their prior behavior.
+        """
+
+        if type(require_settled_prior_costs) is not bool:
+            raise CostLedgerConfigurationError("settled-cost requirement must be boolean")
         _validate_request_id(request_id)
         requested = _validate_money(
             maximum_cost_usd,
@@ -347,6 +461,16 @@ class AtomicCostLedger:
             if request_id in entries or request_id in _portfolio_request_ids(portfolio_holds):
                 raise CostReservationStateError(f"request ID already recorded: {request_id}")
             snapshot = _snapshot(self.cap_usd, entries, portfolio_holds)
+            if require_settled_prior_costs and (
+                snapshot.held_portfolio_usd > 0
+                or any(
+                    entry.status in {CostEntryStatus.RESERVED, CostEntryStatus.UNCERTAIN_ACCOUNTED}
+                    for entry in snapshot.entries
+                )
+            ):
+                raise CostBudgetExceededError(
+                    "development reservation requires all prior provider costs to be settled"
+                )
             if snapshot.has_reservation_overrun:
                 raise CostBudgetExceededError(
                     "a prior provider cost exceeded its reservation; further calls are blocked"
@@ -737,27 +861,41 @@ class AtomicCostLedger:
             _cap, entries, portfolio_holds = _validate_state(state)
             return _snapshot(self.cap_usd, entries, portfolio_holds)
 
+    def snapshot_with_identity_sha256(self) -> tuple[str, CostLedgerSnapshot]:
+        """Return one snapshot bound to the exact persistent lock held while reading it."""
+
+        with self._locked() as lock_descriptor:
+            state = self._required_state()
+            _cap, entries, portfolio_holds = _validate_state(state)
+            return (
+                self._identity_sha256_for_lock(lock_descriptor),
+                _snapshot(self.cap_usd, entries, portfolio_holds),
+            )
+
     @property
     def identity_sha256(self) -> str:
         """Commit the operator-selected ledger and its persistent lock identity."""
 
         with self._locked() as lock_descriptor:
-            lock_details = os.fstat(lock_descriptor)
-            material = {
-                "schema": "mmaudit.atomic-cost-ledger.identity.v1",
-                "canonical_path": self.path.as_posix(),
-                "lock_device": lock_details.st_dev,
-                "lock_inode": lock_details.st_ino,
-                "owner_uid": lock_details.st_uid,
-            }
-            return hashlib.sha256(
-                json.dumps(
-                    material,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=True,
-                ).encode("utf-8")
-            ).hexdigest()
+            return self._identity_sha256_for_lock(lock_descriptor)
+
+    def _identity_sha256_for_lock(self, lock_descriptor: int) -> str:
+        lock_details = os.fstat(lock_descriptor)
+        material = {
+            "schema": "mmaudit.atomic-cost-ledger.identity.v1",
+            "canonical_path": self.path.as_posix(),
+            "lock_device": lock_details.st_dev,
+            "lock_inode": lock_details.st_ino,
+            "owner_uid": lock_details.st_uid,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                material,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
 
     @contextmanager
     def _locked(self, *, create_lock: bool = False) -> Iterator[int]:
@@ -840,6 +978,73 @@ def _thread_lock_for(path: Path) -> threading.RLock:
         return lock
 
 
+def _provision_lock_path(path: Path) -> Path:
+    return path.parent / f".{path.name}.provision.lock"
+
+
+@contextmanager
+def _initialization_guard(
+    path: Path,
+    *,
+    create: bool = True,
+) -> Iterator[tuple[bool, str]]:
+    """Serialize one-time initialization without trusting partial ledger state."""
+
+    deadline = time.monotonic() + _INITIALIZATION_LOCK_TIMEOUT_SECONDS
+    thread_lock = _thread_lock_for(path)
+    if not thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise CostLedgerConfigurationError(
+            "timed out waiting for concurrent cost ledger initialization"
+        )
+    descriptor: int | None = None
+    locked = False
+    guard_path = _provision_lock_path(path)
+    try:
+        descriptor, guard_created = _open_provision_lock_file(guard_path, create=create)
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise CostLedgerConfigurationError(
+                        "cost ledger provisioning lock could not be acquired"
+                    ) from exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CostLedgerConfigurationError(
+                        "timed out waiting for concurrent cost ledger initialization"
+                    ) from exc
+                time.sleep(min(_INITIALIZATION_LOCK_RETRY_SECONDS, remaining))
+        _require_exact_provision_lock_path(guard_path, descriptor)
+        if guard_created:
+            try:
+                os.fsync(descriptor)
+                _fsync_exact_private_directory(path.parent)
+            except OSError as exc:
+                raise CostLedgerConfigurationError(
+                    "cost ledger provisioning marker could not be persisted"
+                ) from exc
+        guard_identity = _provision_lock_identity_sha256(guard_path, descriptor)
+        try:
+            yield guard_created, guard_identity
+        finally:
+            _require_exact_provision_lock_path(guard_path, descriptor)
+    finally:
+        try:
+            if descriptor is not None:
+                if locked:
+                    with suppress(OSError):
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                # Closing the descriptor releases any retained flock. Cleanup failure must not
+                # turn completed initialization into an apparent failure with durable state.
+                with suppress(OSError):
+                    os.close(descriptor)
+        finally:
+            thread_lock.release()
+
+
 def _path_entry_exists(path: Path) -> bool:
     try:
         path.lstat()
@@ -876,12 +1081,112 @@ def _validate_operator_ledger_parent(path: Path) -> Path:
     return parent
 
 
+def _open_provision_lock_file(path: Path, *, create: bool) -> tuple[int, bool]:
+    """Create or reopen the durable initialization coordinator without repairing it."""
+
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    created = False
+    if create:
+        try:
+            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+        except FileExistsError:
+            try:
+                descriptor = os.open(path, flags)
+            except OSError as exc:
+                raise CostLedgerConfigurationError(
+                    "cost ledger provisioning lock file is unavailable"
+                ) from exc
+        except OSError as exc:
+            raise CostLedgerConfigurationError(
+                "cost ledger provisioning lock file is unavailable"
+            ) from exc
+    else:
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            raise CostLedgerConfigurationError(
+                "existing cost ledger provisioning lock file is unavailable"
+            ) from exc
+    details = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_nlink != 1
+        or stat.S_IMODE(details.st_mode) != 0o600
+    ):
+        os.close(descriptor)
+        raise CostLedgerConfigurationError(
+            "cost ledger provisioning lock must be a single-link operator-owned "
+            "mode-0600 regular file"
+        )
+    return descriptor, created
+
+
+def _provision_lock_identity_sha256(path: Path, descriptor: int) -> str:
+    details = os.fstat(descriptor)
+    material = {
+        "schema": "mmaudit.atomic-cost-ledger.provisioning-marker-identity.v1",
+        "canonical_path": path.as_posix(),
+        "device": details.st_dev,
+        "inode": details.st_ino,
+        "owner_uid": details.st_uid,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            material,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _fsync_exact_private_directory(path: Path) -> None:
+    before = path.lstat()
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        after = path.lstat()
+        expected = (before.st_dev, before.st_ino, before.st_uid, stat.S_IMODE(before.st_mode))
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(after.st_mode)
+            or expected
+            != (opened.st_dev, opened.st_ino, opened.st_uid, stat.S_IMODE(opened.st_mode))
+            or expected != (after.st_dev, after.st_ino, after.st_uid, stat.S_IMODE(after.st_mode))
+            or expected[2] != os.geteuid()
+            or expected[3] != 0o700
+        ):
+            raise CostLedgerConfigurationError(
+                "cost ledger parent changed while persisting provisioning marker"
+            )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _open_lock_file(path: Path, *, create: bool) -> int:
     flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     if create:
         flags |= os.O_CREAT | os.O_EXCL
     try:
         descriptor = os.open(path, flags, 0o600)
+    except FileExistsError as exc:
+        if create:
+            raise _CostLedgerInitializationCollision(
+                "cost ledger or lock already exists; initialization is one-time"
+            ) from exc
+        raise CostLedgerConfigurationError(
+            "existing cost ledger lock file is missing or unavailable"
+        ) from exc
     except OSError as exc:
         message = (
             "cost ledger lock file is unavailable"
@@ -928,8 +1233,38 @@ def _require_exact_lock_path(path: Path, descriptor: int) -> None:
         raise CostLedgerConfigurationError("cost ledger lock changed during the locked operation")
 
 
+def _require_exact_provision_lock_path(path: Path, descriptor: int) -> None:
+    """Require the flocked provisioning descriptor to remain its exact private path."""
+
+    try:
+        held = os.fstat(descriptor)
+        current = path.lstat()
+    except OSError as exc:
+        raise CostLedgerConfigurationError(
+            "cost ledger provisioning lock changed during initialization"
+        ) from exc
+    if (
+        not stat.S_ISREG(held.st_mode)
+        or held.st_uid != os.geteuid()
+        or held.st_nlink != 1
+        or stat.S_IMODE(held.st_mode) != 0o600
+        or not stat.S_ISREG(current.st_mode)
+        or stat.S_ISLNK(current.st_mode)
+        or current.st_uid != os.geteuid()
+        or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) != 0o600
+        or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)
+    ):
+        raise CostLedgerConfigurationError(
+            "cost ledger provisioning lock changed during initialization"
+        )
+
+
 def _open_regular_private_file(path: Path) -> int:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if nonblock == 0:
+        raise CostLedgerConfigurationError("nonblocking cost ledger file access is unavailable")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | nonblock
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:

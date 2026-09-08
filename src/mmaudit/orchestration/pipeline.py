@@ -438,6 +438,12 @@ from mmaudit.orchestration.learning import (
     persist_terminal_learning_capture,
     terminal_learning_capture_is_eligible,
 )
+from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+from mmaudit.orchestration.managed_pipeline import (
+    prepare_managed_pipeline_tools,
+    verify_managed_pipeline_config,
+)
 from mmaudit.orchestration.manifest import (
     SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME,
     ManifestFileBinding,
@@ -580,6 +586,7 @@ from mmaudit.scanners.runtime_evidence import (
 )
 from mmaudit.solidity.compile import CompilationRun, compile_solidity_projects
 from mmaudit.solidity.coverage import (
+    build_audited_suite_entity_catalog,
     build_solidity_coverage,
     with_invariant_review_coverage,
     with_model_review_coverage,
@@ -600,6 +607,7 @@ from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.reproduction import (
     ForkReproductionRunner,
+    IsolationBackend,
     translate_foundry_test,
 )
 from mmaudit.solidity.reproduction_integrity import verify_reproduction_integrity
@@ -3206,7 +3214,27 @@ class AuditPipeline:
             PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
         ),
         repository_fork_matrix_runner: RepositoryForkMatrixRunner | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
+        managed_backend: IsolationBackend | None = None,
+        offline_forks: ManagedForkArchives | None = None,
     ) -> None:
+        if host_tools is not None:
+            verify_managed_pipeline_config(host_tools, config)
+            if any(
+                runner is not None
+                for runner in (
+                    scanner_runner,
+                    reproduction_runner,
+                    invariant_runner,
+                    formal_runner,
+                    repository_fork_matrix_runner,
+                )
+            ):
+                raise ValueError("managed pipeline requires fixed consumers without overrides")
+        elif managed_backend is not None:
+            raise ValueError("managed pipeline backend requires prepared host material")
+        elif offline_forks is not None:
+            raise ValueError("managed pipeline archives require prepared host material")
         self.config = config.effective()
         self.file_config = file_config or self.config
         self.environment_overrides = environment_overrides or AuditConfigOverrides()
@@ -3328,6 +3356,24 @@ class AuditPipeline:
         self.privacy_authorization: TrustedPrivacyAuthorization | None = None
         self.privacy_source_sha256: str | None = None
         self.logger = logger or logging.getLogger("mmaudit.pipeline")
+        self._managed_tools = (
+            prepare_managed_pipeline_tools(
+                host_tools,
+                self.config,
+                repo=self.repo_input,
+                output=self.output,
+                backend=managed_backend,
+                offline_forks=offline_forks,
+            )
+            if host_tools is not None
+            else None
+        )
+        if self._managed_tools is not None:
+            scanner_runner = self._managed_tools.scanners
+            reproduction_runner = self._managed_tools.reproduction
+            invariant_runner = self._managed_tools.invariants
+            formal_runner = self._managed_tools.formal
+            repository_fork_matrix_runner = self._managed_tools.fork_matrix
         self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
             self.config.reproduction,
             self.config.smart_contracts,
@@ -3369,6 +3415,20 @@ class AuditPipeline:
         )
         self._owns_client = False
         self._active_scheduler: PipelineScheduler | None = None
+        self._run_log_handler: JsonLineHandler | None = None
+
+    def _verify_managed_tools(self) -> None:
+        if self._managed_tools is not None:
+            self._managed_tools.verify(
+                config=self.config,
+                repo=self.repo_input,
+                output=self.output,
+                scanners=self.scanner_runner,
+                reproduction=self.reproduction_runner,
+                invariants=self.invariant_runner,
+                formal=self.formal_runner,
+                fork_matrix=self.repository_fork_matrix_runner,
+            )
 
     def clear_credentials(self) -> None:
         """Drop operator credentials retained by pipeline/provider objects."""
@@ -3805,7 +3865,7 @@ class AuditPipeline:
         """Execute one audit and always clear provider credentials afterward."""
 
         try:
-            return await self._run_with_provider(
+            result = await self._run_with_provider(
                 resume_run_dir=resume_run_dir,
                 scanner_only=scanner_only,
                 allow_code_egress=allow_code_egress,
@@ -3823,6 +3883,8 @@ class AuditPipeline:
                 ci_mode=ci_mode,
                 ci_baseline=ci_baseline,
             )
+            self._verify_managed_tools()
+            return result
         finally:
             scheduler = self._active_scheduler
             if scheduler is not None:
@@ -3840,6 +3902,11 @@ class AuditPipeline:
             self.privacy_authorization = None
             self.privacy_consent_observation = None
             self.privacy_source_provenance_observation = None
+            handler = self._run_log_handler
+            if handler is not None:
+                self._run_log_handler = None
+                self.logger.removeHandler(handler)
+                handler.close()
 
     async def _run_with_provider(
         self,
@@ -3861,6 +3928,7 @@ class AuditPipeline:
         ci_mode: bool = False,
         ci_baseline: LoadedCIBaseline | None = None,
     ) -> PipelineResult:
+        self._verify_managed_tools()
         frozen_learning_scope: LearningCaptureScope | None = None
         if learning_capture_scope is not None:
             if type(learning_capture_scope) is not LearningCaptureScope:
@@ -4092,6 +4160,7 @@ class AuditPipeline:
                 benchmark_verification,
             )
         log_handler = JsonLineHandler(run_dir / "logs" / "events.jsonl")
+        self._run_log_handler = log_handler
         log_handler.addFilter(RedactingFilter())
         if self.logger.level == logging.NOTSET:
             self.logger.setLevel(logging.INFO)
@@ -4627,9 +4696,10 @@ class AuditPipeline:
                     for result in dependency_failures
                 )
                 terminal_code = ExitCode.INCOMPLETE
+            self._verify_managed_tools()
             compilation_config = (
                 self.config.smart_contracts.model_copy(update={"compile": False})
-                if preflight_blocked
+                if preflight_blocked and self._managed_tools is None
                 else self.config.smart_contracts
             )
             dependency_arguments: dict[str, Any] = {}
@@ -4644,6 +4714,8 @@ class AuditPipeline:
                     "require_prepared_dependencies": True,
                     "excluded_repository_paths": (snapshot_parent_relative,),
                 }
+            if self._managed_tools is not None:
+                dependency_arguments["host_tools"] = self._managed_tools.material
             compilation_run = (
                 compile_solidity_projects(
                     discovery.root,
@@ -4654,8 +4726,10 @@ class AuditPipeline:
                     **dependency_arguments,
                 )
                 if language_capability.evm_portfolio_applicable
+                and not (preflight_blocked and self._managed_tools is not None)
                 else CompilationRun(results=[], artifact_roots=[])
             )
+            self._verify_managed_tools()
             solidity_compilations = compilation_run.results
             index_build = build_solidity_index(
                 solidity_analysis_discovery,
@@ -4801,6 +4875,7 @@ class AuditPipeline:
                     f"{scope_preflight_gate.gate}: {scope_preflight_gate.detail}"
                 )
                 terminal_code = ExitCode.INCOMPLETE
+        self._verify_managed_tools()
         if (
             language_capability.evm_portfolio_applicable
             and self.config.formal.enabled
@@ -4822,6 +4897,7 @@ class AuditPipeline:
                 incomplete.append(f"formal adapter layer failed safely: {type(exc).__name__}")
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
+        self._verify_managed_tools()
         write_json(
             run_dir / "dependency-preparation.json",
             {
@@ -4912,8 +4988,21 @@ class AuditPipeline:
             },
         )
         self.logger.info("Running deterministic scanners", extra={"run_id": run_id})
+        self._verify_managed_tools()
         if not preflight_blocked and scanner_source_inventory_valid:
             assert scanner_source_sha256 is not None
+            audited_suite_entity_catalog = (
+                build_audited_suite_entity_catalog(
+                    index=solidity_index,
+                    projects=solidity_projects,
+                    repository_sha256=scanner_source_sha256,
+                    source_file_sha256s={
+                        item.relative_path: item.sha256 for item in discovery.files
+                    },
+                )
+                if solidity_index is not None and language_capability.evm_portfolio_applicable
+                else None
+            )
             try:
                 scanner_runs = await self.scanner_runner.run_all(
                     discovery.root,
@@ -4925,6 +5014,7 @@ class AuditPipeline:
                     expected_repository_sha256=scanner_source_sha256,
                     repository_exclusion_root=scanner_source_exclusion_root,
                     allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+                    audited_suite_entity_catalog=audited_suite_entity_catalog,
                 )
             except ScannerSourceIntegrityError:
                 scanner_source_inventory_valid = False
@@ -4933,6 +5023,7 @@ class AuditPipeline:
                 )
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
+        self._verify_managed_tools()
         if (
             scanner_source_inventory_valid
             and language_capability.evm_portfolio_applicable
@@ -5031,6 +5122,7 @@ class AuditPipeline:
         )
 
         fork_acknowledged = self.config.smart_contracts.allow_fork_probing or allow_fork_probing
+        self._verify_managed_tools()
         invariant_executions = (
             await self._execute_invariant_harnesses(
                 discovery=discovery,
@@ -5045,6 +5137,7 @@ class AuditPipeline:
             if language_capability.evm_portfolio_applicable
             else []
         )
+        self._verify_managed_tools()
         write_json(
             run_dir / "invariant-execution-results.json",
             {
@@ -11300,6 +11393,7 @@ class AuditPipeline:
                             )
                         )
                         continue
+                    self._verify_managed_tools()
                     reproduction = await asyncio.to_thread(
                         self.reproduction_runner.run,
                         repository_root=discovery.root,
@@ -11308,6 +11402,7 @@ class AuditPipeline:
                         specification=specification,
                         private_dir=run_dir / "private" / "reproduction",
                     )
+                    self._verify_managed_tools()
                     expected_chain_id = (
                         specification.expected_chain_id
                         if specification.expected_chain_id is not None
@@ -12292,6 +12387,7 @@ class AuditPipeline:
             )
         quality_gates = _evaluate_quality_gates(
             config=self.config,
+            maximum_assurance_required=assurance_contract.required,
             actor_model_input=actor_model_input,
             solidity_projects=solidity_projects,
             compilations=solidity_compilations,
@@ -12880,6 +12976,7 @@ class AuditPipeline:
         )
         quality_gates = _evaluate_quality_gates(
             config=self.config,
+            maximum_assurance_required=assurance_contract.required,
             actor_model_input=actor_model_input,
             solidity_projects=solidity_projects,
             compilations=solidity_compilations,
@@ -13415,6 +13512,7 @@ class AuditPipeline:
                     "metadata": report_metadata,
                 }
             )
+        self._verify_managed_tools()
         terminal_report_authority = RunTerminalReportAuthority.build_from_runtime(
             report=report,
             status=ReportStatusProjection(
@@ -13476,6 +13574,7 @@ class AuditPipeline:
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
+        self._run_log_handler = None
         return PipelineResult(
             report=report,
             run_dir=run_dir,
@@ -13562,6 +13661,7 @@ class AuditPipeline:
                 )
             else:
                 assert project is not None
+                self._verify_managed_tools()
                 results.append(
                     await asyncio.to_thread(
                         self.invariant_runner.run,
@@ -13571,6 +13671,7 @@ class AuditPipeline:
                         private_dir=run_dir / "private" / "invariants",
                     )
                 )
+                self._verify_managed_tools()
         return results
 
     def _write_model_qualification_runtime(
@@ -15586,6 +15687,7 @@ def _record_reproduction_attempts(
 def _evaluate_quality_gates(
     *,
     config: AuditConfig,
+    maximum_assurance_required: bool,
     actor_model_input: ActorModelInputEvidence,
     solidity_projects: list[SolidityProjectMetadata],
     compilations: list[SolidityCompilationResult],
@@ -15606,7 +15708,9 @@ def _evaluate_quality_gates(
     model_surface_assignment_gate: QualityGateResult,
     repository_execution_sha256: str | None,
 ) -> list[QualityGateResult]:
-    maximum = config.profile is AuditProfile.MAXIMUM_ASSURANCE
+    # Preserve the configured profile while honoring the same resolved per-run
+    # requirement used by preflight, the assurance assessment and report custody.
+    maximum = config.profile is AuditProfile.MAXIMUM_ASSURANCE or maximum_assurance_required
     base_gates = [
         language_capability_quality_gate(language_capability),
         scope_quality_gate(scope_assessment),

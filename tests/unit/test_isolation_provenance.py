@@ -64,7 +64,7 @@ def test_every_adversarial_preflight_probe_is_mandatory(
     probes = replace(_passing_probes(), **{failed_probe: False})
     monkeypatch.setattr(
         "mmaudit.isolation.provenance._run_builtin_preflight",
-        lambda _backend: probes,
+        lambda _backend, **_kwargs: probes,
     )
     backend = MacOSSandboxBackend(executable=str(_executable(tmp_path)))
 
@@ -230,7 +230,7 @@ def test_seal_rejects_reconstructed_altered_executable_and_altered_policy(
     executable = _executable(tmp_path)
     monkeypatch.setattr(
         "mmaudit.isolation.provenance._run_builtin_preflight",
-        lambda _backend: _passing_probes(),
+        lambda _backend, **_kwargs: _passing_probes(),
     )
     backend = MacOSSandboxBackend(executable=str(executable))
     _seal_builtin_isolation_backend(backend)
@@ -245,6 +245,8 @@ def test_seal_rejects_reconstructed_altered_executable_and_altered_policy(
     assert isolation_execution_evidence(backend) is ExecutionEvidenceKind.UNVERIFIED
     assert isolation_attestation_sha256(backend) is None
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert isolation_execution_evidence(backend) is ExecutionEvidenceKind.UNVERIFIED
+    _seal_builtin_isolation_backend(backend)
     assert isolation_execution_evidence(backend) is ExecutionEvidenceKind.REAL
 
     original_wrap = MacOSSandboxBackend.wrap

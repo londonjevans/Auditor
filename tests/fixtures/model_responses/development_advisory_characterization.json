@@ -1,0 +1,14 @@
+{
+  "summary": "Synthetic guarded ControlB enforces the declared administrator invariant.",
+  "findings": [
+    {
+      "title": "Limit changes have no observation event",
+      "severity": "informational",
+      "line_start": 14,
+      "line_end": 17,
+      "violated_invariant": "Only the configured administrator may change the limit.",
+      "explanation": "The synthetic setter checks its administrator. This is an optional observability advisory, not a demonstrated authorization violation.",
+      "recommendation": "Consider a change event if observability is a requirement."
+    }
+  ]
+}

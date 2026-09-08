@@ -6,7 +6,7 @@ import asyncio
 import math
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
@@ -23,6 +23,7 @@ from mmaudit.models.schemas import (
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+    AuditedSuiteEntityCatalog,
     CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
@@ -56,6 +57,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
     SolidityProjectMetadata,
+    SoliditySymbolIndex,
     StrictModel,
 )
 from mmaudit.orchestration.execution_candidates import (
@@ -93,6 +95,7 @@ from mmaudit.scanners.fork_matrix import (
     repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.scanners.runner import ScannerRunner
+from mmaudit.solidity.coverage import build_audited_suite_entity_catalog
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
 from mmaudit.solidity.reproduction import (
     ForkReproductionRunner,
@@ -261,6 +264,7 @@ class ScannerReplayRunner(Protocol):
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]: ...
 
 
@@ -402,6 +406,73 @@ def _repository_suite_replay_identity(
     return expected_sha256, exclusion_root, allow_custom_repository_exclusion
 
 
+def _replay_audited_suite_entity_catalog(
+    expected: Sequence[ScannerRun],
+    *,
+    projects: Sequence[SolidityProjectMetadata],
+    repository_sha256: str | None,
+    solidity_index: SoliditySymbolIndex | None,
+    source_file_sha256s: Mapping[str, str] | None,
+) -> AuditedSuiteEntityCatalog | None:
+    """Rebuild the exact statement denominator only for a coverage-bearing replay."""
+
+    coverage_runs = [
+        run
+        for run in expected
+        if run.scanner == "foundry_fork"
+        and (
+            bool(run.repository_statement_coverage_evidence)
+            or run.repository_statement_coverage_receipt is not None
+        )
+    ]
+    if not coverage_runs:
+        return None
+    if repository_sha256 is None:
+        raise ValueError("statement coverage replay lacks a repository-suite identity")
+    if solidity_index is None:
+        raise ValueError("statement coverage replay lacks its saved Solidity index")
+    if source_file_sha256s is None:
+        raise ValueError("statement coverage replay lacks manifest source hashes")
+
+    catalog = build_audited_suite_entity_catalog(
+        index=solidity_index,
+        projects=list(projects),
+        repository_sha256=repository_sha256,
+        source_file_sha256s=source_file_sha256s,
+    )
+    if not catalog.classification_complete:
+        raise ValueError("statement coverage replay entity catalog is incomplete")
+    bindings_by_id = {binding.entity_id: binding for binding in catalog.bindings}
+    for run in coverage_runs:
+        selection = run.repository_suite_selection
+        if selection is None or selection.repository_sha256 != repository_sha256:
+            raise ValueError("statement coverage replay differs from its repository identity")
+        evidence_by_id = {
+            evidence.entity_id: evidence for evidence in run.repository_statement_coverage_evidence
+        }
+        if set(evidence_by_id) != set(bindings_by_id):
+            raise ValueError("statement coverage replay differs from its audited entity catalog")
+        for entity_id, binding in bindings_by_id.items():
+            evidence = evidence_by_id[entity_id]
+            if (
+                evidence.entity_kind is not binding.entity_kind
+                or evidence.contract_name != binding.evidence_contract_name
+                or evidence.location != binding.location
+                or any(
+                    statement.start_byte_offset < binding.entity_start_byte_offset
+                    or statement.end_byte_offset > binding.entity_end_byte_offset
+                    for statement in evidence.statements
+                )
+            ):
+                raise ValueError(
+                    "statement coverage replay entity evidence differs from its catalog"
+                )
+        receipt = run.repository_statement_coverage_receipt
+        if receipt is not None and receipt.entity_catalog_sha256 != catalog.catalog_sha256:
+            raise ValueError("statement coverage replay receipt differs from its entity catalog")
+    return catalog
+
+
 class _ScannerArtifact(StrictModel):
     schema_version: Literal["1.0"]
     runs: list[ScannerRun] = Field(max_length=100)
@@ -417,6 +488,11 @@ class _ScannerArtifact(StrictModel):
 class _SolidityProjectsArtifact(StrictModel):
     schema_version: Literal["1.0"]
     projects: list[SolidityProjectMetadata] = Field(max_length=200)
+
+
+class _SolidityIndexArtifact(StrictModel):
+    schema_version: Literal["1.0"]
+    index: SoliditySymbolIndex | None
 
 
 class _InvariantArtifact(StrictModel):
@@ -613,6 +689,14 @@ class OfflineReplayOrchestrator:
                     projects=artifacts.projects.projects,
                     expected=artifacts.scanners.runs,
                     audited_relative_paths=tuple(binding.path for binding in manifest.sources),
+                    solidity_index=(
+                        artifacts.solidity_index.index
+                        if artifacts.solidity_index is not None
+                        else None
+                    ),
+                    source_file_sha256s={
+                        binding.path: binding.sha256 for binding in manifest.sources
+                    },
                     observed_runs=observed_scanner_runs,
                 )
             )
@@ -770,6 +854,8 @@ class OfflineReplayOrchestrator:
         projects: list[SolidityProjectMetadata],
         expected: list[ScannerRun],
         audited_relative_paths: tuple[str, ...],
+        solidity_index: SoliditySymbolIndex | None = None,
+        source_file_sha256s: Mapping[str, str] | None = None,
         observed_runs: list[ScannerRun] | None = None,
     ) -> list[OfflineReplayComponent]:
         if not expected:
@@ -796,6 +882,13 @@ class OfflineReplayOrchestrator:
                 if expected_repository_sha256 is None
                 else expected_repository_sha256
             )
+            audited_suite_entity_catalog = _replay_audited_suite_entity_catalog(
+                expected,
+                projects=projects,
+                repository_sha256=expected_repository_sha256,
+                solidity_index=solidity_index,
+                source_file_sha256s=source_file_sha256s,
+            )
             fork_acknowledged = any(
                 item.scanner in {"foundry_fork", "hardhat_fork"}
                 and item.repository_suite_selection is not None
@@ -812,6 +905,7 @@ class OfflineReplayOrchestrator:
                 expected_repository_sha256=frozen_scanner_source_sha256,
                 repository_exclusion_root=repository_exclusion_root,
                 allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+                audited_suite_entity_catalog=audited_suite_entity_catalog,
             )
             if observed_runs is not None:
                 observed_runs.extend(observed)
@@ -1301,6 +1395,7 @@ class OfflineReplayOrchestrator:
 class _ReplayArtifacts(StrictModel):
     scanners: _ScannerArtifact
     projects: _SolidityProjectsArtifact
+    solidity_index: _SolidityIndexArtifact | None = None
     invariants: _InvariantArtifact
     harnesses: _InvariantHarnessArtifact
     property_corpus: _PropertyCorpusArtifact
@@ -1496,6 +1591,15 @@ def _load_replay_artifacts(
     return _ReplayArtifacts(
         scanners=_load_artifact(run_dir, "scanner-results.json", _ScannerArtifact),
         projects=_load_artifact(run_dir, "solidity-projects.json", _SolidityProjectsArtifact),
+        solidity_index=(
+            _load_artifact(run_dir, "solidity-index.json", _SolidityIndexArtifact)
+            if (
+                (run_dir / "solidity-index.json").exists()
+                or (run_dir / "solidity-index.json").is_symlink()
+                or (run_dir / "solidity-index.json").is_junction()
+            )
+            else None
+        ),
         invariants=_load_artifact(run_dir, "solidity-invariants.json", _InvariantArtifact),
         harnesses=_load_artifact(
             run_dir,

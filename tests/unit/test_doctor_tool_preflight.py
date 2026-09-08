@@ -99,7 +99,7 @@ def test_configured_tool_preflight_probes_exact_resolved_path_with_scrubbed_envi
     observed: list[tuple[object, dict[str, str], object, Path, Path]] = []
     monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-secret-must-not-propagate")
     monkeypatch.setattr(
-        "mmaudit.scanners.runner.shutil.which",
+        "mmaudit.scanners.base.shutil.which",
         lambda _name: str(executable),
     )
 
@@ -147,7 +147,7 @@ def test_configured_tool_preflight_refuses_repository_path_shadow_before_executi
     shadow = repository / "semgrep"
     shadow.write_text("synthetic non-production path shadow\n", encoding="utf-8")
     shadow.chmod(0o700)
-    monkeypatch.setattr("mmaudit.scanners.runner.shutil.which", lambda _name: str(shadow))
+    monkeypatch.setattr("mmaudit.scanners.base.shutil.which", lambda _name: str(shadow))
     monkeypatch.setattr(
         "mmaudit.scanners.runner.preflight_scanner_executable",
         lambda *_args, **_kwargs: pytest.fail("repository-local executable must not run"),
@@ -222,7 +222,7 @@ def test_configured_tool_preflight_creates_private_chain_with_owner_only_mode(
     output.mkdir()
     output.chmod(0o755)
     selected = output / "private" / "doctor-tool-preflight" / "run-id"
-    monkeypatch.setattr("mmaudit.scanners.runner.shutil.which", lambda _name: None)
+    monkeypatch.setattr("mmaudit.scanners.base.shutil.which", lambda _name: None)
 
     preflight_configured_scanner_tools(
         {"semgrep": _SyntheticAdapter("semgrep", "absent-tool")},
@@ -302,7 +302,7 @@ def test_configured_tool_preflight_reports_absent_and_no_isolation_states(
         "present": _SyntheticAdapter("present", "present-tool"),
     }
     monkeypatch.setattr(
-        "mmaudit.scanners.runner.shutil.which",
+        "mmaudit.scanners.base.shutil.which",
         lambda name: str(executable) if name == "present-tool" else None,
     )
 
@@ -341,7 +341,7 @@ def test_configured_tool_preflight_preserves_other_results_after_per_tool_failur
         "bad": _SyntheticAdapter("bad", "bad-tool"),
     }
     monkeypatch.setattr(
-        "mmaudit.scanners.runner.shutil.which",
+        "mmaudit.scanners.base.shutil.which",
         lambda name: str(paths[name]),
     )
     probed: list[Path] = []
@@ -392,7 +392,7 @@ def test_hardhat_preflight_never_labels_host_path_as_container_identity(
     def forbidden_host_resolution(_name: str) -> str:
         pytest.fail("Hardhat container identity must not consult host PATH")
 
-    monkeypatch.setattr("mmaudit.scanners.runner.shutil.which", forbidden_host_resolution)
+    monkeypatch.setattr("mmaudit.scanners.base.shutil.which", forbidden_host_resolution)
     monkeypatch.setattr(
         "mmaudit.scanners.runner.preflight_scanner_executable",
         lambda *_args, **_kwargs: pytest.fail("generic host/image probe must not run"),

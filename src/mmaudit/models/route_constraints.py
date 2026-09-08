@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum, StrEnum
 from types import CellType, CodeType, FunctionType, MappingProxyType
-from typing import Any, Literal, Self, cast
+from typing import Any, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,7 +38,20 @@ _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 _ROLE_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 _PARAMETER_PATTERN = r"^[a-z][a-z0-9_]{0,99}$"
 _DECIMAL_PRICE_PATTERN = re.compile(r"(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?\Z")
+_CANONICAL_DECIMAL_PRICE_SCHEMA_PATTERN = (
+    r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"
+)
 _NATIVE_CAPABILITY_MARKER = "structured_outputs"
+_MAX_PRICING_TIERS = 64
+_MAX_PRICING_TIER_PROMPT_TOKENS = 2**31 - 1
+_TIERED_MAXIMUM_RATE_PROJECTION: Final = "MMAUDIT_TIERED_MAXIMUM_RATE_V1"
+_ZERO_WEB_SEARCH_REQUEST_FIELDS: Final = (
+    "plugins",
+    "tool_choice",
+    "tools",
+    "web_search",
+    "web_search_options",
+)
 
 
 @dataclass(frozen=True)
@@ -197,6 +210,33 @@ class ExactRouteRole(StrEnum):
 
 class ProviderPriceCapAlgorithm(StrEnum):
     OPENROUTER_MAX_PRICE_CEILING_V1 = "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+    OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2 = "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2"
+    # Reserved for provider-free successor modeling only. OpenRouter's documented max_price
+    # object has no cache-write dimension, so this algorithm must remain non-admissible;
+    # project_provider_price_cap enforces that cutoff.
+    OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3 = (
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3"
+    )
+
+
+def _price_cap_schema_version(
+    algorithm: ProviderPriceCapAlgorithm,
+) -> Literal["1.0", "1.1", "1.2"]:
+    """Return the exact durable schema generation for one price-cap algorithm."""
+
+    if type(algorithm) is not ProviderPriceCapAlgorithm:
+        raise RouteConstraintError("provider price-cap algorithm has an invalid type")
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1:
+        return "1.0"
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2:
+        return "1.1"
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3:
+        return "1.2"
+    raise RouteConstraintError("provider price-cap algorithm is unsupported")
+
+
+class RoutePriceComponentUnitEnvelopeMethod(StrEnum):
+    EXACT_REQUEST_FIELD_ABSENCE_V1 = "MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1"
 
 
 class RoutePriceComponent(StrEnum):
@@ -237,7 +277,11 @@ class _FrozenStrictModel(BaseModel):
 
 class ExactRoutePrice(_FrozenStrictModel):
     component: RoutePriceComponent
-    unit_price: str = Field(min_length=1, max_length=50)
+    unit_price: str = Field(
+        min_length=1,
+        max_length=49,
+        pattern=_CANONICAL_DECIMAL_PRICE_SCHEMA_PATTERN,
+    )
 
     @field_validator("unit_price")
     @classmethod
@@ -245,6 +289,147 @@ class ExactRoutePrice(_FrozenStrictModel):
         if _canonical_price(value) != value:
             raise ValueError("route price is not a canonical decimal string")
         return value
+
+
+class RoutePriceComponentUnitEnvelope(_FrozenStrictModel):
+    """Self-hashed proof that one unsupported price component has zero reachable units."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    component: Literal[RoutePriceComponent.WEB_SEARCH]
+    maximum_units: Literal[0]
+    maximum_cost_usd_exact: Literal["0"]
+    enforcement_method: Literal[
+        RoutePriceComponentUnitEnvelopeMethod.EXACT_REQUEST_FIELD_ABSENCE_V1
+    ]
+    emitted_request_parameters: tuple[str, ...] = Field(
+        min_length=len(_EMITTED_REQUEST_PARAMETERS),
+        max_length=len(_EMITTED_REQUEST_PARAMETERS),
+    )
+    prohibited_request_fields: tuple[str, ...] = Field(
+        min_length=len(_ZERO_WEB_SEARCH_REQUEST_FIELDS),
+        max_length=len(_ZERO_WEB_SEARCH_REQUEST_FIELDS),
+    )
+    envelope_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build_web_search_disabled(cls) -> Self:
+        """Seal the exact no-search request contract used by structured requests."""
+
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "component": RoutePriceComponent.WEB_SEARCH,
+            "maximum_units": 0,
+            "maximum_cost_usd_exact": "0",
+            "enforcement_method": (
+                RoutePriceComponentUnitEnvelopeMethod.EXACT_REQUEST_FIELD_ABSENCE_V1
+            ),
+            "emitted_request_parameters": _EMITTED_REQUEST_PARAMETERS,
+            "prohibited_request_fields": _ZERO_WEB_SEARCH_REQUEST_FIELDS,
+        }
+        values["envelope_sha256"] = _canonical_sha256(values)
+        return cls.model_validate(values)
+
+    @model_validator(mode="after")
+    def envelope_is_exact_and_self_hashed(self) -> Self:
+        if (
+            self.emitted_request_parameters != _EMITTED_REQUEST_PARAMETERS
+            or self.prohibited_request_fields != _ZERO_WEB_SEARCH_REQUEST_FIELDS
+        ):
+            raise ValueError("route price-component request fields are not exact")
+        _require_self_hash(self, "envelope_sha256")
+        return self
+
+
+class ExactRoutePriceTier(_FrozenStrictModel):
+    """One ordered prompt-threshold tier of exact partial price replacements."""
+
+    min_prompt_tokens: int = Field(ge=0, le=_MAX_PRICING_TIER_PROMPT_TOKENS)
+    pricing: tuple[ExactRoutePrice, ...] = Field(
+        min_length=1,
+        max_length=len(RoutePriceComponent),
+    )
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        min_prompt_tokens: int,
+        pricing: Mapping[str, str],
+    ) -> Self:
+        """Normalize one partial tier without requiring base prompt/completion fields."""
+
+        try:
+            exact = _normalize_exact_route_price_mapping(pricing, minimum_items=1)
+        except RouteConstraintError as exc:
+            raise RouteConstraintError("route pricing tier mapping is invalid") from exc
+        return cls(min_prompt_tokens=min_prompt_tokens, pricing=exact)
+
+    @model_validator(mode="after")
+    def tier_is_canonical(self) -> Self:
+        _require_canonical_partial_pricing(self.pricing)
+        return self
+
+
+class ExactRoutePricingSchedule(_FrozenStrictModel):
+    """Exact conditional pricing plus its conservative component-wise maximum."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    base_pricing: tuple[ExactRoutePrice, ...] = Field(
+        min_length=2,
+        max_length=len(RoutePriceComponent),
+    )
+    tiers: tuple[ExactRoutePriceTier, ...] = Field(
+        min_length=1,
+        max_length=_MAX_PRICING_TIERS,
+    )
+    maximum_pricing: tuple[ExactRoutePrice, ...] = Field(
+        min_length=2,
+        max_length=len(RoutePriceComponent),
+    )
+    projection_method: Literal["MMAUDIT_TIERED_MAXIMUM_RATE_V1"] = _TIERED_MAXIMUM_RATE_PROJECTION
+    conservative_for_sub_threshold_prompts: Literal[True] = True
+    pricing_schedule_sha256: str = Field(pattern=_SHA256_PATTERN)
+    evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        base_pricing: Sequence[ExactRoutePrice],
+        tiers: Sequence[ExactRoutePriceTier],
+    ) -> Self:
+        """Derive and seal a bounded schedule from exact base and partial tier prices."""
+
+        base = tuple(base_pricing)
+        exact_tiers = tuple(tiers)
+        maximum, _effective = _derive_schedule_pricing(base, exact_tiers)
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "base_pricing": base,
+            "tiers": exact_tiers,
+            "maximum_pricing": maximum,
+            "projection_method": _TIERED_MAXIMUM_RATE_PROJECTION,
+            "conservative_for_sub_threshold_prompts": True,
+            "pricing_schedule_sha256": _exact_route_pricing_schedule_sha256(
+                base,
+                exact_tiers,
+            ),
+        }
+        values["evidence_sha256"] = _canonical_sha256(values)
+        return cls.model_validate(values)
+
+    @model_validator(mode="after")
+    def schedule_is_canonical_and_self_hashed(self) -> Self:
+        maximum, _effective = _derive_schedule_pricing(self.base_pricing, self.tiers)
+        if self.maximum_pricing != maximum:
+            raise ValueError("route pricing schedule maximum is inconsistent")
+        if self.pricing_schedule_sha256 != _exact_route_pricing_schedule_sha256(
+            self.base_pricing,
+            self.tiers,
+        ):
+            raise ValueError("route pricing schedule hash is inconsistent")
+        _require_self_hash(self, "evidence_sha256")
+        return self
 
 
 class ProviderPriceCap(_FrozenStrictModel):
@@ -260,9 +445,19 @@ class ProviderPriceCap(_FrozenStrictModel):
 
 
 class ProviderPriceCapProof(_FrozenStrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     algorithm: ProviderPriceCapAlgorithm
     exact_pricing: tuple[ExactRoutePrice, ...] = Field(min_length=2, max_length=8)
+    pricing_schedule: ExactRoutePricingSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    price_component_unit_envelopes: tuple[RoutePriceComponentUnitEnvelope, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=len(RoutePriceComponent),
+        exclude_if=lambda value: value is None,
+    )
     projected_cap: tuple[ProviderPriceCap, ...] = Field(min_length=2, max_length=4)
     configured_cap: tuple[ProviderPriceCap, ...] = Field(min_length=2, max_length=4)
     expressible: Literal[True]
@@ -271,14 +466,34 @@ class ProviderPriceCapProof(_FrozenStrictModel):
 
     @model_validator(mode="after")
     def proof_is_canonical_and_self_hashed(self) -> Self:
+        envelopes = self.price_component_unit_envelopes or ()
+        _require_price_component_unit_envelopes(self.algorithm, envelopes)
+        if self.schema_version != _price_cap_schema_version(self.algorithm):
+            raise ValueError("provider price proof schema differs from its component policy")
         _require_canonical_pricing(self.exact_pricing)
+        if (
+            self.pricing_schedule is not None
+            and self.pricing_schedule.base_pricing != self.exact_pricing
+        ):
+            raise ValueError("provider price proof schedule differs from exact base pricing")
         _require_canonical_caps(self.projected_cap)
         _require_canonical_caps(self.configured_cap)
-        if self.projected_cap != project_provider_price_cap(self.exact_pricing):
+        if self.projected_cap != project_provider_price_cap(
+            self.exact_pricing,
+            schedule=self.pricing_schedule,
+            algorithm=self.algorithm,
+            price_component_unit_envelopes=envelopes,
+        ):
             raise ValueError("provider price projection is inconsistent")
         if self.configured_cap != self.projected_cap:
             raise ValueError("configured provider cap is weaker than the exact projection")
-        _require_no_weaker_cap(self.exact_pricing, self.configured_cap)
+        _require_no_weaker_cap(
+            self.exact_pricing,
+            self.configured_cap,
+            schedule=self.pricing_schedule,
+            algorithm=self.algorithm,
+            price_component_unit_envelopes=envelopes,
+        )
         _require_self_hash(self, "proof_sha256")
         return self
 
@@ -288,7 +503,25 @@ def normalize_exact_route_pricing(
 ) -> tuple[ExactRoutePrice, ...]:
     """Normalize one exact provider pricing mapping into the finite component inventory."""
 
-    if type(pricing) is not dict or not 2 <= len(pricing) <= len(RoutePriceComponent):
+    try:
+        exact = _normalize_exact_route_price_mapping(pricing, minimum_items=2)
+        _require_canonical_pricing(exact)
+    except (TypeError, ValueError) as exc:
+        raise RouteConstraintError("route pricing mapping is invalid") from exc
+    return exact
+
+
+def _normalize_exact_route_price_mapping(
+    pricing: Mapping[str, str],
+    *,
+    minimum_items: int,
+) -> tuple[ExactRoutePrice, ...]:
+    if (
+        type(pricing) is not dict
+        or type(minimum_items) is not int
+        or not 1 <= minimum_items <= len(RoutePriceComponent)
+        or not minimum_items <= len(pricing) <= len(RoutePriceComponent)
+    ):
         raise RouteConstraintError("route pricing mapping is invalid")
     try:
         exact = tuple(
@@ -303,16 +536,86 @@ def normalize_exact_route_pricing(
                 key=lambda item: item.component.value,
             )
         )
-        _require_canonical_pricing(exact)
+        _require_canonical_partial_pricing(exact)
     except (TypeError, ValueError) as exc:
         raise RouteConstraintError("route pricing mapping is invalid") from exc
     return exact
 
 
+def _require_canonical_partial_pricing(pricing: tuple[ExactRoutePrice, ...]) -> None:
+    if (
+        not 1 <= len(pricing) <= len(RoutePriceComponent)
+        or any(type(item) is not ExactRoutePrice for item in pricing)
+        or pricing != tuple(sorted(pricing, key=lambda item: item.component.value))
+        or len({item.component for item in pricing}) != len(pricing)
+    ):
+        raise RouteConstraintError("exact partial route pricing is incomplete or noncanonical")
+
+
+def _derive_schedule_pricing(
+    base_pricing: tuple[ExactRoutePrice, ...],
+    tiers: tuple[ExactRoutePriceTier, ...],
+) -> tuple[tuple[ExactRoutePrice, ...], tuple[tuple[ExactRoutePrice, ...], ...]]:
+    """Return exact component maxima and every inherited effective tier state."""
+
+    _require_canonical_pricing(base_pricing)
+    if not 1 <= len(tiers) <= _MAX_PRICING_TIERS or any(
+        type(tier) is not ExactRoutePriceTier for tier in tiers
+    ):
+        raise RouteConstraintError("route pricing schedule tiers are invalid")
+    thresholds = tuple(tier.min_prompt_tokens for tier in tiers)
+    if thresholds != tuple(sorted(set(thresholds))):
+        raise RouteConstraintError("route pricing schedule thresholds must be strictly increasing")
+    base_components = {item.component for item in base_pricing}
+    current = {item.component: item for item in base_pricing}
+    maxima = dict(current)
+    effective: list[tuple[ExactRoutePrice, ...]] = []
+    for tier in tiers:
+        _require_canonical_partial_pricing(tier.pricing)
+        if not {item.component for item in tier.pricing}.issubset(base_components):
+            raise RouteConstraintError(
+                "route pricing tier introduces a component absent from base pricing"
+            )
+        current.update({item.component: item for item in tier.pricing})
+        effective_state = tuple(sorted(current.values(), key=lambda item: item.component.value))
+        _require_canonical_pricing(effective_state)
+        effective.append(effective_state)
+        for item in effective_state:
+            previous = maxima[item.component]
+            if Decimal(item.unit_price) > Decimal(previous.unit_price):
+                maxima[item.component] = item
+    maximum = tuple(sorted(maxima.values(), key=lambda item: item.component.value))
+    _require_canonical_pricing(maximum)
+    return maximum, tuple(effective)
+
+
+def _exact_route_pricing_schedule_sha256(
+    base_pricing: tuple[ExactRoutePrice, ...],
+    tiers: tuple[ExactRoutePriceTier, ...],
+) -> str:
+    """Match the endpoint schedule digest while keeping route types provider-neutral."""
+
+    _require_canonical_pricing(base_pricing)
+    _derive_schedule_pricing(base_pricing, tiers)
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.openrouter.pricing_schedule.v1",
+            "base_pricing": {item.component.value: item.unit_price for item in base_pricing},
+            "pricing_overrides": [
+                {
+                    "min_prompt_tokens": tier.min_prompt_tokens,
+                    "prices": {item.component.value: item.unit_price for item in tier.pricing},
+                }
+                for tier in tiers
+            ],
+        }
+    )
+
+
 class RoutePredicateProfile(_FrozenStrictModel):
     """Shared requirements for every exact AUTHRUNNER route."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     predicate_ids: tuple[RoutePredicateId, ...] = Field(
         min_length=len(ROUTE_PREDICATE_IDS),
         max_length=len(ROUTE_PREDICATE_IDS),
@@ -339,6 +642,12 @@ class RoutePredicateProfile(_FrozenStrictModel):
     minimum_context_tokens: int = Field(gt=0, le=2**31 - 1)
     required_completion_limit_source: Literal["metadata"]
     price_cap_algorithm: ProviderPriceCapAlgorithm
+    price_component_unit_envelopes: tuple[RoutePriceComponentUnitEnvelope, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=len(RoutePriceComponent),
+        exclude_if=lambda value: value is None,
+    )
     empirical_schema_conformance_disposition: RoutePredicateDisposition
     token_detail_convention_disposition: RoutePredicateDisposition
     profile_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -355,9 +664,13 @@ class RoutePredicateProfile(_FrozenStrictModel):
         minimum_prompt_tokens: int,
         required_output_tokens: int,
         minimum_context_tokens: int,
+        price_cap_algorithm: ProviderPriceCapAlgorithm = (
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+        ),
     ) -> Self:
+        schema_version = _price_cap_schema_version(price_cap_algorithm)
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": schema_version,
             "predicate_ids": ROUTE_PREDICATE_IDS,
             "emitted_request_parameters": _EMITTED_REQUEST_PARAMETERS,
             "native_capability_marker": _NATIVE_CAPABILITY_MARKER,
@@ -380,15 +693,26 @@ class RoutePredicateProfile(_FrozenStrictModel):
             "required_completion_tokens": (required_output_tokens + reserved_reasoning_tokens),
             "minimum_context_tokens": minimum_context_tokens,
             "required_completion_limit_source": "metadata",
-            "price_cap_algorithm": (ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1),
+            "price_cap_algorithm": price_cap_algorithm,
             "empirical_schema_conformance_disposition": (RoutePredicateDisposition.UNAVAILABLE),
             "token_detail_convention_disposition": (RoutePredicateDisposition.UNAVAILABLE),
         }
+        if price_cap_algorithm in {
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3,
+        }:
+            values["price_component_unit_envelopes"] = (
+                RoutePriceComponentUnitEnvelope.build_web_search_disabled(),
+            )
         values["profile_sha256"] = _canonical_sha256(values)
         return cls.model_validate(values)
 
     @model_validator(mode="after")
     def profile_is_exact_complete_and_self_hashed(self) -> Self:
+        envelopes = self.price_component_unit_envelopes or ()
+        _require_price_component_unit_envelopes(self.price_cap_algorithm, envelopes)
+        if self.schema_version != _price_cap_schema_version(self.price_cap_algorithm):
+            raise ValueError("route predicate schema differs from its price-component policy")
         if self.predicate_ids != ROUTE_PREDICATE_IDS:
             raise ValueError("route predicate profile inventory is incomplete or reordered")
         if self.emitted_request_parameters != _EMITTED_REQUEST_PARAMETERS:
@@ -419,8 +743,6 @@ class RoutePredicateProfile(_FrozenStrictModel):
             raise ValueError("route predicate context minimum does not cover its envelopes")
         if (
             self.required_completion_limit_source != "metadata"
-            or self.price_cap_algorithm
-            is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
             or self.empirical_schema_conformance_disposition
             is not RoutePredicateDisposition.UNAVAILABLE
             or self.token_detail_convention_disposition is not RoutePredicateDisposition.UNAVAILABLE
@@ -507,6 +829,10 @@ class NormalizedRouteFacts(_FrozenStrictModel):
     context_tokens: int = Field(gt=0, le=2**31 - 1)
     runtime_required_output_tokens: int | None = Field(default=None, ge=256, le=65_536)
     exact_pricing: tuple[ExactRoutePrice, ...] = Field(min_length=2, max_length=8)
+    pricing_schedule: ExactRoutePricingSchedule | Literal["unavailable"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     configured_provider_max_price: tuple[ProviderPriceCap, ...] | None
     frozen_live_equivalent: bool | None
     expected_selection_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -559,6 +885,7 @@ class NormalizedRouteFacts(_FrozenStrictModel):
         registry_selection_plan_sha256: str | None = None,
         registry_profile_sha256: str | None = None,
         registry_constraint_sha256: str | None = None,
+        pricing_schedule: ExactRoutePricingSchedule | Literal["unavailable"] | None = None,
     ) -> Self:
         values: dict[str, Any] = {
             "schema_version": "1.0",
@@ -593,13 +920,19 @@ class NormalizedRouteFacts(_FrozenStrictModel):
             "context_tokens": context_tokens,
             "runtime_required_output_tokens": runtime_required_output_tokens,
             "exact_pricing": exact_pricing,
-            "configured_provider_max_price": configured_provider_max_price,
-            "frozen_live_equivalent": frozen_live_equivalent,
-            "expected_selection_plan_sha256": expected_selection_plan_sha256,
-            "registry_selection_plan_sha256": registry_selection_plan_sha256,
-            "registry_profile_sha256": registry_profile_sha256,
-            "registry_constraint_sha256": registry_constraint_sha256,
         }
+        if pricing_schedule is not None:
+            values["pricing_schedule"] = pricing_schedule
+        values.update(
+            {
+                "configured_provider_max_price": configured_provider_max_price,
+                "frozen_live_equivalent": frozen_live_equivalent,
+                "expected_selection_plan_sha256": expected_selection_plan_sha256,
+                "registry_selection_plan_sha256": registry_selection_plan_sha256,
+                "registry_profile_sha256": registry_profile_sha256,
+                "registry_constraint_sha256": registry_constraint_sha256,
+            }
+        )
         values["facts_sha256"] = _canonical_sha256(values)
         return cls.model_validate(values)
 
@@ -654,6 +987,15 @@ class NormalizedRouteFacts(_FrozenStrictModel):
         ):
             raise ValueError("configured endpoint inventory is invalid")
         _require_canonical_pricing(self.exact_pricing)
+        if self.pricing_schedule == "unavailable":
+            if self.configured_provider_max_price is not None:
+                raise ValueError(
+                    "unavailable route pricing schedule cannot retain a provider price cap"
+                )
+        elif self.pricing_schedule is not None and (
+            self.pricing_schedule.base_pricing != self.exact_pricing
+        ):
+            raise ValueError("route pricing schedule differs from exact base pricing")
         if self.configured_provider_max_price is not None:
             _require_canonical_caps(self.configured_provider_max_price)
         if self.max_prompt_tokens > self.context_tokens:
@@ -922,14 +1264,85 @@ _PURPOSE_REQUIRED: Mapping[RouteConstraintPurpose, frozenset[RoutePredicateId]] 
 )
 
 
+def _require_price_component_unit_envelopes(
+    algorithm: ProviderPriceCapAlgorithm,
+    envelopes: tuple[RoutePriceComponentUnitEnvelope, ...],
+) -> frozenset[RoutePriceComponent]:
+    """Validate the complete algorithm-specific zero-unit exception inventory."""
+
+    if type(algorithm) is not ProviderPriceCapAlgorithm or any(
+        type(item) is not RoutePriceComponentUnitEnvelope for item in envelopes
+    ):
+        raise RouteConstraintError("provider price-component policy has an invalid type")
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1:
+        if envelopes:
+            raise RouteConstraintError("legacy provider price-cap policy cannot carry unit proofs")
+        return frozenset()
+    if algorithm not in {
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3,
+    }:
+        raise RouteConstraintError("provider price-cap algorithm is unsupported")
+    expected = (RoutePriceComponentUnitEnvelope.build_web_search_disabled(),)
+    if envelopes != expected:
+        raise RouteConstraintError("provider price-component unit-envelope inventory is not exact")
+    return frozenset(item.component for item in envelopes)
+
+
 def project_provider_price_cap(
     pricing: Sequence[ExactRoutePrice],
+    *,
+    schedule: ExactRoutePricingSchedule | None = None,
+    algorithm: ProviderPriceCapAlgorithm = (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    ),
+    price_component_unit_envelopes: Sequence[RoutePriceComponentUnitEnvelope] = (),
 ) -> tuple[ProviderPriceCap, ...]:
-    """Project exact per-token prices into upward-rounded provider max-price floats."""
+    """Project flat or conditional exact prices into upward-rounded provider caps."""
 
     if not route_constraint_callables_are_pristine():
         raise RouteConstraintError("route predicate callable boundary changed")
+    zero_unit_components = _require_price_component_unit_envelopes(
+        algorithm,
+        tuple(price_component_unit_envelopes),
+    )
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3:
+        raise RouteConstraintError(
+            "V3 cache-write pricing cannot be bound by the provider max_price contract"
+        )
     exact = tuple(pricing)
+    _require_canonical_pricing(exact)
+    if schedule is not None:
+        schedule = _detached(
+            schedule,
+            ExactRoutePricingSchedule,
+            "exact route pricing schedule",
+        )
+        if schedule.base_pricing != exact:
+            raise RouteConstraintError("route pricing schedule differs from exact base pricing")
+        _maximum, effective = _derive_schedule_pricing(exact, schedule.tiers)
+        for effective_pricing in (exact, *effective):
+            _project_provider_price_cap_vector(
+                effective_pricing,
+                algorithm=algorithm,
+                zero_unit_components=zero_unit_components,
+            )
+        exact = schedule.maximum_pricing
+    return _project_provider_price_cap_vector(
+        exact,
+        algorithm=algorithm,
+        zero_unit_components=zero_unit_components,
+    )
+
+
+def _project_provider_price_cap_vector(
+    exact: tuple[ExactRoutePrice, ...],
+    *,
+    algorithm: ProviderPriceCapAlgorithm,
+    zero_unit_components: frozenset[RoutePriceComponent],
+) -> tuple[ProviderPriceCap, ...]:
+    """Project one complete effective pricing vector after schedule validation."""
+
     _require_canonical_pricing(exact)
     by_component = {item.component: Decimal(item.unit_price) for item in exact}
     if not {RoutePriceComponent.PROMPT, RoutePriceComponent.COMPLETION}.issubset(by_component):
@@ -942,15 +1355,22 @@ def project_provider_price_cap(
         context.prec = 160
         for item in exact:
             if item.component in _UNENFORCEABLE_VARIABLE_PRICE_FIELDS:
-                raise RouteConstraintError("route contains a variable price without a provider cap")
+                raise RouteConstraintError(
+                    "route contains a variable price without a provider cap: "
+                    + item.component.value
+                )
             if item.component is RoutePriceComponent.INPUT_CACHE_READ:
                 continue
             try:
                 cap_component = ProviderMaxPriceComponent(item.component.value)
             except ValueError:
-                if Decimal(item.unit_price) != 0:
+                if item.component not in zero_unit_components and (
+                    algorithm is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                    or Decimal(item.unit_price) != 0
+                ):
                     raise RouteConstraintError(
-                        "route contains a nonzero price without a provider cap"
+                        "route price lacks a provider cap or exact zero-unit envelope: "
+                        + item.component.value
                     ) from None
                 continue
             ceiling = Decimal(item.unit_price)
@@ -977,29 +1397,58 @@ def prove_provider_price_cap(
     pricing: Sequence[ExactRoutePrice],
     configured_cap: Sequence[ProviderPriceCap],
     algorithm: ProviderPriceCapAlgorithm,
+    schedule: ExactRoutePricingSchedule | None = None,
+    price_component_unit_envelopes: Sequence[RoutePriceComponentUnitEnvelope] = (),
 ) -> ProviderPriceCapProof:
     """Seal proof that a configured cap is expressible and no weaker than exact pricing."""
 
     if not route_constraint_callables_are_pristine():
         raise RouteConstraintError("route predicate callable boundary changed")
-    if algorithm is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1:
-        raise RouteConstraintError("provider price-cap algorithm is unsupported")
+    envelopes = tuple(price_component_unit_envelopes)
+    _require_price_component_unit_envelopes(algorithm, envelopes)
     exact = tuple(pricing)
     configured = tuple(configured_cap)
-    projected = project_provider_price_cap(exact)
+    if schedule is not None:
+        schedule = _detached(
+            schedule,
+            ExactRoutePricingSchedule,
+            "exact route pricing schedule",
+        )
+        if schedule.base_pricing != exact:
+            raise RouteConstraintError("route pricing schedule differs from exact base pricing")
+    projected = project_provider_price_cap(
+        exact,
+        schedule=schedule,
+        algorithm=algorithm,
+        price_component_unit_envelopes=envelopes,
+    )
     _require_canonical_caps(configured)
-    _require_no_weaker_cap(exact, configured)
+    _require_no_weaker_cap(
+        exact,
+        configured,
+        schedule=schedule,
+        algorithm=algorithm,
+        price_component_unit_envelopes=envelopes,
+    )
     if configured != projected:
         raise RouteConstraintError("configured provider cap is weaker than the exact projection")
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": _price_cap_schema_version(algorithm),
         "algorithm": algorithm,
         "exact_pricing": exact,
-        "projected_cap": projected,
-        "configured_cap": configured,
-        "expressible": True,
-        "no_weaker": True,
     }
+    if schedule is not None:
+        values["pricing_schedule"] = schedule
+    if envelopes:
+        values["price_component_unit_envelopes"] = envelopes
+    values.update(
+        {
+            "projected_cap": projected,
+            "configured_cap": configured,
+            "expressible": True,
+            "no_weaker": True,
+        }
+    )
     values["proof_sha256"] = _canonical_sha256(values)
     return ProviderPriceCapProof.model_validate(values)
 
@@ -1193,9 +1642,8 @@ def evaluate_route_predicates(
         and facts.max_completion_tokens >= profile.required_completion_tokens,
         RoutePredicateReason.COMPLETION_CAPACITY_NOT_METADATA,
     )
-    try:
-        project_provider_price_cap(facts.exact_pricing)
-    except RouteConstraintError:
+    pricing_schedule = facts.pricing_schedule
+    if pricing_schedule == "unavailable":
         results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY] = _rejected_result(
             RoutePredicateId.PRICE_CAP_EXPRESSIBILITY,
             RoutePredicateReason.PRICE_CAP_NOT_EXPRESSIBLE,
@@ -1205,30 +1653,51 @@ def evaluate_route_predicates(
             RoutePredicateReason.PRICE_CAP_PROOF_UNAVAILABLE,
         )
     else:
-        results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY] = _satisfied_result(
-            RoutePredicateId.PRICE_CAP_EXPRESSIBILITY
-        )
-        if facts.configured_provider_max_price is None:
-            results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _rejected_result(
+        try:
+            project_provider_price_cap(
+                facts.exact_pricing,
+                schedule=pricing_schedule,
+                algorithm=profile.price_cap_algorithm,
+                price_component_unit_envelopes=(profile.price_component_unit_envelopes or ()),
+            )
+        except RouteConstraintError:
+            results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY] = _rejected_result(
+                RoutePredicateId.PRICE_CAP_EXPRESSIBILITY,
+                RoutePredicateReason.PRICE_CAP_NOT_EXPRESSIBLE,
+            )
+            results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _unavailable_result(
                 RoutePredicateId.PRICE_CAP_NO_WEAKER,
-                RoutePredicateReason.PRICE_CAP_MISSING,
+                RoutePredicateReason.PRICE_CAP_PROOF_UNAVAILABLE,
             )
         else:
-            try:
-                prove_provider_price_cap(
-                    pricing=facts.exact_pricing,
-                    configured_cap=facts.configured_provider_max_price,
-                    algorithm=profile.price_cap_algorithm,
-                )
-            except RouteConstraintError:
+            results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY] = _satisfied_result(
+                RoutePredicateId.PRICE_CAP_EXPRESSIBILITY
+            )
+            if facts.configured_provider_max_price is None:
                 results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _rejected_result(
                     RoutePredicateId.PRICE_CAP_NO_WEAKER,
-                    RoutePredicateReason.PRICE_CAP_WEAKER_THAN_ROUTE,
+                    RoutePredicateReason.PRICE_CAP_MISSING,
                 )
             else:
-                results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _satisfied_result(
-                    RoutePredicateId.PRICE_CAP_NO_WEAKER
-                )
+                try:
+                    prove_provider_price_cap(
+                        pricing=facts.exact_pricing,
+                        configured_cap=facts.configured_provider_max_price,
+                        algorithm=profile.price_cap_algorithm,
+                        schedule=pricing_schedule,
+                        price_component_unit_envelopes=(
+                            profile.price_component_unit_envelopes or ()
+                        ),
+                    )
+                except RouteConstraintError:
+                    results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _rejected_result(
+                        RoutePredicateId.PRICE_CAP_NO_WEAKER,
+                        RoutePredicateReason.PRICE_CAP_WEAKER_THAN_ROUTE,
+                    )
+                else:
+                    results[RoutePredicateId.PRICE_CAP_NO_WEAKER] = _satisfied_result(
+                        RoutePredicateId.PRICE_CAP_NO_WEAKER
+                    )
     if facts.frozen_live_equivalent is None:
         results[RoutePredicateId.FROZEN_LIVE_EQUIVALENCE] = _unavailable_result(
             RoutePredicateId.FROZEN_LIVE_EQUIVALENCE,
@@ -1814,9 +2283,31 @@ def _unavailable_result(
 def _require_no_weaker_cap(
     pricing: tuple[ExactRoutePrice, ...],
     configured: tuple[ProviderPriceCap, ...],
+    *,
+    schedule: ExactRoutePricingSchedule | None = None,
+    algorithm: ProviderPriceCapAlgorithm = (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    ),
+    price_component_unit_envelopes: Sequence[RoutePriceComponentUnitEnvelope] = (),
 ) -> None:
+    zero_unit_components = _require_price_component_unit_envelopes(
+        algorithm,
+        tuple(price_component_unit_envelopes),
+    )
     _require_canonical_pricing(pricing)
     _require_canonical_caps(configured)
+    if schedule is not None:
+        if type(schedule) is not ExactRoutePricingSchedule or schedule.base_pricing != pricing:
+            raise RouteConstraintError("route pricing schedule differs from exact base pricing")
+        _maximum, effective = _derive_schedule_pricing(pricing, schedule.tiers)
+        for effective_pricing in (pricing, *effective):
+            _require_no_weaker_cap(
+                effective_pricing,
+                configured,
+                algorithm=algorithm,
+                price_component_unit_envelopes=price_component_unit_envelopes,
+            )
+        return
     exact = {item.component: Decimal(item.unit_price) for item in pricing}
     caps = {item.component: Decimal(str(item.value)) for item in configured}
     prompt = exact.get(RoutePriceComponent.PROMPT)
@@ -1834,8 +2325,13 @@ def _require_no_weaker_cap(
         try:
             cap_component = ProviderMaxPriceComponent(component.value)
         except ValueError:
-            if price != 0:
-                raise RouteConstraintError("route nonzero price is not provider-capped") from None
+            if component not in zero_unit_components and (
+                algorithm is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                or price != 0
+            ):
+                raise RouteConstraintError(
+                    "route price lacks a provider cap or exact zero-unit envelope"
+                ) from None
             continue
         cap = caps.get(cap_component)
         if cap is None:
@@ -2066,6 +2562,7 @@ def _build_route_constraint_callable_guard() -> Callable[[], bool]:
             RouteConstraintPurpose,
             ExactRouteRole,
             ProviderPriceCapAlgorithm,
+            RoutePriceComponentUnitEnvelopeMethod,
             RoutePriceComponent,
             ProviderMaxPriceComponent,
             StructuredOutputMode,
@@ -2242,6 +2739,8 @@ __all__ = [
     "ROUTE_PREDICATE_IDS",
     "ExactRouteConstraint",
     "ExactRoutePrice",
+    "ExactRoutePriceTier",
+    "ExactRoutePricingSchedule",
     "ExactRouteRole",
     "NormalizedRouteFacts",
     "ProviderMaxPriceComponent",
@@ -2258,6 +2757,8 @@ __all__ = [
     "RoutePredicateRequirementError",
     "RoutePredicateResult",
     "RoutePriceComponent",
+    "RoutePriceComponentUnitEnvelope",
+    "RoutePriceComponentUnitEnvelopeMethod",
     "bind_live_route_facts",
     "bind_registry_route_facts",
     "bind_runtime_route_facts",

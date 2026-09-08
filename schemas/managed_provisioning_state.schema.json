@@ -1,0 +1,754 @@
+{
+  "$defs": {
+    "CodeQLProvisioningObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ManagedProvisioningAction"
+        },
+        "config_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Binding Sha256",
+          "type": "string"
+        },
+        "configured_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Configured Identity Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "CODEQL_DATABASE",
+          "title": "Kind",
+          "type": "string"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "pattern": "^[ -~]{1,300}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Limitation"
+        },
+        "observed_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observed Identity Sha256"
+        },
+        "refusal_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedProvisioningRefusalCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ManagedProvisioningObservationStatus"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "config_binding_sha256",
+        "status",
+        "action",
+        "refusal_code",
+        "limitation",
+        "evidence_sha256",
+        "configured_identity_sha256",
+        "observed_identity_sha256",
+        "kind"
+      ],
+      "title": "CodeQLProvisioningObservation",
+      "type": "object"
+    },
+    "CostLedgerProvisioningObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ManagedProvisioningAction"
+        },
+        "active_portfolio_hold_count": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Active Portfolio Hold Count"
+        },
+        "active_reservation_count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Active Reservation Count"
+        },
+        "cap_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cap Usd Exact"
+        },
+        "config_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Binding Sha256",
+          "type": "string"
+        },
+        "entry_count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entry Count"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "held_portfolio_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Held Portfolio Usd Exact"
+        },
+        "kind": {
+          "const": "COST_LEDGER",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ledger_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ledger Identity Sha256"
+        },
+        "ledger_path_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ledger Path Sha256"
+        },
+        "ledger_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ledger Snapshot Sha256"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "pattern": "^[ -~]{1,300}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Limitation"
+        },
+        "portfolio_hold_count": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Portfolio Hold Count"
+        },
+        "provisioning_marker_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provisioning Marker Identity Sha256"
+        },
+        "refusal_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedProvisioningRefusalCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ManagedProvisioningObservationStatus"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "config_binding_sha256",
+        "status",
+        "action",
+        "refusal_code",
+        "limitation",
+        "evidence_sha256",
+        "kind",
+        "ledger_path_sha256",
+        "provisioning_marker_identity_sha256",
+        "ledger_identity_sha256",
+        "ledger_snapshot_sha256",
+        "cap_usd_exact",
+        "entry_count",
+        "active_reservation_count",
+        "portfolio_hold_count",
+        "active_portfolio_hold_count",
+        "held_portfolio_usd_exact"
+      ],
+      "title": "CostLedgerProvisioningObservation",
+      "type": "object"
+    },
+    "DependencySnapshotProvisioningObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ManagedProvisioningAction"
+        },
+        "config_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Binding Sha256",
+          "type": "string"
+        },
+        "configured_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Configured Identity Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "DEPENDENCY_SNAPSHOT",
+          "title": "Kind",
+          "type": "string"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "pattern": "^[ -~]{1,300}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Limitation"
+        },
+        "observed_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observed Identity Sha256"
+        },
+        "refusal_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedProvisioningRefusalCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ManagedProvisioningObservationStatus"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "config_binding_sha256",
+        "status",
+        "action",
+        "refusal_code",
+        "limitation",
+        "evidence_sha256",
+        "configured_identity_sha256",
+        "observed_identity_sha256",
+        "kind"
+      ],
+      "title": "DependencySnapshotProvisioningObservation",
+      "type": "object"
+    },
+    "ForkRpcProvisioningObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ManagedProvisioningAction"
+        },
+        "config_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Binding Sha256",
+          "type": "string"
+        },
+        "configured_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Configured Identity Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "PINNED_FORK_RPC",
+          "title": "Kind",
+          "type": "string"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "pattern": "^[ -~]{1,300}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Limitation"
+        },
+        "observed_identity_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Observed Identity Sha256"
+        },
+        "refusal_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedProvisioningRefusalCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ManagedProvisioningObservationStatus"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "config_binding_sha256",
+        "status",
+        "action",
+        "refusal_code",
+        "limitation",
+        "evidence_sha256",
+        "configured_identity_sha256",
+        "observed_identity_sha256",
+        "kind"
+      ],
+      "title": "ForkRpcProvisioningObservation",
+      "type": "object"
+    },
+    "ManagedProvisioningAction": {
+      "description": "Local setup action recorded without implying authority.",
+      "enum": [
+        "NONE",
+        "CREATED",
+        "VERIFIED_EXISTING"
+      ],
+      "title": "ManagedProvisioningAction",
+      "type": "string"
+    },
+    "ManagedProvisioningObservationStatus": {
+      "description": "Outcome of one bounded local observation.",
+      "enum": [
+        "NOT_REQUIRED",
+        "VERIFIED_NONAUTHORIZING",
+        "REFUSED"
+      ],
+      "title": "ManagedProvisioningObservationStatus",
+      "type": "string"
+    },
+    "ManagedProvisioningObservations": {
+      "additionalProperties": false,
+      "description": "Exact observation set supplied to the pure reducer.",
+      "properties": {
+        "codeql": {
+          "$ref": "#/$defs/CodeQLProvisioningObservation"
+        },
+        "cost_ledger": {
+          "$ref": "#/$defs/CostLedgerProvisioningObservation"
+        },
+        "dependency_snapshot": {
+          "$ref": "#/$defs/DependencySnapshotProvisioningObservation"
+        },
+        "fork_rpcs": {
+          "items": {
+            "$ref": "#/$defs/ForkRpcProvisioningObservation"
+          },
+          "maxItems": 9,
+          "title": "Fork Rpcs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "cost_ledger",
+        "codeql",
+        "dependency_snapshot",
+        "fork_rpcs"
+      ],
+      "title": "ManagedProvisioningObservations",
+      "type": "object"
+    },
+    "ManagedProvisioningRefusal": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ManagedProvisioningRefusalCode"
+        },
+        "limitation": {
+          "pattern": "^[ -~]{1,300}$",
+          "title": "Limitation",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,127}$",
+          "title": "Requirement Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "code",
+        "limitation"
+      ],
+      "title": "ManagedProvisioningRefusal",
+      "type": "object"
+    },
+    "ManagedProvisioningRefusalCode": {
+      "description": "Closed reasons that cannot contain paths, endpoints, or exception text.",
+      "enum": [
+        "MISSING_CONFIGURATION",
+        "MISSING_INPUT",
+        "INVALID_LOCAL_STATE",
+        "IDENTITY_MISMATCH",
+        "UNAVAILABLE",
+        "UNRESOLVED_TOOLCHAIN_ROLE",
+        "INSTALLED_TOOLCHAIN_UNVERIFIED",
+        "UNSUPPORTED_RUNTIME_SURFACE"
+      ],
+      "title": "ManagedProvisioningRefusalCode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/managed_provisioning_state.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic setup receipt that is never spend or runtime authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "managed-provisioning-state",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "bundle_trusted": {
+      "const": false,
+      "title": "Bundle Trusted",
+      "type": "boolean"
+    },
+    "effective_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Effective Config Sha256",
+      "type": "string"
+    },
+    "execution_evidence_verified": {
+      "const": false,
+      "title": "Execution Evidence Verified",
+      "type": "boolean"
+    },
+    "image_side_attestation_verified": {
+      "const": false,
+      "title": "Image Side Attestation Verified",
+      "type": "boolean"
+    },
+    "independently_trusted": {
+      "const": false,
+      "title": "Independently Trusted",
+      "type": "boolean"
+    },
+    "installed_members_verified": {
+      "const": false,
+      "title": "Installed Members Verified",
+      "type": "boolean"
+    },
+    "local_checks_recorded": {
+      "const": true,
+      "title": "Local Checks Recorded",
+      "type": "boolean"
+    },
+    "managed_run_ready": {
+      "const": false,
+      "title": "Managed Run Ready",
+      "type": "boolean"
+    },
+    "objective_sha256": {
+      "const": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "observations": {
+      "$ref": "#/$defs/ManagedProvisioningObservations"
+    },
+    "operator_secret_sources_accessed": {
+      "const": false,
+      "title": "Operator Secret Sources Accessed",
+      "type": "boolean"
+    },
+    "provider_or_network_accessed": {
+      "const": false,
+      "title": "Provider Or Network Accessed",
+      "type": "boolean"
+    },
+    "provisioning_state_verified": {
+      "const": false,
+      "title": "Provisioning State Verified",
+      "type": "boolean"
+    },
+    "refusals": {
+      "items": {
+        "$ref": "#/$defs/ManagedProvisioningRefusal"
+      },
+      "maxItems": 41,
+      "minItems": 1,
+      "title": "Refusals",
+      "type": "array"
+    },
+    "repository_content_hashed": {
+      "const": true,
+      "title": "Repository Content Hashed",
+      "type": "boolean"
+    },
+    "repository_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Repository Identity Sha256",
+      "type": "string"
+    },
+    "runtime_authority": {
+      "const": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "self_consistent": {
+      "const": true,
+      "title": "Self Consistent",
+      "type": "boolean"
+    },
+    "setup_policy_sha256": {
+      "enum": [
+        "ff438f3fd072329a5abfadfebc75e800a4cb36dbaa0d4e8c9f761d8e4b76750f",
+        "7d0d9c2a7ded8b955fafb027abdb1bb20e8a25577335dc945e6745c8ab174f19"
+      ],
+      "title": "Setup Policy Sha256",
+      "type": "string"
+    },
+    "source_bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Bundle Sha256",
+      "type": "string"
+    },
+    "source_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Plan Sha256",
+      "type": "string"
+    },
+    "spend_admission_evaluated": {
+      "const": false,
+      "title": "Spend Admission Evaluated",
+      "type": "boolean"
+    },
+    "state_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "State Sha256",
+      "type": "string"
+    },
+    "status": {
+      "const": "REFUSED_INCOMPLETE",
+      "title": "Status",
+      "type": "string"
+    },
+    "transitive_dependency_closure_verified": {
+      "const": false,
+      "title": "Transitive Dependency Closure Verified",
+      "type": "boolean"
+    },
+    "verified_requirement_ids": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Verified Requirement Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "objective_sha256",
+    "setup_policy_sha256",
+    "source_plan_sha256",
+    "source_bundle_sha256",
+    "effective_config_sha256",
+    "repository_identity_sha256",
+    "observations",
+    "verified_requirement_ids",
+    "refusals",
+    "status",
+    "local_checks_recorded",
+    "self_consistent",
+    "independently_trusted",
+    "bundle_trusted",
+    "installed_members_verified",
+    "transitive_dependency_closure_verified",
+    "image_side_attestation_verified",
+    "provisioning_state_verified",
+    "execution_evidence_verified",
+    "spend_admission_evaluated",
+    "runtime_authority",
+    "managed_run_ready",
+    "provider_or_network_accessed",
+    "repository_content_hashed",
+    "operator_secret_sources_accessed",
+    "state_sha256"
+  ],
+  "title": "mmaudit incomplete nonauthorizing managed provisioning state",
+  "type": "object"
+}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -18,6 +20,8 @@ from mmaudit.models.schemas import (
     AuditedSuiteCoverage,
     AuditedSuiteCoverageGap,
     AuditedSuiteCoverageGapKind,
+    AuditedSuiteEntityCatalog,
+    AuditedSuiteEntityCatalogBinding,
     AuditedSuiteMutationEvidence,
     AuditedSuiteMutationOutcome,
     AuditedSuiteMutationSurfaceEvidence,
@@ -56,6 +60,7 @@ from mmaudit.models.schemas import (
     SolidityGraphOccurrenceKind,
     SolidityGraphSet,
     SolidityProjectMetadata,
+    SolidityProvenance,
     SoliditySymbolIndex,
     solidity_graph_occurrence_sha256,
 )
@@ -107,6 +112,16 @@ class _AuditedFunctionPopulation:
     exclusions: tuple[CoverageExclusion, ...]
     classification_complete: bool
     limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Utf8SourceSpanIndex:
+    """One linear-time UTF-8 boundary and line lookup reused by every statement span."""
+
+    content: str
+    content_bytes: bytes
+    codepoint_boundaries: bytes
+    line_starts: tuple[int, ...]
 
 
 def partition_audited_source_entities(
@@ -279,6 +294,101 @@ def partition_audited_source_entities(
         function_exclusions=tuple(sorted(function_exclusions, key=lambda item: item.subject)),
         classification_complete=classification_complete,
         limitations=tuple(sorted(limitations)),
+    )
+
+
+def build_audited_suite_entity_catalog(
+    *,
+    index: SoliditySymbolIndex,
+    projects: list[SolidityProjectMetadata],
+    repository_sha256: str,
+    source_file_sha256s: Mapping[str, str],
+) -> AuditedSuiteEntityCatalog:
+    """Freeze the exact audited-source denominator before repository test execution."""
+
+    canonical_index = SoliditySymbolIndex.model_validate(index.model_dump(mode="json"))
+    canonical_projects = [
+        SolidityProjectMetadata.model_validate(project.model_dump(mode="json"))
+        for project in projects
+    ]
+    partition = partition_audited_source_entities(
+        index=canonical_index,
+        projects=canonical_projects,
+    )
+    entity_ids = {
+        *partition.contract_entity_ids,
+        *partition.function_entity_ids,
+    }
+    entities_by_id: dict[str, SolidityEntity] = {}
+    duplicate_ids: set[str] = set()
+    for entity in canonical_index.entities:
+        if entity.id in entities_by_id:
+            duplicate_ids.add(entity.id)
+        entities_by_id[entity.id] = entity
+    limitations = set(partition.limitations)
+    classification_complete = partition.classification_complete and not duplicate_ids
+    if duplicate_ids:
+        limitations.add(
+            "statement producer catalog is incomplete: duplicate symbol-index entity IDs"
+        )
+
+    bindings: list[AuditedSuiteEntityCatalogBinding] = []
+    for entity_id in sorted(entity_ids):
+        catalog_entity = entities_by_id.get(entity_id)
+        if catalog_entity is None:
+            classification_complete = False
+            limitations.add(
+                "statement producer catalog is incomplete: partition entity is absent from index"
+            )
+            continue
+        source_file_sha256 = source_file_sha256s.get(catalog_entity.path)
+        if source_file_sha256 is None:
+            classification_complete = False
+            limitations.add(
+                "statement producer catalog is incomplete: audited source file hash is absent"
+            )
+            continue
+        if catalog_entity.provenance is not SolidityProvenance.COMPILER:
+            classification_complete = False
+            limitations.add(
+                "statement producer catalog is incomplete: audited source entity is not "
+                "compiler-derived"
+            )
+        if catalog_entity.byte_end <= catalog_entity.byte_start:
+            classification_complete = False
+            limitations.add(
+                "statement producer catalog is incomplete: audited source entity has an "
+                "empty compiler byte span"
+            )
+            continue
+        bindings.append(
+            AuditedSuiteEntityCatalogBinding.sealed(
+                entity_id=catalog_entity.id,
+                entity_kind=catalog_entity.kind,
+                entity_name=catalog_entity.name,
+                declaring_contract_name=catalog_entity.contract_name,
+                evidence_contract_name=catalog_entity.contract_name or catalog_entity.name,
+                location=Location(
+                    path=catalog_entity.path,
+                    start_line=catalog_entity.start_line,
+                    end_line=catalog_entity.end_line,
+                    symbol=catalog_entity.signature or catalog_entity.name,
+                    content_hash=catalog_entity.source_hash,
+                ),
+                entity_start_byte_offset=catalog_entity.byte_start,
+                entity_end_byte_offset=catalog_entity.byte_end,
+                source_file_sha256=source_file_sha256,
+                provenance=catalog_entity.provenance,
+            )
+        )
+    return AuditedSuiteEntityCatalog.sealed(
+        repository_sha256=repository_sha256,
+        classification_complete=classification_complete,
+        classification_limitations=sorted(limitations),
+        bindings=sorted(
+            bindings,
+            key=lambda item: (item.entity_id, item.binding_sha256),
+        ),
     )
 
 
@@ -1511,6 +1621,15 @@ def _build_audited_suite_coverage(
             "audited-suite statement evidence references non-source entity IDs: "
             + ", ".join(unexpected_supplied_ids[:20])
         )
+    trusted_statements_by_id, statement_limitations = (
+        _reconcile_trusted_statement_coverage_evidence(
+            entities_by_id=entities_by_id,
+            source_entity_ids=source_entity_ids,
+            scanner_runs=scanner_runs,
+            expected_repository_sha256=expected_repository_sha256,
+            source_contents_by_path=source_contents_by_path,
+        )
+    )
 
     critical_graphs = {
         SolidityGraphKind.PRIVILEGE,
@@ -1740,15 +1859,16 @@ def _build_audited_suite_coverage(
             }
             else "protocol"
         )
-        statement_evidence = supplied_by_id.get(entity_id)
-        if statement_evidence is not None and (
-            statement_evidence.entity_kind is not entity.kind
-            or statement_evidence.contract_name != expected_contract
-            or statement_evidence.location != expected_location
+        supplied_statement_evidence = supplied_by_id.get(entity_id)
+        if supplied_statement_evidence is not None and (
+            supplied_statement_evidence.entity_kind is not entity.kind
+            or supplied_statement_evidence.contract_name != expected_contract
+            or supplied_statement_evidence.location != expected_location
         ):
             raise ValueError(
                 "audited-suite statement evidence identity differs from the source index"
             )
+        statement_evidence = trusted_statements_by_id.get(entity_id)
         mutation_evidence = mutation_evidence_by_entity.get(entity_id, [])
         assertion_status = _assertion_status_from_mutation_evidence(mutation_evidence)
         surfaces.append(
@@ -1758,8 +1878,20 @@ def _build_audited_suite_coverage(
                 contract_name=expected_contract,
                 location=expected_location,
                 critical=critical,
-                statement_status=AuditedSuiteStatementStatus.NOT_ANALYZED,
+                statement_status=(
+                    statement_evidence.statement_status
+                    if statement_evidence is not None
+                    else AuditedSuiteStatementStatus.NOT_ANALYZED
+                ),
                 assertion_status=assertion_status,
+                statement_evidence_sha256s=(
+                    [statement_evidence.evidence_sha256] if statement_evidence is not None else []
+                ),
+                repository_test_execution_sha256s=(
+                    statement_evidence.repository_test_execution_sha256s
+                    if statement_evidence is not None
+                    else []
+                ),
                 mutation_evidence=mutation_evidence,
             )
         )
@@ -1813,7 +1945,11 @@ def _build_audited_suite_coverage(
         scanner_runs,
         expected_repository_sha256=expected_repository_sha256,
     )
-    limitations = [*partition.limitations, *mutation_limitations]
+    limitations = [
+        *partition.limitations,
+        *statement_limitations,
+        *mutation_limitations,
+    ]
     if not critical_classification_complete:
         limitations.extend(
             f"critical classification incomplete: {limitation}"
@@ -1838,12 +1974,17 @@ def _build_audited_suite_coverage(
     if supplied_statements:
         limitations.append(
             "self-declared statement coverage artifacts lack a process-local trusted "
-            "normalizer receipt; no statement credit was awarded"
+            "normalizer receipt and were ignored"
         )
-    elif surfaces:
+    if trusted_statements_by_id:
         limitations.append(
-            "trusted statement coverage producer evidence was not supplied; statement "
-            "coverage remains not analyzed"
+            "statement coverage is a comparison-only durable projection; serialization does "
+            "not recreate its live process-local runtime origin"
+        )
+    if surfaces and not trusted_statements_by_id:
+        limitations.append(
+            "complete process-sealed statement coverage producer evidence was not available; "
+            "statement coverage remains not analyzed"
         )
     if critical_surfaces and all(
         surface.assertion_status is AuditedSuiteAssertionStatus.NOT_ANALYZED
@@ -2026,6 +2167,289 @@ def _audited_suite_gap(
         evidence_sha256s=evidence_sha256s,
         detail=detail,
     )
+
+
+def _reconcile_trusted_statement_coverage_evidence(
+    *,
+    entities_by_id: dict[str, SolidityEntity],
+    source_entity_ids: set[str],
+    scanner_runs: list[ScannerRun],
+    expected_repository_sha256: str | None,
+    source_contents_by_path: dict[str, str],
+) -> tuple[dict[str, AuditedSuiteStatementCoverageEvidence], list[str]]:
+    """Join one complete statement population from a live process-sealed scanner run."""
+
+    limitations: list[str] = []
+    declared_evidence = any(
+        candidate.repository_statement_coverage_evidence for candidate in scanner_runs
+    )
+    source_span_indexes = {
+        path: _utf8_source_span_index(source_contents_by_path[path])
+        for path in sorted(
+            {
+                entities_by_id[entity_id].path
+                for entity_id in source_entity_ids
+                if entities_by_id[entity_id].path in source_contents_by_path
+            }
+        )
+    }
+    if any(
+        entities_by_id[entity_id].provenance is not SolidityProvenance.COMPILER
+        for entity_id in source_entity_ids
+    ):
+        return {}, [
+            "statement coverage requires exact compiler-derived audited-source entity byte "
+            "ranges; no statement credit was awarded"
+        ]
+    complete_sets: list[dict[str, AuditedSuiteStatementCoverageEvidence]] = []
+    invalid_process_sealed_set = False
+    for run in _validated_real_repository_suite_runs(
+        scanner_runs,
+        expected_repository_sha256=expected_repository_sha256,
+    ):
+        evidence = run.repository_statement_coverage_evidence
+        if not evidence:
+            continue
+        evidence_by_id = {item.entity_id: item for item in evidence}
+        if set(evidence_by_id) != source_entity_ids:
+            invalid_process_sealed_set = True
+            limitations.append(
+                "process-sealed statement coverage did not contain the complete exact "
+                "audited-source entity population; no statement credit was awarded"
+            )
+            continue
+        invalid = False
+        for entity_id in sorted(source_entity_ids):
+            entity = entities_by_id[entity_id]
+            item = evidence_by_id[entity_id]
+            expected_contract = entity.contract_name or (
+                entity.name
+                if entity.kind
+                in {
+                    SolidityEntityKind.CONTRACT,
+                    SolidityEntityKind.INTERFACE,
+                    SolidityEntityKind.LIBRARY,
+                }
+                else "protocol"
+            )
+            expected_location = Location(
+                path=entity.path,
+                start_line=entity.start_line,
+                end_line=entity.end_line,
+                symbol=entity.signature or entity.name,
+                content_hash=entity.source_hash,
+            )
+            source = source_contents_by_path.get(entity.path)
+            source_span_index = source_span_indexes.get(entity.path)
+            if (
+                item.entity_kind is not entity.kind
+                or item.contract_name != expected_contract
+                or item.location != expected_location
+                or source is None
+                or source_span_index is None
+                or line_range_hash(source, entity.start_line, entity.end_line) != entity.source_hash
+                or not _entity_span_matches_source(
+                    source_index=source_span_index,
+                    entity_location=expected_location,
+                    start_byte_offset=entity.byte_start,
+                    end_byte_offset=entity.byte_end,
+                )
+                or any(
+                    not _statement_observation_matches_source(
+                        source_index=source_span_index,
+                        entity_location=expected_location,
+                        entity_start_byte_offset=entity.byte_start,
+                        entity_end_byte_offset=entity.byte_end,
+                        statement_location=statement.location,
+                        start_byte_offset=statement.start_byte_offset,
+                        end_byte_offset=statement.end_byte_offset,
+                    )
+                    for statement in item.statements
+                )
+            ):
+                invalid = True
+                break
+        if not invalid and not _statement_entity_populations_are_consistent(
+            evidence_by_id=evidence_by_id,
+            entities_by_id=entities_by_id,
+            source_entity_ids=source_entity_ids,
+        ):
+            invalid = True
+        if invalid:
+            invalid_process_sealed_set = True
+            limitations.append(
+                "process-sealed statement coverage differed from the exact current source "
+                "index, UTF-8 statement spans, or contract/function population hierarchy; "
+                "no statement credit was awarded"
+            )
+            continue
+        complete_sets.append(evidence_by_id)
+
+    if invalid_process_sealed_set:
+        return {}, sorted(set(limitations))
+    if not complete_sets:
+        if declared_evidence:
+            limitations.append(
+                "statement coverage declarations lacked a complete live process-local Foundry "
+                "runtime seal; no statement credit was awarded"
+            )
+        return {}, sorted(set(limitations))
+    signatures = {
+        tuple(
+            (entity_id, evidence_by_id[entity_id].evidence_sha256)
+            for entity_id in sorted(evidence_by_id)
+        )
+        for evidence_by_id in complete_sets
+    }
+    if len(signatures) != 1:
+        return {}, sorted(
+            {
+                *limitations,
+                "conflicting process-sealed statement coverage observations were present; "
+                "no statement credit was awarded",
+            }
+        )
+    return complete_sets[0], sorted(set(limitations))
+
+
+def _statement_entity_populations_are_consistent(
+    *,
+    evidence_by_id: dict[str, AuditedSuiteStatementCoverageEvidence],
+    entities_by_id: dict[str, SolidityEntity],
+    source_entity_ids: set[str],
+) -> bool:
+    """Require contract and function views of every contained statement to agree exactly."""
+
+    contract_kinds = {
+        SolidityEntityKind.CONTRACT,
+        SolidityEntityKind.INTERFACE,
+        SolidityEntityKind.LIBRARY,
+    }
+    function_kinds = {
+        SolidityEntityKind.FUNCTION,
+        SolidityEntityKind.CONSTRUCTOR,
+    }
+    contracts = [
+        entities_by_id[entity_id]
+        for entity_id in source_entity_ids
+        if entities_by_id[entity_id].kind in contract_kinds
+    ]
+    for entity_id in source_entity_ids:
+        function = entities_by_id[entity_id]
+        if function.kind not in function_kinds or function.contract_name is None:
+            continue
+        enclosing_contracts = [
+            contract
+            for contract in contracts
+            if contract.path == function.path
+            and contract.name == function.contract_name
+            and contract.byte_start <= function.byte_start
+            and function.byte_end <= contract.byte_end
+        ]
+        if len(enclosing_contracts) != 1:
+            return False
+        contract = enclosing_contracts[0]
+        function_spans = {
+            (statement.start_byte_offset, statement.end_byte_offset): statement.covered
+            for statement in evidence_by_id[function.id].statements
+        }
+        overlapping_contract_statements = [
+            statement
+            for statement in evidence_by_id[contract.id].statements
+            if statement.start_byte_offset < function.byte_end
+            and function.byte_start < statement.end_byte_offset
+        ]
+        if any(
+            statement.start_byte_offset < function.byte_start
+            or statement.end_byte_offset > function.byte_end
+            for statement in overlapping_contract_statements
+        ):
+            return False
+        contract_spans_within_function = {
+            (statement.start_byte_offset, statement.end_byte_offset): statement.covered
+            for statement in overlapping_contract_statements
+        }
+        if function_spans != contract_spans_within_function:
+            return False
+    return True
+
+
+def _utf8_source_span_index(source: str) -> _Utf8SourceSpanIndex:
+    source_bytes = source.encode("utf-8")
+    boundaries = bytearray(len(source_bytes) + 1)
+    boundaries[0] = 1
+    boundaries[-1] = 1
+    line_starts = [0]
+    for index, value in enumerate(source_bytes):
+        if value & 0b1100_0000 != 0b1000_0000:
+            boundaries[index] = 1
+        if value == 0x0A:
+            line_starts.append(index + 1)
+    return _Utf8SourceSpanIndex(
+        content=source,
+        content_bytes=source_bytes,
+        codepoint_boundaries=bytes(boundaries),
+        line_starts=tuple(line_starts),
+    )
+
+
+def _statement_observation_matches_source(
+    *,
+    source_index: _Utf8SourceSpanIndex,
+    entity_location: Location,
+    entity_start_byte_offset: int,
+    entity_end_byte_offset: int,
+    statement_location: Location,
+    start_byte_offset: int,
+    end_byte_offset: int,
+) -> bool:
+    """Validate exact UTF-8 byte offsets and their reported one-based line range."""
+
+    source_bytes = source_index.content_bytes
+    if (
+        start_byte_offset < entity_start_byte_offset
+        or end_byte_offset <= start_byte_offset
+        or end_byte_offset > entity_end_byte_offset
+        or not source_index.codepoint_boundaries[start_byte_offset]
+        or not source_index.codepoint_boundaries[end_byte_offset]
+        or statement_location.path != entity_location.path
+        or statement_location.content_hash != entity_location.content_hash
+        or statement_location.symbol != entity_location.symbol
+    ):
+        return False
+    statement_bytes = source_bytes[start_byte_offset:end_byte_offset]
+    if not statement_bytes.strip():
+        return False
+    start_line = bisect_right(source_index.line_starts, start_byte_offset)
+    end_line = bisect_right(source_index.line_starts, end_byte_offset - 1)
+    return (
+        statement_location.start_line == start_line
+        and statement_location.end_line == end_line
+        and entity_location.start_line <= start_line <= end_line <= entity_location.end_line
+    )
+
+
+def _entity_span_matches_source(
+    *,
+    source_index: _Utf8SourceSpanIndex,
+    entity_location: Location,
+    start_byte_offset: int,
+    end_byte_offset: int,
+) -> bool:
+    """Bind one compiler-derived entity to its exact UTF-8 byte and line range."""
+
+    source_bytes = source_index.content_bytes
+    if (
+        start_byte_offset < 0
+        or end_byte_offset <= start_byte_offset
+        or end_byte_offset > len(source_bytes)
+        or not source_index.codepoint_boundaries[start_byte_offset]
+        or not source_index.codepoint_boundaries[end_byte_offset]
+    ):
+        return False
+    start_line = bisect_right(source_index.line_starts, start_byte_offset)
+    end_line = bisect_right(source_index.line_starts, end_byte_offset - 1)
+    return entity_location.start_line == start_line and entity_location.end_line == end_line
 
 
 def _reconcile_mutation_surface_evidence(

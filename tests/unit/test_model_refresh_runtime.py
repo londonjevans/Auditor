@@ -116,6 +116,15 @@ def test_exact_current_refresh_issues_only_a_veto_guard(tmp_path: Path) -> None:
     )
     assert pricing_route.comparison_state == "EXACT"
     assert pricing_route.baseline_pricing == pricing_route.current_pricing
+    assert pricing_route.baseline_pricing_overrides == ()
+    assert pricing_route.current_pricing_overrides == ()
+    assert pricing_route.baseline_pricing_schedule is None
+    assert pricing_route.current_pricing_schedule is None
+    pricing_route_payload = pricing_route.model_dump(mode="json")
+    assert "baseline_pricing_overrides" not in pricing_route_payload
+    assert "baseline_pricing_schedule" not in pricing_route_payload
+    assert "current_pricing_overrides" not in pricing_route_payload
+    assert "current_pricing_schedule" not in pricing_route_payload
     assert pricing_route.pricing_use_authorized is False
 
 
@@ -193,6 +202,50 @@ def test_selected_price_drift_above_tolerance_fails_closed(tmp_path: Path) -> No
                 "completion": "0.000002100001",
                 "prompt": "0.000001",
             },
+        )
+
+
+def test_tier_threshold_drift_with_same_maximum_is_retained_and_bounded(
+    tmp_path: Path,
+) -> None:
+    baseline: dict[str, Any] = {
+        "completion": "0.000002",
+        "prompt": "0.000001",
+        "overrides": [{"min_prompt_tokens": 100, "prompt": "0.00000105"}],
+    }
+    current: dict[str, Any] = {
+        "completion": "0.000002",
+        "prompt": "0.000001",
+        "overrides": [{"min_prompt_tokens": 200, "prompt": "0.00000105"}],
+    }
+    runtime = synthetic_refresh_runtime(
+        tmp_path,
+        qualified_pricing=baseline,
+        current_pricing=current,
+    )
+
+    first = runtime.audit_selection.models[0]
+    route = runtime.pricing_authority.route_for(
+        first.exact_model_id,
+        **_pricing_authority_arguments(runtime),
+    )
+    assert route.comparison_state == "WITHIN_TOLERANCE"
+    assert route.changed_components == ("prompt",)
+    assert route.increased_components == ()
+    assert route.baseline_pricing_schedule is not None
+    assert route.current_pricing_schedule is not None
+    assert (
+        route.baseline_pricing_schedule.maximum_pricing
+        == route.current_pricing_schedule.maximum_pricing
+    )
+    assert route.baseline_pricing_sha256 != route.current_pricing_sha256
+
+    tampered = route.model_dump(mode="json")
+    tampered["current_pricing_overrides"][0]["min_prompt_tokens"] = 201
+    with pytest.raises(ValueError):
+        AuditModelRefreshPricingRouteEvidence.model_validate_json(
+            json.dumps(tampered),
+            strict=True,
         )
 
 

@@ -14,7 +14,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mmaudit.config import FormalConfig
 from mmaudit.isolation.provenance import (
@@ -39,12 +39,16 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SoliditySymbolIndex,
 )
+from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 from mmaudit.scanners.base import (
+    _observe_scanner_executable,
+    _ScannerExecutableObservation,
     isolated_executable_version_probe,
     sanitized_scanner_environment,
+    scanner_trust_pin_error,
 )
 from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.solidity.engines.certora import (
@@ -68,6 +72,9 @@ from mmaudit.solidity.engines.kontrol import (
 )
 from mmaudit.solidity.engines.medusa import translate_medusa_corpus
 from mmaudit.solidity.reproduction import IsolationBackend, default_isolation_backend
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
 
 _EXCLUDED_DYNAMIC_WORKSPACE_NAMES = frozenset(
     {
@@ -822,6 +829,34 @@ class FoundryInvariantAdapter(PropertyToolAdapter):
     executable = "forge"
     property_prefixes = ("invariant_",)
 
+    def __init__(self, *, solc: FormalDependencySpec | None = None) -> None:
+        self.solc = solc
+
+    def dependencies(
+        self,
+        *,
+        repository_root: Path,
+        config: FormalConfig,
+    ) -> tuple[list[FormalDependencySpec], str]:
+        del repository_root, config
+        return ([self.solc] if self.solc is not None else []), ""
+
+    def build_command_with_dependencies(
+        self,
+        executable: Path,
+        workspace: Path,
+        output_path: Path,
+        index: SoliditySymbolIndex,
+        config: FormalConfig,
+        dependencies: list[FormalDependencySpec],
+    ) -> list[str]:
+        command = self.build_command(executable, workspace, output_path, index, config)
+        if self.solc is not None:
+            if dependencies != [self.solc] or self.solc.name != "solc":
+                raise ValueError("managed Foundry invariants require one validated Solc dependency")
+            command.extend(["--no-auto-detect", "--use", str(self.solc.executable)])
+        return command
+
     def build_command(
         self,
         executable: Path,
@@ -845,6 +880,9 @@ class HalmosAdapter(PropertyToolAdapter):
     name = "halmos"
     executable = "halmos"
     requires_preflight_trust = True
+
+    def __init__(self, *, solver_path: Path | None = None) -> None:
+        self.solver_path = solver_path
 
     def applicable_with_corpus(
         self,
@@ -879,7 +917,7 @@ class HalmosAdapter(PropertyToolAdapter):
     ) -> tuple[list[FormalDependencySpec], str]:
         if config.halmos_solver_version is None or config.halmos_solver_sha256 is None:
             return [], "Halmos requires exact configured Z3 version and SHA-256 trust pins"
-        raw_solver = shutil.which("z3")
+        raw_solver = str(self.solver_path) if self.solver_path is not None else shutil.which("z3")
         if raw_solver is None:
             return [], "the fixed local Z3 dependency is unavailable"
         try:
@@ -1460,6 +1498,128 @@ class KontrolAdapter(PropertyToolAdapter):
         return _kontrol_campaign_observation("\n".join((stdout, stderr)))
 
 
+_MANAGED_FORMAL_ROLES = {
+    "solc-smtchecker": ManagedToolchainRole.SOLC,
+    "mythril": ManagedToolchainRole.MYTHRIL,
+    "echidna": ManagedToolchainRole.ECHIDNA,
+    "medusa": ManagedToolchainRole.MEDUSA,
+    "foundry-invariant": ManagedToolchainRole.FORGE,
+    "halmos": ManagedToolchainRole.HALMOS,
+    "certora": ManagedToolchainRole.CERTORA_CLI,
+    "kontrol": ManagedToolchainRole.KONTROL,
+}
+
+
+@dataclass(frozen=True)
+class _ManagedFormalSelection:
+    """Retained direct-file identity, not transitive closure or atomic execution proof."""
+
+    material: ManagedHostToolMaterialization
+    config: FormalConfig
+    tools: tuple[
+        tuple[ManagedToolchainRole, FormalDependencySpec, _ScannerExecutableObservation], ...
+    ]
+
+    def verify(self) -> None:
+        _verify_managed_formal_config(self.material, self.config)
+        for _, spec, observation in self.tools:
+            if _observe_scanner_executable(spec.executable) != observation:
+                raise ValueError("managed formal executable identity changed")
+
+    def verify_roots(self, repository_root: Path, private_dir: Path) -> None:
+        self.verify()
+        for root in (repository_root.resolve(strict=True), private_dir.resolve(strict=False)):
+            if self.material.directory.is_relative_to(root) or root.is_relative_to(
+                self.material.directory
+            ):
+                raise ValueError(
+                    "managed formal material overlaps source or writable private state"
+                )
+
+    def tool(
+        self, role: ManagedToolchainRole
+    ) -> tuple[FormalDependencySpec, _ScannerExecutableObservation]:
+        for selected_role, spec, observation in self.tools:
+            if selected_role is role:
+                return spec, observation
+        raise ValueError("managed formal execution has no prepared material for the selected role")
+
+    def dependency_observation(
+        self, dependency: FormalDependencySpec
+    ) -> _ScannerExecutableObservation:
+        self.verify()
+        for _, spec, observation in self.tools:
+            if dependency == spec:
+                return observation
+        raise ValueError("managed formal dependency differs from its prepared selection")
+
+    def adapters(self) -> list[FormalAdapter]:
+        """Rebuild fixed adapters so a caller's mutable adapter view cannot redirect execution."""
+
+        self.verify()
+        by_role = {role: spec for role, spec, _ in self.tools}
+        solver = by_role.get(ManagedToolchainRole.HALMOS_Z3)
+        adapters: list[FormalAdapter] = [
+            SolcSMTCheckerAdapter(),
+            MythrilAdapter(),
+            EchidnaAdapter(),
+            MedusaAdapter(),
+            FoundryInvariantAdapter(solc=by_role.get(ManagedToolchainRole.SOLC)),
+            HalmosAdapter(solver_path=solver.executable if solver is not None else None),
+            CertoraAdapter(),
+            KontrolAdapter(),
+        ]
+        for adapter in adapters:
+            spec = by_role.get(_MANAGED_FORMAL_ROLES[adapter.name])
+            if spec is not None:
+                adapter.executable = str(spec.executable)
+        return adapters
+
+
+def _verify_managed_formal_config(
+    material: ManagedHostToolMaterialization, config: FormalConfig
+) -> None:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+
+    if type(material) is not ManagedHostToolMaterialization or type(config) is not FormalConfig:
+        raise ValueError("managed formal execution requires exact material and config types")
+    if config != material.config.formal:
+        raise ValueError("managed formal config differs from prepared material")
+    material.verify()
+
+
+def _managed_formal_selection(
+    material: ManagedHostToolMaterialization, config: FormalConfig
+) -> _ManagedFormalSelection:
+    _verify_managed_formal_config(material, config)
+    roles = {*_MANAGED_FORMAL_ROLES.values(), ManagedToolchainRole.HALMOS_Z3}
+    tools: list[
+        tuple[ManagedToolchainRole, FormalDependencySpec, _ScannerExecutableObservation]
+    ] = []
+    for member in material.manifest.files:
+        if member.role not in roles:
+            continue
+        executable = material.executable_for(member.role)
+        observation = _observe_scanner_executable(executable)
+        if observation.sha256 != member.sha256:
+            raise ValueError("managed formal executable differs from its selected pin")
+        tools.append(
+            (
+                member.role,
+                FormalDependencySpec(
+                    name=member.locator,
+                    executable=executable,
+                    expected_version=member.version,
+                    expected_sha256=member.sha256,
+                ),
+                observation,
+            )
+        )
+    selected = _ManagedFormalSelection(material=material, config=config, tools=tuple(tools))
+    selected.verify()
+    return selected
+
+
 class FormalRunner:
     """Execute configured adapters only in copied workspaces and hardened isolation."""
 
@@ -1469,10 +1629,26 @@ class FormalRunner:
         *,
         backend: IsolationBackend | None = None,
         adapters: list[FormalAdapter] | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
     ) -> None:
         self.config = config
-        self.backend = backend if backend is not None else default_isolation_backend("auto")
-        if adapters is None:
+        self._managed = (
+            _managed_formal_selection(host_tools, config) if host_tools is not None else None
+        )
+        if self._managed is not None and adapters is not None:
+            raise ValueError("managed formal execution requires the fixed built-in adapters")
+        self.backend = backend
+        if self.backend is None:
+            if host_tools is None:
+                self.backend = default_isolation_backend("auto")
+            elif config.enabled:
+                from mmaudit.isolation.managed import managed_isolation_backend
+
+                self.backend = managed_isolation_backend(host_tools)
+        if self._managed is not None:
+            self.adapters = self._managed.adapters()
+            self._trusted_adapters = tuple(self.adapters)
+        elif adapters is None:
             self.adapters = [
                 SolcSMTCheckerAdapter(),
                 MythrilAdapter(),
@@ -1510,6 +1686,11 @@ class FormalRunner:
         private_dir: Path,
         property_corpus: PropertyCorpus | None = None,
     ) -> list[FormalToolRun]:
+        if self._managed is not None:
+            _verify_managed_formal_config(self._managed.material, self.config)
+            self._managed.verify_roots(repository_root, private_dir)
+            self.adapters = self._managed.adapters()
+            self._trusted_adapters = tuple(self.adapters)
         if not self.config.enabled:
             return []
         project = _root_project(projects)
@@ -1545,6 +1726,9 @@ class FormalRunner:
                     "isolation_attestation_sha256": isolation_attestation_sha256(self.backend),
                 }
             )
+            if self._managed is not None:
+                _verify_managed_formal_config(self._managed.material, self.config)
+                self._managed.verify()
             if run.execution_observation_sha256 is not None:
                 run = run.model_copy(
                     update={
@@ -1580,7 +1764,14 @@ class FormalRunner:
         property_corpus: PropertyCorpus | None,
     ) -> FormalToolRun:
         started = time.monotonic()
-        executable = adapter.available(repository_root)
+        managed_spec: FormalDependencySpec | None = None
+        host_observation: _ScannerExecutableObservation | None = None
+        if self._managed is not None:
+            self._managed.verify()
+            managed_spec, host_observation = self._managed.tool(_MANAGED_FORMAL_ROLES[adapter.name])
+            executable: Path | None = managed_spec.executable
+        else:
+            executable = adapter.available(repository_root)
         if executable is None:
             return FormalToolRun(
                 tool=adapter.name,
@@ -1624,20 +1815,38 @@ class FormalRunner:
             _copy_project(repository_root, project, workspace)
             environment = sanitized_scanner_environment(private_dir)
             environment["FOUNDRY_OFFLINE"] = "true"
-            executable_sha256 = _file_sha256(executable)
-            if adapter.requires_preflight_trust:
+            if self._managed is not None:
+                self._managed.verify()
+            executable_sha256 = (
+                host_observation.sha256
+                if host_observation is not None
+                else _file_sha256(executable)
+            )
+            if adapter.requires_preflight_trust or managed_spec is not None:
                 version = _isolated_tool_version(
                     executable,
                     backend=self.backend,
                     workspace=workspace,
                     private_dir=private_dir,
                     environment=environment,
+                    expected_host_observation=host_observation,
                 )
+                if self._managed is not None:
+                    self._managed.verify()
                 trusted, trust_reason = adapter.validate_trust(
                     version=version,
                     executable_sha256=executable_sha256,
                     config=self.config,
                 )
+                if managed_spec is not None:
+                    pin_error = scanner_trust_pin_error(
+                        version=version,
+                        executable_sha256=executable_sha256,
+                        expected_version=managed_spec.expected_version,
+                        expected_sha256=managed_spec.expected_sha256,
+                    )
+                    if pin_error:
+                        trusted, trust_reason = False, pin_error
                 if not trusted:
                     return FormalToolRun(
                         tool=adapter.name,
@@ -1673,7 +1882,16 @@ class FormalRunner:
             ):
                 raise ValueError("formal dependency specifications must be unique and sorted")
             for dependency in dependency_specs:
-                dependency_sha256 = _file_sha256(dependency.executable)
+                dependency_observation = (
+                    self._managed.dependency_observation(dependency)
+                    if self._managed is not None
+                    else None
+                )
+                dependency_sha256 = (
+                    dependency_observation.sha256
+                    if dependency_observation is not None
+                    else _file_sha256(dependency.executable)
+                )
                 dependency_version = _isolated_tool_version(
                     dependency.executable,
                     backend=self.backend,
@@ -1681,7 +1899,10 @@ class FormalRunner:
                     private_dir=private_dir,
                     environment=environment,
                     artifact_prefix=f"{dependency.name}.",
+                    expected_host_observation=dependency_observation,
                 )
+                if self._managed is not None:
+                    self._managed.verify()
                 dependency_provenance.append(
                     FormalDependencyProvenance(
                         name=dependency.name,
@@ -1771,6 +1992,8 @@ class FormalRunner:
                 self.config,
                 dependency_specs,
             )
+            if self._managed is not None:
+                self._managed.verify()
             environment_extension = adapter.execution_environment(config=self.config)
             if environment_extension.failure_reason:
                 return FormalToolRun(
@@ -1821,7 +2044,10 @@ class FormalRunner:
                 additional_output_paths=[output_path],
                 timeout=self.config.timeout_seconds,
                 max_output_bytes=self.config.max_output_bytes,
+                managed_selection=self._managed,
             )
+            if self._managed is not None:
+                self._managed.verify()
             _redact_sensitive_artifacts(
                 (stdout_path, stderr_path, output_path),
                 sensitive_values,
@@ -2245,9 +2471,12 @@ def _bounded_process(
     timeout: float,
     max_output_bytes: int,
     additional_output_paths: list[Path] | None = None,
+    managed_selection: _ManagedFormalSelection | None = None,
 ) -> int | str:
     process: subprocess.Popen[bytes] | None = None
     with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+        if managed_selection is not None:
+            managed_selection.verify()
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -2288,6 +2517,7 @@ def _isolated_tool_version(
     private_dir: Path,
     environment: dict[str, str],
     artifact_prefix: str = "",
+    expected_host_observation: _ScannerExecutableObservation | None = None,
 ) -> str | None:
     del artifact_prefix
     try:
@@ -2298,6 +2528,7 @@ def _isolated_tool_version(
             workspace,
             private_dir,
             timeout_seconds=10,
+            expected_host_observation=expected_host_observation,
         )
     except (OSError, RuntimeError, ValueError):
         return None

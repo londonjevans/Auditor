@@ -11,6 +11,10 @@ from pydantic import ValidationError
 
 import mmaudit.models.refresh as refresh_module
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.price_lexemes import (
+    captured_openrouter_json_number_raw,
+    decode_openrouter_price_metadata_json,
+)
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
     CandidateModel,
@@ -324,6 +328,60 @@ def test_refresh_reuses_production_pricing_and_provider_slug_normalization() -> 
     assert route.endpoint_slug == ENDPOINT
     assert route.pricing == BASE_PRICING
     assert route.zdr_eligible
+
+
+def test_refresh_retains_and_projects_conditional_pricing_schedule() -> None:
+    registry = _registry()
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {
+            "min_prompt_tokens": 20_000,
+            "prompt": "0.000002",
+        }
+    ]
+
+    source = _source(
+        registry,
+        zdr_endpoints=[endpoint],
+        candidate_endpoints={MODEL: [endpoint]},
+    )
+    snapshot = build_model_refresh_snapshot_from_source(
+        source_evidence=source,
+        candidate_registry=registry,
+    )
+
+    source_route = source.candidate_endpoint_sets[0].endpoints[0]
+    assert source_route.pricing == BASE_PRICING
+    assert source_route.pricing_overrides[0].min_prompt_tokens == 20_000
+    assert source_route.pricing_overrides[0].prices == {"prompt": "0.000002"}
+    route = snapshot.models[0].routes[0]
+    assert route.pricing == BASE_PRICING
+    assert route.pricing_overrides == source_route.pricing_overrides
+    assert route.pricing_schedule is not None
+    assert route.pricing_schedule != "unavailable"
+    assert {
+        price.component.value: price.unit_price for price in route.pricing_schedule.maximum_pricing
+    } == {"completion": "0.000002", "prompt": "0.000002"}
+    assert route.discovery_eligible
+
+
+def test_flat_refresh_pricing_omits_schedule_fields_and_keeps_legacy_digest() -> None:
+    registry = _registry()
+    source = _source(registry)
+    snapshot = build_model_refresh_snapshot_from_source(
+        source_evidence=source,
+        candidate_registry=registry,
+    )
+
+    source_route = source.candidate_endpoint_sets[0].endpoints[0]
+    route = snapshot.models[0].routes[0]
+    assert source_route.pricing_overrides == ()
+    assert route.pricing_overrides == ()
+    assert route.pricing_schedule is None
+    assert route.pricing_sha256 == _sha(BASE_PRICING)
+    assert "pricing_overrides" not in source_route.model_dump(mode="json")
+    assert "pricing_overrides" not in route.model_dump(mode="json")
+    assert "pricing_schedule" not in route.model_dump(mode="json")
 
 
 def test_refresh_reuses_production_token_limit_and_parameter_normalization() -> None:
@@ -743,6 +801,287 @@ def test_source_evidence_is_allowlisted_order_invariant_and_replayable() -> None
     assert snapshot.source_evidence_sha256 == forward.source_evidence_sha256
     assert snapshot.catalog_snapshot_sha256 == forward.catalog_projection_sha256
     assert snapshot.zdr_snapshot_sha256 == forward.zdr_projection_sha256
+
+
+def test_captured_numeric_prices_preserve_refresh_source_and_snapshot_identity() -> None:
+    registry = _registry()
+    candidate_raw = (
+        b'{"data":{"id":"alpha/atlas-secure","endpoints":[{'
+        b'"slug":"approved-provider/fp8","provider_name":"Approved Provider",'
+        b'"status":0,"context_length":100000,"max_prompt_tokens":91808,'
+        b'"max_completion_tokens":8192,'
+        b'"supported_parameters":["max_tokens","reasoning","response_format","temperature"],'
+        b'"pricing":{"completion":0.000002,"prompt":0.000001}}]}}'
+    )
+    zdr_raw = (
+        b'{"data":[{"model_id":"alpha/atlas-secure",'
+        b'"slug":"approved-provider/fp8","provider_name":"Approved Provider",'
+        b'"status":0,"context_length":100000,"max_prompt_tokens":91808,'
+        b'"max_completion_tokens":8192,'
+        b'"supported_parameters":["max_tokens","reasoning","response_format","temperature"],'
+        b'"pricing":{"completion":0.000002,"prompt":0.000001}}]}'
+    )
+
+    def decode(raw: bytes, *, layout: Literal["model_endpoints", "zdr_endpoints"]):
+        return decode_openrouter_price_metadata_json(raw, layout=layout)
+
+    numeric_source = build_model_refresh_source_evidence(
+        retrieved_at=NOW,
+        catalog_payload={"data": [_model()]},
+        zdr_payload=decode(zdr_raw, layout="zdr_endpoints"),
+        candidate_registry=registry,
+        candidate_endpoint_payloads={
+            MODEL: decode(candidate_raw, layout="model_endpoints"),
+        },
+        authenticated_metadata=True,
+    )
+    string_source = _source(registry)
+    numeric_snapshot = build_model_refresh_snapshot_from_source(
+        source_evidence=numeric_source,
+        candidate_registry=registry,
+    )
+    string_snapshot = build_model_refresh_snapshot_from_source(
+        source_evidence=string_source,
+        candidate_registry=registry,
+    )
+
+    assert numeric_source == string_source
+    assert numeric_source.model_dump_json() == string_source.model_dump_json()
+    assert numeric_snapshot == string_snapshot
+    assert numeric_snapshot.model_dump_json() == string_snapshot.model_dump_json()
+
+
+def _decoded_refresh_price_payload(
+    payload: dict[str, Any],
+    *,
+    layout: Literal["model_endpoints", "zdr_endpoints"],
+    replacements: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    for marker, lexeme in replacements:
+        encoded = encoded.replace(json.dumps(marker), lexeme)
+    return decode_openrouter_price_metadata_json(encoded.encode(), layout=layout)
+
+
+def _indexed_numeric_refresh_payloads() -> tuple[dict[str, Any], dict[str, Any]]:
+    unrelated = _endpoint(endpoint="other-provider/fp8")
+    candidate = _endpoint()
+    candidate["pricing"] = {
+        "completion": "__candidate_completion__",
+        "prompt": "__candidate_prompt__",
+    }
+    endpoint_payload = _decoded_refresh_price_payload(
+        _endpoint_envelope(MODEL, unrelated, candidate),
+        layout="model_endpoints",
+        replacements=(
+            ("__candidate_completion__", BASE_PRICING["completion"]),
+            ("__candidate_prompt__", BASE_PRICING["prompt"]),
+        ),
+    )
+
+    zdr = _endpoint()
+    zdr["pricing"] = {
+        "completion": "__zdr_completion__",
+        "prompt": "__zdr_prompt__",
+    }
+    zdr_payload = _decoded_refresh_price_payload(
+        {"data": [{"model_id": "openrouter/auto"}, zdr]},
+        layout="zdr_endpoints",
+        replacements=(
+            ("__zdr_completion__", BASE_PRICING["completion"]),
+            ("__zdr_prompt__", BASE_PRICING["prompt"]),
+        ),
+    )
+    return endpoint_payload, zdr_payload
+
+
+def test_refresh_accepts_numeric_prices_at_original_unfiltered_indices() -> None:
+    registry = _registry()
+    endpoint_payload, zdr_payload = _indexed_numeric_refresh_payloads()
+    candidate_pricing = endpoint_payload["data"]["endpoints"][1]["pricing"]
+    zdr_pricing = zdr_payload["data"][1]["pricing"]
+
+    assert (
+        captured_openrouter_json_number_raw(candidate_pricing["prompt"]) == BASE_PRICING["prompt"]
+    )
+    assert captured_openrouter_json_number_raw(zdr_pricing["prompt"]) == BASE_PRICING["prompt"]
+
+    source = build_model_refresh_source_evidence(
+        retrieved_at=NOW,
+        catalog_payload={"data": [_model()]},
+        zdr_payload=zdr_payload,
+        candidate_registry=registry,
+        candidate_endpoint_payloads={MODEL: endpoint_payload},
+        authenticated_metadata=True,
+    )
+
+    candidate_endpoint = next(
+        endpoint
+        for endpoint in source.candidate_endpoint_sets[0].endpoints
+        if endpoint.endpoint_slug == ENDPOINT
+    )
+    zdr_endpoint = next(
+        endpoint for endpoint in source.zdr_endpoints if endpoint.endpoint_slug == ENDPOINT
+    )
+    assert candidate_endpoint.pricing == BASE_PRICING
+    assert zdr_endpoint.pricing == BASE_PRICING
+    assert [
+        (item.model_id, item.occurrence_count) for item in source.excluded_zdr_routed_models
+    ] == [("openrouter/auto", 1)]
+
+
+def test_refresh_compatibility_wrapper_accepts_captured_numeric_prices() -> None:
+    registry = _registry()
+    endpoint_payload, zdr_payload = _indexed_numeric_refresh_payloads()
+
+    snapshot = build_model_refresh_snapshot(
+        retrieved_at=NOW,
+        catalog_payload={"data": [_model()]},
+        zdr_payload=zdr_payload,
+        candidate_registry=registry,
+        candidate_endpoint_payloads={MODEL: endpoint_payload},
+        authenticated_metadata=True,
+    )
+
+    route = next(
+        route for route in snapshot.models[0].routes if route.provider_endpoint == ENDPOINT
+    )
+    assert route.pricing == BASE_PRICING
+
+
+def test_refresh_rejects_and_revokes_numeric_price_moved_across_candidate_indices() -> None:
+    registry = _registry()
+    first = _endpoint(endpoint="other-provider/fp8")
+    first["pricing"]["prompt"] = "__first_prompt__"
+    second = _endpoint()
+    second["pricing"]["prompt"] = "__second_prompt__"
+    endpoint_payload = _decoded_refresh_price_payload(
+        _endpoint_envelope(MODEL, first, second),
+        layout="model_endpoints",
+        replacements=(
+            ("__first_prompt__", "0.000003"),
+            ("__second_prompt__", BASE_PRICING["prompt"]),
+        ),
+    )
+    endpoints = endpoint_payload["data"]["endpoints"]
+    first_token = endpoints[0]["pricing"]["prompt"]
+    second_token = endpoints[1]["pricing"]["prompt"]
+    endpoints[0]["pricing"]["prompt"] = second_token
+    endpoints[1]["pricing"]["prompt"] = first_token
+
+    def build_source() -> None:
+        build_model_refresh_source_evidence(
+            retrieved_at=NOW,
+            catalog_payload={"data": [_model()]},
+            zdr_payload={"data": [_endpoint()]},
+            candidate_registry=registry,
+            candidate_endpoint_payloads={MODEL: endpoint_payload},
+            authenticated_metadata=True,
+        )
+
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
+
+    assert captured_openrouter_json_number_raw(second_token) is None
+    assert captured_openrouter_json_number_raw(first_token) == "0.000003"
+    endpoints[0]["pricing"]["prompt"] = first_token
+    endpoints[1]["pricing"]["prompt"] = second_token
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
+
+
+def test_refresh_rejects_and_revokes_numeric_price_moved_across_zdr_indices() -> None:
+    registry = _registry()
+    first = _endpoint(endpoint="other-provider/fp8")
+    first["pricing"]["prompt"] = "__first_zdr_prompt__"
+    second = _endpoint()
+    second["pricing"]["prompt"] = "__second_zdr_prompt__"
+    zdr_payload = _decoded_refresh_price_payload(
+        {"data": [first, second]},
+        layout="zdr_endpoints",
+        replacements=(
+            ("__first_zdr_prompt__", "0.000003"),
+            ("__second_zdr_prompt__", BASE_PRICING["prompt"]),
+        ),
+    )
+    endpoints = zdr_payload["data"]
+    first_token = endpoints[0]["pricing"]["prompt"]
+    second_token = endpoints[1]["pricing"]["prompt"]
+    endpoints[0]["pricing"]["prompt"] = second_token
+    endpoints[1]["pricing"]["prompt"] = first_token
+
+    def build_source() -> None:
+        build_model_refresh_source_evidence(
+            retrieved_at=NOW,
+            catalog_payload={"data": [_model()]},
+            zdr_payload=zdr_payload,
+            candidate_registry=registry,
+            candidate_endpoint_payloads={MODEL: _endpoint_envelope(MODEL, _endpoint())},
+            authenticated_metadata=True,
+        )
+
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
+
+    assert captured_openrouter_json_number_raw(second_token) is None
+    assert captured_openrouter_json_number_raw(first_token) == "0.000003"
+    endpoints[0]["pricing"]["prompt"] = first_token
+    endpoints[1]["pricing"]["prompt"] = second_token
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
+
+
+@pytest.mark.parametrize("source_layout", ["model_endpoints", "zdr_endpoints"])
+def test_refresh_rejects_and_revokes_numeric_price_moved_across_layouts(
+    source_layout: Literal["model_endpoints", "zdr_endpoints"],
+) -> None:
+    registry = _registry()
+    candidate = _endpoint()
+    candidate["pricing"]["prompt"] = "__candidate_prompt__"
+    endpoint_payload = _decoded_refresh_price_payload(
+        _endpoint_envelope(MODEL, candidate),
+        layout="model_endpoints",
+        replacements=(("__candidate_prompt__", BASE_PRICING["prompt"]),),
+    )
+    zdr = _endpoint()
+    zdr["pricing"]["prompt"] = "__zdr_prompt__"
+    zdr_payload = _decoded_refresh_price_payload(
+        {"data": [zdr]},
+        layout="zdr_endpoints",
+        replacements=(("__zdr_prompt__", BASE_PRICING["prompt"]),),
+    )
+    candidate_pricing = endpoint_payload["data"]["endpoints"][0]["pricing"]
+    zdr_pricing = zdr_payload["data"][0]["pricing"]
+    candidate_token = candidate_pricing["prompt"]
+    zdr_token = zdr_pricing["prompt"]
+
+    if source_layout == "model_endpoints":
+        moved_token = candidate_token
+        candidate_pricing["prompt"] = BASE_PRICING["prompt"]
+        zdr_pricing["prompt"] = moved_token
+    else:
+        moved_token = zdr_token
+        candidate_pricing["prompt"] = moved_token
+        zdr_pricing["prompt"] = BASE_PRICING["prompt"]
+
+    def build_source() -> None:
+        build_model_refresh_source_evidence(
+            retrieved_at=NOW,
+            catalog_payload={"data": [_model()]},
+            zdr_payload=zdr_payload,
+            candidate_registry=registry,
+            candidate_endpoint_payloads={MODEL: endpoint_payload},
+            authenticated_metadata=True,
+        )
+
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
+
+    assert captured_openrouter_json_number_raw(moved_token) is None
+    candidate_pricing["prompt"] = candidate_token
+    zdr_pricing["prompt"] = zdr_token
+    with pytest.raises(ModelRefreshValidationError, match="price metadata"):
+        build_source()
 
 
 def test_source_evidence_preserves_nullable_limit_provenance_and_rejects_reseal() -> None:
@@ -2047,6 +2386,138 @@ def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
     )
     assert beyond_diff.status is ModelRefreshAttemptStatus.PRODUCTION_BLOCKED
     assert beyond_diff.changes[0].pricing_increase_fields == (f"{ENDPOINT}:completion",)
+
+
+def test_tier_threshold_only_drift_is_detected_even_when_maximum_is_unchanged() -> None:
+    registry = _registry()
+    previous_endpoint = _endpoint()
+    previous_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000003"}]
+    previous_source, previous = _source_and_snapshot(
+        registry,
+        candidate_endpoints={MODEL: [previous_endpoint]},
+        zdr_endpoints=[previous_endpoint],
+    )
+    current_endpoint = _endpoint()
+    current_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 200, "prompt": "0.000003"}]
+    current = _snapshot(
+        registry,
+        retrieved_at=NOW + timedelta(hours=1),
+        candidate_endpoints={MODEL: [current_endpoint]},
+        zdr_endpoints=[current_endpoint],
+    )
+
+    diff = diff_model_refresh(
+        current=current,
+        previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
+        candidate_registry=registry,
+        pricing_tolerance_fraction="0.05",
+        compared_at=NOW + timedelta(hours=1),
+    )
+
+    record = diff.changes[0]
+    assert record.change_kinds == (ModelDriftKind.PRICING_CHANGED,)
+    assert record.pricing_comparison is PricingComparisonState.EVALUATED
+    assert record.pricing_increase_fields == ()
+    assert record.before is not None and record.after is not None
+    before_schedule = record.before.routes[0].pricing_schedule
+    after_schedule = record.after.routes[0].pricing_schedule
+    assert before_schedule is not None and before_schedule != "unavailable"
+    assert after_schedule is not None and after_schedule != "unavailable"
+    assert before_schedule.maximum_pricing == after_schedule.maximum_pricing
+    assert before_schedule.pricing_schedule_sha256 != after_schedule.pricing_schedule_sha256
+
+
+def test_tier_only_increase_is_compared_at_reachable_threshold_boundary() -> None:
+    registry = _registry()
+    previous_endpoint = _endpoint()
+    previous_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000002"}]
+    previous_source, previous = _source_and_snapshot(
+        registry,
+        candidate_endpoints={MODEL: [previous_endpoint]},
+        zdr_endpoints=[previous_endpoint],
+    )
+    current_endpoint = _endpoint()
+    current_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000003"}]
+    current = _snapshot(
+        registry,
+        retrieved_at=NOW + timedelta(hours=1),
+        candidate_endpoints={MODEL: [current_endpoint]},
+        zdr_endpoints=[current_endpoint],
+    )
+
+    diff = diff_model_refresh(
+        current=current,
+        previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
+        candidate_registry=registry,
+        pricing_tolerance_fraction="0.05",
+        compared_at=NOW + timedelta(hours=1),
+    )
+
+    assert diff.changes[0].pricing_comparison is PricingComparisonState.EVALUATED
+    assert diff.changes[0].pricing_increase_fields == (f"{ENDPOINT}:prompt",)
+
+
+def test_unexpressible_tier_schedule_is_retained_but_not_discovery_eligible() -> None:
+    registry = _registry()
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "input_cache_write": "0.000001"}]
+
+    snapshot = _snapshot(
+        registry,
+        candidate_endpoints={MODEL: [endpoint]},
+        zdr_endpoints=[endpoint],
+    )
+
+    route = snapshot.models[0].routes[0]
+    assert route.pricing_overrides[0].prices == {"input_cache_write": "0.000001"}
+    assert route.pricing_schedule == "unavailable"
+    assert not route.discovery_eligible
+    assert snapshot.models[0].eligible_provider_endpoints == ()
+
+
+def test_zdr_and_route_tier_schedules_must_match_exactly() -> None:
+    registry = _registry()
+    candidate_endpoint = _endpoint()
+    candidate_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000003"}]
+    zdr_endpoint = _endpoint()
+    zdr_endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 101, "prompt": "0.000003"}]
+
+    snapshot = _snapshot(
+        registry,
+        candidate_endpoints={MODEL: [candidate_endpoint]},
+        zdr_endpoints=[zdr_endpoint],
+    )
+
+    route = snapshot.models[0].routes[0]
+    assert not route.zdr_eligible
+    assert not route.discovery_eligible
+
+
+def test_resealed_route_cannot_change_tier_without_its_schedule_and_digest() -> None:
+    registry = _registry()
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000003"}]
+    route = (
+        _snapshot(
+            registry,
+            candidate_endpoints={MODEL: [endpoint]},
+            zdr_endpoints=[endpoint],
+        )
+        .models[0]
+        .routes[0]
+    )
+    payload = route.model_dump(mode="json")
+    payload["pricing_overrides"][0]["prices"]["prompt"] = "0.000004"
+    payload["route_sha256"] = _sha(
+        {key: value for key, value in payload.items() if key != "route_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match=r"pricing schedule|pricing hash"):
+        type(route).model_validate(payload)
 
 
 def test_canonical_identity_drift_is_classified_and_blocks_selected_route() -> None:

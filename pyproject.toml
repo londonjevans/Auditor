@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "hatchling>=1.25,<2",
+  "jsonschema>=4.23,<5",
   "mypy>=1.11,<2",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<1",

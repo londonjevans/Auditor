@@ -39,7 +39,7 @@ AUTONOMY_INVENTORY_PATH = "docs/remediation/v3/autonomy_gate_inventory.json"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SOURCE_ID_PATTERN = r"^[a-z][a-z0-9_.:*\[\]-]{0,299}$"
 _GATE_ID_PATTERN = r"^gate-[a-z0-9][a-z0-9-]{0,98}$"
-_MAX_SOURCES = 4_096
+_MAX_SOURCES = 8_192
 _MAX_GATES = 128
 _FROZEN_AUDIT_CONFIG_PATHS_SHA256 = (
     "9d419244ecac1ec4833d030836573f8269bf533a4946b3d243d3a0a6d4e1e759"
@@ -57,23 +57,23 @@ _FROZEN_CLI_RUN_PARAMETERS_SHA256 = (
     "cef83d47a117042e0edae8e40e0701d69114c221bc6d3e68288cb9a9835ba4cf"
 )
 _FROZEN_PIPELINE_INIT_PARAMETERS_SHA256 = (
-    "a22584594adb4e7a7d349de01503cd36dcf12da770d59326e91eae98c479ad5e"
+    "4d68421ce51e4d2e429f3be0ea46d2f5cfe84eba2bfc33ea692fc14eb2b67277"
 )
 _FROZEN_PIPELINE_RUN_PARAMETERS_SHA256 = (
     "55123fbc974864c8cae44eef98ac34c9c46bb625ea6784420290870367fe4748"
 )
 _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
-    "de1c412bb4c42aef17210e8d0d7ad92a4b203e941cc4677c6b84410887e0c0a7"
+    "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "9cfb89edc56aca130fb8e39003edb7d906e6b9e6c7f772b6a652d13a7906d5b8"
+    "0a1625615bc4b0e5fdf320479ce985e554bef2e84c44ac86e2d517b1ed14ff05"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "1e39c70ae93165af150e66875663384489a66c42d582ef0766f90d6cc992ba0b"
+    "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "d1c0a4ed1a8ec889655d477793d5a301cdb353672b4ac4087eda61a87b16627b"
+    "e83c10834b2d3c7a6f854ea3cc15f93d1e05624a4c72c6922f371e05a43dab2b"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -232,9 +232,9 @@ class AutonomyGateInventory(StrictModel):
     audit_override_path_count: Literal[51]
     environment_override_count: Literal[28]
     cli_run_parameter_count: Literal[53]
-    pipeline_init_parameter_count: Literal[26]
+    pipeline_init_parameter_count: Literal[29]
     pipeline_run_parameter_count: Literal[16]
-    completion_entrypoint_parameter_count: Literal[336]
+    completion_entrypoint_parameter_count: Literal[355]
     source_kind_counts: dict[CompletionInputSourceKind, int] = Field(
         min_length=len(CompletionInputSourceKind),
         max_length=len(CompletionInputSourceKind),
@@ -507,7 +507,8 @@ _GATE_SPECS = (
         "objective:1,6(J/K)",
         AutonomousGateDisposition.PREPROVISIONED_NONHUMAN_INPUT,
         GateImplementationState.CURRENT_MANUAL_INPUT,
-        "Snapshot verification exists, while snapshot creation and selection remain external.",
+        "Local archive construction, automatic config handoff and private receipt verification exist; "
+        "archive/advisory distribution, feed assurance and full managed execution remain external.",
     ),
     _gate(
         "gate-forensic-export-consent",
@@ -546,7 +547,9 @@ _GATE_SPECS = (
         "objective:1,6(J/K,S)",
         AutonomousGateDisposition.PREPROVISIONED_NONHUMAN_INPUT,
         GateImplementationState.CURRENT_MANUAL_INPUT,
-        "The endpoint, chain, block, and acknowledgement remain per-run/operator inputs.",
+        "Declared offline primary Foundry, reproduction, invariant and matrix reads have managed "
+        "preparation and owned leases; Hardhat consumers, supported local-RPC isolation and source "
+        "authority remain external.",
     ),
     _gate(
         "gate-full-quality-analysis",
@@ -610,8 +613,13 @@ _GATE_SPECS = (
         "Every pre-run dependency must be provisioned and verified before spend.",
         "objective:1,5,6(U)",
         AutonomousGateDisposition.PREPROVISIONED_NONHUMAN_INPUT,
-        GateImplementationState.MISSING,
-        "There is no single idempotent setup command or complete provisioning-state proof.",
+        GateImplementationState.PARTIAL,
+        "Typed local setup binds the bounded audited-workspace content inventory, creates or "
+        "reopens the exact cumulative ledger, preserves portfolio holds, and prepares explicit "
+        "offline dependency material. Its API can also materialize pinned direct host files and "
+        "hand verified paths and a shared derived config to existing consumers. Fork, CodeQL, "
+        "complete installed dependency/image closure, independent trust and a managed audit "
+        "remain unverified; provisioning and managed-run authority stay false.",
     ),
     _gate(
         "gate-managed-toolchain-bundle",
@@ -620,10 +628,21 @@ _GATE_SPECS = (
         "objective:1,6(J/K/S),7",
         AutonomousGateDisposition.PREPROVISIONED_NONHUMAN_INPUT,
         GateImplementationState.PARTIAL,
-        "A typed nonauthorizing catalog and config projection bind 28 first-class managed roles, "
-        "but fixed operating-system probe helpers remain unmodeled and lack exact identity "
-        "verification. External production pins, independent bundle trust, provisioning, "
-        "installed-process verification, and image-side attestation also remain absent.",
+        "A nonauthorizing catalog/config projection binds 28 managed roles. Bounded offline setup "
+        "materializes pinned direct host files with exact repeat verification and shared derived "
+        "config. Scanner paths, runtime clones and explicit Slither/Foundry compilers retain pins "
+        "without ambient fallback. Built-in launchers use bounded identity observations through "
+        "mandatory probes and identity-bound process-local seals. Matching-Linux construction "
+        "selects pinned Bubblewrap and exposes only reverified material read-only. Compiler, formal, "
+        "local-invariant and reproduction consumers accept prepared paths, fixed commands, isolated "
+        "version checks and retained identities. Reproduction still requires acknowledgment, "
+        "chain/block pins and compatible loopback isolation. Pipeline composition shares material "
+        "and one backend, with config/tool/consumer drift guards. Local controls prove no real "
+        "engine, fork or Linux execution. Doctor, unattended provisioning and fork-matrix "
+        "handoffs remain incomplete; operating-system probe helpers remain unmodeled. External "
+        "production pins, independent bundle trust, "
+        "architecture, transitive dependency/image closure, atomic execution custody and full "
+        "installed-process verification remain unverified; managed readiness stays false.",
     ),
     _gate(
         "gate-private-repository-boundary",
@@ -1312,6 +1331,9 @@ _PIPELINE_INIT_GATE_IDS: dict[str, str] = {
     "invariant_runner": "gate-invariant-template-library",
     "formal_runner": "gate-formal-analysis",
     "repository_fork_matrix_runner": "gate-fork-environment",
+    "host_tools": "gate-managed-toolchain-bundle",
+    "managed_backend": "gate-reproduction-capability-policy",
+    "offline_forks": "gate-fork-environment",
 }
 
 _PIPELINE_RUN_GATE_IDS: dict[str, str] = {
@@ -1587,6 +1609,22 @@ def _command_parameter_classification(
         return SourceCoverageClassification.NON_GATING_CONTROL, None
     if (command_name, parameter_name) == ("init_command", "force"):
         return SourceCoverageClassification.GATE, "gate-managed-provisioning"
+    if command_name == "managed_provision" and parameter_name == "verify_only":
+        return SourceCoverageClassification.GATE, "gate-managed-provisioning"
+    if command_name == "managed_provision" and parameter_name in {
+        "archive_root",
+        "advisory_path",
+        "advisory_sha256",
+    }:
+        return SourceCoverageClassification.GATE, "gate-dependency-snapshot"
+    if command_name == "managed_build_dependency_snapshot" and parameter_name in {
+        "repo",
+        "archive_root",
+        "advisory_path",
+        "advisory_sha256",
+        "verify_only",
+    }:
+        return SourceCoverageClassification.GATE, "gate-dependency-snapshot"
     if (command_name, parameter_name) == ("scan_command", "framework"):
         return SourceCoverageClassification.GATE, "gate-full-quality-analysis"
     if command_name in {"quote_accept", "quote_reconcile"} and parameter_name in {
@@ -1616,7 +1654,11 @@ def _command_parameter_classification(
         "candidate",
         "predecessor_plan",
         "refresh_endpoint_inventory",
+        "upgrade_price_cap_profile_v2",
+        "upgrade_price_cap_profile_v3",
     }:
+        return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
+    if command_name == "models_emit_selection_plan_reactivation" and parameter_name == "candidate":
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
     if command_name == "models_list_endpoints" and parameter_name == "model_id":
         return SourceCoverageClassification.GATE, "gate-autonomous-model-authority"
@@ -2088,6 +2130,7 @@ _BOUNDARY_ALIAS_TARGETS = frozenset(
         "pathlib.Path.stat",
         "platform.python_implementation",
         "platform.python_version",
+        "platform.machine",
         "platform.system",
         "rich.prompt.Confirm.ask",
         "rich.prompt.Prompt.ask",
@@ -2310,6 +2353,7 @@ class _EnvironmentAuthorityVisitor(_ScopedBoundaryVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == "expanduser":
             self._record("home-expansion", node)
         if call_name in {
+            "platform.machine",
             "platform.system",
             "platform.python_implementation",
             "platform.python_version",
@@ -2429,7 +2473,11 @@ def _direct_environment_gate(
     if kind == "wall-clock":
         return "gate-trusted-time-independent-replay"
     if kind in {"process-identity", "process-identity-binding"}:
-        if relative_path == "benchmark/model_portfolio.py":
+        if relative_path in {
+            "benchmark/foundry_mutation_executor.py",
+            "benchmark/model_portfolio.py",
+            "benchmark/mutations.py",
+        }:
             return "gate-benchmark-evidence-authority"
         if relative_path == "orchestration/budgets.py":
             return "gate-cost-ledger-provisioning"
@@ -2442,6 +2490,7 @@ def _direct_environment_gate(
         if relative_path.startswith("models/authenticated_runner"):
             return "gate-authenticated-real-campaign"
         if relative_path in {
+            "models/candidate_plan_ancestry.py",
             "models/frozen_lineage_authority.py",
             "models/generation_evidence.py",
             "models/public_lineage_authority.py",
@@ -2488,6 +2537,12 @@ def _direct_environment_gate(
     if relative_path == "orchestration/pipeline.py" and kind == "host-platform":
         return "gate-report-delivery"
     if kind == "host-identity":
+        if relative_path == "isolation/container_cleanup.py":
+            return "gate-managed-output-provisioning"
+        if relative_path == "isolation/dependency_snapshot.py":
+            return "gate-dependency-snapshot"
+        if relative_path == "orchestration/managed_host_tools.py":
+            return "gate-managed-toolchain-bundle"
         if relative_path == "models/candidate_selection.py":
             return "gate-autonomous-model-authority"
         if relative_path == "isolation/container.py":
@@ -2883,6 +2938,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "benchmark/certificate.py": "gate-benchmark-evidence-authority",
     "benchmark/claims.py": "gate-benchmark-evidence-authority",
     "benchmark/engine.py": "gate-benchmark-evidence-authority",
+    "benchmark/foundry_mutation_executor.py": "gate-benchmark-evidence-authority",
     "benchmark/model_portfolio.py": "gate-benchmark-evidence-authority",
     "benchmark/models.py": "gate-benchmark-evidence-authority",
     "benchmark/mutations.py": "gate-benchmark-evidence-authority",
@@ -2892,6 +2948,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "full_protocol_acceptance.py": "gate-release-evidence-pipeline",
     "isolation/container.py": "gate-reproduction-capability-policy",
     "isolation/dependencies.py": "gate-dependency-snapshot",
+    "isolation/dependency_snapshot.py": "gate-dependency-snapshot",
     "isolation/hardhat_loopback_relay.py": "gate-managed-toolchain-bundle",
     "isolation/provenance.py": "gate-managed-toolchain-bundle",
     "isolation/repository_code.py": "gate-reproduction-capability-policy",
@@ -2901,6 +2958,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "models/authenticated_runner_smoke_corpus.py": "gate-authenticated-real-campaign",
     "models/actor_model.py": "gate-full-quality-analysis",
     "models/calibration.py": "gate-benchmark-evidence-authority",
+    "models/candidate_plan_ancestry.py": "gate-autonomous-model-authority",
     "models/candidate_registry_bridge.py": "gate-autonomous-model-authority",
     "models/candidate_revocation.py": "gate-autonomous-model-authority",
     "models/candidate_selection.py": "gate-autonomous-model-authority",
@@ -2924,6 +2982,13 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "orchestration/cost_ledger.py": "gate-cost-ledger-provisioning",
     "orchestration/learning.py": "gate-managed-output-provisioning",
     "orchestration/manifest.py": "gate-release-evidence-pipeline",
+    "orchestration/managed_host_tools.py": "gate-managed-toolchain-bundle",
+    "orchestration/managed_image_files.py": "gate-managed-toolchain-bundle",
+    "orchestration/managed_fork_matrix.py": "gate-managed-toolchain-bundle",
+    "orchestration/managed_fork_archives.py": "gate-fork-environment",
+    "orchestration/managed_pipeline.py": "gate-managed-toolchain-bundle",
+    "orchestration/managed_provisioning.py": "gate-managed-provisioning",
+    "orchestration/managed_provisioning_runtime.py": "gate-managed-provisioning",
     "orchestration/managed_toolchain.py": "gate-managed-toolchain-bundle",
     "orchestration/pipeline.py": "gate-full-quality-analysis",
     "orchestration/prior_audit.py": "gate-full-quality-analysis",
@@ -2959,7 +3024,9 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "scanners/foundry.py": "gate-full-quality-analysis",
     "scanners/foundry_inventory_runner.py": "gate-full-quality-analysis",
     "scanners/hardhat.py": "gate-full-quality-analysis",
+    "scanners/hardhat_finalization.py": "gate-full-quality-analysis",
     "scanners/hardhat_source.py": "gate-full-quality-analysis",
+    "scanners/hardhat_supervision.py": "gate-full-quality-analysis",
     "scanners/normalization.py": "gate-full-quality-analysis",
     "scanners/read_only_rpc.py": "gate-fork-environment",
     "scanners/repository_suite.py": "gate-full-quality-analysis",
@@ -2986,6 +3053,10 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
 
 def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "") -> str:
     searchable = f"{scope}:{expression}".lower()
+    if relative_path == "isolation/container_cleanup.py":
+        if scope in {"_runtime_identity", "_control_environment", "_run_control_command"}:
+            return "gate-managed-toolchain-bundle"
+        return "gate-managed-output-provisioning"
     if relative_path == "benchmark/claims.py" and "human_comparison" in scope:
         return "gate-human-signoff-boundary"
     if relative_path == "cli.py":
@@ -3043,9 +3114,10 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
     if relative_path == "isolation/container.py":
         if scope == "discover_rootless_container_backend":
             return "gate-managed-toolchain-bundle"
-        if scope == "RootlessContainerBackend.cleanup":
-            return "gate-managed-output-provisioning"
-        if scope.startswith("SingleLoopbackHardhatBackend."):
+        if (
+            scope.startswith("SingleLoopbackHardhatBackend.")
+            or scope == "_hardhat_phase_workspace_identity"
+        ):
             return "gate-fork-environment"
         if scope == "_hardhat_private_directory_identity":
             return "gate-managed-output-provisioning"
@@ -3081,6 +3153,11 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
         "_validated_projection_root"
     ):
         return "gate-managed-output-provisioning"
+    if relative_path == "scanners/base.py" and scope in {
+        "_observe_scanner_executable",
+        "scanner_executable_candidate",
+    }:
+        return "gate-managed-toolchain-bundle"
     if relative_path == "scanners/foundry.py":
         if scope in {
             "_foundry_private_generated_root",
@@ -3111,7 +3188,7 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
     if relative_path == "solidity/compile.py":
         if scope == "_copy_prepared_dependencies":
             return "gate-dependency-snapshot"
-        if scope in {"_compile_one", "_file_sha256"}:
+        if scope in {"_compile_one", "_file_sha256", "_managed_compilation_selection"}:
             return "gate-managed-toolchain-bundle"
     if relative_path == "solidity/formal.py" and scope in {
         "FormalAdapter.available",
@@ -3119,17 +3196,21 @@ def _filesystem_input_gate(relative_path: str, scope: str, expression: str = "")
         "HalmosAdapter.dependencies",
         "HalmosAdapter.prepare_workspace",
         "KontrolAdapter.prepare_workspace",
+        "_ManagedFormalSelection.verify_roots",
         "_file_sha256",
     }:
         return "gate-managed-toolchain-bundle"
     if relative_path == "solidity/invariant_execution.py":
-        if scope in {"_file_sha256", "_validated_external_executable"} or (
-            scope == "FoundryInvariantRunner.run" and "copyfile" in expression
-        ):
+        if scope in {
+            "_file_sha256",
+            "_validated_external_executable",
+            "_ManagedInvariantSelection.verify_roots",
+        } or (scope == "FoundryInvariantRunner.run" and "copyfile" in expression):
             return "gate-managed-toolchain-bundle"
         return "gate-full-quality-analysis"
     if relative_path == "solidity/reproduction.py":
         if scope in {
+            "_ManagedReproductionSelection.verify_roots",
             "_external_executable",
             "_file_sha256",
             "_macos_shebang_interpreter",
@@ -3284,31 +3365,188 @@ def _explicit_environment_source(
 
 
 def _default_explicit_sources() -> list[_SourceDraft]:
-    from mmaudit.isolation.container import rootless_runtime_environment
+    from mmaudit.benchmark.development import (
+        bind_development_benchmark,
+        read_development_benchmark_truth,
+        score_development_audit,
+    )
+    from mmaudit.isolation.container import (
+        SingleLoopbackHardhatBackend,
+        rootless_runtime_environment,
+    )
+    from mmaudit.isolation.container_cleanup import cleanup_rootless_container
     from mmaudit.isolation.dependencies import prepare_dependencies
+    from mmaudit.models.development_audit import prepare_development_audit
+    from mmaudit.models.development_routing import observe_development_routing
+    from mmaudit.models.development_transport import review_development_audit_shard
     from mmaudit.models.schemas import AuditReport
     from mmaudit.operator_secrets import load_operator_secrets, select_operator_secret_file
     from mmaudit.orchestration.consensus import preliminary_status
     from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+    from mmaudit.orchestration.development_audit import run_development_audit
+    from mmaudit.orchestration.managed_fork_archives import (
+        ManagedForkArchives,
+        ManagedForkArchiveSource,
+        _invariant_state,
+        _reproduction_state,
+        prepare_managed_fork_archives,
+    )
+    from mmaudit.orchestration.managed_image_files import verify_managed_image_files
+    from mmaudit.orchestration.managed_image_layers import verify_managed_image_layers
+    from mmaudit.orchestration.managed_image_metadata import read_managed_image_metadata
     from mmaudit.orchestration.pipeline import (
         AuditPipeline,
         _enforce_post_judge_execution_severity_accounting,
     )
     from mmaudit.privacy import load_privacy_retention_consent
+    from mmaudit.release_io import stream_file_evidence
     from mmaudit.reporting.client import _finding_detail
     from mmaudit.reporting.markdown import _status_qualification
     from mmaudit.scanners.base import sanitized_scanner_environment
     from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
     from mmaudit.scanners.codeql import CodeQLScanner
     from mmaudit.scanners.fork_matrix import RepositoryForkMatrixRunner
-    from mmaudit.scanners.foundry import _resolve_pinned_solidity_compiler
+    from mmaudit.scanners.foundry import FoundryForkScanner, _resolve_pinned_solidity_compiler
     from mmaudit.scanners.hardhat import _fork_rpc_value
+    from mmaudit.scanners.hardhat_execution import capture_hardhat_two_phase_execution
+    from mmaudit.scanners.hardhat_finalization import finalize_hardhat_phase
+    from mmaudit.scanners.hardhat_protocol import (
+        consume_hardhat_test_phase_capture,
+        prepare_hardhat_test_phase_from_capture,
+    )
+    from mmaudit.scanners.hardhat_supervision import supervise_hardhat_phase_process
+    from mmaudit.scanners.offline_fork_rpc import load_offline_fork_rpc_archive
+    from mmaudit.scanners.offline_fork_service import OfflineForkRpcLease
     from mmaudit.scanners.trivy import TrivyScanner
     from mmaudit.solidity.formal import FormalRunner
     from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
     from mmaudit.solidity.reproduction import ForkReproductionRunner
 
     sources = [
+        _explicit_anchor(
+            "development-benchmark-truth",
+            read_development_benchmark_truth,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-benchmark-plan-binding",
+            bind_development_benchmark,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-benchmark-score",
+            score_development_audit,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-routing-observation",
+            observe_development_routing,
+            "gate-provider-secret-transport",
+        ),
+        _explicit_anchor(
+            "development-audit-frozen-plan", prepare_development_audit, "gate-client-audit-scope"
+        ),
+        _explicit_anchor(
+            "development-audit-shard-transport",
+            review_development_audit_shard,
+            "gate-provider-secret-transport",
+        ),
+        _explicit_anchor(
+            "development-audit-sequential-run", run_development_audit, "gate-full-quality-analysis"
+        ),
+        _explicit_anchor(
+            "managed-image-file-membership",
+            verify_managed_image_files,
+            "gate-managed-toolchain-bundle",
+        ),
+        _explicit_anchor(
+            "managed-image-layer-bytes",
+            verify_managed_image_layers,
+            "gate-managed-toolchain-bundle",
+        ),
+        _explicit_anchor(
+            "bound-read-only-evidence-stream",
+            stream_file_evidence,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "managed-image-metadata-chain",
+            read_managed_image_metadata,
+            "gate-managed-toolchain-bundle",
+        ),
+        _explicit_anchor(
+            "hardhat-phase-finalization", finalize_hardhat_phase, "gate-full-quality-analysis"
+        ),
+        _explicit_anchor(
+            "rootless-exact-container-cleanup",
+            cleanup_rootless_container,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "hardhat-owned-two-phase-execution",
+            capture_hardhat_two_phase_execution,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "hardhat-phase-container-layout",
+            SingleLoopbackHardhatBackend.wrap_hardhat_phase,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "hardhat-captured-inventory-preparation",
+            prepare_hardhat_test_phase_from_capture,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "hardhat-captured-test-consumption",
+            consume_hardhat_test_phase_capture,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "hardhat-phase-output-supervision",
+            supervise_hardhat_phase_process,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "managed-invariant-archive-selection",
+            _invariant_state,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "managed-reproduction-archive-selection",
+            _reproduction_state,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "managed-offline-primary-archive-selection",
+            ManagedForkArchiveSource,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "managed-primary-foundry-consumption",
+            FoundryForkScanner,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "managed-offline-fork-archive-preparation",
+            prepare_managed_fork_archives,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "managed-offline-fork-archive-consumption",
+            ManagedForkArchives,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "offline-fork-read-lease",
+            OfflineForkRpcLease,
+            "gate-fork-environment",
+        ),
+        _explicit_anchor(
+            "offline-fork-read-archive",
+            load_offline_fork_rpc_archive,
+            "gate-fork-environment",
+        ),
         _explicit_anchor(
             "cost-ledger-existing-state-contract",
             AtomicCostLedger,
@@ -3679,9 +3917,9 @@ def build_autonomy_gate_inventory(
         "audit_override_path_count": 51,
         "environment_override_count": 28,
         "cli_run_parameter_count": 53,
-        "pipeline_init_parameter_count": 26,
+        "pipeline_init_parameter_count": 29,
         "pipeline_run_parameter_count": 16,
-        "completion_entrypoint_parameter_count": 336,
+        "completion_entrypoint_parameter_count": 355,
         "source_kind_counts": {
             kind.value: sum(item.source_kind is kind for item in source_coverage)
             for kind in CompletionInputSourceKind

@@ -45,6 +45,13 @@ from mmaudit.models.actor_model import (
     CandidateActorContext,
     FindingActorAssessment,
 )
+from mmaudit.models.endpoint_snapshots import (
+    EndpointSnapshotValidationError,
+    OpenRouterPricingOverrideTier,
+    canonicalize_openrouter_pricing_schedule,
+    openrouter_pricing_schedule_sha256,
+    project_openrouter_pricing_schedule,
+)
 from mmaudit.models.identity import OpenRouterIdentityStrength
 from mmaudit.models.output_modes import (
     STRUCTURED_OUTPUT_PROTOCOL_VERSION,
@@ -62,6 +69,15 @@ from mmaudit.models.retrieval import (
     SolidityRetrievalRolePolicy,
     SolidityRetrievalTranscript,
     require_solidity_retrieval_transcript_within_policy,
+)
+from mmaudit.models.route_constraints import (
+    ExactRoutePricingSchedule,
+    ProviderPriceCapAlgorithm,
+    RouteConstraintError,
+    RoutePredicateProfile,
+    RoutePriceComponentUnitEnvelope,
+    normalize_exact_route_pricing,
+    project_provider_price_cap,
 )
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 from mmaudit.models.token_planning import (
@@ -6770,6 +6786,19 @@ class ScannerRun(StrictModel):
         default_factory=list,
         max_length=10_000,
     )
+    repository_statement_coverage_evidence: list[AuditedSuiteStatementCoverageEvidence] = Field(
+        default_factory=list,
+        max_length=10_000,
+        exclude_if=lambda value: not value,
+    )
+    repository_statement_entity_catalog: AuditedSuiteEntityCatalog | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    repository_statement_coverage_receipt: AuditedSuiteStatementCoverageReceipt | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     execution_observation_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -6959,6 +6988,45 @@ class ScannerRun(StrictModel):
             raise ValueError("operator preparation step requires an unmet scanner prerequisite")
         if self.repository_test_executions and self.repository_suite_selection is None:
             raise ValueError("repository test executions require their selection evidence")
+        statement_evidence = self.repository_statement_coverage_evidence
+        statement_catalog = self.repository_statement_entity_catalog
+        statement_receipt = self.repository_statement_coverage_receipt
+        if statement_receipt is not None and not statement_evidence:
+            raise ValueError("statement coverage receipt requires entity evidence")
+        if (statement_receipt is None) != (statement_catalog is None):
+            raise ValueError("statement coverage receipt and entity catalog are all-or-none")
+        if statement_evidence:
+            selection = self.repository_suite_selection
+            execution_policy = self.repository_suite_execution_policy
+            if (
+                self.scanner != "foundry_fork"
+                or self.status is not ScannerStatus.SUCCESS
+                or not self.machine_output_validated
+                or self.execution_evidence is not ExecutionEvidenceKind.REAL
+                or self.repository_code_execution is not RepositoryCodeExecutionState.ISOLATED
+                or selection is None
+                or execution_policy is None
+                or self.version is None
+                or self.executable_sha256 is None
+                or self.isolation_attestation_sha256 is None
+            ):
+                raise ValueError(
+                    "statement coverage evidence requires a successful isolated real Foundry run"
+                )
+            validated_repository_statement_coverage_evidence(
+                statement_evidence,
+                receipt=statement_receipt,
+                selection=selection,
+                execution_policy=execution_policy,
+                executions=self.repository_test_executions,
+                tool_version=self.version,
+                tool_sha256=self.executable_sha256,
+                isolation_attestation_sha256=self.isolation_attestation_sha256,
+                fork_rpc_scopes=self.repository_test_fork_rpc_scopes,
+                pre_inventory=self.repository_suite_inventory,
+                post_inventory=self.repository_suite_post_inventory,
+                entity_catalog=statement_catalog,
+            )
         if (
             self.repository_suite_inventory is not None
             or self.repository_suite_post_inventory is not None
@@ -11332,58 +11400,808 @@ class AuditedSuiteMutationSurfaceEvidence(StrictModel):
         return self
 
 
-class AuditedSuiteStatementObservation(StrictModel):
-    """One exact producer-emitted source statement and its execution disposition."""
+AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT = 100_000
+AUDITED_SUITE_STATEMENT_EVIDENCE_BYTE_LIMIT = 32_000_000
+AuditedSuiteSha256 = Annotated[
+    str,
+    Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+]
+AuditedSuitePhysicalStatementId = Annotated[
+    str,
+    Field(
+        min_length=83,
+        max_length=83,
+        pattern=r"^compiler-statement:[0-9a-f]{64}$",
+    ),
+]
+AuditedSuiteAtomicStatementNodeType = Literal[
+    "Break",
+    "Continue",
+    "EmitStatement",
+    "ExpressionStatement",
+    "PlaceholderStatement",
+    "Return",
+    "RevertStatement",
+    "Throw",
+    "VariableDeclarationStatement",
+    "YulAssignment",
+    "YulBreak",
+    "YulContinue",
+    "YulExpressionStatement",
+    "YulLeave",
+    "YulVariableDeclaration",
+]
 
-    statement_id: str = Field(pattern=r"^statement:[0-9a-f]{64}$")
-    location: Location
-    covered: bool
 
-    @model_validator(mode="after")
-    def location_is_exact(self) -> AuditedSuiteStatementObservation:
-        if self.location.content_hash is None or self.location.symbol is None:
-            raise ValueError("statement observation requires an exact hash-bound symbol location")
-        return self
+def _require_audited_suite_exact_location_input(value: object) -> object:
+    """Reject coercible or weak locations at the statement-evidence boundary."""
+
+    raw: Mapping[str, object]
+    if isinstance(value, Location):
+        raw = value.model_dump(mode="python")
+    elif isinstance(value, Mapping):
+        raw = value
+    else:
+        raise ValueError("audited-suite statement location must be a typed object")
+    path = raw.get("path")
+    start_line = raw.get("start_line")
+    end_line = raw.get("end_line")
+    symbol = raw.get("symbol")
+    content_hash = raw.get("content_hash")
+    if not isinstance(path, str):
+        raise ValueError("audited-suite statement location path must be exact text")
+    if (
+        isinstance(start_line, bool)
+        or not isinstance(start_line, int)
+        or isinstance(end_line, bool)
+        or not isinstance(end_line, int)
+    ):
+        raise ValueError("audited-suite statement location lines require exact integers")
+    if not isinstance(symbol, str) or not symbol or len(symbol) > 4_000:
+        raise ValueError("audited-suite statement location requires a bounded symbol")
+    if not isinstance(content_hash, str) or re.fullmatch(r"[0-9a-f]{64}", content_hash) is None:
+        raise ValueError("audited-suite statement location requires a SHA-256 content hash")
+    return value
 
 
-class AuditedSuiteStatementCoverageEvidence(StrictModel):
-    """Self-hashed statement declaration that cannot independently earn coverage credit."""
+class AuditedSuiteEntityCatalogBinding(StrictModel):
+    """Exact indexed audited-source identity supplied to the coverage producer."""
 
     schema_version: Literal["1.0"] = "1.0"
     entity_id: str = Field(min_length=1, max_length=500)
     entity_kind: SolidityEntityKind
-    contract_name: str = Field(min_length=1, max_length=500)
+    entity_name: str = Field(min_length=1, max_length=500)
+    declaring_contract_name: str | None = Field(default=None, max_length=500)
+    evidence_contract_name: str = Field(min_length=1, max_length=500)
     location: Location
-    statement_status: AuditedSuiteStatementStatus
-    statement_count: int = Field(ge=1, le=10_000_000)
-    covered_statement_count: int = Field(ge=0, le=10_000_000)
-    statements: list[AuditedSuiteStatementObservation] = Field(
-        min_length=1,
-        max_length=10_000_000,
+    entity_start_byte_offset: int = Field(ge=0, le=1_000_000_000)
+    entity_end_byte_offset: int = Field(ge=1, le=1_000_000_000)
+    source_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provenance: SolidityProvenance
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteEntityCatalogBinding:
+        """Construct one self-hashed index-to-producer binding."""
+
+        if "binding_sha256" in values:
+            raise ValueError("binding_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, binding_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"binding_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "binding_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("entity_start_byte_offset", "entity_end_byte_offset", mode="before")
+    @classmethod
+    def byte_offsets_are_exact_integers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("audited-suite catalog byte offsets require exact integers")
+        return value
+
+    @field_validator("location", mode="before")
+    @classmethod
+    def location_input_is_exact(cls, value: object) -> object:
+        return _require_audited_suite_exact_location_input(value)
+
+    @model_validator(mode="after")
+    def identity_location_and_hash_are_consistent(self) -> AuditedSuiteEntityCatalogBinding:
+        contract_kinds = {
+            SolidityEntityKind.CONTRACT,
+            SolidityEntityKind.INTERFACE,
+            SolidityEntityKind.LIBRARY,
+        }
+        function_kinds = {
+            SolidityEntityKind.FUNCTION,
+            SolidityEntityKind.CONSTRUCTOR,
+        }
+        if self.entity_kind not in contract_kinds | function_kinds:
+            raise ValueError("audited-suite catalog supports only contract and function entities")
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("audited-suite catalog requires an exact hash-bound location")
+        if not _repository_suite_path_is_safe(self.location.path, allow_root=False):
+            raise ValueError("audited-suite catalog path must be repository-relative")
+        if self.entity_end_byte_offset <= self.entity_start_byte_offset:
+            raise ValueError("audited-suite catalog requires a nonempty entity byte span")
+        if self.entity_kind in contract_kinds:
+            if self.declaring_contract_name is not None:
+                raise ValueError("contract catalog bindings cannot declare an enclosing contract")
+            if self.evidence_contract_name != self.entity_name:
+                raise ValueError("contract catalog evidence name differs from its entity name")
+        elif (
+            self.declaring_contract_name is None
+            or self.evidence_contract_name != self.declaring_contract_name
+        ):
+            raise ValueError("function catalog bindings require their exact declaring contract")
+        payload = self.model_dump(mode="json", exclude={"binding_sha256"})
+        if self.binding_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("audited-suite catalog binding hash does not match its fields")
+        return self
+
+
+class AuditedSuiteEntityCatalog(StrictModel):
+    """Self-hashed complete audited-source denominator passed into Foundry."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    classification_complete: bool
+    classification_limitations: list[str] = Field(default_factory=list, max_length=1_000)
+    bindings: list[AuditedSuiteEntityCatalogBinding] = Field(
+        default_factory=list,
+        max_length=10_000,
     )
-    repository_test_execution_sha256s: list[str] = Field(
+    catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteEntityCatalog:
+        """Construct a denominator catalog whose digest covers every entity binding."""
+
+        if "catalog_sha256" in values:
+            raise ValueError("catalog_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, catalog_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"catalog_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "catalog_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("classification_complete", mode="before")
+    @classmethod
+    def completeness_is_an_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("audited-suite catalog completeness requires an exact boolean")
+        return value
+
+    @model_validator(mode="after")
+    def population_and_hash_are_consistent(self) -> AuditedSuiteEntityCatalog:
+        binding_keys = [(item.entity_id, item.binding_sha256) for item in self.bindings]
+        if binding_keys != sorted(set(binding_keys)) or len(
+            {item.entity_id for item in self.bindings}
+        ) != len(self.bindings):
+            raise ValueError("audited-suite catalog bindings must be unique and sorted")
+        if self.classification_limitations != sorted(set(self.classification_limitations)):
+            raise ValueError("audited-suite catalog limitations must be unique and sorted")
+        if self.classification_complete and self.classification_limitations:
+            raise ValueError("complete audited-suite catalog cannot carry limitations")
+        if not self.classification_complete and not self.classification_limitations:
+            raise ValueError("incomplete audited-suite catalog requires a limitation")
+        if self.classification_complete and any(
+            binding.provenance is not SolidityProvenance.COMPILER for binding in self.bindings
+        ):
+            raise ValueError("complete audited-suite catalog requires compiler-derived bindings")
+        if any(
+            not _repository_suite_text_is_safe(item) for item in self.classification_limitations
+        ):
+            raise ValueError("audited-suite catalog limitations must be bounded printable text")
+        payload = self.model_dump(mode="json", exclude={"catalog_sha256"})
+        if self.catalog_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("audited-suite catalog hash does not match its fields")
+        return self
+
+
+class AuditedSuiteCompilerStatementRecord(StrictModel):
+    """One canonical atomic AST statement and its aggregated coverage disposition."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    physical_statement_id: str = Field(pattern=r"^compiler-statement:[0-9a-f]{64}$")
+    project_root: str = Field(min_length=1, max_length=4_096)
+    path: str = Field(min_length=1, max_length=4_096)
+    source_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_build_info_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_source_id: int = Field(ge=0, le=1_000_000_000)
+    compiler_ast_id: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    enclosing_inline_assembly_ast_id: int | None = Field(
+        default=None,
+        ge=0,
+        le=1_000_000_000,
+    )
+    enclosing_contract_ast_id: int = Field(ge=0, le=1_000_000_000)
+    enclosing_function_ast_id: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    compiler_ast_node_type: AuditedSuiteAtomicStatementNodeType
+    start_line: int = Field(ge=1, le=1_000_000_000)
+    end_line: int = Field(ge=2, le=1_000_000_001)
+    start_byte_offset: int = Field(ge=0, le=1_000_000_000)
+    end_byte_offset: int = Field(ge=1, le=1_000_000_000)
+    covered: bool
+    record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @staticmethod
+    def calculate_physical_statement_id(
+        *,
+        path: str,
+        source_file_sha256: str,
+        start_byte_offset: int,
+        end_byte_offset: int,
+    ) -> str:
+        return "compiler-statement:" + _canonical_model_sha256(
+            {
+                "path": path,
+                "source_file_sha256": source_file_sha256,
+                "start_byte_offset": start_byte_offset,
+                "end_byte_offset": end_byte_offset,
+            }
+        )
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteCompilerStatementRecord:
+        """Construct one self-hashed compiler statement record."""
+
+        if "record_sha256" in values:
+            raise ValueError("record_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, record_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"record_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "record_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "compiler_source_id",
+        "compiler_ast_id",
+        "enclosing_inline_assembly_ast_id",
+        "enclosing_contract_ast_id",
+        "enclosing_function_ast_id",
+        "start_line",
+        "end_line",
+        "start_byte_offset",
+        "end_byte_offset",
+        mode="before",
+    )
+    @classmethod
+    def statement_numbers_are_exact_integers(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError("compiler statement identity requires exact integers")
+        return value
+
+    @field_validator("covered", mode="before")
+    @classmethod
+    def coverage_disposition_is_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("compiler statement coverage requires an exact boolean")
+        return value
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("compiler statement project root must be repository-relative")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def source_path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("compiler statement path must be repository-relative")
+        return value
+
+    @model_validator(mode="after")
+    def span_identity_and_hash_are_consistent(self) -> AuditedSuiteCompilerStatementRecord:
+        if self.end_line <= self.start_line or self.end_byte_offset <= self.start_byte_offset:
+            raise ValueError("compiler statement requires nonempty half-open source ranges")
+        if self.project_root != "." and not self.path.startswith(f"{self.project_root}/"):
+            raise ValueError("compiler statement path is outside its project root")
+        yul_statement = self.compiler_ast_node_type.startswith("Yul")
+        if yul_statement != (
+            self.compiler_ast_id is None and self.enclosing_inline_assembly_ast_id is not None
+        ):
+            raise ValueError("compiler statement AST identity differs from its language family")
+        if not yul_statement and self.enclosing_inline_assembly_ast_id is not None:
+            raise ValueError("Solidity statement cannot carry an inline-assembly surrogate ID")
+        expected_id = self.calculate_physical_statement_id(
+            path=self.path,
+            source_file_sha256=self.source_file_sha256,
+            start_byte_offset=self.start_byte_offset,
+            end_byte_offset=self.end_byte_offset,
+        )
+        if self.physical_statement_id != expected_id:
+            raise ValueError("compiler statement identity differs from its source span")
+        payload = self.model_dump(mode="json", exclude={"record_sha256"})
+        if self.record_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("compiler statement record hash does not match its fields")
+        return self
+
+
+class AuditedSuiteStatementCoverageProcessReceipt(StrictModel):
+    """Host-observed custody for one exact selected-test coverage process."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    sequence_index: int = Field(ge=1, le=10_000)
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_test_execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_command_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fork_rpc_scope_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    process_exit_code: Literal[0] = 0
+    machine_output_validated: Literal[True] = True
+    machine_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    private_artifact_path: str = Field(min_length=1, max_length=1_000)
+    stdout_path: str = Field(min_length=1, max_length=1_000)
+    stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stdout_bytes: int = Field(ge=1, le=1_000_000_000)
+    stderr_path: str = Field(min_length=1, max_length=1_000)
+    stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stderr_bytes: int = Field(ge=0, le=1_000_000_000)
+    private_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    private_artifact_bytes: int = Field(ge=1, le=1_000_000_000)
+    duration_seconds: float = Field(gt=0, le=86_400)
+    debug_statement_population_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    debug_statement_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteStatementCoverageProcessReceipt:
+        """Construct one self-hashed coverage process observation."""
+
+        if "receipt_sha256" in values:
+            raise ValueError("receipt_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, receipt_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"receipt_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "receipt_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "sequence_index",
+        "process_exit_code",
+        "stdout_bytes",
+        "stderr_bytes",
+        "private_artifact_bytes",
+        mode="before",
+    )
+    @classmethod
+    def process_numbers_are_exact_integers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("statement coverage process custody requires exact integers")
+        return value
+
+    @field_validator("machine_output_validated", mode="before")
+    @classmethod
+    def machine_validation_is_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("statement coverage machine validation requires an exact boolean")
+        return value
+
+    @field_validator("duration_seconds", mode="before")
+    @classmethod
+    def duration_is_a_finite_number(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("statement coverage duration requires a finite number")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("statement coverage duration requires a finite number")
+        return numeric
+
+    @field_validator("private_artifact_path", "stdout_path", "stderr_path")
+    @classmethod
+    def artifact_paths_are_safe_relative(cls, value: str) -> str:
+        return _require_safe_relative_artifact_path(
+            value,
+            label="statement coverage private artifact path",
+        )
+
+    @model_validator(mode="after")
+    def byte_accounting_and_hash_are_consistent(
+        self,
+    ) -> AuditedSuiteStatementCoverageProcessReceipt:
+        if self.stdout_bytes + self.stderr_bytes > self.private_artifact_bytes:
+            raise ValueError("coverage process streams exceed their complete private artifact")
+        if (
+            self.private_artifact_path != f"repository-suite/coverage/{self.sequence_index - 1:05d}"
+            or self.stdout_path != f"{self.private_artifact_path}/stdout.txt"
+            or self.stderr_path != f"{self.private_artifact_path}/stderr.txt"
+        ):
+            raise ValueError("coverage process stream paths differ from its private artifact tree")
+        payload = self.model_dump(mode="json", exclude={"receipt_sha256"})
+        if self.receipt_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("statement coverage process receipt hash does not match its fields")
+        return self
+
+
+class AuditedSuiteStatementCoverageReceipt(StrictModel):
+    """Shared compiler/process custody for one complete entity evidence population."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_suite_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_suite_execution_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pre_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    post_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    entity_catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_test_execution_sha256s: list[AuditedSuiteSha256] = Field(
         min_length=1,
         max_length=10_000,
     )
-    source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    processes: list[AuditedSuiteStatementCoverageProcessReceipt] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    compiler_statements: list[AuditedSuiteCompilerStatementRecord] = Field(
+        default_factory=list,
+        max_length=AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT,
+    )
+    entity_statement_ids: dict[str, list[AuditedSuitePhysicalStatementId]] = Field(
+        default_factory=dict,
+        max_length=10_000,
+    )
+    compiler_statement_count: int = Field(
+        ge=0,
+        le=AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT,
+    )
+    statement_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     coverage_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_artifact_bytes: int = Field(ge=1, le=1_000_000_000)
     producer_name: Literal["mmaudit-audited-suite-coverage-normalizer"] = (
         "mmaudit-audited-suite-coverage-normalizer"
     )
     producer_version: str = Field(min_length=1, max_length=1_000)
     producer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    tool_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+    normalizer_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_name: Literal["forge"] = "forge"
     tool_version: str = Field(min_length=1, max_length=1_000)
     tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_version: str = Field(min_length=1, max_length=1_000)
+    compiler_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
     machine_output_validated: Literal[True] = True
     isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
-    @field_validator("producer_version", "tool_version")
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteStatementCoverageReceipt:
+        """Construct the single run-level receipt for all entity evidence."""
+
+        if "receipt_sha256" in values:
+            raise ValueError("receipt_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, receipt_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"receipt_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "receipt_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("producer_version", "tool_version", "compiler_version")
     @classmethod
     def runtime_versions_are_public_safe(cls, value: str) -> str:
         return _require_public_tool_version(value)
+
+    @field_validator("compiler_statement_count", "coverage_artifact_bytes", mode="before")
+    @classmethod
+    def receipt_counts_are_exact_integers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("statement coverage receipt counts require exact integers")
+        return value
+
+    @field_validator("machine_output_validated", mode="before")
+    @classmethod
+    def receipt_machine_validation_is_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("statement coverage receipt validation requires an exact boolean")
+        return value
+
+    @property
+    def coverage_command_sha256s(self) -> list[str]:
+        return sorted(process.coverage_command_sha256 for process in self.processes)
+
+    @model_validator(mode="after")
+    def populations_artifacts_and_hash_are_consistent(
+        self,
+    ) -> AuditedSuiteStatementCoverageReceipt:
+        if self.repository_test_execution_sha256s != sorted(
+            set(self.repository_test_execution_sha256s)
+        ):
+            raise ValueError("statement receipt execution hashes must be unique and sorted")
+        process_indexes = [process.sequence_index for process in self.processes]
+        if process_indexes != list(range(1, len(self.processes) + 1)):
+            raise ValueError("statement coverage process receipts must be contiguous and sorted")
+        for values, label in (
+            ([process.descriptor_sha256 for process in self.processes], "descriptors"),
+            (
+                [process.repository_test_execution_sha256 for process in self.processes],
+                "executions",
+            ),
+            ([process.coverage_command_sha256 for process in self.processes], "commands"),
+            (
+                [process.fork_rpc_scope_evidence_sha256 for process in self.processes],
+                "fork RPC scopes",
+            ),
+            ([process.private_artifact_path for process in self.processes], "artifact paths"),
+            ([process.stdout_path for process in self.processes], "stdout paths"),
+            ([process.stderr_path for process in self.processes], "stderr paths"),
+            ([process.receipt_sha256 for process in self.processes], "process receipts"),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"statement coverage process {label} must be unique")
+        if (
+            sorted(process.repository_test_execution_sha256 for process in self.processes)
+            != self.repository_test_execution_sha256s
+        ):
+            raise ValueError("statement receipt execution population differs from its processes")
+        statement_keys = [
+            (
+                statement.path,
+                statement.start_byte_offset,
+                statement.end_byte_offset,
+                statement.physical_statement_id,
+                statement.record_sha256,
+            )
+            for statement in self.compiler_statements
+        ]
+        if statement_keys != sorted(set(statement_keys)) or len(
+            {statement.physical_statement_id for statement in self.compiler_statements}
+        ) != len(self.compiler_statements):
+            raise ValueError("compiler statements must be unique and canonically sorted")
+        solidity_ast_keys = [
+            (
+                statement.project_root,
+                statement.normalized_build_info_sha256,
+                statement.compiler_ast_id,
+            )
+            for statement in self.compiler_statements
+            if statement.compiler_ast_id is not None
+        ]
+        if len(solidity_ast_keys) != len(set(solidity_ast_keys)):
+            raise ValueError("Solidity compiler statement AST identities must be unique")
+        source_id_bindings: dict[tuple[str, str, int], tuple[str, str]] = {}
+        for statement in self.compiler_statements:
+            source_key = (
+                statement.project_root,
+                statement.normalized_build_info_sha256,
+                statement.compiler_source_id,
+            )
+            source_binding = (statement.path, statement.source_file_sha256)
+            previous_binding = source_id_bindings.setdefault(source_key, source_binding)
+            if previous_binding != source_binding:
+                raise ValueError("compiler source IDs have conflicting path/hash bindings")
+        if any(
+            current.path == previous.path and current.start_byte_offset < previous.end_byte_offset
+            for previous, current in zip(
+                self.compiler_statements,
+                self.compiler_statements[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("canonical atomic compiler statement spans must not overlap")
+        if self.compiler_statement_count != len(self.compiler_statements):
+            raise ValueError("compiler statement count differs from its exact inventory")
+        physical_statement_ids = {
+            statement.physical_statement_id for statement in self.compiler_statements
+        }
+        if not self.entity_statement_ids:
+            raise ValueError("statement receipt requires its exact entity projection map")
+        if any(not entity_id or len(entity_id) > 500 for entity_id in self.entity_statement_ids):
+            raise ValueError("statement receipt entity projection IDs are malformed")
+        if any(
+            statement_ids != sorted(set(statement_ids))
+            or not set(statement_ids) <= physical_statement_ids
+            for statement_ids in self.entity_statement_ids.values()
+        ):
+            raise ValueError("statement receipt entity projections are noncanonical or unknown")
+        if {
+            statement_id
+            for statement_ids in self.entity_statement_ids.values()
+            for statement_id in statement_ids
+        } != physical_statement_ids:
+            raise ValueError("statement receipt entity projections omit compiler statements")
+        if sum(len(statement_ids) for statement_ids in self.entity_statement_ids.values()) > (
+            2 * AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT
+        ):
+            raise ValueError("statement receipt entity projections exceed the aggregate bound")
+        inventory_payload = [
+            statement.model_dump(
+                mode="json",
+                exclude={"covered", "record_sha256"},
+            )
+            for statement in self.compiler_statements
+        ]
+        if self.statement_inventory_sha256 != _canonical_model_sha256(inventory_payload):
+            raise ValueError("compiler statement inventory hash does not match its records")
+        artifact_payload = [
+            {
+                "sequence_index": process.sequence_index,
+                "private_artifact_path": process.private_artifact_path,
+                "stdout_path": process.stdout_path,
+                "stdout_sha256": process.stdout_sha256,
+                "stdout_bytes": process.stdout_bytes,
+                "stderr_path": process.stderr_path,
+                "stderr_sha256": process.stderr_sha256,
+                "stderr_bytes": process.stderr_bytes,
+                "private_artifact_sha256": process.private_artifact_sha256,
+                "private_artifact_bytes": process.private_artifact_bytes,
+            }
+            for process in self.processes
+        ]
+        if self.coverage_artifact_sha256 != _canonical_model_sha256(artifact_payload):
+            raise ValueError("coverage artifact bundle hash does not match its process custody")
+        if self.coverage_artifact_bytes != sum(
+            process.private_artifact_bytes for process in self.processes
+        ):
+            raise ValueError("coverage artifact bytes differ from complete process custody")
+        payload = self.model_dump(mode="json", exclude={"receipt_sha256"})
+        if self.receipt_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("statement coverage receipt hash does not match its fields")
+        return self
+
+
+class AuditedSuiteStatementObservation(StrictModel):
+    """One exact producer-emitted source statement and its execution disposition."""
+
+    statement_id: str = Field(pattern=r"^statement:[0-9a-f]{64}$")
+    location: Location
+    start_byte_offset: int = Field(ge=0, le=1_000_000_000)
+    end_byte_offset: int = Field(ge=1, le=1_000_000_000)
+    covered: bool
+
+    @field_validator("start_byte_offset", "end_byte_offset", mode="before")
+    @classmethod
+    def byte_offsets_are_exact_integers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("statement observation byte offsets require exact integers")
+        return value
+
+    @field_validator("covered", mode="before")
+    @classmethod
+    def covered_is_an_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("statement observation coverage requires an exact boolean")
+        return value
+
+    @field_validator("location", mode="before")
+    @classmethod
+    def location_input_is_exact(cls, value: object) -> object:
+        return _require_audited_suite_exact_location_input(value)
+
+    @classmethod
+    def calculate_statement_id(
+        cls,
+        *,
+        location: Location,
+        start_byte_offset: int,
+        end_byte_offset: int,
+    ) -> str:
+        """Derive one stable identity from the exact UTF-8 source byte span."""
+
+        return "statement:" + _canonical_model_sha256(
+            {
+                "path": location.path,
+                "content_hash": location.content_hash,
+                "symbol": location.symbol,
+                "start_line": location.start_line,
+                "end_line": location.end_line,
+                "start_byte_offset": start_byte_offset,
+                "end_byte_offset": end_byte_offset,
+            }
+        )
+
+    @model_validator(mode="after")
+    def location_is_exact(self) -> AuditedSuiteStatementObservation:
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("statement observation requires an exact hash-bound symbol location")
+        if self.end_byte_offset <= self.start_byte_offset:
+            raise ValueError("statement observation requires a nonempty source byte span")
+        expected_id = self.calculate_statement_id(
+            location=self.location,
+            start_byte_offset=self.start_byte_offset,
+            end_byte_offset=self.end_byte_offset,
+        )
+        if self.statement_id != expected_id:
+            raise ValueError("statement identity differs from its exact source byte span")
+        return self
+
+
+class AuditedSuiteStatementCoverageEvidence(StrictModel):
+    """Self-hashed declaration; exact empty executable inventories are vacuously covered."""
+
+    schema_version: Literal["1.1", "1.2"] = "1.1"
+    entity_id: str = Field(min_length=1, max_length=500)
+    entity_kind: SolidityEntityKind
+    contract_name: str = Field(min_length=1, max_length=500)
+    location: Location
+    statement_status: AuditedSuiteStatementStatus
+    statement_count: int = Field(ge=0, le=AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT)
+    covered_statement_count: int = Field(
+        ge=0,
+        le=AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT,
+    )
+    statements: list[AuditedSuiteStatementObservation] = Field(
+        max_length=AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT,
+    )
+    empty_statement_inventory_policy: Literal["vacuously_covered_exact_empty_inventory"] = (
+        "vacuously_covered_exact_empty_inventory"
+    )
+    repository_test_execution_sha256s: list[AuditedSuiteSha256] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_suite_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_suite_execution_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_command_sha256s: list[AuditedSuiteSha256] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    statement_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_artifact_bytes: int = Field(ge=1, le=1_000_000_000)
+    producer_name: Literal["mmaudit-audited-suite-coverage-normalizer"] = (
+        "mmaudit-audited-suite-coverage-normalizer"
+    )
+    producer_version: str = Field(min_length=1, max_length=1_000)
+    producer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalizer_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+    tool_version: str = Field(min_length=1, max_length=1_000)
+    tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_version: str = Field(min_length=1, max_length=1_000)
+    compiler_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
+    machine_output_validated: Literal[True] = True
+    isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_receipt_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("producer_version", "tool_version", "compiler_version")
+    @classmethod
+    def runtime_versions_are_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
+
+    @field_validator(
+        "statement_count",
+        "covered_statement_count",
+        "coverage_artifact_bytes",
+        mode="before",
+    )
+    @classmethod
+    def evidence_counts_are_exact_integers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("statement evidence counts require exact integers")
+        return value
+
+    @field_validator("machine_output_validated", mode="before")
+    @classmethod
+    def machine_validation_is_an_exact_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("statement evidence validation requires an exact boolean")
+        return value
+
+    @field_validator("location", mode="before")
+    @classmethod
+    def location_input_is_exact(cls, value: object) -> object:
+        return _require_audited_suite_exact_location_input(value)
 
     @classmethod
     def sealed(cls, **values: Any) -> AuditedSuiteStatementCoverageEvidence:
@@ -11417,15 +12235,19 @@ class AuditedSuiteStatementCoverageEvidence(StrictModel):
             raise ValueError(
                 "audited-suite statement evidence requires an exact hash-bound symbol location"
             )
+        if (self.schema_version == "1.2") != (self.coverage_receipt_sha256 is not None):
+            raise ValueError("statement evidence v1.2 requires exactly one coverage receipt hash")
         if self.repository_test_execution_sha256s != sorted(
             set(self.repository_test_execution_sha256s)
         ):
             raise ValueError("statement evidence execution hashes must be unique and sorted")
+        if self.coverage_command_sha256s != sorted(set(self.coverage_command_sha256s)):
+            raise ValueError("statement coverage command hashes must be unique and sorted")
         statement_keys = [
             (
                 statement.location.path,
-                statement.location.start_line,
-                statement.location.end_line,
+                statement.start_byte_offset,
+                statement.end_byte_offset,
                 statement.statement_id,
             )
             for statement in self.statements
@@ -11433,8 +12255,14 @@ class AuditedSuiteStatementCoverageEvidence(StrictModel):
         if statement_keys != sorted(set(statement_keys)):
             raise ValueError("statement observations must be unique and canonically sorted")
         if any(
+            current.start_byte_offset < previous.end_byte_offset
+            for previous, current in zip(self.statements, self.statements[1:], strict=False)
+        ):
+            raise ValueError("statement source byte spans must not overlap")
+        if any(
             statement.location.path != self.location.path
             or statement.location.content_hash != self.location.content_hash
+            or statement.location.symbol != self.location.symbol
             or statement.location.start_line < self.location.start_line
             or statement.location.end_line > self.location.end_line
             for statement in self.statements
@@ -11460,8 +12288,392 @@ class AuditedSuiteStatementCoverageEvidence(StrictModel):
         return self
 
 
+def validated_repository_statement_coverage_evidence(
+    evidence: Sequence[AuditedSuiteStatementCoverageEvidence],
+    *,
+    receipt: AuditedSuiteStatementCoverageReceipt | None = None,
+    selection: RepositorySuiteSelection,
+    execution_policy: RepositorySuiteExecutionPolicy,
+    executions: Sequence[RepositoryTestExecution],
+    tool_version: str,
+    tool_sha256: str,
+    isolation_attestation_sha256: str,
+    fork_rpc_scopes: Sequence[RepositoryTestForkRpcScopeEvidence] = (),
+    pre_inventory: RepositorySuiteInventoryEvidence | None = None,
+    post_inventory: RepositorySuiteInventoryEvidence | None = None,
+    entity_catalog: AuditedSuiteEntityCatalog | None = None,
+    entity_catalog_sha256: str | None = None,
+) -> list[AuditedSuiteStatementCoverageEvidence]:
+    """Canonicalize and bind one complete normalized observation to its exact suite run."""
+
+    canonical = [
+        AuditedSuiteStatementCoverageEvidence.model_validate(item.model_dump(mode="json"))
+        for item in evidence
+    ]
+    if not canonical:
+        if receipt is not None or entity_catalog is not None:
+            raise ValueError(
+                "statement coverage receipt/catalog cannot exist without entity evidence"
+            )
+        return []
+    if canonical != list(evidence):
+        raise ValueError("statement coverage evidence failed canonical revalidation")
+    evidence_keys = [(item.entity_id, item.evidence_sha256) for item in canonical]
+    if evidence_keys != sorted(set(evidence_keys)) or len(
+        {item.entity_id for item in canonical}
+    ) != len(canonical):
+        raise ValueError("statement coverage evidence must have unique canonically sorted entities")
+    schema_versions = {item.schema_version for item in canonical}
+    if len(schema_versions) != 1:
+        raise ValueError("statement coverage entities must use one schema version")
+    canonical_receipt: AuditedSuiteStatementCoverageReceipt | None = None
+    canonical_entity_catalog: AuditedSuiteEntityCatalog | None = None
+    canonical_bindings_by_id: dict[str, AuditedSuiteEntityCatalogBinding] = {}
+    if schema_versions == {"1.2"}:
+        if receipt is None or entity_catalog is None:
+            raise ValueError(
+                "statement coverage v1.2 requires its shared process receipt and entity catalog"
+            )
+        canonical_receipt = AuditedSuiteStatementCoverageReceipt.model_validate(
+            receipt.model_dump(mode="json")
+        )
+        if canonical_receipt != receipt:
+            raise ValueError("statement coverage receipt failed canonical revalidation")
+        if any(
+            item.coverage_receipt_sha256 != canonical_receipt.receipt_sha256 for item in canonical
+        ):
+            raise ValueError("statement coverage entities differ from their shared receipt")
+        canonical_entity_catalog = AuditedSuiteEntityCatalog.model_validate(
+            entity_catalog.model_dump(mode="json")
+        )
+        if canonical_entity_catalog != entity_catalog:
+            raise ValueError("statement coverage entity catalog failed canonical revalidation")
+        if (
+            not canonical_entity_catalog.classification_complete
+            or canonical_entity_catalog.repository_sha256 != selection.repository_sha256
+            or canonical_entity_catalog.catalog_sha256 != canonical_receipt.entity_catalog_sha256
+            or (
+                entity_catalog_sha256 is not None
+                and canonical_entity_catalog.catalog_sha256 != entity_catalog_sha256
+            )
+        ):
+            raise ValueError("statement coverage entity catalog differs from its repository run")
+        canonical_bindings_by_id = {
+            binding.entity_id: binding for binding in canonical_entity_catalog.bindings
+        }
+        if set(canonical_bindings_by_id) != {item.entity_id for item in canonical} or any(
+            item.entity_kind is not canonical_bindings_by_id[item.entity_id].entity_kind
+            or item.contract_name != canonical_bindings_by_id[item.entity_id].evidence_contract_name
+            or item.location != canonical_bindings_by_id[item.entity_id].location
+            for item in canonical
+        ):
+            raise ValueError("statement coverage evidence differs from its frozen entity catalog")
+    elif receipt is not None or entity_catalog is not None:
+        raise ValueError("legacy statement evidence cannot acquire a coverage receipt or catalog")
+    execution_sha256s = sorted(execution.execution_sha256 for execution in executions)
+    if len(execution_sha256s) != selection.selected_test_count or any(
+        execution.status is not RepositoryTestExecutionStatus.PASSED for execution in executions
+    ):
+        raise ValueError(
+            "statement coverage evidence requires every selected repository test to pass"
+        )
+    run_bindings = {
+        (
+            item.source_repository_sha256,
+            item.repository_suite_selection_sha256,
+            item.repository_suite_execution_policy_sha256,
+            tuple(item.repository_test_execution_sha256s),
+            tuple(item.coverage_command_sha256s),
+            item.statement_inventory_sha256,
+            item.coverage_artifact_sha256,
+            item.coverage_artifact_bytes,
+            item.producer_version,
+            item.producer_sha256,
+            item.normalizer_policy_sha256,
+            item.tool_name,
+            item.tool_version,
+            item.tool_sha256,
+            item.compiler_version,
+            item.compiler_sha256,
+            item.isolation_attestation_sha256,
+        )
+        for item in canonical
+    }
+    if len(run_bindings) != 1:
+        raise ValueError("statement coverage entities must share one exact producer observation")
+    if sum(item.statement_count for item in canonical) > AUDITED_SUITE_STATEMENT_OBSERVATION_LIMIT:
+        raise ValueError("statement coverage exceeds the aggregate statement bound")
+    normalized_evidence_bytes = sum(
+        len(
+            json.dumps(
+                item.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        for item in canonical
+    )
+    normalized_receipt_bytes = (
+        len(
+            json.dumps(
+                canonical_receipt.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        if canonical_receipt is not None
+        else 0
+    )
+    coverage_artifact_bytes = canonical[0].coverage_artifact_bytes
+    regular_execution_artifact_bytes = sum(execution.output_bytes for execution in executions)
+    if (
+        normalized_evidence_bytes
+        + normalized_receipt_bytes
+        + regular_execution_artifact_bytes
+        + coverage_artifact_bytes
+        > min(
+            AUDITED_SUITE_STATEMENT_EVIDENCE_BYTE_LIMIT,
+            execution_policy.max_total_output_bytes,
+        )
+    ):
+        raise ValueError("statement coverage evidence exceeds its complete artifact byte budget")
+    if any(
+        item.source_repository_sha256 != selection.repository_sha256
+        or item.repository_suite_selection_sha256 != selection.selection_sha256
+        or item.repository_suite_execution_policy_sha256 != execution_policy.policy_sha256
+        or item.repository_test_execution_sha256s != execution_sha256s
+        or len(item.coverage_command_sha256s) != selection.selected_test_count
+        or item.tool_name != "forge"
+        or item.tool_version != tool_version
+        or item.tool_sha256 != tool_sha256
+        or item.compiler_version != execution_policy.compiler_version
+        or item.compiler_sha256 != execution_policy.compiler_sha256
+        or item.isolation_attestation_sha256 != isolation_attestation_sha256
+        for item in canonical
+    ):
+        raise ValueError("statement coverage evidence differs from its exact repository-suite run")
+    if canonical_receipt is not None:
+        if pre_inventory is None or post_inventory is None:
+            raise ValueError("statement coverage receipt requires pre/post compiler inventories")
+        descriptor_sha256s = [item.descriptor_sha256 for item in selection.tests]
+        ordered_executions = list(executions)
+        if len(ordered_executions) != len(descriptor_sha256s) or any(
+            execution.descriptor_sha256 != descriptor_sha256
+            for execution, descriptor_sha256 in zip(
+                ordered_executions,
+                descriptor_sha256s,
+                strict=True,
+            )
+        ):
+            raise ValueError("statement coverage executions differ from selection order")
+        if any(
+            process.descriptor_sha256 != descriptor_sha256
+            or process.repository_test_execution_sha256 != execution.execution_sha256
+            for process, descriptor_sha256, execution in zip(
+                canonical_receipt.processes,
+                descriptor_sha256s,
+                ordered_executions,
+                strict=True,
+            )
+        ):
+            raise ValueError("coverage processes differ from selected terminal executions")
+        ordered_scopes = list(fork_rpc_scopes)
+        if len(ordered_scopes) != len(descriptor_sha256s) or any(
+            scope.sequence_index != index
+            or scope.descriptor_sha256 != descriptor_sha256
+            or scope.selection_sha256 != selection.selection_sha256
+            or scope.status is not RepositoryTestForkRpcScopeStatus.VALIDATED
+            or process.fork_rpc_scope_evidence_sha256 != scope.evidence_sha256
+            for index, (process, scope, descriptor_sha256) in enumerate(
+                zip(
+                    canonical_receipt.processes,
+                    ordered_scopes,
+                    descriptor_sha256s,
+                    strict=True,
+                ),
+                start=1,
+            )
+        ):
+            raise ValueError("coverage processes lack their exact validated fork RPC scopes")
+        if any(
+            execution.output_bytes + process.private_artifact_bytes
+            > execution_policy.max_output_bytes_per_test
+            or execution.duration_seconds + process.duration_seconds
+            > execution_policy.per_test_timeout_seconds
+            for execution, process in zip(
+                ordered_executions,
+                canonical_receipt.processes,
+                strict=True,
+            )
+        ):
+            raise ValueError("paired repository tests and coverage exceeded a per-test ceiling")
+        if (
+            sum(execution.duration_seconds for execution in ordered_executions)
+            + sum(process.duration_seconds for process in canonical_receipt.processes)
+            > execution_policy.total_timeout_seconds
+        ):
+            raise ValueError("repository tests and coverage exceeded their shared suite ceiling")
+        populations_by_project: dict[str, set[str]] = {}
+        for process, descriptor in zip(
+            canonical_receipt.processes,
+            selection.tests,
+            strict=True,
+        ):
+            populations_by_project.setdefault(descriptor.project_root, set()).add(
+                process.debug_statement_population_sha256
+            )
+        if any(len(populations) != 1 for populations in populations_by_project.values()):
+            raise ValueError(
+                "coverage processes from one project differ in their debug statement population"
+            )
+        if (
+            canonical_receipt.source_repository_sha256 != selection.repository_sha256
+            or canonical_receipt.repository_suite_selection_sha256 != selection.selection_sha256
+            or canonical_receipt.repository_suite_execution_policy_sha256
+            != execution_policy.policy_sha256
+            or canonical_receipt.pre_inventory_sha256 != pre_inventory.inventory_sha256
+            or canonical_receipt.post_inventory_sha256 != post_inventory.inventory_sha256
+            or canonical_receipt.repository_test_execution_sha256s != execution_sha256s
+            or canonical_receipt.tool_version != tool_version
+            or canonical_receipt.tool_sha256 != tool_sha256
+            or canonical_receipt.compiler_version != execution_policy.compiler_version
+            or canonical_receipt.compiler_sha256 != execution_policy.compiler_sha256
+            or canonical_receipt.isolation_attestation_sha256 != isolation_attestation_sha256
+            or (
+                canonical_entity_catalog is not None
+                and canonical_receipt.entity_catalog_sha256
+                != canonical_entity_catalog.catalog_sha256
+            )
+        ):
+            raise ValueError("statement coverage receipt differs from its exact repository run")
+        pre_build_hashes_by_project = {
+            project.project_root: {
+                artifact.normalized_sha256 for artifact in project.build_info_artifacts
+            }
+            for project in pre_inventory.projects
+        }
+        post_build_hashes_by_project = {
+            project.project_root: {
+                artifact.normalized_sha256 for artifact in project.build_info_artifacts
+            }
+            for project in post_inventory.projects
+        }
+        if any(
+            statement.normalized_build_info_sha256
+            not in pre_build_hashes_by_project.get(statement.project_root, set())
+            or statement.normalized_build_info_sha256
+            not in post_build_hashes_by_project.get(statement.project_root, set())
+            for statement in canonical_receipt.compiler_statements
+        ):
+            raise ValueError("compiler statements lack matching stable build-info custody")
+        receipt_statement_keys = {
+            (
+                statement.path,
+                statement.start_line,
+                statement.end_line - 1,
+                statement.start_byte_offset,
+                statement.end_byte_offset,
+                statement.covered,
+            )
+            for statement in canonical_receipt.compiler_statements
+        }
+        projected_statement_keys = {
+            (
+                statement.location.path,
+                statement.location.start_line,
+                statement.location.end_line,
+                statement.start_byte_offset,
+                statement.end_byte_offset,
+                statement.covered,
+            )
+            for item in canonical
+            for statement in item.statements
+        }
+        if projected_statement_keys != receipt_statement_keys:
+            raise ValueError(
+                "statement entity projections differ from the compiler statement inventory"
+            )
+        if set(canonical_receipt.entity_statement_ids) != {item.entity_id for item in canonical}:
+            raise ValueError("statement receipt entity projections differ from entity evidence")
+        receipt_statements_by_span = {
+            (
+                statement.path,
+                statement.start_byte_offset,
+                statement.end_byte_offset,
+            ): statement
+            for statement in canonical_receipt.compiler_statements
+        }
+        receipt_statements_by_id = {
+            statement.physical_statement_id: statement
+            for statement in canonical_receipt.compiler_statements
+        }
+        for item in canonical:
+            binding = canonical_bindings_by_id[item.entity_id]
+            if any(
+                receipt_statements_by_id[statement_id].path != binding.location.path
+                or receipt_statements_by_id[statement_id].source_file_sha256
+                != binding.source_file_sha256
+                or receipt_statements_by_id[statement_id].start_byte_offset
+                < binding.entity_start_byte_offset
+                or receipt_statements_by_id[statement_id].end_byte_offset
+                > binding.entity_end_byte_offset
+                for statement_id in canonical_receipt.entity_statement_ids[item.entity_id]
+            ):
+                raise ValueError(
+                    "statement receipt ownership escapes its frozen audited-source entity"
+                )
+            projected_physical_ids: list[str] = []
+            for statement in item.statements:
+                compiler_statement = receipt_statements_by_span.get(
+                    (
+                        statement.location.path,
+                        statement.start_byte_offset,
+                        statement.end_byte_offset,
+                    )
+                )
+                if (
+                    compiler_statement is None
+                    or compiler_statement.covered is not statement.covered
+                    or compiler_statement.start_line != statement.location.start_line
+                    or compiler_statement.end_line - 1 != statement.location.end_line
+                ):
+                    raise ValueError(
+                        "statement entity projection differs from its compiler statement"
+                    )
+                projected_physical_ids.append(compiler_statement.physical_statement_id)
+            if (
+                sorted(projected_physical_ids)
+                != canonical_receipt.entity_statement_ids[item.entity_id]
+            ):
+                raise ValueError(
+                    "statement entity projection differs from its receipt ownership map"
+                )
+        if any(
+            item.repository_test_execution_sha256s
+            != canonical_receipt.repository_test_execution_sha256s
+            or item.coverage_command_sha256s != canonical_receipt.coverage_command_sha256s
+            or item.statement_inventory_sha256 != canonical_receipt.statement_inventory_sha256
+            or item.coverage_artifact_sha256 != canonical_receipt.coverage_artifact_sha256
+            or item.coverage_artifact_bytes != canonical_receipt.coverage_artifact_bytes
+            or item.producer_name != canonical_receipt.producer_name
+            or item.producer_version != canonical_receipt.producer_version
+            or item.producer_sha256 != canonical_receipt.producer_sha256
+            or item.normalizer_policy_sha256 != canonical_receipt.normalizer_policy_sha256
+            for item in canonical
+        ):
+            raise ValueError("statement entities differ from their receipt-derived bindings")
+    return canonical
+
+
+ScannerRun.model_rebuild()
+
+
 class AuditedSuiteSurfaceCoverage(StrictModel):
-    """Coverage evidence for one exact indexed audited-source entity."""
+    """Comparison-only projection for one exact indexed audited-source entity."""
 
     entity_id: str = Field(min_length=1, max_length=500)
     entity_kind: SolidityEntityKind
@@ -11536,12 +12748,18 @@ class AuditedSuiteSurfaceCoverage(StrictModel):
         ]
         if mutation_keys != sorted(set(mutation_keys)):
             raise ValueError("audited-suite mutation evidence must be unique and sorted")
-        if self.statement_status is not AuditedSuiteStatementStatus.NOT_ANALYZED:
+        statement_evidence_present = bool(
+            self.statement_evidence_sha256s and self.repository_test_execution_sha256s
+        )
+        if self.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED:
+            if self.statement_evidence_sha256s or self.repository_test_execution_sha256s:
+                raise ValueError(
+                    "not-analyzed statement coverage cannot carry surface-level evidence"
+                )
+        elif not statement_evidence_present:
             raise ValueError(
-                "statement coverage cannot be analyzed without a trusted normalizer boundary"
+                "analyzed statement coverage requires exact statement and execution evidence"
             )
-        if self.statement_evidence_sha256s or self.repository_test_execution_sha256s:
-            raise ValueError("not-analyzed statement coverage cannot carry surface-level evidence")
         mutation_outcomes = {evidence.outcome for evidence in self.mutation_evidence}
         expected_assertion_status = (
             AuditedSuiteAssertionStatus.NOT_ANALYZED
@@ -11608,9 +12826,13 @@ class AuditedSuiteCoverageGap(StrictModel):
 
 
 class AuditedSuiteCoverage(StrictModel):
-    """Source-only coverage and assertion-strength evidence from repository-owned tests."""
+    """Comparison-only source coverage projection from repository-owned tests."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
+    statement_coverage_authority: Literal["comparison_only"] | None = Field(
+        default="comparison_only",
+        exclude_if=lambda value: value is None,
+    )
     contract_statement_coverage: CoverageMetric
     function_statement_coverage: CoverageMetric
     critical_function_assertion_coverage: CoverageMetric
@@ -11623,8 +12845,31 @@ class AuditedSuiteCoverage(StrictModel):
     critical_classification_complete: bool
     limitations: list[str] = Field(default_factory=list, max_length=1_000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_statement_authority_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if value.get("schema_version", "1.1") == "1.0":
+            if "statement_coverage_authority" in value:
+                raise ValueError("audited-suite coverage 1.0 cannot declare statement authority")
+            return {**value, "statement_coverage_authority": None}
+        return value
+
     @model_validator(mode="after")
     def populations_gaps_and_runtime_counts_are_consistent(self) -> AuditedSuiteCoverage:
+        if self.schema_version == "1.0":
+            if self.statement_coverage_authority is not None or any(
+                surface.statement_status is not AuditedSuiteStatementStatus.NOT_ANALYZED
+                or surface.statement_evidence_sha256s
+                or surface.repository_test_execution_sha256s
+                for surface in self.surfaces
+            ):
+                raise ValueError(
+                    "audited-suite coverage 1.0 cannot carry analyzed statement evidence"
+                )
+        elif self.statement_coverage_authority != "comparison_only":
+            raise ValueError("audited-suite coverage 1.1 is comparison-only")
         if any(
             not isinstance(metric, CoverageMetric)
             for metric in (
@@ -13274,6 +14519,50 @@ _RouterPrice = Annotated[
 _RouterPriceMap = dict[_RouterPriceField, _RouterPrice]
 
 
+def _refresh_pricing_schedule_payload(
+    pricing: _RefreshPricingMap,
+    overrides: Sequence[OpenRouterPricingOverrideTier],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = dict(pricing)
+    if overrides:
+        payload["overrides"] = [
+            {
+                "min_prompt_tokens": tier.min_prompt_tokens,
+                **dict(tier.prices),
+            }
+            for tier in overrides
+        ]
+    return payload
+
+
+def _require_refresh_pricing_schedule(
+    *,
+    pricing: _RefreshPricingMap,
+    overrides: tuple[OpenRouterPricingOverrideTier, ...],
+    schedule: ExactRoutePricingSchedule | None,
+    label: str,
+) -> _RefreshPricingMap:
+    """Validate one retained schedule and return its conservative component maximum."""
+
+    try:
+        canonical_pricing, canonical_overrides = canonicalize_openrouter_pricing_schedule(
+            _refresh_pricing_schedule_payload(pricing, overrides)
+        )
+    except EndpointSnapshotValidationError as exc:
+        raise ValueError(f"{label} is invalid") from exc
+    expected = project_openrouter_pricing_schedule(pricing, overrides) if overrides else None
+    if (
+        canonical_pricing != pricing
+        or canonical_overrides != overrides
+        or expected == "unavailable"
+        or schedule != expected
+    ):
+        raise ValueError(f"{label} is inconsistent or unavailable")
+    if schedule is None:
+        return dict(pricing)
+    return {item.component.value: item.unit_price for item in schedule.maximum_pricing}
+
+
 def _canonical_nonnegative_decimal(value: object, *, router_units: bool = False) -> str:
     """Return one bounded nonnegative plain decimal without using ambient precision."""
 
@@ -13347,7 +14636,7 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     authority_mode: Literal["NON_AUTHORIZING_REQUEST_COST_BOUND"] = (
         "NON_AUTHORIZING_REQUEST_COST_BOUND"
@@ -13385,6 +14674,15 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             }
         },
     )
+    baseline_pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
+    baseline_pricing_schedule: ExactRoutePricingSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     baseline_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     current_pricing: _RefreshPricingMap = Field(
         min_length=2,
@@ -13397,7 +14695,35 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             }
         },
     )
+    current_pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
+    current_pricing_schedule: ExactRoutePricingSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     current_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    route_predicate_profile_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    route_predicate_profile: RoutePredicateProfile | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    price_cap_algorithm: ProviderPriceCapAlgorithm | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    price_component_unit_envelopes: tuple[RoutePriceComponentUnitEnvelope, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1,
+        exclude_if=lambda value: value is None,
+    )
     cost_bound_pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     components: tuple[EndpointRequestCostComponentEvidence, ...] = Field(
         min_length=2,
@@ -13436,6 +14762,7 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
         pricing_route: AuditModelRefreshPricingRouteEvidence,
         endpoint_cost_bound: EndpointRequestCostBound,
         provider_max_price: Mapping[str, int | float | str | Decimal],
+        route_predicate_profile: RoutePredicateProfile | None = None,
     ) -> AuditModelRefreshPricingAttemptEvidence:
         """Project exact live objects into durable, permanently non-authorizing evidence."""
 
@@ -13512,8 +14839,25 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             field: _canonical_nonnegative_decimal(value, router_units=True)
             for field, value in sorted(provider_max_price.items())
         }
+        canonical_profile: RoutePredicateProfile | None = None
+        if route_predicate_profile is not None:
+            if type(route_predicate_profile) is not RoutePredicateProfile:
+                raise ValueError("pricing attempt route predicate profile has an invalid type")
+            canonical_profile = RoutePredicateProfile.model_validate_json(
+                route_predicate_profile.model_dump_json(),
+                strict=True,
+            )
+            if (
+                canonical_profile.price_cap_algorithm
+                is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+                or canonical_profile.price_component_unit_envelopes is None
+            ):
+                raise ValueError(
+                    "pricing attempt component-unit profile does not select a current policy"
+                )
+        pricing_attempt_schema_version = "1.1" if canonical_profile is not None else "1.0"
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": pricing_attempt_schema_version,
             "evidence_authority": "comparison_required",
             "authority_mode": "NON_AUTHORIZING_REQUEST_COST_BOUND",
             "logical_request_id": logical_request_id,
@@ -13557,6 +14901,25 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             "pricing_use_authorized": False,
             "provider_access_authorized": False,
         }
+        if canonical_profile is not None:
+            values.update(
+                {
+                    "route_predicate_profile_sha256": canonical_profile.profile_sha256,
+                    "route_predicate_profile": canonical_profile,
+                    "price_cap_algorithm": canonical_profile.price_cap_algorithm,
+                    "price_component_unit_envelopes": (
+                        canonical_profile.price_component_unit_envelopes
+                    ),
+                }
+            )
+        if canonical_route.baseline_pricing_overrides:
+            values["baseline_pricing_overrides"] = canonical_route.baseline_pricing_overrides
+        if canonical_route.baseline_pricing_schedule is not None:
+            values["baseline_pricing_schedule"] = canonical_route.baseline_pricing_schedule
+        if canonical_route.current_pricing_overrides:
+            values["current_pricing_overrides"] = canonical_route.current_pricing_overrides
+        if canonical_route.current_pricing_schedule is not None:
+            values["current_pricing_schedule"] = canonical_route.current_pricing_schedule
         return cls(**values, evidence_sha256=_pricing_attempt_sha256(values))
 
     @field_validator("baseline_pricing", "current_pricing")
@@ -13657,19 +15020,103 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
             self.reservation_checked_at <= self.transport_checked_at < self.pricing_expires_at
         ):
             raise ValueError("pricing transport is outside its exact validity window")
+        component_policy = (
+            self.route_predicate_profile_sha256,
+            self.route_predicate_profile,
+            self.price_cap_algorithm,
+            self.price_component_unit_envelopes,
+        )
+        if self.schema_version == "1.1":
+            expected_algorithm = ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+            if (
+                self.route_predicate_profile_sha256 is None
+                or self.route_predicate_profile is None
+                or self.price_cap_algorithm is not expected_algorithm
+                or self.price_component_unit_envelopes is None
+            ):
+                raise ValueError("current pricing attempt lacks component-unit custody")
+            if (
+                self.route_predicate_profile.profile_sha256 != self.route_predicate_profile_sha256
+                or self.route_predicate_profile.price_cap_algorithm is not self.price_cap_algorithm
+                or self.route_predicate_profile.price_component_unit_envelopes
+                != self.price_component_unit_envelopes
+            ):
+                raise ValueError("pricing attempt component-unit custody is inconsistent")
+        elif any(value is not None for value in component_policy):
+            raise ValueError("legacy pricing attempt cannot carry component-unit custody")
         baseline_fields = tuple(self.baseline_pricing)
         current_fields = tuple(self.current_pricing)
-        component_fields = tuple(component.pricing_field for component in self.components)
-        expected_max_fields = tuple(
-            field for field in current_fields if field in _ROUTER_MAX_PRICE_FIELDS
+        baseline_maximum = _require_refresh_pricing_schedule(
+            pricing=self.baseline_pricing,
+            overrides=self.baseline_pricing_overrides,
+            schedule=self.baseline_pricing_schedule,
+            label="pricing attempt baseline schedule",
         )
+        current_maximum = _require_refresh_pricing_schedule(
+            pricing=self.current_pricing,
+            overrides=self.current_pricing_overrides,
+            schedule=self.current_pricing_schedule,
+            label="pricing attempt current schedule",
+        )
+        maximum_fields = tuple(current_maximum)
+        component_fields = tuple(component.pricing_field for component in self.components)
+        uncappable_variable_fields = {"input_cache_write", "internal_reasoning"}
+        if uncappable_variable_fields.intersection(maximum_fields):
+            raise ValueError("pricing attempt contains an uncappable variable pricing component")
+        current_prompt_price = Decimal(current_maximum["prompt"])
+        prompt_dominated_fields = {"input_cache_read"}
+        if any(
+            field in current_maximum and Decimal(current_maximum[field]) > current_prompt_price
+            for field in prompt_dominated_fields
+        ):
+            raise ValueError("pricing attempt cache price is not dominated by its prompt price")
+        if self.price_component_unit_envelopes is None and any(
+            field not in _ROUTER_MAX_PRICE_FIELDS
+            and field != "input_cache_read"
+            and Decimal(current_maximum[field]) != 0
+            for field in maximum_fields
+        ):
+            raise ValueError("pricing attempt contains an uncappable nonzero pricing component")
+        try:
+            project_provider_price_cap(
+                normalize_exact_route_pricing(self.baseline_pricing),
+                schedule=self.baseline_pricing_schedule,
+                algorithm=(
+                    self.price_cap_algorithm
+                    or ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                ),
+                price_component_unit_envelopes=(self.price_component_unit_envelopes or ()),
+            )
+            projected_cap = project_provider_price_cap(
+                normalize_exact_route_pricing(self.current_pricing),
+                schedule=self.current_pricing_schedule,
+                algorithm=(
+                    self.price_cap_algorithm
+                    or ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                ),
+                price_component_unit_envelopes=(self.price_component_unit_envelopes or ()),
+            )
+        except (RouteConstraintError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "pricing attempt lacks an exact cap or component-unit envelope"
+            ) from exc
+        expected_max_fields = tuple(item.component.value for item in projected_cap)
         if (
             baseline_fields != current_fields
-            or component_fields != current_fields
+            or tuple(baseline_maximum) != maximum_fields
+            or component_fields != maximum_fields
             or component_fields != tuple(sorted(set(component_fields)))
             or tuple(self.provider_max_price) != expected_max_fields
-            or self.baseline_pricing_sha256 != _canonical_model_sha256(self.baseline_pricing)
-            or self.current_pricing_sha256 != _canonical_model_sha256(self.current_pricing)
+            or self.baseline_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.baseline_pricing,
+                self.baseline_pricing_overrides,
+            )
+            or self.current_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.current_pricing,
+                self.current_pricing_overrides,
+            )
             or self.qualified_pricing_snapshot_sha256 != self.baseline_pricing_sha256
             or self.provider_max_price_sha256 != _canonical_model_sha256(self.provider_max_price)
         ):
@@ -13677,31 +15124,17 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
         component_by_field = {item.pricing_field: item for item in self.components}
         with localcontext() as context:
             context.prec = 160
-            if {"input_cache_write", "internal_reasoning"}.intersection(current_fields):
-                raise ValueError(
-                    "pricing attempt contains an uncappable variable pricing component"
-                )
-            current_prompt_price = Decimal(self.current_pricing["prompt"])
             prompt_cap = Decimal(self.provider_max_price["prompt"]) / Decimal(1_000_000)
-            current_cache_read = self.current_pricing.get("input_cache_read")
-            if (
-                current_cache_read is not None
-                and Decimal(current_cache_read) > current_prompt_price
-            ):
-                raise ValueError(
-                    "pricing attempt cache-read price is not dominated by its prompt price"
-                )
-            for field in current_fields:
+            for field in maximum_fields:
                 component_price = Decimal(component_by_field[field].unit_price_usd_exact)
-                current_price = Decimal(self.current_pricing[field])
-                if field == "input_cache_read":
-                    # Cache-read tokens are discounted prompt-token cache hits.  The provider's
-                    # prompt max_price is the enforceable fresh-input ceiling, so retained cost
-                    # evidence must reserve cache reads at that transmitted cap rather than at a
-                    # potentially stale discounted snapshot rate.
+                current_price = Decimal(current_maximum[field])
+                if field in prompt_dominated_fields:
+                    # Prompt-dominated cache dimensions retain independent full-input unit
+                    # ceilings but use the transmitted prompt cap rather than a stale observed
+                    # discount or zero price.
                     if component_price != prompt_cap or component_price < current_price:
                         raise ValueError(
-                            "pricing attempt cache-read bound differs from provider prompt cap"
+                            "pricing attempt cache bound differs from provider prompt cap"
                         )
                 elif field in _ROUTER_MAX_PRICE_FIELDS:
                     projected = Decimal(self.provider_max_price[field])
@@ -13712,7 +15145,16 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
                             "pricing attempt cost bound is below refreshed provider max_price"
                         )
                 else:
-                    if current_price != 0:
+                    zero_unit_component = self.price_component_unit_envelopes is not None and any(
+                        envelope.component.value == field
+                        for envelope in self.price_component_unit_envelopes
+                    )
+                    if zero_unit_component:
+                        if component_by_field[field].maximum_units != 0:
+                            raise ValueError(
+                                "pricing attempt component units exceed their sealed envelope"
+                            )
+                    elif current_price != 0:
                         raise ValueError(
                             "pricing attempt contains an uncappable nonzero pricing component"
                         )
@@ -14199,6 +15641,18 @@ def _validate_refresh_pricing_attempt_inventory(record: UsageRecord) -> None:
             for attempt in attempts
         )
         or any(attempt.current_pricing != final.current_pricing for attempt in attempts)
+        or any(
+            attempt.current_pricing_overrides != final.current_pricing_overrides
+            or attempt.current_pricing_schedule != final.current_pricing_schedule
+            for attempt in attempts
+        )
+        or any(
+            attempt.route_predicate_profile_sha256 != final.route_predicate_profile_sha256
+            or attempt.route_predicate_profile != final.route_predicate_profile
+            or attempt.price_cap_algorithm is not final.price_cap_algorithm
+            or attempt.price_component_unit_envelopes != final.price_component_unit_envelopes
+            for attempt in attempts
+        )
         or any(
             attempt.current_endpoint_snapshot_sha256 != final.current_endpoint_snapshot_sha256
             for attempt in attempts
@@ -14922,7 +16376,12 @@ def validate_audit_model_refresh_pricing_usage_custody(
             or attempt.refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
             or attempt.qualified_pricing_snapshot_sha256 != route.qualified_pricing_snapshot_sha256
             or attempt.baseline_pricing != route.baseline_pricing
+            or attempt.baseline_pricing_overrides != route.baseline_pricing_overrides
+            or attempt.baseline_pricing_schedule != route.baseline_pricing_schedule
+            or attempt.baseline_pricing_sha256 != route.baseline_pricing_sha256
             or attempt.current_pricing != route.current_pricing
+            or attempt.current_pricing_overrides != route.current_pricing_overrides
+            or attempt.current_pricing_schedule != route.current_pricing_schedule
             or attempt.current_pricing_sha256 != route.current_pricing_sha256
             or attempt.pricing_verified_at != pricing.verified_at
             or attempt.pricing_expires_at != pricing.expires_at

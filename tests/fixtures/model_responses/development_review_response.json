@@ -1,0 +1,24 @@
+{
+  "id": "gen-synthetic-development-001",
+  "object": "chat.completion",
+  "model": "synthetic/development-auditor",
+  "provider": "Synthetic Development Provider",
+  "choices": [{
+    "index": 0,
+    "finish_reason": "stop",
+    "message": {
+      "role": "assistant",
+      "content": "{\"summary\":\"The declared administrator-only invariant needs validation.\",\"findings\":[{\"title\":\"Missing administrator check\",\"severity\":\"medium\",\"line_start\":14,\"line_end\":15,\"violated_invariant\":\"Only the administrator may change the limit.\",\"explanation\":\"The setter has no caller authorization condition.\",\"recommendation\":\"Require the configured administrator before updating the limit.\"}]}"
+    }
+  }],
+  "usage": {"prompt_tokens": 400, "completion_tokens": 100, "total_tokens": 500, "cost": 0.01},
+  "openrouter_metadata": {
+    "requested": "synthetic/development-auditor",
+    "strategy": "direct",
+    "attempt": 1,
+    "is_byok": false,
+    "endpoints": {"total": 1, "available": [{"provider": "Synthetic Development Provider", "model": "synthetic/development-auditor", "selected": true}]},
+    "attempts": [{"provider": "Synthetic Development Provider", "model": "synthetic/development-auditor", "status": 200}],
+    "pipeline": []
+  }
+}

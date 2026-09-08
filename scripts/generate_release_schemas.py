@@ -10,6 +10,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
+from mmaudit.benchmark.development import (
+    DevelopmentBenchmarkBinding,
+    DevelopmentBenchmarkScore,
+    DevelopmentBenchmarkTruth,
+)
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
@@ -39,6 +44,19 @@ from mmaudit.models.coverage_planning import (
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourcePreflight,
 )
+from mmaudit.models.development_audit import (
+    DevelopmentAuditObservation,
+    DevelopmentAuditPlan,
+    DevelopmentAuditShardObservation,
+    DevelopmentScoredAuditShardObservation,
+)
+from mmaudit.models.development_costs import DevelopmentCostEstimate, DevelopmentCostPolicy
+from mmaudit.models.development_review import (
+    DevelopmentReviewObservation,
+    DevelopmentReviewResponse,
+    DevelopmentScoredReviewResponse,
+)
+from mmaudit.models.development_routing import DevelopmentRoutingEvidence
 from mmaudit.models.endpoint_inventory import OpenRouterEndpointInventoryDiagnostic
 from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEvidence
 from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
@@ -118,6 +136,11 @@ from mmaudit.orchestration.autonomy_gate_inventory import (
     render_autonomy_gate_inventory,
 )
 from mmaudit.orchestration.context_manifest import ContextManifest
+from mmaudit.orchestration.managed_host_tools import ManagedHostToolManifest
+from mmaudit.orchestration.managed_provisioning import (
+    ManagedProvisioningReceipt,
+    ManagedProvisioningState,
+)
 from mmaudit.orchestration.managed_toolchain import (
     MANAGED_TOOLCHAIN_BUNDLE_RESOURCE,
     ManagedToolchainBundle,
@@ -156,6 +179,7 @@ from mmaudit.reporting.run_authority import (
     RUN_TERMINAL_REPORT_AUTHORITY_PATH,
     RunTerminalReportAuthority,
 )
+from mmaudit.scanners.offline_fork_rpc import OfflineForkRpcArchive
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
@@ -190,6 +214,19 @@ MODELS: dict[str, type[BaseModel]] = {
     "context_manifest.schema.json": ContextManifest,
     "coverage_artifact.schema.json": CoverageArtifact,
     "cross_lineage_adjudication_report.schema.json": CrossLineageAdjudicationReport,
+    "development_cost_policy.schema.json": DevelopmentCostPolicy,
+    "development_cost_estimate.schema.json": DevelopmentCostEstimate,
+    "development_fixture_review_response.schema.json": DevelopmentReviewResponse,
+    "development_fixture_review_observation.schema.json": DevelopmentReviewObservation,
+    "development_audit_plan.schema.json": DevelopmentAuditPlan,
+    "development_audit_shard_observation.schema.json": DevelopmentAuditShardObservation,
+    "development_audit_observation.schema.json": DevelopmentAuditObservation,
+    "development_routing_observation.schema.json": DevelopmentRoutingEvidence,
+    "development_scored_review_response.schema.json": DevelopmentScoredReviewResponse,
+    "development_scored_shard_observation.schema.json": DevelopmentScoredAuditShardObservation,
+    "development_benchmark_truth.schema.json": DevelopmentBenchmarkTruth,
+    "development_benchmark_binding.schema.json": DevelopmentBenchmarkBinding,
+    "development_benchmark_score.schema.json": DevelopmentBenchmarkScore,
     "openrouter_endpoint_inventory_diagnostic.schema.json": (OpenRouterEndpointInventoryDiagnostic),
     "findings_artifact.schema.json": FindingsArtifact,
     "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,
@@ -202,6 +239,10 @@ MODELS: dict[str, type[BaseModel]] = {
     "language_capability.schema.json": LanguageCapabilityArtifact,
     "known_issue_taxonomy.schema.json": KnownIssueTaxonomy,
     "known_issue_taxonomy_coverage.schema.json": KnownIssueTaxonomyCoverage,
+    "managed_provisioning_state.schema.json": ManagedProvisioningState,
+    "managed_provisioning_receipt.schema.json": ManagedProvisioningReceipt,
+    "managed_host_tool_material.schema.json": ManagedHostToolManifest,
+    "offline_fork_rpc_archive.schema.json": OfflineForkRpcArchive,
     "managed_toolchain_bundle.schema.json": ManagedToolchainBundle,
     "evidence_sealed_authority.schema.json": EvidenceSealedAuthorityEvidence,
     "evidence_seal_verdict.schema.json": EvidenceSealVerdictProjection,
@@ -313,6 +354,16 @@ TITLE_OVERRIDES = {
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "language_capability.schema.json": "mmaudit language capability artifact",
+    "managed_provisioning_state.schema.json": (
+        "mmaudit incomplete nonauthorizing managed provisioning state"
+    ),
+    "managed_provisioning_receipt.schema.json": (
+        "mmaudit self-contained incomplete nonauthorizing managed provisioning receipt"
+    ),
+    "managed_host_tool_material.schema.json": (
+        "mmaudit nonauthorizing direct host-file material inventory"
+    ),
+    "offline_fork_rpc_archive.schema.json": "mmaudit incomplete nonauthorizing offline fork reads",
     "managed_toolchain_bundle.schema.json": (
         "mmaudit partial nonauthorizing managed toolchain declaration"
     ),
@@ -1970,6 +2021,21 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
 
     schema = model.model_json_schema()
     _strengthen_minimum_floor_recovery_contract(schema)
+    scored_finding = schema.get("$defs", {}).get("DevelopmentScoredFinding")
+    if scored_finding is not None:
+        # Public schemas enforce the same nullable-kind contract as runtime validation.
+        # Provider request generation remains owned by its separate compiled response model.
+        fields = ("vulnerability_class", "violated_invariant", "root_cause_ref")
+        scored_finding["allOf"] = [
+            {
+                "if": {"properties": {"kind": {"const": kind}}, "required": ["kind"]},
+                "then": {"properties": {field: constraint for field in fields}},
+            }
+            for kind, constraint in (
+                ("advisory", {"type": "null"}),
+                ("invariant_violation", {"not": {"type": "null"}}),
+            )
+        ]
     if filename == "models_config.schema.json":
         lineage = schema["$defs"]["ModelLineageConfig"]
         measured_quality = lineage["properties"]["measured_quality"]

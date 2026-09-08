@@ -510,6 +510,94 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_MAX_SCANNER_EXECUTABLE_BYTES = 4 * 1024**3
+
+
+@dataclass(frozen=True, slots=True)
+class _ScannerExecutableObservation:
+    """One bounded host-file observation, not closure or atomic execution evidence."""
+
+    sha256: str
+    identity: tuple[int, ...]
+
+
+def _scanner_executable_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not metadata.st_mode & 0o111
+        or not 0 < metadata.st_size <= _MAX_SCANNER_EXECUTABLE_BYTES
+    ):
+        raise ValueError("scanner executable must be a bounded unshared regular executable")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _observe_scanner_executable(path: Path) -> _ScannerExecutableObservation:
+    """Hash a canonical host file without following leaf links or blocking on a FIFO.
+
+    Re-observation detects boundary-local identity drift; it does not hold the file
+    through exec or attest its interpreter, dependencies, container or descendants.
+    """
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nofollow or not nonblock:
+        raise ValueError("scanner executable safe observation is unavailable")
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise ValueError("scanner executable path is no longer canonical")
+    metadata = path.lstat()
+    identity = _scanner_executable_identity(metadata)
+    descriptor = os.open(path, os.O_RDONLY | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0))
+    try:
+        if _scanner_executable_identity(os.fstat(descriptor)) != identity:
+            raise ValueError("scanner executable changed before hashing")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, min(1024 * 1024, metadata.st_size - size + 1)):
+            size += len(chunk)
+            if size > metadata.st_size:
+                raise ValueError("scanner executable grew beyond its observed size")
+            digest.update(chunk)
+        if (
+            _scanner_executable_identity(os.fstat(descriptor)) != identity
+            or _scanner_executable_identity(path.lstat()) != identity
+            or size != metadata.st_size
+            or path.resolve(strict=True) != path
+        ):
+            raise ValueError("scanner executable changed while hashing")
+        return _ScannerExecutableObservation(sha256=digest.hexdigest(), identity=identity)
+    finally:
+        os.close(descriptor)
+
+
+def _scanner_executable_recheck_error(
+    path: Path | None,
+    observation: _ScannerExecutableObservation | None,
+    *,
+    boundary: str,
+) -> str | None:
+    if path is None and observation is None:
+        return None  # Image-side identity cannot be inferred from a host file.
+    if path is None or observation is None:
+        return f"scanner executable observation is missing before {boundary}"
+    try:
+        if _observe_scanner_executable(path) == observation:
+            return None
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return f"scanner executable identity changed or cannot be verified before {boundary}"
+
+
 def normalize_scanner_path(root: Path, raw_path: str) -> str | None:
     """Return a contained repository-relative path, never an external path."""
 
@@ -586,6 +674,22 @@ class ScannerExitClassification:
             )
 
 
+def scanner_executable_candidate(executable: str) -> str | None:
+    """Use an explicit absolute host path as-is; its absence never falls back to PATH.
+
+    This is availability selection only. Canonical identity, pins and isolation
+    still require the existing execution-boundary checks before any invocation.
+    """
+
+    requested = Path(executable)
+    if requested.is_absolute():
+        try:
+            return executable if requested.is_file() and os.access(requested, os.X_OK) else None
+        except OSError:
+            return None
+    return shutil.which(executable)
+
+
 class ScannerAdapter(ABC):
     """A fixed-command adapter; model output can never influence arguments."""
 
@@ -598,7 +702,7 @@ class ScannerAdapter(ABC):
     strict_machine_output: bool = False
 
     def available(self) -> bool:
-        return shutil.which(self.executable) is not None
+        return scanner_executable_candidate(self.executable) is not None
 
     @abstractmethod
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
@@ -820,8 +924,18 @@ class ScannerAdapter(ABC):
                 error="hardened scanner isolation is unavailable; scanner was not executed",
             )
         executable_path: Path | None = None
+        executable_observation: _ScannerExecutableObservation | None = None
         if not loads_repository_code:
-            executable_path = Path(shutil.which(self.executable) or "").resolve(strict=True)
+            try:
+                candidate = scanner_executable_candidate(self.executable)
+                if candidate is None:
+                    raise ValueError("selected scanner executable is unavailable")
+                executable_path = Path(candidate).resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return finish(
+                    ScannerStatus.FAILED,
+                    error=f"could not resolve scanner executable: {type(exc).__name__}",
+                )
             try:
                 executable_path.relative_to(root.resolve(strict=True))
             except ValueError:
@@ -832,12 +946,20 @@ class ScannerAdapter(ABC):
                     error="refusing scanner executable resolved from inside audited repository",
                 )
             try:
-                executable_sha256 = _file_sha256(executable_path)
-            except OSError as exc:
+                executable_observation = _observe_scanner_executable(executable_path)
+                executable_sha256 = executable_observation.sha256
+            except (OSError, RuntimeError, ValueError) as exc:
                 return finish(
                     ScannerStatus.FAILED,
-                    error=f"could not hash scanner executable: {type(exc).__name__}",
+                    error=f"could not verify scanner executable: {type(exc).__name__}",
                 )
+        executable_pin_error = _scanner_executable_pin_error(
+            executable_sha256=executable_sha256,
+            expected_version=expected_version,
+            expected_sha256=expected_sha256,
+        )
+        if executable_pin_error is not None:
+            return finish(ScannerStatus.FAILED, error=executable_pin_error)
         workspace = private_dir / "workspace"
         try:
             copy_custody = copy_scanner_workspace_with_custody(
@@ -893,6 +1015,11 @@ class ScannerAdapter(ABC):
                     workspace=workspace,
                     private_dir=private_dir,
                 )
+            identity_error = _scanner_executable_recheck_error(
+                executable_path, executable_observation, boundary="version probe"
+            )
+            if identity_error is not None:
+                return finish(ScannerStatus.FAILED, error=identity_error)
             version_probe = isolated_executable_version_probe(
                 str(executable_path) if executable_path is not None else self.executable,
                 environment,
@@ -900,18 +1027,16 @@ class ScannerAdapter(ABC):
                 workspace,
                 private_dir,
                 repository_javascript=loads_repository_code,
+                expected_host_observation=executable_observation,
             )
             if version_probe.status is not ExecutableVersionProbeStatus.SUCCESS:
-                status = (
-                    ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
-                    if version_probe.status
-                    is ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE
-                    else (
-                        ScannerStatus.TIMED_OUT
-                        if version_probe.status is ExecutableVersionProbeStatus.TIMED_OUT
-                        else ScannerStatus.UNAVAILABLE
-                    )
-                )
+                status = {
+                    ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE: (
+                        ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+                    ),
+                    ExecutableVersionProbeStatus.TIMED_OUT: ScannerStatus.TIMED_OUT,
+                    ExecutableVersionProbeStatus.EXECUTION_REFUSED: ScannerStatus.FAILED,
+                }.get(version_probe.status, ScannerStatus.UNAVAILABLE)
                 return finish(
                     status,
                     version=None,
@@ -978,6 +1103,11 @@ class ScannerAdapter(ABC):
             ):
                 raw_identity = _private_probe_stream_identity(stdout_handle)
                 error_identity = _private_probe_stream_identity(stderr_handle)
+                identity_error = _scanner_executable_recheck_error(
+                    executable_path, executable_observation, boundary="scanner invocation"
+                )
+                if identity_error is not None:
+                    return finish(ScannerStatus.FAILED, version=version, error=identity_error)
                 process = subprocess.Popen(
                     command,
                     cwd=resolved_execution_cwd,
@@ -1173,14 +1303,13 @@ class ScannerAdapter(ABC):
         )
 
 
-def scanner_trust_pin_error(
+def _scanner_executable_pin_error(
     *,
-    version: str | None,
     executable_sha256: str | None,
     expected_version: str | None,
     expected_sha256: str | None,
 ) -> str | None:
-    """Validate an optional paired scanner pin before target execution."""
+    """Reject incomplete or mismatched pins before even probing the executable."""
 
     if expected_version is None and expected_sha256 is None:
         return None
@@ -1188,6 +1317,27 @@ def scanner_trust_pin_error(
         return "scanner trust policy requires paired version and SHA-256 pins"
     if executable_sha256 != expected_sha256:
         return "scanner executable SHA-256 does not match the configured trust pin"
+    return None
+
+
+def scanner_trust_pin_error(
+    *,
+    version: str | None,
+    executable_sha256: str | None,
+    expected_version: str | None,
+    expected_sha256: str | None,
+) -> str | None:
+    """Validate an optional paired scanner pin and the observed version."""
+
+    executable_error = _scanner_executable_pin_error(
+        executable_sha256=executable_sha256,
+        expected_version=expected_version,
+        expected_sha256=expected_sha256,
+    )
+    if executable_error is not None:
+        return executable_error
+    if expected_version is None:
+        return None
     normalized_expected_version = select_public_tool_version_line(expected_version)
     normalized_version = select_public_tool_version_line(version) if version is not None else None
     if (
@@ -2256,7 +2406,10 @@ def _workspace_directory_flags() -> int:
 
 
 def _workspace_file_flags() -> int:
-    return os.O_RDONLY | _required_no_follow_flag() | getattr(os, "O_CLOEXEC", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if nonblock == 0:
+        raise OSError("nonblocking workspace file access is unavailable")
+    return os.O_RDONLY | _required_no_follow_flag() | getattr(os, "O_CLOEXEC", 0) | nonblock
 
 
 def _required_no_follow_flag() -> int:
@@ -2651,11 +2804,17 @@ def isolated_executable_version_probe(
     *,
     repository_javascript: bool = False,
     timeout_seconds: float = 15.0,
+    expected_host_observation: _ScannerExecutableObservation | None = None,
 ) -> ExecutableVersionProbe:
-    """Probe one exact executable without exposing raw output outside ``private_dir``."""
+    """Probe privately, rechecking a supplied host identity after probe preparation.
+
+    The optional observation cannot attest image-side executables or process closure.
+    """
 
     if not 0 < timeout_seconds <= 15.0:
         raise ValueError("isolated executable version timeout is outside its fixed bound")
+    if repository_javascript and expected_host_observation is not None:
+        raise ValueError("host executable observation cannot verify an image-side probe")
     probe_dir = _version_probe_directory(private_dir, executable)
     stdout_path = probe_dir / "stdout.txt"
     stderr_path = probe_dir / "stderr.txt"
@@ -2699,6 +2858,17 @@ def isolated_executable_version_probe(
         ):
             stdout_identity = _private_probe_stream_identity(stdout_handle)
             stderr_identity = _private_probe_stream_identity(stderr_handle)
+            if expected_host_observation is not None:
+                identity_error = _scanner_executable_recheck_error(
+                    Path(executable), expected_host_observation, boundary="version invocation"
+                )
+                if identity_error is not None:
+                    return ExecutableVersionProbe(
+                        status=ExecutableVersionProbeStatus.EXECUTION_REFUSED,
+                        version=None,
+                        diagnostic=identity_error,
+                        return_code=None,
+                    )
             process = subprocess.Popen(
                 command,
                 cwd=workspace,

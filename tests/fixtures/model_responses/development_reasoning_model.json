@@ -1,0 +1,19 @@
+{
+  "fixture_scope": "synthetic local reasoning-metadata regression; no provider, credentials or qualification evidence",
+  "model": {
+    "id": "synthetic/development-auditor",
+    "canonical_slug": "synthetic/development-auditor-20260907",
+    "context_length": 300000,
+    "top_provider": {
+      "context_length": 300000,
+      "max_completion_tokens": 20000,
+      "is_moderated": false
+    },
+    "supported_parameters": ["max_tokens", "reasoning", "response_format", "structured_outputs", "temperature"],
+    "reasoning": {
+      "mandatory": false,
+      "default_enabled": true,
+      "supported_efforts": ["low", "high", "max"]
+    }
+  }
+}

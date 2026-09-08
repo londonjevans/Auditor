@@ -1,0 +1,31 @@
+# Synthetic local setup profile. No provider, credentials or deployable target.
+version = 1
+language_profile = "generic-source-review"
+
+[privacy]
+allow_code_egress = false
+require_zdr = true
+
+[models.threat_model]
+primary = "synthetic/alpha"
+[models.source_audit]
+primary = "synthetic/bravo"
+[models.business_logic]
+primary = "synthetic/charlie"
+[models.configuration]
+primary = "synthetic/delta"
+[models.verifier]
+primary = "synthetic/echo"
+[models.judge]
+primary = "synthetic/foxtrot"
+
+[scanners.semgrep]
+enabled = false
+[scanners.gitleaks]
+enabled = false
+[scanners.trivy]
+enabled = false
+[scanners.osv]
+enabled = false
+[scanners.codeql]
+enabled = false

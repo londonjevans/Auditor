@@ -1,0 +1,2 @@
+Synthetic, non-production scanner identity material. This is not a program.
+Unit tests must stub every process boundary; this file must never be executed.

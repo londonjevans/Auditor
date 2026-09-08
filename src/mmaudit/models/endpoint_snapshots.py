@@ -11,12 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+import mmaudit.models.price_lexemes as price_lexemes_module
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.output_modes import (
     StructuredOutputMode,
@@ -24,6 +25,18 @@ from mmaudit.models.output_modes import (
     output_mode_request_parameters,
     structured_output_parameters,
     supported_output_modes,
+)
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    OpenRouterJSONPath,
+    OpenRouterPriceLexemeLayout,
+    captured_openrouter_json_number_decimal,
+    captured_openrouter_json_number_matches_path,
+    captured_openrouter_json_number_raw,
+    openrouter_json_number_is_price_path,
+    price_lexeme_callables_are_pristine,
+    revoke_captured_openrouter_json_number,
 )
 from mmaudit.models.reasoning import (
     REASONING_EFFORT_ORDER,
@@ -33,6 +46,8 @@ from mmaudit.models.reasoning import (
 )
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
+    ExactRoutePriceTier,
+    ExactRoutePricingSchedule,
     NormalizedRouteFacts,
     RouteConstraintError,
     RouteConstraintPurpose,
@@ -51,6 +66,9 @@ _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 _PROVIDER_NAME_MAX_LENGTH = 128
 _PRICING_FIELD_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _DECIMAL_PRICE_PATTERN = re.compile(r"(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?\Z")
+_CANONICAL_DECIMAL_PRICE_SCHEMA_PATTERN = (
+    r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"
+)
 _BASE_REQUEST_PARAMETERS = frozenset(
     {
         "max_tokens",
@@ -69,14 +87,75 @@ _OPERATIONAL_TEXT_STATUSES = frozenset(
 _MAX_ENDPOINTS = 2_048
 _MAX_PARAMETERS = 256
 _MAX_PRICING_FIELDS = 64
+_MAX_PRICING_OVERRIDES = 64
+_MAX_PRICING_OVERRIDE_PROMPT_TOKENS = 2**31 - 1
 _SNAPSHOT_SCHEMA_VERSION = "1.0"
 _NON_BILLABLE_PRICING_METADATA = frozenset({"discount"})
+_PRICING_OVERRIDE_CONDITIONS = frozenset({"min_prompt_tokens", "utc_days", "utc_end", "utc_start"})
+_SUPPORTED_PRICING_OVERRIDE_FIELDS = frozenset(
+    {
+        "audio",
+        "completion",
+        "input_audio_cache",
+        "input_cache_read",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "prompt",
+    }
+)
+_PRICING_OVERRIDE_SCHEMA: dict[str, Any] = {
+    "propertyNames": {"enum": sorted(_SUPPORTED_PRICING_OVERRIDE_FIELDS)},
+    "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 49,
+        "pattern": _CANONICAL_DECIMAL_PRICE_SCHEMA_PATTERN,
+    },
+}
 
 ReasoningParameterSupport = Literal["supported", "unsupported", "unknown"]
 
 
 class EndpointSnapshotValidationError(ValueError):
     """Raised when endpoint metadata cannot prove the configured routing policy."""
+
+
+class OpenRouterPricingOverrideTier(BaseModel):
+    """One ordered, threshold-conditional partial endpoint price replacement."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    min_prompt_tokens: int = Field(
+        ge=0,
+        le=_MAX_PRICING_OVERRIDE_PROMPT_TOKENS,
+    )
+    prices: dict[str, str] = Field(
+        min_length=1,
+        max_length=_MAX_PRICING_FIELDS,
+        json_schema_extra=_PRICING_OVERRIDE_SCHEMA,
+    )
+
+    @model_validator(mode="after")
+    def tier_is_canonical(self) -> OpenRouterPricingOverrideTier:
+        if tuple(self.prices) != tuple(sorted(self.prices)):
+            raise ValueError("endpoint pricing override fields must be sorted")
+        for field, value in self.prices.items():
+            if (
+                not _PRICING_FIELD_PATTERN.fullmatch(field)
+                or field not in _SUPPORTED_PRICING_OVERRIDE_FIELDS
+                or field in _NON_BILLABLE_PRICING_METADATA
+                or field == "overrides"
+                or field in _PRICING_OVERRIDE_CONDITIONS
+            ):
+                raise ValueError("endpoint pricing override contains an invalid price field")
+            if _canonical_price(value) != value:
+                raise ValueError("endpoint pricing override price is not canonically encoded")
+        return self
 
 
 class OpenRouterConstrainedRouteContext(BaseModel):
@@ -167,6 +246,18 @@ class OpenRouterEndpointEvidence(BaseModel):
     max_completion_tokens: int = Field(gt=0)
     max_completion_tokens_source: Literal["metadata", "context_limit"]
     pricing: dict[str, str] = Field(min_length=2, max_length=_MAX_PRICING_FIELDS)
+    pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        min_length=1,
+        max_length=_MAX_PRICING_OVERRIDES,
+        exclude_if=lambda value: not value,
+    )
+    tiered_pricing_cost_projection: ExactRoutePricingSchedule | Literal["unavailable"] | None = (
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+        )
+    )
     pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     zdr_endpoint_snapshot_sha256: str | None = Field(
@@ -235,11 +326,36 @@ class OpenRouterEndpointEvidence(BaseModel):
         if not {"prompt", "completion"}.issubset(self.pricing):
             raise ValueError("endpoint pricing omits prompt or completion")
         for field, value in self.pricing.items():
-            if not _PRICING_FIELD_PATTERN.fullmatch(field):
+            if (
+                not _PRICING_FIELD_PATTERN.fullmatch(field)
+                or field in _NON_BILLABLE_PRICING_METADATA
+                or field == "overrides"
+                or field in _PRICING_OVERRIDE_CONDITIONS
+            ):
                 raise ValueError("endpoint pricing contains an invalid field")
             if _canonical_price(value) != value:
                 raise ValueError("endpoint pricing is not canonically encoded")
-        if self.pricing_sha256 != _canonical_sha256(self.pricing):
+        if self.pricing_overrides:
+            thresholds = tuple(tier.min_prompt_tokens for tier in self.pricing_overrides)
+            if len(thresholds) != len(set(thresholds)):
+                raise ValueError("endpoint pricing override thresholds are duplicated")
+            if thresholds != tuple(sorted(thresholds)):
+                raise ValueError(
+                    "endpoint pricing override thresholds must be strictly increasing in "
+                    "provider order"
+                )
+            expected_projection = project_openrouter_pricing_schedule(
+                self.pricing,
+                self.pricing_overrides,
+            )
+            if self.tiered_pricing_cost_projection != expected_projection:
+                raise ValueError("conditional endpoint pricing projection is inconsistent")
+        elif self.tiered_pricing_cost_projection is not None:
+            raise ValueError("flat endpoint pricing cannot record a tiered cost projection")
+        if self.pricing_sha256 != openrouter_pricing_schedule_sha256(
+            self.pricing,
+            self.pricing_overrides,
+        ):
             raise ValueError("endpoint pricing hash is inconsistent")
         expected = _canonical_sha256(
             self.model_dump(
@@ -250,6 +366,22 @@ class OpenRouterEndpointEvidence(BaseModel):
         if self.endpoint_snapshot_sha256 != expected:
             raise ValueError("endpoint evidence hash is inconsistent")
         return self
+
+    def effective_pricing(self, prompt_tokens: int) -> dict[str, str]:
+        """Resolve documented strict-threshold inheritance without granting cost authority."""
+
+        if (
+            type(prompt_tokens) is not int
+            or not 0 <= prompt_tokens <= _MAX_PRICING_OVERRIDE_PROMPT_TOKENS
+        ):
+            raise EndpointSnapshotValidationError(
+                "effective endpoint prompt tokens must be an exact bounded nonnegative integer"
+            )
+        return effective_openrouter_pricing(
+            self.pricing,
+            self.pricing_overrides,
+            prompt_tokens=prompt_tokens,
+        )
 
 
 class OpenRouterReasoningCapabilityEvidence(BaseModel):
@@ -318,7 +450,7 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
                 "reasoning capability requires sealed endpoint evidence"
             )
         try:
-            endpoint = OpenRouterEndpointEvidence.model_validate(endpoint.model_dump(mode="json"))
+            endpoint = OpenRouterEndpointEvidence.model_validate(endpoint.model_dump(mode="python"))
         except ValueError as exc:
             raise EndpointSnapshotValidationError(
                 "reasoning capability endpoint evidence is invalid"
@@ -617,7 +749,8 @@ def validate_openrouter_endpoint_snapshot(
     raw_endpoints = _required_endpoint_list(data.get("endpoints"), "endpoint metadata")
     matched = _match_configured_endpoints(configured, raw_endpoints)
     common_output_modes = mutually_supported_output_modes(
-        _supported_parameters(endpoint.get("supported_parameters")) for endpoint in matched
+        _supported_parameters(endpoint.get("supported_parameters"))
+        for _endpoint_index, endpoint in matched
     )
     negotiated_output_mode = common_output_modes[0]
     if required_output_mode is not None and required_output_mode not in common_output_modes:
@@ -657,14 +790,14 @@ def validate_openrouter_endpoint_snapshot(
         assert isinstance(provider_name, str)
         normalized_name = provider_name.casefold()
         provider_name_counts[normalized_name] = provider_name_counts.get(normalized_name, 0) + 1
-    for raw_endpoint in matched:
+    for _endpoint_index, raw_endpoint in matched:
         provider_name = _provider_display_name(raw_endpoint.get("provider_name"))
         if provider_name_counts[provider_name.casefold()] != 1:
             raise EndpointSnapshotValidationError(
                 "configured endpoint provider display name is ambiguous in exact-model metadata"
             )
 
-    zdr_matches: dict[str, Mapping[str, Any] | None]
+    zdr_matches: dict[str, tuple[int, Mapping[str, Any]] | None]
     zdr_projection: dict[str, Any] | None
     if zdr_payload is None:
         if require_zdr:
@@ -684,22 +817,32 @@ def validate_openrouter_endpoint_snapshot(
 
     endpoint_evidence: list[OpenRouterEndpointEvidence] = []
     endpoint_projection: list[dict[str, Any]] = []
-    for endpoint_id, raw_endpoint in zip(configured, matched, strict=True):
+    for endpoint_id, (raw_endpoint_index, raw_endpoint) in zip(configured, matched, strict=True):
         normalized = _normalize_endpoint(
             exact_model_id=exact_model_id,
             configured_endpoint=endpoint_id,
             raw_endpoint=raw_endpoint,
+            price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+            price_lexeme_parent_path=(
+                "data",
+                "endpoints",
+                raw_endpoint_index,
+                "pricing",
+            ),
             required_request_parameters=required_request_parameters,
             enforce_required_parameter_support=route_constraint_context is None,
         )
-        zdr_raw = zdr_matches[endpoint_id]
+        zdr_match = zdr_matches[endpoint_id]
         zdr_hash: str | None = None
         zdr_eligible: bool | None = None if zdr_payload is None else False
-        if zdr_raw is not None:
+        if zdr_match is not None:
+            zdr_raw_index, zdr_raw = zdr_match
             normalized_zdr = _normalize_endpoint(
                 exact_model_id=exact_model_id,
                 configured_endpoint=endpoint_id,
                 raw_endpoint=zdr_raw,
+                price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+                price_lexeme_parent_path=("data", zdr_raw_index, "pricing"),
                 require_item_model_binding=True,
                 required_request_parameters=required_request_parameters,
                 enforce_required_parameter_support=route_constraint_context is None,
@@ -759,7 +902,20 @@ def validate_openrouter_endpoint_snapshot(
         "provider_policy_mode": provider_policy_mode,
         "configured_provider_endpoints": configured,
         "require_zdr": require_zdr,
-        "endpoints": [item.model_dump(mode="json") for item in endpoint_evidence],
+        "endpoints": [
+            {
+                **item.model_dump(mode="json"),
+                **(
+                    {"tiered_pricing_cost_projection": (item.tiered_pricing_cost_projection)}
+                    if isinstance(
+                        item.tiered_pricing_cost_projection,
+                        ExactRoutePricingSchedule,
+                    )
+                    else {}
+                ),
+            }
+            for item in endpoint_evidence
+        ],
         "supported_output_modes": sealed_common_output_modes,
         "structured_output_mode": negotiated_output_mode,
         "output_capability_sha256": _canonical_sha256(output_capability_projection),
@@ -807,7 +963,10 @@ def _build_route_predicate_evidence(
         provider_policy_mode=provider_policy_mode,
         configured_provider_endpoints=configured_provider_endpoints,
         identity_inventory=identity_inventory,
-        selected_endpoint=endpoints[0].model_dump(mode="python"),
+        selected_endpoint={
+            **endpoints[0].model_dump(mode="python"),
+            "tiered_pricing_cost_projection": (endpoints[0].tiered_pricing_cost_projection),
+        },
         structured_output_mode=structured_output_mode,
         context=context,
     )
@@ -852,10 +1011,33 @@ def _evaluate_route_predicate_evidence(
         raise EndpointSnapshotValidationError(
             "constrained endpoint pricing contains an unsupported component"
         ) from exc
-    try:
-        configured_cap = project_provider_price_cap(exact_pricing)
-    except RouteConstraintError:
+    pricing_projection = selected_endpoint.get("tiered_pricing_cost_projection")
+    pricing_schedule: ExactRoutePricingSchedule | Literal["unavailable"] | None
+    if isinstance(pricing_projection, ExactRoutePricingSchedule):
+        pricing_schedule = pricing_projection
+    elif type(pricing_projection) is str and pricing_projection == "unavailable":
+        pricing_schedule = "unavailable"
+    else:
+        pricing_schedule = None
+    price_cap_failure: str | None = None
+    if pricing_schedule == "unavailable":
         configured_cap = None
+        price_cap_failure = "pricing schedule unavailable"
+    else:
+        try:
+            configured_cap = project_provider_price_cap(
+                exact_pricing,
+                schedule=pricing_schedule,
+                algorithm=context.route_predicate_profile.price_cap_algorithm,
+                price_component_unit_envelopes=(
+                    context.route_predicate_profile.price_component_unit_envelopes or ()
+                ),
+            )
+        except RouteConstraintError as exc:
+            configured_cap = None
+            # Projection errors contain controlled labels and enum components, not raw metadata.
+            # Preserve the first refusal for diagnosis; it cannot confer admission or proof.
+            price_cap_failure = str(exc)
     provider_display_names = tuple(
         sorted(
             (
@@ -902,6 +1084,7 @@ def _evaluate_route_predicate_evidence(
             max_completion_tokens_source=selected_endpoint["max_completion_tokens_source"],
             context_tokens=selected_endpoint["context_length"],
             exact_pricing=exact_pricing,
+            pricing_schedule=pricing_schedule,
             configured_provider_max_price=configured_cap,
             frozen_live_equivalent=None,
             expected_selection_plan_sha256=context.expected_selection_plan_sha256,
@@ -917,9 +1100,11 @@ def _evaluate_route_predicate_evidence(
         )
     except RoutePredicateRequirementError as exc:
         reasons = ",".join(result.reason.value for result in exc.failures)
-        raise EndpointSnapshotValidationError(
-            "constrained endpoint snapshot failed discovery route predicates: " + reasons
-        ) from exc
+        message = "constrained endpoint snapshot failed discovery route predicates: " + reasons
+        if price_cap_failure is not None:
+            algorithm = context.route_predicate_profile.price_cap_algorithm.value
+            message += f"; price-cap projection [{algorithm}]: {price_cap_failure}"
+        raise EndpointSnapshotValidationError(message) from exc
     except (RouteConstraintError, ValueError) as exc:
         raise EndpointSnapshotValidationError(
             "constrained endpoint snapshot route facts are invalid"
@@ -950,10 +1135,21 @@ def _validate_embedded_route_predicate_evidence(
     assert report is not None
     endpoint = snapshot.endpoints[0]
     exact_pricing = normalize_exact_route_pricing(endpoint.pricing)
-    try:
-        expected_cap = project_provider_price_cap(exact_pricing)
-    except RouteConstraintError as exc:
-        raise ValueError("constrained endpoint pricing is not provider-cap expressible") from exc
+    pricing_schedule = endpoint.tiered_pricing_cost_projection
+    if isinstance(pricing_schedule, str):
+        expected_cap = None
+    else:
+        try:
+            expected_cap = project_provider_price_cap(
+                exact_pricing,
+                schedule=pricing_schedule,
+                algorithm=profile.price_cap_algorithm,
+                price_component_unit_envelopes=(profile.price_component_unit_envelopes or ()),
+            )
+        except RouteConstraintError as exc:
+            raise ValueError(
+                "constrained endpoint pricing is not provider-cap expressible"
+            ) from exc
     expected_emitted = project_route_emitted_request_parameters(
         structured_output_mode=snapshot.structured_output_mode,
         reasoning_emitted=facts.reasoning_mode != "disabled",
@@ -979,6 +1175,7 @@ def _validate_embedded_route_predicate_evidence(
         endpoint.max_completion_tokens_source,
         endpoint.context_length,
         exact_pricing,
+        pricing_schedule,
         expected_cap,
     )
     observed_endpoint_facts = (
@@ -998,6 +1195,7 @@ def _validate_embedded_route_predicate_evidence(
         facts.max_completion_tokens_source,
         facts.context_tokens,
         facts.exact_pricing,
+        facts.pricing_schedule,
         facts.configured_provider_max_price,
     )
     if observed_endpoint_facts != expected_endpoint_facts:
@@ -1072,9 +1270,9 @@ def _required_endpoint_list(
 def _match_configured_endpoints(
     configured: tuple[str, ...],
     endpoints: list[Mapping[str, Any]],
-) -> list[Mapping[str, Any]]:
+) -> list[tuple[int, Mapping[str, Any]]]:
     identities = [_endpoint_identities(endpoint) for endpoint in endpoints]
-    matched: list[Mapping[str, Any]] = []
+    matched: list[tuple[int, Mapping[str, Any]]] = []
     matched_indexes: set[int] = set()
     for configured_endpoint in configured:
         indexes = [
@@ -1090,8 +1288,9 @@ def _match_configured_endpoints(
             raise EndpointSnapshotValidationError(
                 f"configured endpoint tag or slug is ambiguous: {configured_endpoint}"
             )
-        matched_indexes.add(indexes[0])
-        matched.append(endpoints[indexes[0]])
+        matched_index = indexes[0]
+        matched_indexes.add(matched_index)
+        matched.append((matched_index, endpoints[matched_index]))
     return matched
 
 
@@ -1102,22 +1301,22 @@ def _match_zdr_endpoints(
     payload: Any,
     required_request_parameters: tuple[str, ...],
     enforce_required_parameter_support: bool,
-) -> tuple[dict[str, Mapping[str, Any] | None], dict[str, Any]]:
+) -> tuple[dict[str, tuple[int, Mapping[str, Any]] | None], dict[str, Any]]:
     envelope = _required_mapping(payload, "ZDR endpoint metadata")
     raw_items = _required_endpoint_list(
         envelope.get("data"),
         "ZDR endpoint metadata",
         allow_empty=True,
     )
-    exact_model_items: list[Mapping[str, Any]] = []
-    for item in raw_items:
+    exact_model_items: list[tuple[int, Mapping[str, Any]]] = []
+    for item_index, item in enumerate(raw_items):
         item_model = item.get("model_id")
         if not isinstance(item_model, str):
             raise EndpointSnapshotValidationError("ZDR endpoint omits its exact model binding")
         if item_model == exact_model_id:
-            exact_model_items.append(item)
-    identities = [_endpoint_identities(item) for item in exact_model_items]
-    matches: dict[str, Mapping[str, Any] | None] = {}
+            exact_model_items.append((item_index, item))
+    identities = [_endpoint_identities(item) for _item_index, item in exact_model_items]
+    matches: dict[str, tuple[int, Mapping[str, Any]] | None] = {}
     projection: list[dict[str, Any]] = []
     for configured_endpoint in configured:
         indexes = [
@@ -1131,6 +1330,7 @@ def _match_zdr_endpoints(
             )
         match = exact_model_items[indexes[0]] if indexes else None
         matches[configured_endpoint] = match
+        matched_item_index, matched_item = match if match is not None else (None, None)
         projection.append(
             {
                 "provider_endpoint": configured_endpoint,
@@ -1139,12 +1339,18 @@ def _match_zdr_endpoints(
                     _normalize_endpoint(
                         exact_model_id=exact_model_id,
                         configured_endpoint=configured_endpoint,
-                        raw_endpoint=match,
+                        raw_endpoint=matched_item,
+                        price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+                        price_lexeme_parent_path=(
+                            "data",
+                            matched_item_index,
+                            "pricing",
+                        ),
                         require_item_model_binding=True,
                         required_request_parameters=required_request_parameters,
                         enforce_required_parameter_support=(enforce_required_parameter_support),
                     )
-                    if match is not None
+                    if matched_item is not None and matched_item_index is not None
                     else None
                 ),
             }
@@ -1215,6 +1421,8 @@ def _normalize_endpoint(
     exact_model_id: str,
     configured_endpoint: str,
     raw_endpoint: Mapping[str, Any],
+    price_lexeme_layout: OpenRouterPriceLexemeLayout,
+    price_lexeme_parent_path: OpenRouterJSONPath,
     require_item_model_binding: bool = False,
     required_request_parameters: tuple[str, ...],
     enforce_required_parameter_support: bool = True,
@@ -1251,7 +1459,11 @@ def _normalize_endpoint(
         raise EndpointSnapshotValidationError(
             "configured endpoint lacks emitted request parameter support: " + ", ".join(missing)
         )
-    pricing = canonicalize_openrouter_pricing(raw_endpoint.get("pricing"))
+    pricing, pricing_overrides = canonicalize_openrouter_pricing_schedule(
+        raw_endpoint.get("pricing"),
+        price_lexeme_layout=price_lexeme_layout,
+        price_lexeme_parent_path=price_lexeme_parent_path,
+    )
     (
         context_length,
         max_prompt_tokens,
@@ -1259,7 +1471,7 @@ def _normalize_endpoint(
         max_completion_tokens,
         max_completion_tokens_source,
     ) = canonicalize_openrouter_endpoint_token_limits(raw_endpoint)
-    normalized = {
+    normalized: dict[str, Any] = {
         "exact_model_id": exact_model_id,
         "provider_endpoint": configured_endpoint,
         "endpoint_tag": tag,
@@ -1279,8 +1491,17 @@ def _normalize_endpoint(
         "max_completion_tokens": max_completion_tokens,
         "max_completion_tokens_source": max_completion_tokens_source,
         "pricing": pricing,
-        "pricing_sha256": _canonical_sha256(pricing),
+        "pricing_sha256": openrouter_pricing_schedule_sha256(
+            pricing,
+            pricing_overrides,
+        ),
     }
+    if pricing_overrides:
+        normalized["pricing_overrides"] = pricing_overrides
+        normalized["tiered_pricing_cost_projection"] = project_openrouter_pricing_schedule(
+            pricing,
+            pricing_overrides,
+        )
     normalized["output_capability_sha256"] = _canonical_sha256(
         _endpoint_output_capability_projection(normalized)
     )
@@ -1404,8 +1625,33 @@ def _effective_token_limit(
     return _positive_integer(value, label), "metadata"
 
 
-def canonicalize_openrouter_pricing(value: Any) -> dict[str, str]:
-    """Return the shared exact billable-price projection from endpoint metadata."""
+def canonicalize_openrouter_pricing_schedule(
+    value: Any,
+    *,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
+    price_lexeme_parent_path: OpenRouterJSONPath | None = None,
+    _price_lexeme_guard: Callable[[], bool] = price_lexeme_callables_are_pristine,
+    _captured_raw: Callable[[object], str | None] = captured_openrouter_json_number_raw,
+    _captured_decimal: Callable[[object], Decimal | None] = (
+        captured_openrouter_json_number_decimal
+    ),
+    _captured_path_matches: Callable[..., bool] = captured_openrouter_json_number_matches_path,
+    _captured_revoke: Callable[[object], None] = revoke_captured_openrouter_json_number,
+    _price_path_validator: Callable[..., bool] = openrouter_json_number_is_price_path,
+) -> tuple[dict[str, str], tuple[OpenRouterPricingOverrideTier, ...]]:
+    """Return exact base prices and a validated ordered conditional schedule."""
+
+    if (
+        price_lexemes_module.price_lexeme_callables_are_pristine is not _price_lexeme_guard
+        or price_lexemes_module.captured_openrouter_json_number_raw is not _captured_raw
+        or price_lexemes_module.captured_openrouter_json_number_decimal is not _captured_decimal
+        or price_lexemes_module.captured_openrouter_json_number_matches_path
+        is not _captured_path_matches
+        or price_lexemes_module.revoke_captured_openrouter_json_number is not _captured_revoke
+        or price_lexemes_module.openrouter_json_number_is_price_path is not _price_path_validator
+        or not _price_lexeme_guard()
+    ):
+        raise EndpointSnapshotValidationError("endpoint price-lexeme custody changed")
 
     if (
         not isinstance(value, dict)
@@ -1417,29 +1663,354 @@ def canonicalize_openrouter_pricing(value: Any) -> dict[str, str]:
         raise EndpointSnapshotValidationError("endpoint pricing omits prompt or completion")
     if len({field.casefold() for field in value}) != len(value):
         raise EndpointSnapshotValidationError("endpoint pricing fields are ambiguous")
+    pricing_items = tuple(dict.items(value))
+    captured_values_list = [
+        raw_price for _field, raw_price in pricing_items if _captured_raw(raw_price) is not None
+    ]
+    raw_overrides = value.get("overrides")
+    if type(raw_overrides) is list:
+        for raw_tier in list.__iter__(raw_overrides):
+            if type(raw_tier) is not dict:
+                continue
+            captured_values_list.extend(
+                raw_price
+                for _field, raw_price in dict.items(raw_tier)
+                if _captured_raw(raw_price) is not None
+            )
+    captured_values = tuple(captured_values_list)
+
+    def revoke_captured_values() -> None:
+        for captured_value in captured_values:
+            _captured_revoke(captured_value)
+
+    has_layout = price_lexeme_layout is not None
+    has_parent_path = price_lexeme_parent_path is not None
+    if has_layout != has_parent_path:
+        revoke_captured_values()
+        raise EndpointSnapshotValidationError(
+            "endpoint price-lexeme layout and full-path context must be supplied together"
+        )
+    if has_layout:
+        assert price_lexeme_layout is not None
+        assert price_lexeme_parent_path is not None
+        try:
+            valid_parent_path = type(price_lexeme_parent_path) is tuple and _price_path_validator(
+                (*price_lexeme_parent_path, "prompt"),
+                layout=price_lexeme_layout,
+            )
+        except (TypeError, ValueError):
+            valid_parent_path = False
+        if not valid_parent_path:
+            revoke_captured_values()
+            raise EndpointSnapshotValidationError(
+                "endpoint price-lexeme full-path context is invalid"
+            )
+    elif captured_values:
+        revoke_captured_values()
+        raise EndpointSnapshotValidationError(
+            "endpoint captured numeric price lacks full-path custody"
+        )
     normalized: dict[str, str] = {}
-    for field in sorted(value):
+    for field, raw_price in sorted(pricing_items):
         if not _PRICING_FIELD_PATTERN.fullmatch(field):
             raise EndpointSnapshotValidationError("endpoint pricing field is invalid")
-        raw_price = value[field]
-        if field in _NON_BILLABLE_PRICING_METADATA:
-            _validate_non_billable_pricing_metadata(field, raw_price)
+        if field == "overrides":
             continue
-        if not isinstance(raw_price, str):
+        captured_raw = _captured_raw(raw_price)
+        if captured_raw is not None:
+            assert price_lexeme_layout is not None
+            assert price_lexeme_parent_path is not None
+            if not _captured_path_matches(
+                raw_price,
+                layout=price_lexeme_layout,
+                path=(*price_lexeme_parent_path, field),
+            ):
+                raise EndpointSnapshotValidationError(
+                    "endpoint captured numeric price full-path binding changed"
+                )
+        if field in _NON_BILLABLE_PRICING_METADATA:
+            _validate_non_billable_pricing_metadata(
+                field,
+                raw_price,
+                _captured_decimal=_captured_decimal,
+            )
+            continue
+        if isinstance(raw_price, str):
+            normalized[field] = _canonical_price(raw_price)
+            continue
+        if captured_raw is None:
+            if raw_price is None or (
+                isinstance(raw_price, Mapping | Sequence)
+                and not isinstance(raw_price, str | bytes | bytearray)
+            ):
+                raise EndpointSnapshotValidationError(
+                    f"endpoint pricing field {field} must be a scalar exact decimal string"
+                )
             raise EndpointSnapshotValidationError("endpoint prices must be exact decimal strings")
-        normalized[field] = _canonical_price(raw_price)
-    return normalized
+        canonical = _canonical_price(captured_raw)
+        if canonical != captured_raw:
+            raise EndpointSnapshotValidationError(
+                "endpoint captured numeric price is not canonically encoded"
+            )
+        normalized[field] = captured_raw
+    overrides = _canonicalize_openrouter_pricing_overrides(
+        raw_overrides,
+        present="overrides" in value,
+        price_lexeme_layout=price_lexeme_layout,
+        price_lexeme_parent_path=price_lexeme_parent_path,
+        captured_raw=_captured_raw,
+        captured_path_matches=_captured_path_matches,
+        captured_revoke=_captured_revoke,
+    )
+    return normalized, overrides
 
 
-def _validate_non_billable_pricing_metadata(field: str, value: Any) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
+def canonicalize_openrouter_pricing(
+    value: Any,
+    *,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
+    price_lexeme_parent_path: OpenRouterJSONPath | None = None,
+    _price_lexeme_guard: Callable[[], bool] = price_lexeme_callables_are_pristine,
+    _captured_raw: Callable[[object], str | None] = captured_openrouter_json_number_raw,
+    _captured_decimal: Callable[[object], Decimal | None] = (
+        captured_openrouter_json_number_decimal
+    ),
+    _captured_path_matches: Callable[..., bool] = captured_openrouter_json_number_matches_path,
+    _captured_revoke: Callable[[object], None] = revoke_captured_openrouter_json_number,
+    _price_path_validator: Callable[..., bool] = openrouter_json_number_is_price_path,
+) -> dict[str, str]:
+    """Return flat exact prices and refuse a conditional schedule rather than dropping it."""
+
+    pricing, overrides = canonicalize_openrouter_pricing_schedule(
+        value,
+        price_lexeme_layout=price_lexeme_layout,
+        price_lexeme_parent_path=price_lexeme_parent_path,
+        _price_lexeme_guard=_price_lexeme_guard,
+        _captured_raw=_captured_raw,
+        _captured_decimal=_captured_decimal,
+        _captured_path_matches=_captured_path_matches,
+        _captured_revoke=_captured_revoke,
+        _price_path_validator=_price_path_validator,
+    )
+    if overrides:
+        raise EndpointSnapshotValidationError(
+            "endpoint pricing contains structured overrides that require schedule-aware evidence"
+        )
+    return pricing
+
+
+def _canonicalize_openrouter_pricing_overrides(
+    value: Any,
+    *,
+    present: bool,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None,
+    price_lexeme_parent_path: OpenRouterJSONPath | None,
+    captured_raw: Callable[[object], str | None],
+    captured_path_matches: Callable[..., bool],
+    captured_revoke: Callable[[object], None],
+) -> tuple[OpenRouterPricingOverrideTier, ...]:
+    if not present:
+        return ()
+    if type(value) is not list or not 1 <= len(value) <= _MAX_PRICING_OVERRIDES:
+        if captured_raw(value) is not None:
+            captured_revoke(value)
+        raise EndpointSnapshotValidationError(
+            "endpoint pricing overrides must be a nonempty bounded list"
+        )
+
+    tiers: list[OpenRouterPricingOverrideTier] = []
+    previous_threshold: int | None = None
+    for index, raw_tier in enumerate(list.__iter__(value)):
+        if (
+            type(raw_tier) is not dict
+            or not 1 <= len(raw_tier) <= _MAX_PRICING_FIELDS + 1
+            or any(type(field) is not str for field in raw_tier)
+        ):
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override entry must be a bounded object"
+            )
+        if len({field.casefold() for field in raw_tier}) != len(raw_tier):
+            raise EndpointSnapshotValidationError("endpoint pricing override fields are ambiguous")
+        unsupported_conditions = sorted(
+            set(raw_tier).intersection(_PRICING_OVERRIDE_CONDITIONS - {"min_prompt_tokens"})
+        )
+        if unsupported_conditions:
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override condition is unsupported: " + unsupported_conditions[0]
+            )
+        if "min_prompt_tokens" not in raw_tier:
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override entry omits min_prompt_tokens"
+            )
+        threshold = raw_tier["min_prompt_tokens"]
+        if type(threshold) is not int or not 0 <= threshold <= _MAX_PRICING_OVERRIDE_PROMPT_TOKENS:
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override min_prompt_tokens must be an exact bounded "
+                "nonnegative integer"
+            )
+        if previous_threshold is not None:
+            if threshold == previous_threshold:
+                raise EndpointSnapshotValidationError(
+                    "endpoint pricing override thresholds are duplicated"
+                )
+            if threshold < previous_threshold:
+                raise EndpointSnapshotValidationError(
+                    "endpoint pricing override thresholds must be strictly increasing in "
+                    "provider order"
+                )
+        previous_threshold = threshold
+
+        prices: dict[str, str] = {}
+        for field, raw_price in sorted(dict.items(raw_tier)):
+            if field == "min_prompt_tokens":
+                continue
+            if field == "overrides":
+                raise EndpointSnapshotValidationError(
+                    "endpoint pricing override cannot contain recursive overrides"
+                )
+            if (
+                not _PRICING_FIELD_PATTERN.fullmatch(field)
+                or field not in _SUPPORTED_PRICING_OVERRIDE_FIELDS
+            ):
+                raise EndpointSnapshotValidationError(
+                    "endpoint pricing override price field is invalid"
+                )
+            captured = captured_raw(raw_price)
+            if captured is not None:
+                if price_lexeme_layout is None or price_lexeme_parent_path is None:
+                    captured_revoke(raw_price)
+                    raise EndpointSnapshotValidationError(
+                        "endpoint captured numeric override price lacks full-path custody"
+                    )
+                if not captured_path_matches(
+                    raw_price,
+                    layout=price_lexeme_layout,
+                    path=(*price_lexeme_parent_path, "overrides", index, field),
+                ):
+                    raise EndpointSnapshotValidationError(
+                        "endpoint captured numeric override price full-path binding changed"
+                    )
+            if not isinstance(raw_price, str):
+                if raw_price is None or (
+                    isinstance(raw_price, Mapping | Sequence)
+                    and not isinstance(raw_price, str | bytes | bytearray)
+                ):
+                    raise EndpointSnapshotValidationError(
+                        f"endpoint pricing override field {field} must be a scalar exact "
+                        "decimal string"
+                    )
+                raise EndpointSnapshotValidationError(
+                    f"endpoint pricing override field {field} must be an exact decimal string"
+                )
+            prices[field] = _canonical_price(raw_price)
+        if not prices:
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override entry must include a billable price"
+            )
+        try:
+            tiers.append(
+                OpenRouterPricingOverrideTier(
+                    min_prompt_tokens=threshold,
+                    prices=prices,
+                )
+            )
+        except ValueError as exc:
+            raise EndpointSnapshotValidationError(
+                "endpoint pricing override entry is invalid"
+            ) from exc
+    return tuple(tiers)
+
+
+def openrouter_pricing_schedule_sha256(
+    pricing: Mapping[str, str],
+    overrides: Sequence[OpenRouterPricingOverrideTier],
+) -> str:
+    """Hash base prices exactly as before, and bind every ordered conditional tier."""
+
+    if not overrides:
+        return _canonical_sha256(dict(pricing))
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.openrouter.pricing_schedule.v1",
+            "base_pricing": dict(pricing),
+            "pricing_overrides": [
+                {
+                    "min_prompt_tokens": tier.min_prompt_tokens,
+                    "prices": dict(tier.prices),
+                }
+                for tier in overrides
+            ],
+        }
+    )
+
+
+def project_openrouter_pricing_schedule(
+    pricing: Mapping[str, str],
+    overrides: Sequence[OpenRouterPricingOverrideTier],
+) -> ExactRoutePricingSchedule | Literal["unavailable"]:
+    """Derive the shared exact schedule maximum or a fail-closed unavailable state."""
+
+    try:
+        base_pricing = normalize_exact_route_pricing(pricing)
+        tiers = tuple(
+            ExactRoutePriceTier.build(
+                min_prompt_tokens=tier.min_prompt_tokens,
+                pricing=tier.prices,
+            )
+            for tier in overrides
+        )
+        return ExactRoutePricingSchedule.build(
+            base_pricing=base_pricing,
+            tiers=tiers,
+        )
+    except (RouteConstraintError, ValueError):
+        return "unavailable"
+
+
+def effective_openrouter_pricing(
+    pricing: Mapping[str, str],
+    overrides: Sequence[OpenRouterPricingOverrideTier],
+    *,
+    prompt_tokens: int,
+) -> dict[str, str]:
+    """Resolve one canonical strict-threshold schedule state without granting authority."""
+
+    if (
+        type(prompt_tokens) is not int
+        or not 0 <= prompt_tokens <= _MAX_PRICING_OVERRIDE_PROMPT_TOKENS
+    ):
+        raise EndpointSnapshotValidationError(
+            "effective endpoint prompt tokens must be an exact bounded nonnegative integer"
+        )
+    result = dict(pricing)
+    for tier in overrides:
+        if prompt_tokens > tier.min_prompt_tokens:
+            result.update(tier.prices)
+    return dict(sorted(result.items()))
+
+
+def _validate_non_billable_pricing_metadata(
+    field: str,
+    value: Any,
+    *,
+    _captured_decimal: Callable[[object], Decimal | None] = (
+        captured_openrouter_json_number_decimal
+    ),
+) -> None:
+    captured_decimal = _captured_decimal(value)
+    if captured_decimal is not None:
+        parsed = captured_decimal
+    elif isinstance(value, bool) or not isinstance(value, int | float | str):
         raise EndpointSnapshotValidationError(
             f"endpoint {field} metadata must be a finite nonnegative fraction"
         )
-    try:
-        parsed = Decimal(str(value))
-    except InvalidOperation as error:
-        raise EndpointSnapshotValidationError(f"endpoint {field} metadata is invalid") from error
+    else:
+        try:
+            parsed = Decimal(str(value))
+        except InvalidOperation as error:
+            raise EndpointSnapshotValidationError(
+                f"endpoint {field} metadata is invalid"
+            ) from error
     if not parsed.is_finite() or not Decimal(0) <= parsed < Decimal(1):
         raise EndpointSnapshotValidationError(
             f"endpoint {field} metadata must be a finite nonnegative fraction"
@@ -1487,9 +2058,11 @@ def _validate_zdr_counterpart(
         "max_completion_tokens",
         "max_completion_tokens_source",
         "pricing",
+        "pricing_overrides",
+        "tiered_pricing_cost_projection",
         "pricing_sha256",
     )
-    if any(endpoint[field] != zdr_endpoint[field] for field in compared_fields):
+    if any(endpoint.get(field) != zdr_endpoint.get(field) for field in compared_fields):
         raise EndpointSnapshotValidationError(
             "per-model and ZDR endpoint metadata snapshots are inconsistent"
         )

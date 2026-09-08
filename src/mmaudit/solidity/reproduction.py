@@ -12,9 +12,9 @@ import signal
 import stat
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 from urllib.parse import urlparse
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
@@ -53,6 +53,13 @@ from mmaudit.solidity.reproduction_integrity import (
     reproduction_tree_sha256,
     reproduction_workspace_path_excluded,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+    from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
+    from mmaudit.scanners.base import _ScannerExecutableObservation
+    from mmaudit.scanners.offline_fork_service import OfflineForkRpcLease
 
 _FOUNDRY_CHEATCODE_ADDRESS = "0x7109709ecfa91a80626ff3989d68f67f5b1dd12d"
 _MACOS_SHEBANG_BYTES = 512
@@ -294,6 +301,7 @@ class BubblewrapBackend:
     executable: str
     name: str = "bubblewrap"
     supports_local_fork_rpc: bool = False
+    host_tools: ManagedHostToolMaterialization | None = field(default=None, repr=False)
 
     def wrap(
         self,
@@ -337,9 +345,18 @@ class BubblewrapBackend:
         private_dir: Path,
         allow_network: bool,
     ) -> list[str]:
+        if not command:
+            raise ValueError("sandboxed command must not be empty")
         resolved_private = private_dir.resolve(strict=True)
         resolved_workspace = workspace.resolve(strict=True)
         resolved_workspace.relative_to(resolved_private)
+        tool_directory = None
+        if self.host_tools is not None:
+            from mmaudit.isolation.managed import _managed_tool_read_directory
+
+            tool_directory = _managed_tool_read_directory(
+                self.host_tools, executable=self.executable, private_dir=resolved_private
+            )
         arguments = [
             self.executable,
             "--die-with-parent",
@@ -354,6 +371,7 @@ class BubblewrapBackend:
         ]
         if not allow_network:
             arguments.append("--unshare-net")
+        system_roots: list[Path] = []
         for system_path in (
             Path("/usr"),
             Path("/bin"),
@@ -364,6 +382,7 @@ class BubblewrapBackend:
             Path("/nix/store"),
         ):
             if system_path.exists():
+                system_roots.append(system_path)
                 arguments.extend(["--ro-bind", str(system_path), str(system_path)])
         for system_file in (
             Path("/etc/hosts"),
@@ -412,6 +431,23 @@ class BubblewrapBackend:
                     str(resolved_trusted_inputs),
                 ]
             )
+        if tool_directory is not None:
+            present_directories = {
+                Path("/"),
+                Path("/tmp"),
+                Path("/dev"),
+                Path("/proc"),
+                *resolved_private.parents,
+                *(parent for root in system_roots for parent in (root, *root.parents)),
+            }
+            for parent in reversed(tool_directory.parents):
+                if parent not in present_directories and not any(
+                    parent.is_relative_to(root) for root in system_roots
+                ):
+                    arguments.extend(["--dir", str(parent)])
+            # Only this closed, reverified directory is exposed; parents are empty
+            # namespace directories, never mounts of host-home or output contents.
+            arguments.extend(["--ro-bind", str(tool_directory), str(tool_directory)])
         arguments.extend(["--chdir", str(resolved_workspace), "--", *command])
         return arguments
 
@@ -460,6 +496,90 @@ def default_isolation_backend(
     return None
 
 
+@dataclass(frozen=True)
+class _ManagedReproductionSelection:
+    """Retain prepared direct tools, not fork readiness or installed-closure authority."""
+
+    material: ManagedHostToolMaterialization
+    reproduction: ReproductionConfig
+    smart_contracts: SmartContractsConfig
+    enabled: bool
+    tools: tuple[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str], ...]
+
+    def verify(self) -> None:
+        from mmaudit.scanners.base import _observe_scanner_executable
+
+        _verify_managed_reproduction_config(self.material, self.reproduction, self.smart_contracts)
+        for _, path, observation, _ in self.tools:
+            if _observe_scanner_executable(path) != observation:
+                raise ValueError("managed reproduction executable identity changed")
+
+    def verify_roots(self, repository_root: Path, private_dir: Path) -> None:
+        self.verify()
+        for root in (repository_root.resolve(strict=True), private_dir.resolve(strict=False)):
+            if self.material.directory.is_relative_to(root) or root.is_relative_to(
+                self.material.directory
+            ):
+                raise ValueError("managed reproduction material overlaps source or writable state")
+
+    def tool(self, role: Literal["forge", "solc"]) -> tuple[Path, _ScannerExecutableObservation]:
+        for selected, path, observation, _ in self.tools:
+            if selected.value == role:
+                return path, observation
+        raise ValueError("managed reproduction has no prepared tool for the selected role")
+
+
+def _verify_managed_reproduction_config(
+    material: ManagedHostToolMaterialization,
+    reproduction: ReproductionConfig,
+    smart_contracts: SmartContractsConfig,
+) -> None:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+
+    if (
+        type(material) is not ManagedHostToolMaterialization
+        or type(reproduction) is not ReproductionConfig
+        or type(smart_contracts) is not SmartContractsConfig
+    ):
+        raise ValueError("managed reproduction requires exact material and config types")
+    config = material.config
+    if reproduction != config.reproduction or smart_contracts != config.smart_contracts:
+        raise ValueError("managed reproduction config differs from prepared material")
+    material.verify()
+
+
+def _managed_reproduction_selection(
+    material: ManagedHostToolMaterialization,
+    reproduction: ReproductionConfig,
+    smart_contracts: SmartContractsConfig,
+) -> _ManagedReproductionSelection:
+    from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
+    from mmaudit.scanners.base import _observe_scanner_executable
+
+    _verify_managed_reproduction_config(material, reproduction, smart_contracts)
+    enabled = (
+        reproduction.enabled and smart_contracts.enabled and smart_contracts.allow_fork_probing
+    )
+    tools: list[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str]] = []
+    if enabled:
+        members = {item.role: item for item in material.manifest.files}
+        for role in (ManagedToolchainRole.FORGE, ManagedToolchainRole.SOLC):
+            path = material.executable_for(role)
+            observation = _observe_scanner_executable(path)
+            if observation.sha256 != members[role].sha256:
+                raise ValueError("managed reproduction executable differs from its prepared pin")
+            tools.append((role, path, observation, members[role].version))
+    selected = _ManagedReproductionSelection(
+        material=material,
+        reproduction=reproduction,
+        smart_contracts=smart_contracts,
+        enabled=enabled,
+        tools=tuple(tools),
+    )
+    selected.verify()
+    return selected
+
+
 class ForkReproductionRunner:
     """Translate typed plans and execute only a fixed `forge test` command."""
 
@@ -470,19 +590,93 @@ class ForkReproductionRunner:
         *,
         backend: IsolationBackend | None = None,
         forge_executable: Path | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
+        offline_forks: ManagedForkArchives | None = None,
     ) -> None:
         self.reproduction = reproduction
         self.smart_contracts = smart_contracts
-        self.backend = (
-            backend
-            if backend is not None
-            else default_isolation_backend(
-                reproduction.isolation_backend,
-                rootless_container_image=reproduction.rootless_container_image,
-                rootless_container_runtime=reproduction.rootless_container_runtime,
-            )
+        self._managed = (
+            _managed_reproduction_selection(host_tools, reproduction, smart_contracts)
+            if host_tools is not None
+            else None
         )
+        self._prepared_managed_selection = self._managed
+        self.offline_forks = offline_forks
+        self._prepared_offline_forks = offline_forks
+        self._verify_managed_selection()
+        if self._managed is not None and forge_executable is not None:
+            raise ValueError("managed reproduction cannot be combined with path overrides")
+        self.backend = backend
+        if self.backend is None:
+            if host_tools is None:
+                self.backend = default_isolation_backend(
+                    reproduction.isolation_backend,
+                    rootless_container_image=reproduction.rootless_container_image,
+                    rootless_container_runtime=reproduction.rootless_container_runtime,
+                )
+            elif self._managed is not None and self._managed.enabled:
+                from mmaudit.isolation.managed import managed_isolation_backend
+
+                self.backend = managed_isolation_backend(host_tools)
         self.forge_executable = forge_executable
+        if self._managed is not None and self._managed.enabled:
+            self.forge_executable = self._managed.tool("forge")[0]
+
+    def _verify_managed_selection(self) -> None:
+        if (
+            self._managed is not self._prepared_managed_selection
+            or self.offline_forks is not self._prepared_offline_forks
+        ):
+            raise ValueError("managed reproduction selection changed")
+        if self.offline_forks is not None:
+            from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+
+            if type(self.offline_forks) is not ManagedForkArchives or self._managed is None:
+                raise ValueError("managed reproduction requires exact prepared tools and archives")
+            self.offline_forks.verify(self._managed.material.config)
+            self.offline_forks.verify_roots(self._managed.material.directory)
+        if self._managed is not None:
+            _verify_managed_reproduction_config(
+                self._managed.material, self.reproduction, self.smart_contracts
+            )
+            self._managed.verify()
+
+    def _preflight_managed_tools(self, private_dir: Path) -> None:
+        from mmaudit.scanners.base import (
+            isolated_executable_version_probe,
+            sanitized_scanner_environment,
+            scanner_trust_pin_error,
+        )
+        from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
+
+        self._verify_managed_selection()
+        assert self._managed is not None and self.backend is not None
+        private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        workspace = private_dir / "reproduction-version-workspace"
+        workspace.mkdir(exist_ok=True, mode=0o700)
+        for _, path, observation, expected_version in self._managed.tools:
+            self._verify_managed_selection()
+            probe = isolated_executable_version_probe(
+                path,
+                sanitized_scanner_environment(private_dir),
+                self.backend,
+                workspace,
+                private_dir,
+                timeout_seconds=10,
+                expected_host_observation=observation,
+            )
+            self._verify_managed_selection()
+            if (
+                probe.status is not ExecutableVersionProbeStatus.SUCCESS
+                or probe.version is None
+                or scanner_trust_pin_error(
+                    version=probe.version,
+                    executable_sha256=observation.sha256,
+                    expected_version=expected_version,
+                    expected_sha256=observation.sha256,
+                )
+            ):
+                raise ValueError("managed reproduction tool version failed its prepared preflight")
 
     @property
     def isolation_available(self) -> bool:
@@ -503,6 +697,33 @@ class ForkReproductionRunner:
         specification: GeneratedFoundryTestSpec,
         private_dir: Path,
     ) -> ReproductionResult:
+        self._verify_managed_selection()
+        if self._managed is not None:
+            self._verify_managed_selection()
+            self._managed.verify_roots(repository_root, private_dir)
+            if self.offline_forks is not None:
+                self.offline_forks.verify_roots(repository_root, private_dir)
+            if (
+                type(project) is not SolidityProjectMetadata
+                or type(candidate) is not CandidateFinding
+                or type(specification) is not GeneratedFoundryTestSpec
+            ):
+                raise ValueError(
+                    "managed reproduction requires exact typed project/candidate/specification"
+                )
+            project = SolidityProjectMetadata.model_validate_json(
+                project.model_dump_json(), strict=True
+            )
+            candidate = CandidateFinding.model_validate_json(
+                candidate.model_dump_json(), strict=True
+            )
+            specification = GeneratedFoundryTestSpec.model_validate_json(
+                specification.model_dump_json(), strict=True
+            )
+            if candidate.candidate_id != specification.candidate_id:
+                raise ValueError(
+                    "managed reproduction specification belongs to a different candidate"
+                )
         started = time.monotonic()
         spec_hash = _specification_hash(specification)
         block_number = (
@@ -526,6 +747,20 @@ class ForkReproductionRunner:
             "assumptions": specification.assumptions,
             "financial_settlement": specification.financial_settlement,
         }
+        if self._managed is not None and (
+            not self._managed.enabled
+            or self.reproduction.pinned_block_number is None
+            or self.reproduction.expected_chain_id is None
+        ):
+            return ReproductionResult(
+                **base,
+                state=ReproductionState.ENVIRONMENT_BLOCKED,
+                limitations=[
+                    "managed reproduction requires enabled, acknowledged local fork execution "
+                    "with prepared chain and block pins"
+                ],
+                duration_seconds=time.monotonic() - started,
+            )
         limitation = self._eligibility_error(project, specification)
         if limitation:
             return ReproductionResult(
@@ -552,7 +787,11 @@ class ForkReproductionRunner:
                 duration_seconds=time.monotonic() - started,
                 isolation_backend=self.backend.name,
             )
-        forge = self.forge_executable or _external_executable(repository_root, "forge")
+        forge = (
+            self._managed.tool("forge")[0]
+            if self._managed is not None
+            else self.forge_executable or _external_executable(repository_root, "forge")
+        )
         if forge is None:
             return ReproductionResult(
                 **base,
@@ -562,7 +801,11 @@ class ForkReproductionRunner:
                 isolation_backend=self.backend.name,
             )
         try:
-            forge_sha256 = _file_sha256(forge)
+            forge_sha256 = (
+                self._managed.tool("forge")[1].sha256
+                if self._managed is not None
+                else _file_sha256(forge)
+            )
         except OSError as exc:
             return ReproductionResult(
                 **base,
@@ -571,18 +814,41 @@ class ForkReproductionRunner:
                 duration_seconds=time.monotonic() - started,
                 isolation_backend=self.backend.name,
             )
-        try:
-            rpc_url, rpc_port = _local_rpc(
-                os.environ.get(self.smart_contracts.fork_rpc_url_env, "")
-            )
-        except ValueError as exc:
-            return ReproductionResult(
-                **base,
-                state=ReproductionState.ENVIRONMENT_BLOCKED,
-                limitations=[str(exc)],
-                duration_seconds=time.monotonic() - started,
-                isolation_backend=self.backend.name,
-            )
+        legacy_rpc: tuple[str, int] | None = None
+        if self._managed is not None:
+            if self.offline_forks is None or self.offline_forks.reproduction_source_binding is None:
+                return ReproductionResult(
+                    **base,
+                    state=ReproductionState.ENVIRONMENT_BLOCKED,
+                    limitations=["managed reproduction fork archive is unavailable"],
+                    duration_seconds=time.monotonic() - started,
+                    isolation_backend=self.backend.name,
+                )
+        else:
+            try:
+                legacy_rpc = _local_rpc(os.environ.get(self.smart_contracts.fork_rpc_url_env, ""))
+            except ValueError as exc:
+                return ReproductionResult(
+                    **base,
+                    state=ReproductionState.ENVIRONMENT_BLOCKED,
+                    limitations=[str(exc)],
+                    duration_seconds=time.monotonic() - started,
+                    isolation_backend=self.backend.name,
+                )
+        if self._managed is not None:
+            try:
+                self._preflight_managed_tools(private_dir)
+            except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+                self._verify_managed_selection()
+                return ReproductionResult(
+                    **base,
+                    state=ReproductionState.ENVIRONMENT_BLOCKED,
+                    limitations=[
+                        f"prepared reproduction tool preflight failed: {type(exc).__name__}"
+                    ],
+                    duration_seconds=time.monotonic() - started,
+                    isolation_backend=self.backend.name,
+                )
         try:
             repository_sha256 = reproduction_repository_sha256(repository_root, project)
             source = translate_foundry_test(
@@ -611,6 +877,7 @@ class ForkReproductionRunner:
         outcomes: list[ReproductionState] = []
         run_root = private_dir / spec_hash[:16]
         for attempt in range(1, self.reproduction.repetitions + 1):
+            self._verify_managed_selection()
             attempt_root = run_root / f"attempt-{attempt}"
             workspace = attempt_root / "workspace"
             try:
@@ -630,37 +897,21 @@ class ForkReproductionRunner:
             test_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             test_path = test_dir / f"{specification.name}.t.sol"
             test_path.write_text(source, encoding="utf-8")
+            self._verify_managed_selection()
             relative_test = test_path.relative_to(workspace).as_posix()
-            command = [
-                str(forge),
-                "test",
-                "--root",
-                str(workspace),
-                "--match-path",
-                relative_test,
-                "--match-test",
-                f"test_MMAudit_{specification.name}",
-                "--fork-url",
-                rpc_url,
-                "--offline",
-                "--color",
-                "never",
-                "-vvv",
-            ]
-            if block_number is not None:
-                command.extend(["--fork-block-number", str(block_number)])
-            display_command = [
-                "[FORGE]",
-                *("[REDACTED_LOCAL_FORK_RPC]" if item == rpc_url else item for item in command[1:]),
-            ]
             attempts += 1
-            execution = self._execute(
-                command,
+            execution, display_command = self._execute_attempt(
+                forge=forge,
+                relative_test=relative_test,
+                test_name=specification.name,
+                block_number=block_number,
+                legacy_rpc=legacy_rpc,
+                repository_root=repository_root,
                 workspace=workspace,
                 private_dir=attempt_root,
-                rpc_port=rpc_port,
                 attempt=attempt,
             )
+            self._verify_managed_selection()
             stdout_path, stderr_path = execution.stdout_path, execution.stderr_path
             outcomes.append(execution.state)
             attempt_evidence.append(
@@ -714,7 +965,7 @@ class ForkReproductionRunner:
             ),
             proven_minimal=final_state is ReproductionState.REPRODUCED_AND_MINIMIZED,
         )
-        return ReproductionResult(
+        result = ReproductionResult(
             **base,
             state=final_state,
             execution_evidence=(
@@ -759,6 +1010,103 @@ class ForkReproductionRunner:
                 and successful == attempts
             ),
         )
+        self._verify_managed_selection()
+        return result
+
+    def _execute_attempt(
+        self,
+        *,
+        forge: Path,
+        relative_test: str,
+        test_name: str,
+        block_number: int | None,
+        legacy_rpc: tuple[str, int] | None,
+        repository_root: Path,
+        workspace: Path,
+        private_dir: Path,
+        attempt: int,
+    ) -> tuple[_Execution, list[str]]:
+        """Own fresh managed reads through one unchanged child policy and verified cleanup."""
+
+        lease: OfflineForkRpcLease | None = None
+        deadline: float | None = None
+        primary_error: BaseException | None = None
+        try:
+            self._verify_managed_selection()
+            if self._managed is not None:
+                if legacy_rpc is not None or self.offline_forks is None:
+                    raise ValueError("managed reproduction cannot mix or omit prepared fork reads")
+                deadline = (
+                    time.monotonic() + self.offline_forks.reproduction_attempt_lifetime_seconds
+                )
+                lease = self.offline_forks.start_reproduction_attempt(
+                    repository=repository_root, output=private_dir, absolute_deadline=deadline
+                )
+                rpc_url, rpc_port = _local_rpc(lease.endpoint)
+            elif legacy_rpc is not None:
+                rpc_url, rpc_port = legacy_rpc
+            else:
+                raise ValueError("reproduction fork input is unavailable")
+            command = [
+                str(forge),
+                "test",
+                "--root",
+                str(workspace),
+                "--match-path",
+                relative_test,
+                "--match-test",
+                f"test_MMAudit_{test_name}",
+                "--fork-url",
+                rpc_url,
+                "--offline",
+                "--color",
+                "never",
+                "-vvv",
+            ]
+            compiler = self._managed.tool("solc")[0] if self._managed is not None else None
+            if compiler is not None:
+                command.extend(["--no-auto-detect", "--use", str(compiler)])
+            if block_number is not None:
+                command.extend(["--fork-block-number", str(block_number)])
+            display_command = [
+                "[FORGE]",
+                *(
+                    "[REDACTED_LOCAL_FORK_RPC]"
+                    if item == rpc_url
+                    else "[PINNED_SOLC]"
+                    if compiler is not None and item == str(compiler)
+                    else item
+                    for item in command[1:]
+                ),
+            ]
+            execution = self._execute(
+                command,
+                workspace=workspace,
+                private_dir=private_dir,
+                rpc_port=rpc_port,
+                attempt=attempt,
+                **({"absolute_deadline": deadline} if deadline is not None else {}),
+            )
+            return execution, display_command
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            close_error: BaseException | None = None
+            if lease is not None:
+                try:
+                    lease.stop(deadline=deadline)
+                    if not lease.stopped_cleanly:
+                        raise ValueError("managed reproduction fork did not close cleanly")
+                except BaseException as exc:
+                    close_error = exc
+            try:
+                self._verify_managed_selection()
+            except BaseException as exc:
+                if close_error is None:
+                    close_error = exc
+            if close_error is not None and primary_error is None:
+                raise close_error
 
     def _eligibility_error(
         self,
@@ -809,9 +1157,11 @@ class ForkReproductionRunner:
         private_dir: Path,
         rpc_port: int,
         attempt: int,
+        absolute_deadline: float | None = None,
     ) -> _Execution:
         from mmaudit.scanners.base import sanitized_scanner_environment
 
+        self._verify_managed_selection()
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         assert self.backend is not None
         wrapped = self.backend.wrap(
@@ -825,10 +1175,16 @@ class ForkReproductionRunner:
         environment = sanitized_scanner_environment(private_dir)
         environment.update({"FOUNDRY_FFI": "false", "FOUNDRY_NO_STORAGE_CACHING": "true"})
         process: subprocess.Popen[bytes] | None = None
+        primary_error: BaseException | None = None
         timed_out = False
         output_exceeded = False
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                self._verify_managed_selection()
+                if absolute_deadline is not None:
+                    if self.offline_forks is None:
+                        raise ValueError("reproduction deadline requires prepared fork reads")
+                    self.offline_forks.verify_reproduction_execution_budget(absolute_deadline)
                 process = subprocess.Popen(
                     wrapped,
                     cwd=workspace,
@@ -839,6 +1195,9 @@ class ForkReproductionRunner:
                     start_new_session=os.name != "nt",
                     preexec_fn=_limit_process if os.name != "nt" else None,
                 )
+                if absolute_deadline is not None:
+                    assert self.offline_forks is not None
+                    self.offline_forks.verify_reproduction_execution_budget(absolute_deadline)
                 deadline = time.monotonic() + self.reproduction.timeout_seconds
                 while True:
                     # Observe the deadline before trusting a completed poll. The controller can be
@@ -865,12 +1224,24 @@ class ForkReproductionRunner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             if process is not None:
                 _stop_process(process)
+            self._verify_managed_selection()
             return _Execution(
                 state=ReproductionState.ENVIRONMENT_BLOCKED,
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
                 limitations=[f"isolated execution failed: {type(exc).__name__}"],
             )
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            if process is not None:
+                try:
+                    _stop_process(process)
+                except BaseException:
+                    if primary_error is None:
+                        raise
+        self._verify_managed_selection()
         if timed_out:
             return _Execution(
                 state=ReproductionState.ENVIRONMENT_BLOCKED,

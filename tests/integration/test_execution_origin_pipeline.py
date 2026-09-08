@@ -16,6 +16,7 @@ from mmaudit.isolation.provenance import (
     isolation_execution_evidence,
 )
 from mmaudit.models.schemas import (
+    AuditedSuiteEntityCatalog,
     AuditReport,
     CandidateFindingArtifact,
     CandidateOriginKind,
@@ -75,6 +76,7 @@ class _NoScannerRunner(ScannerRunner):
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]:
         del (
             root,
@@ -86,6 +88,7 @@ class _NoScannerRunner(ScannerRunner):
             expected_repository_sha256,
             repository_exclusion_root,
             allow_custom_repository_exclusion,
+            audited_suite_entity_catalog,
         )
         return []
 

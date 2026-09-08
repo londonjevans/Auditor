@@ -21,7 +21,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import unquote, urlsplit
 
 from mmaudit.config import (
@@ -63,6 +63,7 @@ from mmaudit.models.schemas import (
 from mmaudit.scanners.base import ScannerIsolationBackend
 from mmaudit.scanners.clean_chain import (
     CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS,
+    TrustedCleanAnvilLauncher,
 )
 from mmaudit.scanners.fork_rpc import (
     ForkRpcBindingError,
@@ -72,11 +73,16 @@ from mmaudit.scanners.fork_rpc import (
     observe_pinned_fork_rpc,
 )
 from mmaudit.scanners.foundry import FoundryForkScanner
+from mmaudit.scanners.offline_fork_service import _SHUTDOWN_SECONDS, OfflineForkRpcLease
 from mmaudit.scanners.read_only_rpc import (
     ReadOnlyRpcBridge,
     ReadOnlyRpcBridgeSnapshot,
     ReadOnlyRpcTestScopeSnapshot,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
 
 _OBSERVATION_TIMEOUT_SECONDS = 5.0
 _BRIDGE_SHUTDOWN_RESERVE_SECONDS = 1.0
@@ -905,6 +911,8 @@ class _RawState:
 class _StateLifecycle:
     clean_lease: CleanStateLease | None = None
     clean_stop_attempted: bool = False
+    offline_lease: OfflineForkRpcLease | None = None
+    offline_stop_attempted: bool = False
     directories: list[_DirectoryCustody] = field(default_factory=list)
     disposal_observations: dict[
         tuple[int, int],
@@ -1149,10 +1157,80 @@ class RepositoryForkMatrixRunner:
         reproduction: ReproductionConfig,
         *,
         dependencies: ForkMatrixDependencies | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
+        managed_backend: ScannerIsolationBackend | None = None,
+        offline_forks: ManagedForkArchives | None = None,
     ) -> None:
+        from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+        from mmaudit.orchestration.managed_fork_matrix import prepare_managed_fork_matrix_tools
+        from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+
+        if host_tools is not None and dependencies is not None:
+            raise ValueError("managed fork matrix cannot mix custom dependencies")
+        if managed_backend is not None and host_tools is None:
+            raise ValueError("managed fork matrix backend requires prepared material")
+        if offline_forks is not None and host_tools is None:
+            raise ValueError("managed fork archives require prepared material")
+        if offline_forks is not None:
+            if (
+                type(offline_forks) is not ManagedForkArchives
+                or type(host_tools) is not ManagedHostToolMaterialization
+            ):
+                raise ValueError("managed fork archives require exact prepared material")
+            offline_forks.verify(host_tools.config)
+            offline_forks.verify_roots(host_tools.directory)
         self.smart_contracts = smart_contracts
         self.reproduction = reproduction
-        self.dependencies = dependencies or ForkMatrixDependencies()
+        self._managed = (
+            prepare_managed_fork_matrix_tools(
+                host_tools, smart_contracts, reproduction, backend=managed_backend
+            )
+            if host_tools is not None
+            else None
+        )
+        self.backend = self._managed.backend if self._managed is not None else None
+        self.dependencies = (
+            ForkMatrixDependencies(
+                scanner_factory=self._managed.scanner_factory,
+                clean_state_provider=(
+                    TrustedCleanAnvilLauncher(host_tools=host_tools)
+                    if smart_contracts.repository_suite.fork_matrix_states
+                    else None
+                ),
+            )
+            if self._managed is not None
+            else dependencies or ForkMatrixDependencies()
+        )
+        self._managed_dependencies = self.dependencies if self._managed is not None else None
+        self.offline_forks = offline_forks
+        self._managed_offline_forks = offline_forks
+        self.verify_managed_selection()
+
+    def verify_managed_selection(self) -> None:
+        """Reject selection drift even when the matrix has no configured states."""
+
+        from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+
+        if self._managed is not None:
+            self._managed.verify(self.smart_contracts, self.reproduction)
+            if (
+                self.dependencies is not self._managed_dependencies
+                or self.backend is not self._managed.backend
+                or self.offline_forks is not self._managed_offline_forks
+            ):
+                raise ValueError("managed fork matrix dependency or backend selection changed")
+            if self.offline_forks is not None:
+                if type(self.offline_forks) is not ManagedForkArchives:
+                    raise ValueError("managed fork matrix requires exact prepared archives")
+                self.offline_forks.verify(self._managed.material.config)
+                self.offline_forks.verify_roots(self._managed.material.directory)
+
+    def _verify_managed_execution(self, backend: ScannerIsolationBackend) -> None:
+        self.verify_managed_selection()
+        if self._managed is not None:
+            limitation = self._managed.backend_limitation(backend)
+            if limitation is not None:
+                raise ValueError(limitation)
 
     def run(
         self,
@@ -1166,6 +1244,11 @@ class RepositoryForkMatrixRunner:
         baseline_run: ScannerRun,
         absolute_deadline: float,
     ) -> RepositorySuiteDifferentialRun | None:
+        self.verify_managed_selection()
+        if self._managed is not None:
+            self._managed.verify_roots(root, private_root, repository_exclusion_root)
+            if self.offline_forks is not None:
+                self.offline_forks.verify_roots(root, private_root, repository_exclusion_root)
         suite = self.smart_contracts.repository_suite
         configured_states = tuple(suite.fork_matrix_states)
         if not configured_states:
@@ -1185,6 +1268,12 @@ class RepositoryForkMatrixRunner:
                 limitations=failure_limitations,
             )
 
+        if self._managed is not None:
+            managed_error = self._managed.backend_limitation(backend)
+            if managed_error is None:
+                managed_error = self._managed.baseline_limitation(baseline_run)
+            if managed_error is not None:
+                return failed(managed_error)
         baseline_error = _baseline_limitation(
             baseline_run,
             repository_sha256=repository_sha256,
@@ -1249,6 +1338,9 @@ class RepositoryForkMatrixRunner:
                 f"repository-fork-matrix-{matrix_nonce_sha256[:16]}"
             )
             for state_config in configured_states:
+                self._verify_managed_execution(backend)
+                if self._managed is not None:
+                    self._managed.verify_roots(root, private_root, repository_exclusion_root)
                 raw_states.append(
                     self._execute_state(
                         state_config,
@@ -1269,6 +1361,7 @@ class RepositoryForkMatrixRunner:
                 )
             private_custody.assert_stable()
             matrix_custody.assert_stable()
+            self._verify_managed_execution(backend)
             states = tuple(
                 self._seal_state(raw_state)
                 for raw_state in sorted(raw_states, key=lambda item: item.config.state_id)
@@ -1554,6 +1647,9 @@ class RepositoryForkMatrixRunner:
             )
         )
         try:
+            self._verify_managed_execution(backend)
+            if self._managed is not None:
+                self._managed.verify_roots(root, private_root, repository_exclusion_root)
             matrix = RepositorySuiteDifferentialMatrix.sealed(
                 repository_sha256=repository_sha256,
                 selection_sha256=selection.selection_sha256,
@@ -1681,12 +1777,19 @@ class RepositoryForkMatrixRunner:
         cleanup_error: BaseException | None = None
         owned_directory_count = len(lifecycle.directories)
         ordered_disposals: list[_DirectoryDisposalObservation] = []
+        if lifecycle.offline_lease is not None and not lifecycle.offline_stop_attempted:
+            lifecycle.offline_stop_attempted = True
+            try:
+                lifecycle.offline_lease.stop(absolute_deadline)
+            except BaseException as exc:
+                cleanup_error = exc
         if lifecycle.clean_lease is not None and not lifecycle.clean_stop_attempted:
             lifecycle.clean_stop_attempted = True
             try:
                 lifecycle.clean_lease.stop(absolute_deadline)
             except BaseException as exc:
-                cleanup_error = exc
+                if cleanup_error is None:
+                    cleanup_error = exc
         removal_budget: _DirectoryRemovalBudget | None = None
         if lifecycle.directories:
             try:
@@ -1756,6 +1859,7 @@ class RepositoryForkMatrixRunner:
         limitations: list[str],
         lifecycle: _StateLifecycle,
     ) -> _RawState:
+        self._verify_managed_execution(backend)
         matrix_root = matrix_custody.path
         repetitions = self.smart_contracts.repository_suite.fork_matrix_repetitions
         attempts: list[_RawAttempt] = []
@@ -1764,6 +1868,7 @@ class RepositoryForkMatrixRunner:
         observation_status = RepositoryExecutionStateObservationStatus.OBSERVED
         observation_detail: str | None = None
         clean_lease: CleanStateLease | None = None
+        offline_lease: OfflineForkRpcLease | None = None
         endpoint: str | None = None
 
         if isinstance(state_config, RepositoryCleanForkMatrixStateConfig):
@@ -1789,6 +1894,26 @@ class RepositoryForkMatrixRunner:
             except (ForkRpcBindingError, OSError, RuntimeError, TimeoutError, ValueError):
                 observation_status = RepositoryExecutionStateObservationStatus.FAILED
                 observation_detail = "The trusted clean-state launcher failed closed."
+        elif self._managed is not None:
+            if self.offline_forks is None:
+                observation_status = RepositoryExecutionStateObservationStatus.UNAVAILABLE
+                observation_detail = "The managed pinned state has no prepared offline archive."
+            else:
+                try:
+                    self._verify_managed_execution(backend)
+                    offline_lease = self.offline_forks.start(
+                        state_config,
+                        repository=root,
+                        output=private_root,
+                        absolute_deadline=absolute_deadline,
+                    )
+                    lifecycle.offline_lease = offline_lease
+                    endpoint = offline_lease.endpoint
+                    local_fork_rpc_port(endpoint)
+                except (ForkRpcBindingError, OSError, RuntimeError, ValueError):
+                    endpoint = None
+                    observation_status = RepositoryExecutionStateObservationStatus.FAILED
+                    observation_detail = "The managed offline state failed owned lease admission."
         else:
             environment = self.dependencies.environment
             if environment is None:
@@ -1808,9 +1933,12 @@ class RepositoryForkMatrixRunner:
         state_execution_deadline = (
             absolute_deadline - state_config.shutdown_timeout_seconds
             if isinstance(state_config, RepositoryCleanForkMatrixStateConfig)
+            else absolute_deadline - _SHUTDOWN_SECONDS
+            if offline_lease is not None
             else absolute_deadline
         )
         for index in range(1, repetitions + 1):
+            self._verify_managed_execution(backend)
             attempt_custody, identity_sha256, freshness_sha256 = self._fresh_attempt_dir(
                 matrix_custody,
                 matrix_nonce_sha256=matrix_nonce_sha256,
@@ -1907,6 +2035,7 @@ class RepositoryForkMatrixRunner:
                 now=self.dependencies.now,
             )
             try:
+                self._verify_managed_execution(backend)
                 remaining = state_execution_deadline - clock.read()
                 if remaining <= _ATTEMPT_CLEANUP_RESERVE_SECONDS:
                     raise TimeoutError
@@ -1954,6 +2083,7 @@ class RepositoryForkMatrixRunner:
                 child_timeout_seconds = self.smart_contracts.repository_suite.total_timeout_seconds
                 if remaining < child_timeout_seconds + _ATTEMPT_CLEANUP_RESERVE_SECONDS:
                     raise TimeoutError
+                self._verify_managed_execution(backend)
                 run = scanner.run(
                     root,
                     attempt_dir,
@@ -1962,6 +2092,7 @@ class RepositoryForkMatrixRunner:
                     expected_version=expected_forge_version,
                     expected_sha256=expected_forge_sha256,
                 )
+                self._verify_managed_execution(backend)
                 if (
                     run.version != expected_forge_version
                     or run.executable_sha256 != expected_forge_sha256
@@ -2015,6 +2146,7 @@ class RepositoryForkMatrixRunner:
                 limitations.append(f"State {state_config.state_id} exceeded the matrix deadline.")
             else:
                 try:
+                    self._verify_managed_execution(backend)
                     post = self.dependencies.observer(
                         endpoint,
                         expected_chain_id=expected_chain_id,
@@ -2057,6 +2189,15 @@ class RepositoryForkMatrixRunner:
             custody.assert_stable()
         matrix_custody.assert_stable()
         clean_attestation: RepositoryCleanStateAttestationEvidence | None = None
+        if offline_lease is not None:
+            lifecycle.offline_stop_attempted = True
+            try:
+                offline_lease.stop(absolute_deadline)
+                if not offline_lease.stopped_cleanly:
+                    raise ValueError("offline state did not stop cleanly")
+            except (OSError, RuntimeError, ValueError):
+                observation_status = RepositoryExecutionStateObservationStatus.FAILED
+                observation_detail = "The managed offline state did not close with verified source."
         if clean_lease is not None:
             lifecycle.clean_stop_attempted = True
             try:

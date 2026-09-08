@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -10,11 +12,21 @@ from pydantic import ValidationError
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     OpenRouterConstrainedRouteContext,
+    OpenRouterEndpointEvidence,
     OpenRouterEndpointSnapshotEvidence,
+    OpenRouterPricingOverrideTier,
+    openrouter_pricing_schedule_sha256,
     output_capability_binding_sha256,
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    OpenRouterPriceLexemeLayout,
+    captured_openrouter_json_number_raw,
+    decode_openrouter_price_metadata_json,
+)
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     ReasoningControlProfile,
@@ -23,13 +35,17 @@ from mmaudit.models.reasoning import (
 )
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
+    ExactRoutePricingSchedule,
     ExactRouteRole,
+    ProviderPriceCapAlgorithm,
     RoutePredicateDisposition,
     RoutePredicateId,
     RoutePredicateProfile,
     RoutePredicateReason,
 )
 from mmaudit.orchestration.budgets import EndpointRequestCostBound
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "model_responses"
 
 
 def _endpoint(
@@ -82,6 +98,34 @@ def _zdr_payload(*endpoints: dict[str, Any], model: str = "alpha/atlas-secure") 
             for endpoint in selected
         ]
     }
+
+
+def _decoded_numeric_price_payload(
+    *endpoint_ids: str,
+    layout: OpenRouterPriceLexemeLayout,
+) -> dict[str, Any]:
+    endpoints = [
+        _endpoint(endpoint_id, provider_name=f"Provider {index}")
+        for index, endpoint_id in enumerate(endpoint_ids)
+    ]
+    sentinels: list[tuple[str, str]] = []
+    for index, endpoint in enumerate(endpoints):
+        sentinel = f"__numeric_prompt_{index}__"
+        raw_price = f"0.00000{index + 3}"
+        endpoint["pricing"]["prompt"] = sentinel
+        sentinels.append((sentinel, raw_price))
+    envelope = (
+        _endpoint_payload(*endpoints)
+        if layout == MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT
+        else _zdr_payload(*endpoints)
+    )
+    encoded = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+    for sentinel, raw_price in sentinels:
+        encoded = encoded.replace(json.dumps(sentinel), raw_price)
+    return cast(
+        dict[str, Any],
+        decode_openrouter_price_metadata_json(encoded.encode(), layout=layout),
+    )
 
 
 def _validate(
@@ -145,6 +189,9 @@ def _route_bundle(
     model_efforts: tuple[ReasoningEffort, ...] | None = ("high",),
     observed_policy: ReasoningPolicyArtifact | None = None,
     automatic_fallbacks_allowed: bool = False,
+    price_cap_algorithm: ProviderPriceCapAlgorithm = (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    ),
 ) -> tuple[RoutePredicateProfile, ExactRouteConstraint, OpenRouterConstrainedRouteContext]:
     profile_policy = _reasoning_policy()
     role_policy = profile_policy.role_policy_for_request("model_benchmark")
@@ -157,6 +204,7 @@ def _route_bundle(
         minimum_prompt_tokens=100_000,
         required_output_tokens=4_096,
         minimum_context_tokens=120_000,
+        price_cap_algorithm=price_cap_algorithm,
     )
     constraint = ExactRouteConstraint.build(
         role=ExactRouteRole.CANDIDATE,
@@ -638,6 +686,584 @@ def test_incomplete_or_inexact_pricing_is_rejected(
         _validate(endpoint_payload=_endpoint_payload(endpoint))
 
 
+def test_recorded_xai_pricing_overrides_are_retained_and_self_bound() -> None:
+    fixture = json.loads(
+        (FIXTURES / "openrouter_tiered_pricing_shape.json").read_text(encoding="utf-8")
+    )
+    endpoint = _endpoint()
+    endpoint["pricing"] = fixture["pricing"]
+
+    snapshot = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        zdr_payload=_zdr_payload(endpoint),
+    )
+    evidence = snapshot.endpoint("approved-provider")
+
+    assert evidence.pricing == {
+        "completion": "0.0000066",
+        "input_cache_read": "0.00000055",
+        "input_cache_write": "0",
+        "prompt": "0.0000022",
+        "web_search": "0.01",
+    }
+    assert evidence.pricing_overrides == (
+        OpenRouterPricingOverrideTier(
+            min_prompt_tokens=200_000,
+            prices={
+                "completion": "0.0000132",
+                "input_cache_read": "0.0000011",
+                "input_cache_write": "0",
+                "prompt": "0.0000044",
+            },
+        ),
+    )
+    projection = evidence.tiered_pricing_cost_projection
+    assert isinstance(projection, ExactRoutePricingSchedule)
+    assert {price.component.value: price.unit_price for price in projection.maximum_pricing} == {
+        "completion": "0.0000132",
+        "input_cache_read": "0.0000011",
+        "input_cache_write": "0",
+        "prompt": "0.0000044",
+        "web_search": "0.01",
+    }
+    assert projection.conservative_for_sub_threshold_prompts is True
+    assert projection.pricing_schedule_sha256 == evidence.pricing_sha256
+    assert evidence.pricing_sha256 == openrouter_pricing_schedule_sha256(
+        evidence.pricing,
+        evidence.pricing_overrides,
+    )
+    assert len(evidence.pricing_sha256) == 64
+    assert len(evidence.endpoint_snapshot_sha256) == 64
+    serialized = evidence.model_dump(mode="json")
+    assert serialized["pricing_overrides"] == [
+        {
+            "min_prompt_tokens": 200_000,
+            "prices": {
+                "completion": "0.0000132",
+                "input_cache_read": "0.0000011",
+                "input_cache_write": "0",
+                "prompt": "0.0000044",
+            },
+        }
+    ]
+    assert "discount" not in json.dumps(serialized, sort_keys=True)
+
+
+def test_pricing_overrides_use_strict_thresholds_inheritance_and_later_wins() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {
+            "min_prompt_tokens": 100,
+            "prompt": "0.0000060",
+        },
+        {
+            "min_prompt_tokens": 200,
+            "completion": "0.0000200",
+            "prompt": "0.0000070",
+        },
+    ]
+
+    evidence = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+    ).endpoint("approved-provider")
+
+    at_first_boundary = evidence.effective_pricing(100)
+    above_first = evidence.effective_pricing(101)
+    at_second_boundary = evidence.effective_pricing(200)
+    above_second = evidence.effective_pricing(201)
+    assert at_first_boundary["prompt"] == "0.000003"
+    assert above_first["prompt"] == "0.000006"
+    assert above_first["completion"] == "0.000015"
+    assert at_second_boundary["prompt"] == "0.000006"
+    assert above_second["prompt"] == "0.000007"
+    assert above_second["completion"] == "0.00002"
+    assert above_second["image"] == "0"
+    projection = evidence.tiered_pricing_cost_projection
+    assert isinstance(projection, ExactRoutePricingSchedule)
+    assert {price.component.value: price.unit_price for price in projection.maximum_pricing} == {
+        "completion": "0.00002",
+        "image": "0",
+        "prompt": "0.000007",
+        "request": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "projection_available"),
+    [
+        ("audio", False),
+        ("completion", True),
+        ("input_audio_cache", False),
+        ("input_cache_read", False),
+        ("input_cache_write", False),
+        ("input_cache_write_1h", False),
+        ("prompt", True),
+    ],
+)
+def test_pricing_override_retains_every_documented_nested_price_field(
+    field: str,
+    projection_available: bool,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, field: "0.000006"}]
+
+    evidence = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+    ).endpoint("approved-provider")
+
+    assert evidence.pricing_overrides[0].prices == {field: "0.000006"}
+    assert evidence.effective_pricing(101)[field] == "0.000006"
+    if projection_available:
+        assert isinstance(evidence.tiered_pricing_cost_projection, ExactRoutePricingSchedule)
+    else:
+        assert evidence.tiered_pricing_cost_projection == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (None, "overrides must be a nonempty bounded list"),
+        ([], "overrides must be a nonempty bounded list"),
+        ({"min_prompt_tokens": 1}, "overrides must be a nonempty bounded list"),
+        ([None], "override entry must be a bounded object"),
+        ([{}], "override entry must be a bounded object"),
+        (
+            [{"completion": "0.2", "prompt": "0.1"}],
+            "override entry omits min_prompt_tokens",
+        ),
+        (
+            [{"discount": 0, "min_prompt_tokens": 1}],
+            "override price field is invalid",
+        ),
+        (
+            [{"discount": 0, "min_prompt_tokens": 1, "prompt": "0.1"}],
+            "override price field is invalid",
+        ),
+    ],
+)
+def test_malformed_pricing_overrides_are_rejected(overrides: Any, message: str) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = overrides
+
+    with pytest.raises(EndpointSnapshotValidationError, match=message):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+def test_pricing_override_count_is_bounded() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {"min_prompt_tokens": threshold, "prompt": "0.1"} for threshold in range(65)
+    ]
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="overrides must be a nonempty bounded list",
+    ):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize("threshold", [True, 1.0, "1", -1, 2**31])
+def test_pricing_override_threshold_must_be_an_exact_bounded_integer(
+    threshold: Any,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": threshold, "prompt": "0.1"}]
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="min_prompt_tokens must be an exact bounded nonnegative integer",
+    ):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize(
+    ("thresholds", "message"),
+    [
+        ((100, 100), "override thresholds are duplicated"),
+        ((200, 100), "override thresholds must be strictly increasing"),
+    ],
+)
+def test_pricing_override_thresholds_are_canonical(
+    thresholds: tuple[int, int],
+    message: str,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {"min_prompt_tokens": threshold, "prompt": "0.1"} for threshold in thresholds
+    ]
+
+    with pytest.raises(EndpointSnapshotValidationError, match=message):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("utc_start", "08:00", "override condition is unsupported: utc_start"),
+        ("utc_end", "18:00", "override condition is unsupported: utc_end"),
+        ("utc_days", [1, 2, 3], "override condition is unsupported: utc_days"),
+        ("overrides", [], "override cannot contain recursive overrides"),
+    ],
+)
+def test_pricing_override_unsupported_conditions_are_rejected(
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {
+            "min_prompt_tokens": 1,
+            "prompt": "0.1",
+            field: value,
+        }
+    ]
+
+    with pytest.raises(EndpointSnapshotValidationError, match=message):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize("field", ["utc_days", "utc_end", "utc_start"])
+def test_time_only_pricing_override_reports_the_unsupported_condition(field: str) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{field: "synthetic-time-condition"}]
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match=f"override condition is unsupported: {field}",
+    ):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize("field", ["utc_days", "utc_end", "utc_start", "usage_tiers"])
+def test_durable_pricing_override_cannot_recast_conditions_as_prices(field: str) -> None:
+    with pytest.raises(ValidationError, match="invalid price field"):
+        OpenRouterPricingOverrideTier(
+            min_prompt_tokens=1,
+            prices={field: "100"},
+        )
+
+
+def test_pricing_override_rejects_an_unknown_or_ambiguous_price_field() -> None:
+    unknown = _endpoint()
+    unknown["pricing"]["overrides"] = [{"min_prompt_tokens": 1, "usage_tiers": "0.1"}]
+    with pytest.raises(EndpointSnapshotValidationError, match="price field is invalid"):
+        _validate(endpoint_payload=_endpoint_payload(unknown), require_zdr=False)
+
+    ambiguous = _endpoint()
+    ambiguous["pricing"]["overrides"] = [{"min_prompt_tokens": 1, "prompt": "0.1", "Prompt": "0.2"}]
+    with pytest.raises(EndpointSnapshotValidationError, match="fields are ambiguous"):
+        _validate(endpoint_payload=_endpoint_payload(ambiguous), require_zdr=False)
+
+
+def test_pricing_override_entry_width_is_bounded_before_field_interpretation() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {
+            "min_prompt_tokens": 1,
+            **{f"synthetic_price_{index}": "0.1" for index in range(65)},
+        }
+    ]
+
+    with pytest.raises(EndpointSnapshotValidationError, match="entry must be a bounded object"):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+@pytest.mark.parametrize(
+    ("price", "message"),
+    [
+        (None, "field prompt must be a scalar exact decimal string"),
+        ([], "field prompt must be a scalar exact decimal string"),
+        ({}, "field prompt must be a scalar exact decimal string"),
+        (True, "field prompt must be an exact decimal string"),
+        (1, "field prompt must be an exact decimal string"),
+        (0.1, "field prompt must be an exact decimal string"),
+        ("-0.1", "price is not a bounded decimal string"),
+        ("NaN", "price is not a bounded decimal string"),
+        ("1e-3", "price is not a bounded decimal string"),
+        ("01", "price is not a bounded decimal string"),
+        ("1000000000000", "price is not a bounded decimal string"),
+        (
+            "0.1234567890123456789012345678901234567",
+            "price is not a bounded decimal string",
+        ),
+    ],
+)
+def test_pricing_override_prices_must_be_scalar_exact_decimal_strings(
+    price: Any,
+    message: str,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 1, "prompt": price}]
+
+    with pytest.raises(EndpointSnapshotValidationError, match=message):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+def test_unknown_top_level_pricing_collection_has_an_accurate_scalar_error() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["usage_tiers"] = []
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="pricing field usage_tiers must be a scalar exact decimal string",
+    ):
+        _validate(endpoint_payload=_endpoint_payload(endpoint), require_zdr=False)
+
+
+def test_zdr_pricing_overrides_must_match_the_model_endpoint_schedule() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000006"}]
+    zdr_endpoint = copy.deepcopy(endpoint)
+    zdr_endpoint["pricing"]["overrides"][0]["prompt"] = "0.000007"
+
+    with pytest.raises(EndpointSnapshotValidationError, match="snapshots are inconsistent"):
+        _validate(
+            endpoint_payload=_endpoint_payload(endpoint),
+            zdr_payload=_zdr_payload(zdr_endpoint),
+        )
+
+
+def test_tiered_pricing_roundtrip_and_hashes_reject_tampering() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000006"}]
+    evidence = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        zdr_payload=_zdr_payload(endpoint),
+    )
+
+    assert (
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(evidence.model_dump_json())
+        == evidence
+    )
+
+    payload = evidence.model_dump(mode="json")
+    payload["endpoints"][0]["pricing_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="pricing hash is inconsistent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(json.dumps(payload))
+
+    payload = evidence.model_dump(mode="json")
+    nested = payload["endpoints"][0]
+    nested["pricing_overrides"][0]["prices"]["prompt"] = "0.000007"
+    tiers = tuple(
+        OpenRouterPricingOverrideTier.model_validate(item) for item in nested["pricing_overrides"]
+    )
+    nested["pricing_sha256"] = openrouter_pricing_schedule_sha256(
+        nested["pricing"],
+        tiers,
+    )
+    with pytest.raises(ValidationError, match="pricing projection is inconsistent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(json.dumps(payload))
+
+    payload = evidence.model_dump(mode="json")
+    maximum = payload["endpoints"][0]["tiered_pricing_cost_projection"]["maximum_pricing"]
+    next(item for item in maximum if item["component"] == "prompt")["unit_price"] = "0.000005"
+    with pytest.raises(ValidationError, match="schedule maximum is inconsistent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(json.dumps(payload))
+
+
+def test_identical_maximum_different_schedule_cannot_reuse_projection() -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100, "prompt": "0.000006"}]
+    evidence = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+    )
+    payload = evidence.model_dump(mode="json")
+    nested = payload["endpoints"][0]
+    nested["pricing_overrides"][0]["min_prompt_tokens"] = 101
+    tiers = tuple(
+        OpenRouterPricingOverrideTier.model_validate(item) for item in nested["pricing_overrides"]
+    )
+    nested["pricing_sha256"] = openrouter_pricing_schedule_sha256(
+        nested["pricing"],
+        tiers,
+    )
+
+    with pytest.raises(ValidationError, match="pricing projection is inconsistent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate_json(json.dumps(payload))
+
+
+def test_durable_endpoint_evidence_rejects_scalarized_overrides_in_base_pricing() -> None:
+    evidence = _validate(require_zdr=False).endpoint("approved-provider")
+    payload = evidence.model_dump(mode="json")
+    payload["pricing"] = dict(sorted({**payload["pricing"], "overrides": "0"}.items()))
+    payload["pricing_sha256"] = openrouter_pricing_schedule_sha256(payload["pricing"], ())
+
+    with pytest.raises(ValidationError, match="pricing contains an invalid field"):
+        OpenRouterEndpointEvidence.model_validate(payload)
+
+
+def test_pricing_override_schema_records_all_collection_and_threshold_bounds() -> None:
+    schema = OpenRouterEndpointEvidence.model_json_schema()
+    overrides = schema["properties"]["pricing_overrides"]
+    tier = schema["$defs"]["OpenRouterPricingOverrideTier"]
+
+    assert overrides["minItems"] == 1
+    assert overrides["maxItems"] == 64
+    assert "default" not in overrides
+    assert tier["additionalProperties"] is False
+    assert tier["properties"]["min_prompt_tokens"] == {
+        "maximum": 2**31 - 1,
+        "minimum": 0,
+        "title": "Min Prompt Tokens",
+        "type": "integer",
+    }
+    assert tier["properties"]["prices"]["minProperties"] == 1
+    assert tier["properties"]["prices"]["maxProperties"] == 64
+
+
+def test_flat_pricing_evidence_remains_byte_identical_without_overrides() -> None:
+    baseline = _validate(require_zdr=False)
+    equivalent = _endpoint()
+    equivalent["pricing"] = {
+        "completion": "0.0000150",
+        "discount": 0,
+        "image": "0.0",
+        "prompt": "0.0000030",
+        "request": "0.000",
+    }
+    canonicalized = _validate(
+        endpoint_payload=_endpoint_payload(equivalent),
+        require_zdr=False,
+    )
+
+    assert canonicalized.model_dump_json() == baseline.model_dump_json()
+    assert canonicalized.snapshot_sha256 == baseline.snapshot_sha256
+    assert canonicalized.endpoints[0].pricing_sha256 == baseline.endpoints[0].pricing_sha256
+    assert (
+        canonicalized.endpoints[0].endpoint_snapshot_sha256
+        == baseline.endpoints[0].endpoint_snapshot_sha256
+    )
+    assert "pricing_overrides" not in baseline.endpoints[0].model_dump(mode="json")
+    assert "tiered_pricing_cost_projection" not in baseline.endpoints[0].model_dump(mode="json")
+    serialized = baseline.model_dump_json().encode("utf-8")
+    assert len(serialized) == 1_716
+    assert hashlib.sha256(serialized).hexdigest() == (
+        "a7417bdb11293293a3c06d17e4b385da8fcbafeb661ae500fa5bf98f5536c41c"
+    )
+    assert baseline.snapshot_sha256 == (
+        "7f34083ebf6de417254aaf857e015481e674a8527ab78674473fed6ce3c4b701"
+    )
+    assert baseline.endpoints[0].pricing_sha256 == (
+        "061fc545aeb7c2d63159a92483091c7ec619656021b95d1de3be4e884e4f310d"
+    )
+    assert baseline.endpoints[0].endpoint_snapshot_sha256 == (
+        "35c7fd1aa9f7741194a038e7b016af7cce3c05af0976d26bf2e7d0fe3ec89c2a"
+    )
+
+
+def test_captured_numeric_price_at_nonzero_endpoint_index_is_accepted() -> None:
+    payload = _decoded_numeric_price_payload(
+        "first-provider",
+        "approved-provider",
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+
+    evidence = _validate(
+        endpoint_payload=payload,
+        configured=("approved-provider",),
+        require_zdr=False,
+    )
+
+    assert evidence.endpoint("approved-provider").pricing["prompt"] == "0.000004"
+
+
+def test_captured_numeric_price_moved_across_endpoint_indices_is_revoked() -> None:
+    payload = _decoded_numeric_price_payload(
+        "first-provider",
+        "second-provider",
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    endpoints = payload["data"]["endpoints"]
+    first_pricing = endpoints[0]["pricing"]
+    second_pricing = endpoints[1]["pricing"]
+    first_token = first_pricing["prompt"]
+    second_token = second_pricing["prompt"]
+    assert captured_openrouter_json_number_raw(first_token) == "0.000003"
+
+    first_pricing["prompt"] = "0.000003"
+    second_pricing["prompt"] = first_token
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(
+            endpoint_payload=payload,
+            configured=("first-provider", "second-provider"),
+            require_zdr=False,
+        )
+
+    assert captured_openrouter_json_number_raw(first_token) is None
+    first_pricing["prompt"] = first_token
+    second_pricing["prompt"] = second_token
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(
+            endpoint_payload=payload,
+            configured=("first-provider", "second-provider"),
+            require_zdr=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "source_layout",
+    [MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT, ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT],
+)
+def test_captured_numeric_price_moved_across_endpoint_layouts_is_revoked(
+    source_layout: OpenRouterPriceLexemeLayout,
+) -> None:
+    endpoint_payload = _decoded_numeric_price_payload(
+        "approved-provider",
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    zdr_payload = _decoded_numeric_price_payload(
+        "approved-provider",
+        layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    endpoint_pricing = endpoint_payload["data"]["endpoints"][0]["pricing"]
+    zdr_pricing = zdr_payload["data"][0]["pricing"]
+    endpoint_token = endpoint_pricing["prompt"]
+    zdr_token = zdr_pricing["prompt"]
+
+    if source_layout == MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT:
+        moved_token = endpoint_token
+        endpoint_pricing["prompt"] = "0.000003"
+        zdr_pricing["prompt"] = moved_token
+    else:
+        moved_token = zdr_token
+        endpoint_pricing["prompt"] = moved_token
+        zdr_pricing["prompt"] = "0.000003"
+
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(endpoint_payload=endpoint_payload, zdr_payload=zdr_payload)
+
+    assert captured_openrouter_json_number_raw(moved_token) is None
+    endpoint_pricing["prompt"] = endpoint_token
+    zdr_pricing["prompt"] = zdr_token
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(endpoint_payload=endpoint_payload, zdr_payload=zdr_payload)
+
+
+def test_captured_numeric_price_moved_across_fields_is_revoked() -> None:
+    payload = _decoded_numeric_price_payload(
+        "approved-provider",
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    pricing = payload["data"]["endpoints"][0]["pricing"]
+    prompt_token = pricing["prompt"]
+    completion = pricing["completion"]
+
+    pricing["prompt"] = "0.000003"
+    pricing["completion"] = prompt_token
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(endpoint_payload=payload, require_zdr=False)
+
+    assert captured_openrouter_json_number_raw(prompt_token) is None
+    pricing["prompt"] = prompt_token
+    pricing["completion"] = completion
+    with pytest.raises(EndpointSnapshotValidationError):
+        _validate(endpoint_payload=payload, require_zdr=False)
+
+
 def test_zdr_required_policy_rejects_missing_or_wrong_endpoint_evidence() -> None:
     with pytest.raises(EndpointSnapshotValidationError, match="needs a current"):
         validate_openrouter_endpoint_snapshot(
@@ -970,20 +1596,172 @@ def test_constrained_snapshot_rejects_insufficient_capacity(
         endpoint["max_prompt_tokens"] = 100_000
     _, _, context = _route_bundle()
 
-    with pytest.raises(EndpointSnapshotValidationError, match=reason):
+    with pytest.raises(EndpointSnapshotValidationError, match=reason) as exc_info:
+        _validate_constrained(endpoint, context=context)
+    assert "price-cap projection" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("component", ("input_cache_write", "internal_reasoning"))
+@pytest.mark.parametrize("price", ("0", "0.000001"))
+@pytest.mark.parametrize(
+    "algorithm",
+    (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1,
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+    ),
+)
+def test_constrained_snapshot_names_unexpressible_provider_price_without_raw_metadata(
+    component: str,
+    price: str,
+    algorithm: ProviderPriceCapAlgorithm,
+) -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["name"] = "untrusted-provider-diagnostic-canary"
+    endpoint["pricing"][component] = price
+    _, _, context = _route_bundle(price_cap_algorithm=algorithm)
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="PRICE_CAP_NOT_EXPRESSIBLE",
+    ) as exc_info:
         _validate_constrained(endpoint, context=context)
 
+    message = str(exc_info.value)
+    assert "PRICE_CAP_PROOF_UNAVAILABLE" in message
+    assert (
+        f"price-cap projection [{algorithm.value}]: "
+        f"route contains a variable price without a provider cap: {component}"
+    ) in message
+    assert endpoint["name"] not in message
 
-def test_constrained_snapshot_rejects_unexpressible_provider_price() -> None:
+
+def test_constrained_snapshot_distinguishes_a_non_dominated_cache_read_price() -> None:
     endpoint = _constrained_endpoint()
-    endpoint["pricing"]["input_cache_write"] = "0.000001"
+    endpoint["pricing"]["input_cache_read"] = "0.000004"
     _, _, context = _route_bundle()
+
+    with pytest.raises(EndpointSnapshotValidationError) as exc_info:
+        _validate_constrained(endpoint, context=context)
+
+    message = str(exc_info.value)
+    assert "PRICE_CAP_NOT_EXPRESSIBLE" in message
+    assert "route cache-read pricing is not prompt dominated" in message
+    assert "input_cache_write" not in message
+
+
+def test_constrained_tiered_price_shape_isolates_the_cache_write_refusal() -> None:
+    endpoint = _constrained_endpoint()
+    fixture = json.loads((FIXTURES / "openrouter_tiered_pricing_shape.json").read_text())
+    endpoint["pricing"] = fixture["pricing"]
+    _, _, context = _route_bundle(
+        price_cap_algorithm=ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+
+    with pytest.raises(EndpointSnapshotValidationError, match="provider cap: input_cache_write"):
+        _validate_constrained(endpoint, context=context)
+
+    # A synthetic paired control isolates this blocker; never alter real metadata this way.
+    control = copy.deepcopy(endpoint)
+    del control["pricing"]["input_cache_write"]
+    for tier in control["pricing"]["overrides"]:
+        del tier["input_cache_write"]
+    snapshot = _validate_constrained(control, context=context)
+    facts = snapshot.normalized_route_facts
+    assert facts is not None
+    assert {
+        cap.component.value: cap.value for cap in facts.configured_provider_max_price or ()
+    } == {
+        "completion": 13.2,
+        "prompt": 4.4,
+    }
+
+
+def test_constrained_snapshot_binds_nonzero_web_search_to_zero_request_units() -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["pricing"]["web_search"] = "0.01"
+    profile, _, context = _route_bundle(
+        price_cap_algorithm=(ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2)
+    )
+
+    snapshot = _validate_constrained(endpoint, context=context)
+    assert snapshot.route_predicate_profile == profile
+    facts = snapshot.normalized_route_facts
+    report = snapshot.route_predicate_report
+    assert facts is not None
+    assert report is not None
+    assert {item.component.value for item in facts.configured_provider_max_price or ()} == {
+        "completion",
+        "image",
+        "prompt",
+        "request",
+    }
+    results = {item.predicate_id: item for item in report.results}
+    assert results[RoutePredicateId.PRICE_CAP_EXPRESSIBILITY].disposition is (
+        RoutePredicateDisposition.SATISFIED
+    )
+    assert results[RoutePredicateId.PRICE_CAP_NO_WEAKER].disposition is (
+        RoutePredicateDisposition.SATISFIED
+    )
+    OpenRouterEndpointSnapshotEvidence.model_validate_json(snapshot.model_dump_json(), strict=True)
+
+
+def test_component_unit_envelope_does_not_exempt_zero_cache_write_price() -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["pricing"]["input_cache_write"] = "0"
+    _, _, context = _route_bundle(
+        price_cap_algorithm=(ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2)
+    )
 
     with pytest.raises(
         EndpointSnapshotValidationError,
         match="PRICE_CAP_NOT_EXPRESSIBLE",
     ):
         _validate_constrained(endpoint, context=context)
+
+
+def test_constrained_snapshot_projects_the_schedule_maximum_across_a_valid_override() -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["pricing"]["overrides"] = [{"min_prompt_tokens": 100_000, "prompt": "0.000006"}]
+    _, _, context = _route_bundle()
+
+    snapshot = _validate_constrained(endpoint, context=context)
+    evidence = snapshot.endpoint("approved-provider")
+    projection = evidence.tiered_pricing_cost_projection
+    assert isinstance(projection, ExactRoutePricingSchedule)
+    assert {price.component.value: price.unit_price for price in projection.maximum_pricing} == {
+        "completion": "0.000015",
+        "image": "0",
+        "prompt": "0.000006",
+        "request": "0",
+    }
+    facts = snapshot.normalized_route_facts
+    assert facts is not None
+    assert facts.pricing_schedule == projection
+    assert {
+        cap.component.value: cap.value for cap in facts.configured_provider_max_price or ()
+    } == {
+        "completion": 15.0,
+        "image": 0.0,
+        "prompt": 6.0,
+        "request": 0.0,
+    }
+
+
+def test_constrained_snapshot_fails_closed_for_an_indeterminate_retained_schedule() -> None:
+    endpoint = _constrained_endpoint()
+    endpoint["pricing"]["overrides"] = [
+        {"min_prompt_tokens": 100_000, "input_cache_read": "0.000001"}
+    ]
+    _, _, context = _route_bundle()
+
+    with pytest.raises(EndpointSnapshotValidationError) as exc_info:
+        _validate_constrained(endpoint, context=context)
+
+    message = str(exc_info.value)
+    assert "PRICE_CAP_NOT_EXPRESSIBLE" in message
+    assert "PRICE_CAP_PROOF_UNAVAILABLE" in message
+    assert "PRICE_CAP_MISSING" not in message
+    assert "pricing schedule unavailable" in message
 
 
 def test_constrained_snapshot_rejects_partial_embedded_route_evidence() -> None:

@@ -20,6 +20,7 @@ from mmaudit.isolation.container import (
     cleanup_isolation_backend,
     isolation_host_environment,
 )
+from mmaudit.isolation.managed import managed_isolation_backend
 from mmaudit.models.schemas import (
     CompilationStatus,
     RepositoryCodeExecutionState,
@@ -27,13 +28,19 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SolidityProjectType,
 )
+from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 from mmaudit.scanners.base import (
+    _observe_scanner_executable,
+    _ScannerExecutableObservation,
     isolated_executable_version_probe,
     sanitized_scanner_environment,
+    scanner_trust_pin_error,
 )
 from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
+from mmaudit.solidity.projects import _build_command
 from mmaudit.solidity.reproduction import (
     IsolationBackend,
     default_isolation_backend,
@@ -59,6 +66,108 @@ class CompilationRun:
     artifact_roots: list[Path]
 
 
+@dataclass(frozen=True)
+class _ManagedCompilationSelection:
+    """Retained direct-file observations, not installed closure or atomic exec proof."""
+
+    material: ManagedHostToolMaterialization
+    config: SmartContractsConfig
+    tools: tuple[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str], ...]
+
+    def verify(self) -> None:
+        _verify_managed_compilation_config(self.material, self.config)
+        for _, path, observation, _ in self.tools:
+            if _observe_scanner_executable(path) != observation:
+                raise ValueError("managed compiler executable identity changed")
+
+    def path(self, role: ManagedToolchainRole) -> Path:
+        for selected_role, path, _, _ in self.tools:
+            if selected_role is role:
+                return path
+        raise ValueError("managed compilation has no selected compiler role")
+
+    def preflight(
+        self,
+        backend: IsolationBackend,
+        workspace: Path,
+        private_dir: Path,
+        environment: dict[str, str],
+    ) -> dict[str, str]:
+        versions: dict[str, str] = {}
+        for role, path, observation, expected_version in self.tools:
+            self.verify()
+            observed, error = _isolated_tool_versions(
+                str(path),
+                backend,
+                workspace,
+                private_dir,
+                environment,
+                repository_javascript=False,
+                expected_host_observation=observation,
+            )
+            self.verify()
+            version = observed.get(path.name)
+            if error is not None or scanner_trust_pin_error(
+                version=version,
+                executable_sha256=observation.sha256,
+                expected_version=expected_version,
+                expected_sha256=observation.sha256,
+            ):
+                raise ValueError("managed compiler version preflight did not match its pin")
+            assert version is not None
+            versions[role.value] = version
+        return versions
+
+
+def _verify_managed_compilation_config(
+    material: ManagedHostToolMaterialization, config: SmartContractsConfig
+) -> None:
+    if (
+        type(material) is not ManagedHostToolMaterialization
+        or type(config) is not SmartContractsConfig
+    ):
+        raise ValueError("managed compilation requires exact material and config types")
+    if config != material.config.smart_contracts:
+        raise ValueError("managed compiler config differs from prepared material")
+    material.verify()
+
+
+def _managed_compilation_selection(
+    material: ManagedHostToolMaterialization,
+    config: SmartContractsConfig,
+    projects: list[SolidityProjectMetadata],
+    repository_root: Path,
+    private_dir: Path,
+) -> _ManagedCompilationSelection:
+    _verify_managed_compilation_config(material, config)
+    for root in (repository_root.resolve(strict=True), private_dir.resolve(strict=False)):
+        if material.directory.is_relative_to(root) or root.is_relative_to(material.directory):
+            raise ValueError("managed compiler material overlaps source or writable private state")
+    tools: list[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str]] = []
+    needs_foundry = False
+    if config.compile:
+        for project in projects:
+            if project.project_type is SolidityProjectType.PLAIN:
+                continue
+            if project.build_command != _build_command(project.project_type, config.allow_network):
+                raise ValueError("managed compiler requires the fixed project build command")
+            needs_foundry |= project.project_type in {
+                SolidityProjectType.FOUNDRY,
+                SolidityProjectType.MIXED,
+            }
+    if needs_foundry:
+        members = {item.role: item for item in material.manifest.files}
+        for role in (ManagedToolchainRole.FORGE, ManagedToolchainRole.SOLC):
+            path = material.executable_for(role)
+            observation = _observe_scanner_executable(path)
+            if observation.sha256 != members[role].sha256:
+                raise ValueError("managed compiler executable differs from its selected pin")
+            tools.append((role, path, observation, members[role].version))
+    selection = _ManagedCompilationSelection(material=material, config=config, tools=tuple(tools))
+    selection.verify()
+    return selection
+
+
 def compile_solidity_projects(
     repository_root: Path,
     projects: list[SolidityProjectMetadata],
@@ -69,9 +178,20 @@ def compile_solidity_projects(
     prepared_dependencies: Mapping[str, Path] | None = None,
     require_prepared_dependencies: bool = False,
     excluded_repository_paths: tuple[str, ...] = (),
+    host_tools: ManagedHostToolMaterialization | None = None,
 ) -> CompilationRun:
-    """Compile supported projects in copied private workspaces when explicitly enabled."""
+    """Compile copied workspaces, optionally consuming exact prepared Forge/Solc material."""
 
+    managed = (
+        _managed_compilation_selection(host_tools, config, projects, repository_root, private_dir)
+        if host_tools is not None
+        else None
+    )
+    if managed is not None:
+        projects = [
+            SolidityProjectMetadata.model_validate_json(project.model_dump_json(), strict=True)
+            for project in projects
+        ]
     if not projects:
         return CompilationRun(results=[], artifact_roots=[])
     private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -97,8 +217,16 @@ def compile_solidity_projects(
         )
     results: list[SolidityCompilationResult] = []
     artifact_roots: list[Path] = []
-    resolved_backend = backend or default_isolation_backend("auto")
+    resolved_backend = backend
+    if resolved_backend is None:
+        if host_tools is not None:
+            if any(project.project_type is not SolidityProjectType.PLAIN for project in projects):
+                resolved_backend = managed_isolation_backend(host_tools)
+        else:
+            resolved_backend = default_isolation_backend("auto")
     for project in projects:
+        if managed is not None:
+            managed.verify()
         compiled = _compile_one(
             repository_root,
             project,
@@ -108,10 +236,15 @@ def compile_solidity_projects(
             prepared_dependencies or {},
             require_prepared_dependencies,
             excluded_repository_paths,
+            managed,
         )
+        if managed is not None:
+            managed.verify()
         results.append(compiled.result)
         artifact_roots.extend(compiled.artifact_roots)
     artifact_roots.extend(_existing_artifact_roots(repository_root, projects))
+    if managed is not None:
+        managed.verify()
     return CompilationRun(results=results, artifact_roots=_unique_paths(artifact_roots))
 
 
@@ -130,6 +263,7 @@ def _compile_one(
     prepared_dependencies: Mapping[str, Path],
     require_prepared_dependencies: bool,
     excluded_repository_paths: tuple[str, ...],
+    managed: _ManagedCompilationSelection | None = None,
 ) -> _CompileOneResult:
     monotonic_start = time.monotonic()
     loads_repository_code = project.project_type is SolidityProjectType.HARDHAT
@@ -233,7 +367,14 @@ def _compile_one(
     executable_path: Path | None = None
     executable_sha256: str | None = None
     executable_name = project.build_command[0]
-    if not loads_repository_code:
+    if not loads_repository_code and managed is not None:
+        executable_path = managed.path(ManagedToolchainRole.FORGE)
+        executable_sha256 = next(
+            observation.sha256
+            for role, _, observation, _ in managed.tools
+            if role is ManagedToolchainRole.FORGE
+        )
+    elif not loads_repository_code:
         executable = shutil.which(executable_name)
         if executable is None:
             return _CompileOneResult(
@@ -322,10 +463,41 @@ def _compile_one(
             artifact_roots=[],
         )
     environment = _compilation_environment(private_dir / digest, config)
+    tool_versions: dict[str, str] = {}
+    if managed is not None and not loads_repository_code:
+        try:
+            tool_versions = managed.preflight(backend, workspace, private_dir / digest, environment)
+        except (OSError, RuntimeError, ValueError) as exc:
+            cleanup_error = _cleanup_error(backend, private_dir / digest)
+            return _CompileOneResult(
+                result=SolidityCompilationResult(
+                    status=CompilationStatus.UNAVAILABLE,
+                    framework=project.project_type,
+                    project_root=project.project_root,
+                    executable_sha256=executable_sha256,
+                    command=project.build_command,
+                    compiler_versions=project.compiler_versions,
+                    errors=[
+                        f"managed compiler preflight refused: {type(exc).__name__}",
+                        *([cleanup_error] if cleanup_error else []),
+                    ],
+                    isolation_backend=isolation_backend,
+                    duration_seconds=time.monotonic() - monotonic_start,
+                ),
+                artifact_roots=[],
+            )
     command = [
         str(executable_path) if executable_path is not None else executable_name,
         *project.build_command[1:],
     ]
+    if managed is not None and not loads_repository_code:
+        command = [
+            str(managed.path(ManagedToolchainRole.FORGE)),
+            *_build_command(project.project_type, config.allow_network)[1:],
+            "--no-auto-detect",
+            "--use",
+            str(managed.path(ManagedToolchainRole.SOLC)),
+        ]
     try:
         if loads_repository_code:
             assert isinstance(backend, RepositoryJavaScriptIsolationBackend)
@@ -401,6 +573,8 @@ def _compile_one(
     process: subprocess.Popen[bytes] | None = None
     try:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            if managed is not None:
+                managed.verify()
             process = subprocess.Popen(
                 command,
                 cwd=workspace,
@@ -436,7 +610,7 @@ def _compile_one(
         if process is not None:
             _stop_process(process)
         return_code = process.returncode if process is not None else -1
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         cleanup_error = _cleanup_error(backend, private_dir / digest)
         return _CompileOneResult(
             result=SolidityCompilationResult(
@@ -458,6 +632,8 @@ def _compile_one(
             artifact_roots=[],
         )
     cleanup_error = _cleanup_error(backend, private_dir / digest)
+    if managed is not None:
+        managed.verify()
     stdout = (
         stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
     )
@@ -484,9 +660,8 @@ def _compile_one(
         errors.append(cleanup_error)
     if status is CompilationStatus.FAILED and not errors:
         errors.append(f"compiler exited with code {return_code}")
-    tool_versions: dict[str, str] = {}
     version_cleanup_error: str | None = None
-    if cleanup_error is None:
+    if cleanup_error is None and (managed is None or loads_repository_code):
         tool_versions, version_cleanup_error = _isolated_tool_versions(
             str(executable_path) if executable_path is not None else executable_name,
             backend,
@@ -685,6 +860,7 @@ def _isolated_tool_versions(
     environment: dict[str, str],
     *,
     repository_javascript: bool,
+    expected_host_observation: _ScannerExecutableObservation | None = None,
 ) -> tuple[dict[str, str], str | None]:
     try:
         probe = isolated_executable_version_probe(
@@ -695,6 +871,7 @@ def _isolated_tool_versions(
             private_dir,
             repository_javascript=repository_javascript,
             timeout_seconds=10,
+            expected_host_observation=expected_host_observation,
         )
     except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError):
         return {}, "compilation tool version probe failed closed before public evidence"

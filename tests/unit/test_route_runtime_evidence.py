@@ -14,6 +14,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 import mmaudit.benchmark.models as benchmark_models_module
+import mmaudit.models.authenticated_runner_smoke as authenticated_runner_smoke_module
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.route_runtime_evidence as route_runtime_evidence_module
 from mmaudit.config import AuditConfig, ModelRetryPolicy
@@ -44,10 +45,12 @@ from mmaudit.models.route_admission import (
 from mmaudit.models.route_constraints import (
     ExactRouteRole,
     NormalizedRouteFacts,
+    ProviderPriceCapAlgorithm,
     RouteConstraintError,
     RouteConstraintPurpose,
     RoutePredicateDisposition,
     RoutePredicateId,
+    RoutePredicateProfile,
     RoutePredicateReason,
     RoutePredicateReport,
     bind_registry_route_facts,
@@ -98,6 +101,48 @@ type _ThreeRouteArtifacts = tuple[
 def _route_hash(label: str) -> str:
     value: str = canonical_sha256({"route-runtime-test": label})
     return value
+
+
+def _component_unit_preview(
+    preview: OpenRouterStructuredRequestCostPreview,
+) -> tuple[OpenRouterStructuredRequestCostPreview, RoutePredicateProfile]:
+    profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=preview.reasoning_policy_sha256,
+        reasoning_role_profile_sha256=_route_hash("component-unit-role-profile"),
+        reasoning_role_binding_sha256=preview.reasoning_policy_role_binding_sha256,
+        reasoning_control_profile_sha256=preview.reasoning_profile_sha256,
+        reserved_reasoning_tokens=4_096,
+        minimum_prompt_tokens=preview.prompt_byte_upper_bound_tokens,
+        required_output_tokens=preview.reserved_output_tokens,
+        minimum_context_tokens=(
+            preview.prompt_byte_upper_bound_tokens + preview.reserved_output_tokens + 4_096
+        ),
+        price_cap_algorithm=(ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2),
+    )
+    payload = preview.model_dump(mode="json", exclude={"preview_sha256"})
+    payload.update(
+        {
+            "schema_version": "1.2",
+            "route_predicate_profile_sha256": profile.profile_sha256,
+            "route_predicate_profile": profile.model_dump(mode="json"),
+            "price_cap_algorithm": profile.price_cap_algorithm.value,
+            "price_component_unit_envelopes": [
+                item.model_dump(mode="json")
+                for item in profile.price_component_unit_envelopes or ()
+            ],
+        }
+    )
+    return (
+        OpenRouterStructuredRequestCostPreview.model_validate_json(
+            json.dumps(
+                {**payload, "preview_sha256": canonical_sha256(payload)},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            strict=True,
+        ),
+        profile,
+    )
 
 
 def _route_bound_model(model: CandidateModel, role: ExactRouteRole) -> CandidateModel:
@@ -708,6 +753,59 @@ def test_runtime_artifact_derives_ordered_independent_proofs_and_round_trips(
         proof_kind="PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
     )
     assert route_runtime_evidence_module._token_detail_proof_is_valid(valid_item)
+
+    component_unit_preview, component_unit_profile = _component_unit_preview(preview)
+    component_unit_plan = build_authenticated_runner_smoke_cost_plan(
+        smoke_run_index=run.candidate_cost_plan.smoke_run_index,
+        run_kind=run.candidate_cost_plan.run_kind,
+        stage=run.candidate_cost_plan.stage,
+        case_id=run.candidate_cost_plan.case_id,
+        selection_sha256=run.candidate_cost_plan.selection_sha256,
+        request_preview=component_unit_preview,
+    )
+    component_unit_model_payload = run.candidate.model_dump(mode="python")
+    component_unit_model_payload["route_predicate_profile_sha256"] = (
+        component_unit_profile.profile_sha256
+    )
+    component_unit_model = CandidateModel.model_validate(
+        component_unit_model_payload,
+        strict=True,
+    )
+    component_unit_item = route_runtime_evidence_module._RuntimeSourceItem(
+        run=run,
+        model=component_unit_model,
+        plan=component_unit_plan,
+        usage=usage,
+        proof_kind="PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+    )
+    assert component_unit_plan.schema_version == "1.2"
+    assert component_unit_plan.request_preview.schema_version == "1.2"
+    assert route_runtime_evidence_module._token_detail_proof_is_valid(component_unit_item)
+    route_runtime_evidence_module._validate_source_item(component_unit_item)
+    component_unit_usage = usage.model_copy(
+        update={
+            "routing": {
+                **usage.routing,
+                "request_cost_preview_sha256": component_unit_preview.preview_sha256,
+            }
+        }
+    )
+    authenticated_runner_smoke_module._require_usage_preview_join(
+        component_unit_usage,
+        component_unit_preview,
+    )
+
+    mismatched_model_payload = component_unit_model.model_dump(mode="python")
+    mismatched_model_payload["route_predicate_profile_sha256"] = "f" * 64
+    mismatched_item = route_runtime_evidence_module._RuntimeSourceItem(
+        run=run,
+        model=CandidateModel.model_validate(mismatched_model_payload, strict=True),
+        plan=component_unit_plan,
+        usage=usage,
+        proof_kind="PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+    )
+    with pytest.raises(ValueError, match="differs from its exact route preview"):
+        route_runtime_evidence_module._validate_source_item(mismatched_item)
 
     preview_payload = preview.model_dump(mode="json", exclude={"preview_sha256"})
     preview_payload["request_token_plan_projection_sha256"] = token_plan.plan_sha256

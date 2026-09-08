@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.isolation.provenance import (
@@ -49,9 +50,13 @@ from mmaudit.models.schemas import (
     StatefulActionSpec,
     TransactionOrderingCapability,
 )
+from mmaudit.orchestration.managed_toolchain import ManagedToolchainRole
 from mmaudit.scanners.base import (
+    _observe_scanner_executable,
+    _ScannerExecutableObservation,
     isolated_executable_version_probe,
     sanitized_scanner_environment,
+    scanner_trust_pin_error,
 )
 from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.scanners.foundry import (
@@ -69,6 +74,11 @@ from mmaudit.solidity.reproduction import (
     attacker_capability_policy_error,
     default_isolation_backend,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+    from mmaudit.scanners.offline_fork_service import OfflineForkRpcLease
 
 
 def translate_foundry_invariant(
@@ -842,8 +852,109 @@ def _probe_lines(
     )
 
 
+@dataclass(frozen=True)
+class _ManagedInvariantSelection:
+    """Retain direct-tool identities through replay, without claiming installed closure."""
+
+    material: ManagedHostToolMaterialization
+    reproduction: ReproductionConfig
+    smart_contracts: SmartContractsConfig
+    enabled: bool
+    tools: tuple[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str], ...]
+
+    def verify(self) -> None:
+        _verify_managed_invariant_config(self.material, self.reproduction, self.smart_contracts)
+        for _, path, observation, _ in self.tools:
+            if _observe_scanner_executable(path) != observation:
+                raise ValueError("managed invariant executable identity changed")
+
+    def verify_roots(self, repository_root: Path, private_dir: Path) -> None:
+        self.verify()
+        for root in (repository_root.resolve(strict=True), private_dir.resolve(strict=False)):
+            if self.material.directory.is_relative_to(root) or root.is_relative_to(
+                self.material.directory
+            ):
+                raise ValueError("managed invariant material overlaps source or writable state")
+
+    def tool(self, role: ManagedToolchainRole) -> tuple[Path, _ScannerExecutableObservation]:
+        for selected, path, observation, _ in self.tools:
+            if selected is role:
+                return path, observation
+        raise ValueError("managed invariant execution has no prepared tool for the selected role")
+
+    def preflight(self, backend: IsolationBackend, private_dir: Path) -> dict[str, str]:
+        versions: dict[str, str] = {}
+        for role, path, observation, expected_version in self.tools:
+            self.verify()
+            version = _external_executable_version(
+                path,
+                backend=backend,
+                private_dir=private_dir,
+                expected_host_observation=observation,
+            )
+            self.verify()
+            if scanner_trust_pin_error(
+                version=version,
+                executable_sha256=observation.sha256,
+                expected_version=expected_version,
+                expected_sha256=observation.sha256,
+            ):
+                raise ValueError("managed invariant tool version differs from its prepared pin")
+            versions[role.value] = version
+        return versions
+
+
+def _verify_managed_invariant_config(
+    material: ManagedHostToolMaterialization,
+    reproduction: ReproductionConfig,
+    smart_contracts: SmartContractsConfig,
+) -> None:
+    from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+
+    if (
+        type(material) is not ManagedHostToolMaterialization
+        or type(reproduction) is not ReproductionConfig
+        or type(smart_contracts) is not SmartContractsConfig
+    ):
+        raise ValueError("managed invariant execution requires exact material and config types")
+    config = material.config
+    if reproduction != config.reproduction or smart_contracts != config.smart_contracts:
+        raise ValueError("managed invariant config differs from prepared material")
+    material.verify()
+
+
+def _managed_invariant_selection(
+    material: ManagedHostToolMaterialization,
+    reproduction: ReproductionConfig,
+    smart_contracts: SmartContractsConfig,
+) -> _ManagedInvariantSelection:
+    _verify_managed_invariant_config(material, reproduction, smart_contracts)
+    invariant_config = material.config.invariants
+    enabled = (
+        smart_contracts.enabled and invariant_config.enabled and invariant_config.execute_generated
+    )
+    tools: list[tuple[ManagedToolchainRole, Path, _ScannerExecutableObservation, str]] = []
+    if enabled:
+        members = {item.role: item for item in material.manifest.files}
+        for role in (ManagedToolchainRole.FORGE, ManagedToolchainRole.SOLC):
+            path = material.executable_for(role)
+            observation = _observe_scanner_executable(path)
+            if observation.sha256 != members[role].sha256:
+                raise ValueError("managed invariant executable differs from its prepared pin")
+            tools.append((role, path, observation, members[role].version))
+    selected = _ManagedInvariantSelection(
+        material=material,
+        reproduction=reproduction,
+        smart_contracts=smart_contracts,
+        enabled=enabled,
+        tools=tuple(tools),
+    )
+    selected.verify()
+    return selected
+
+
 class FoundryInvariantRunner:
-    """Run only typed invariant harnesses against a loopback local fork."""
+    """Run typed invariants on source-local deployments or an explicitly configured local fork."""
 
     def __init__(
         self,
@@ -853,20 +964,60 @@ class FoundryInvariantRunner:
         backend: IsolationBackend | None = None,
         forge_executable: Path | None = None,
         solc_executable: Path | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
+        offline_forks: ManagedForkArchives | None = None,
     ) -> None:
         self.reproduction = reproduction
         self.smart_contracts = smart_contracts
-        self.backend = (
-            backend
-            if backend is not None
-            else default_isolation_backend(
-                reproduction.isolation_backend,
-                rootless_container_image=reproduction.rootless_container_image,
-                rootless_container_runtime=reproduction.rootless_container_runtime,
-            )
+        self._managed = (
+            _managed_invariant_selection(host_tools, reproduction, smart_contracts)
+            if host_tools is not None
+            else None
         )
+        if self._managed is not None and (
+            forge_executable is not None or solc_executable is not None
+        ):
+            raise ValueError("managed invariant selection cannot be combined with path overrides")
+        self._prepared_managed_selection = self._managed
+        self.offline_forks = offline_forks
+        self._prepared_offline_forks = offline_forks
+        self._verify_managed_selection()
+        self.backend = backend
+        if self.backend is None:
+            if host_tools is None:
+                self.backend = default_isolation_backend(
+                    reproduction.isolation_backend,
+                    rootless_container_image=reproduction.rootless_container_image,
+                    rootless_container_runtime=reproduction.rootless_container_runtime,
+                )
+            elif self._managed is not None and self._managed.enabled:
+                from mmaudit.isolation.managed import managed_isolation_backend
+
+                self.backend = managed_isolation_backend(host_tools)
         self.forge_executable = forge_executable
         self.solc_executable = solc_executable
+        if self._managed is not None and self._managed.enabled:
+            self.forge_executable = self._managed.tool(ManagedToolchainRole.FORGE)[0]
+            self.solc_executable = self._managed.tool(ManagedToolchainRole.SOLC)[0]
+
+    def _verify_managed_selection(self) -> None:
+        if (
+            self._managed is not self._prepared_managed_selection
+            or self.offline_forks is not self._prepared_offline_forks
+        ):
+            raise ValueError("managed invariant selection changed")
+        if self.offline_forks is not None:
+            from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+
+            if type(self.offline_forks) is not ManagedForkArchives or self._managed is None:
+                raise ValueError("managed invariants require exact prepared tools and archives")
+            self.offline_forks.verify(self._managed.material.config)
+            self.offline_forks.verify_roots(self._managed.material.directory)
+        if self._managed is not None:
+            _verify_managed_invariant_config(
+                self._managed.material, self.reproduction, self.smart_contracts
+            )
+            self._managed.verify()
 
     @property
     def isolation_available(self) -> bool:
@@ -884,6 +1035,24 @@ class FoundryInvariantRunner:
         specification: FoundryInvariantHarnessSpec,
         private_dir: Path,
     ) -> InvariantExecutionResult:
+        self._verify_managed_selection()
+        if self.offline_forks is not None:
+            self.offline_forks.verify_roots(repository_root, private_dir)
+        if self._managed is not None:
+            self._managed.verify_roots(repository_root, private_dir)
+            if (
+                type(specification) is not FoundryInvariantHarnessSpec
+                or type(project) is not SolidityProjectMetadata
+            ):
+                raise ValueError(
+                    "managed invariants require exact typed harness and project inputs"
+                )
+            specification = FoundryInvariantHarnessSpec.model_validate_json(
+                specification.model_dump_json(), strict=True
+            )
+            project = SolidityProjectMetadata.model_validate_json(
+                project.model_dump_json(), strict=True
+            )
         started = time.monotonic()
         base = {
             "invariant_id": specification.invariant_id,
@@ -896,6 +1065,24 @@ class FoundryInvariantRunner:
             "required_transaction_ordering": specification.required_transaction_ordering,
             "capability_policy": specification.capability_policy,
         }
+        if self._managed is not None and not self._managed.enabled:
+            return InvariantExecutionResult(
+                **base,
+                status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
+                limitations=["managed invariant execution requires enabled generated invariants"],
+                duration_seconds=time.monotonic() - started,
+            )
+        if (
+            self._managed is not None
+            and not specification.local_deployments
+            and (self.offline_forks is None or self.offline_forks.invariant_source_binding is None)
+        ):
+            return InvariantExecutionResult(
+                **base,
+                status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
+                limitations=["managed invariant fork archive is unavailable"],
+                duration_seconds=time.monotonic() - started,
+            )
         if specification.capability_policy is not None:
             policy_error = attacker_capability_policy_error(
                 specification.capability_policy,
@@ -957,7 +1144,11 @@ class FoundryInvariantRunner:
                 isolation_backend=self.backend.name,
                 duration_seconds=time.monotonic() - started,
             )
-        forge = self.forge_executable or _external_executable(repository_root, "forge")
+        forge = (
+            self._managed.tool(ManagedToolchainRole.FORGE)[0]
+            if self._managed is not None
+            else self.forge_executable or _external_executable(repository_root, "forge")
+        )
         if forge is None:
             return InvariantExecutionResult(
                 **base,
@@ -967,7 +1158,11 @@ class FoundryInvariantRunner:
                 duration_seconds=time.monotonic() - started,
             )
         try:
-            forge_sha256 = _file_sha256(forge)
+            forge_sha256 = (
+                self._managed.tool(ManagedToolchainRole.FORGE)[1].sha256
+                if self._managed is not None
+                else _file_sha256(forge)
+            )
         except OSError as exc:
             return InvariantExecutionResult(
                 **base,
@@ -979,8 +1174,8 @@ class FoundryInvariantRunner:
         compiler: Path | None = None
         compiler_version: str | None = None
         compiler_sha256: str | None = None
-        if local_only:
-            if self.solc_executable is None:
+        if local_only or self._managed is not None:
+            if self._managed is None and self.solc_executable is None:
                 return InvariantExecutionResult(
                     **base,
                     status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
@@ -992,17 +1187,26 @@ class FoundryInvariantRunner:
                     duration_seconds=time.monotonic() - started,
                 )
             try:
-                compiler = _validated_external_executable(
-                    repository_root,
-                    self.solc_executable,
-                )
-                compiler_version = _external_executable_version(
-                    compiler,
-                    backend=self.backend,
-                    private_dir=private_dir,
-                )
-                compiler_sha256 = _file_sha256(compiler)
+                if self._managed is not None:
+                    versions = self._managed.preflight(self.backend, private_dir)
+                    self._verify_managed_selection()
+                    compiler, observation = self._managed.tool(ManagedToolchainRole.SOLC)
+                    compiler_version = versions[ManagedToolchainRole.SOLC.value]
+                    compiler_sha256 = observation.sha256
+                else:
+                    assert self.solc_executable is not None
+                    compiler = _validated_external_executable(
+                        repository_root,
+                        self.solc_executable,
+                    )
+                    compiler_version = _external_executable_version(
+                        compiler,
+                        backend=self.backend,
+                        private_dir=private_dir,
+                    )
+                    compiler_sha256 = _file_sha256(compiler)
             except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+                self._verify_managed_selection()
                 return InvariantExecutionResult(
                     **base,
                     status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
@@ -1014,7 +1218,7 @@ class FoundryInvariantRunner:
                 )
         rpc_url: str | None = None
         rpc_port = 0
-        if not local_only:
+        if not local_only and self._managed is None:
             try:
                 rpc_url, rpc_port = _local_rpc(
                     os.environ.get(self.smart_contracts.fork_rpc_url_env, "")
@@ -1052,6 +1256,7 @@ class FoundryInvariantRunner:
             InvariantExecutionStatus.COUNTEREXAMPLE,
         }
         for attempt in range(1, attempt_limit + 1):
+            self._verify_managed_selection()
             attempt_root = private_dir / source_hash[:16] / f"attempt-{attempt}"
             workspace = attempt_root / "workspace"
             copied_compiler: Path | None = None
@@ -1061,7 +1266,7 @@ class FoundryInvariantRunner:
                 test_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
                 test_path = test_dir / f"MMAuditInvariant_{specification.name}.t.sol"
                 test_path.write_text(source, encoding="utf-8")
-                if compiler is not None:
+                if compiler is not None and self._managed is None:
                     toolchain_dir = test_dir / "toolchain"
                     toolchain_dir.mkdir(mode=0o700)
                     copied_compiler = toolchain_dir / "solc"
@@ -1079,60 +1284,21 @@ class FoundryInvariantRunner:
                     duration_seconds=time.monotonic() - started,
                 )
             test_paths.append(test_path)
+            self._verify_managed_selection()
+            execution_compiler = compiler if self._managed is not None else copied_compiler
             relative_test = test_path.relative_to(workspace).as_posix()
-            command = [
-                str(forge),
-                "test",
-                "--root",
-                str(workspace),
-                "--match-path",
-                relative_test,
-                "--match-contract",
-                f"MMAuditInvariant_{specification.name}",
-            ]
-            if rpc_url is not None:
-                command.extend(["--fork-url", rpc_url])
-            if copied_compiler is not None:
-                command.extend(["--use", str(copied_compiler)])
-            command.extend(
-                [
-                    "--offline",
-                    "--json",
-                    "--fuzz-runs",
-                    str(specification.runs),
-                    "--fuzz-seed",
-                    str(specification.seed),
-                    "-vvv",
-                ]
-            )
-            display_command = [
-                "[FORGE]",
-                *(
-                    "[REDACTED_LOCAL_FORK_RPC]"
-                    if item == rpc_url
-                    else "[WORKSPACE]"
-                    if item == str(workspace)
-                    else "[PINNED_SOLC]"
-                    if copied_compiler is not None and item == str(copied_compiler)
-                    else item
-                    for item in command[1:]
-                ),
-            ]
-            execution = self._execute(
-                command,
+            execution, display_command = self._execute_attempt(
+                forge=forge,
+                execution_compiler=execution_compiler,
+                relative_test=relative_test,
+                specification=specification,
+                local_only=local_only,
+                legacy_rpc=(rpc_url, rpc_port) if rpc_url is not None else None,
+                repository_root=repository_root,
                 workspace=workspace,
                 private_dir=attempt_root,
-                rpc_port=rpc_port,
-                runs=specification.runs,
-                depth=specification.depth,
-                seed=specification.seed,
-                action_functions={
-                    action.action_id: action.function_signature for action in specification.actions
-                },
-                property_ids={
-                    property_spec.property_id for property_spec in specification.properties
-                },
             )
+            self._verify_managed_selection()
             executions.append(execution)
             attempt_evidence.append(
                 InvariantExecutionAttemptEvidence(
@@ -1408,11 +1574,130 @@ class FoundryInvariantRunner:
             isolation_backend=self.backend.name,
             isolation_attestation_sha256=isolation_attestation_sha256(self.backend),
         )
+        self._verify_managed_selection()
         return result.model_copy(
             update={
                 "execution_observation_sha256": (result.expected_execution_observation_sha256())
             }
         )
+
+    def _execute_attempt(
+        self,
+        *,
+        forge: Path,
+        execution_compiler: Path | None,
+        relative_test: str,
+        specification: FoundryInvariantHarnessSpec,
+        local_only: bool,
+        legacy_rpc: tuple[str, int] | None,
+        repository_root: Path,
+        workspace: Path,
+        private_dir: Path,
+    ) -> tuple[_InvariantExecution, list[str]]:
+        """Keep source-local execution intact and own managed fork reads until verified closure."""
+
+        lease: OfflineForkRpcLease | None = None
+        deadline: float | None = None
+        primary_error: BaseException | None = None
+        try:
+            self._verify_managed_selection()
+            rpc_url: str | None = None
+            rpc_port = 0
+            if local_only:
+                if legacy_rpc is not None:
+                    raise ValueError("source-local invariant execution cannot mix fork reads")
+            elif self._managed is not None:
+                if legacy_rpc is not None or self.offline_forks is None:
+                    raise ValueError("managed invariants cannot mix or omit prepared fork reads")
+                deadline = time.monotonic() + self.offline_forks.invariant_attempt_lifetime_seconds
+                lease = self.offline_forks.start_invariant_attempt(
+                    repository=repository_root, output=private_dir, absolute_deadline=deadline
+                )
+                rpc_url, rpc_port = _local_rpc(lease.endpoint)
+            elif legacy_rpc is not None:
+                rpc_url, rpc_port = legacy_rpc
+            else:
+                raise ValueError("invariant fork input is unavailable")
+            command = [
+                str(forge),
+                "test",
+                "--root",
+                str(workspace),
+                "--match-path",
+                relative_test,
+                "--match-contract",
+                f"MMAuditInvariant_{specification.name}",
+            ]
+            if rpc_url is not None:
+                command.extend(["--fork-url", rpc_url])
+                if self._managed is not None:
+                    command.extend(
+                        ["--fork-block-number", str(self.reproduction.pinned_block_number)]
+                    )
+            if execution_compiler is not None:
+                if self._managed is not None:
+                    command.append("--no-auto-detect")
+                command.extend(["--use", str(execution_compiler)])
+            command.extend(
+                [
+                    "--offline",
+                    "--json",
+                    "--fuzz-runs",
+                    str(specification.runs),
+                    "--fuzz-seed",
+                    str(specification.seed),
+                    "-vvv",
+                ]
+            )
+            display_command = [
+                "[FORGE]",
+                *(
+                    "[REDACTED_LOCAL_FORK_RPC]"
+                    if item == rpc_url
+                    else "[WORKSPACE]"
+                    if item == str(workspace)
+                    else "[PINNED_SOLC]"
+                    if execution_compiler is not None and item == str(execution_compiler)
+                    else item
+                    for item in command[1:]
+                ),
+            ]
+            execution = self._execute(
+                command,
+                workspace=workspace,
+                private_dir=private_dir,
+                rpc_port=rpc_port,
+                runs=specification.runs,
+                depth=specification.depth,
+                seed=specification.seed,
+                action_functions={
+                    action.action_id: action.function_signature for action in specification.actions
+                },
+                property_ids={
+                    property_spec.property_id for property_spec in specification.properties
+                },
+                **({"absolute_deadline": deadline} if deadline is not None else {}),
+            )
+            return execution, display_command
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            close_error: BaseException | None = None
+            if lease is not None:
+                try:
+                    lease.stop(deadline=deadline)
+                    if not lease.stopped_cleanly:
+                        raise ValueError("managed invariant fork did not close cleanly")
+                except BaseException as exc:
+                    close_error = exc
+            try:
+                self._verify_managed_selection()
+            except BaseException as exc:
+                if close_error is None:
+                    close_error = exc
+            if close_error is not None and primary_error is None:
+                raise close_error
 
     def _execute(
         self,
@@ -1426,7 +1711,9 @@ class FoundryInvariantRunner:
         seed: int,
         action_functions: dict[str, str],
         property_ids: set[str],
+        absolute_deadline: float | None = None,
     ) -> _InvariantExecution:
+        self._verify_managed_selection()
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         assert self.backend is not None
         wrapped = self.backend.wrap(
@@ -1450,8 +1737,14 @@ class FoundryInvariantRunner:
         process: subprocess.Popen[bytes] | None = None
         timed_out = False
         output_exceeded = False
+        primary_error: BaseException | None = None
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                self._verify_managed_selection()
+                if absolute_deadline is not None:
+                    if self.offline_forks is None:
+                        raise ValueError("invariant attempt lost its prepared archive")
+                    self.offline_forks.verify_invariant_execution_budget(absolute_deadline)
                 process = subprocess.Popen(
                     wrapped,
                     cwd=workspace,
@@ -1462,6 +1755,9 @@ class FoundryInvariantRunner:
                     start_new_session=os.name != "nt",
                     preexec_fn=_limit_invariant_process if os.name != "nt" else None,
                 )
+                if absolute_deadline is not None:
+                    assert self.offline_forks is not None
+                    self.offline_forks.verify_invariant_execution_budget(absolute_deadline)
                 deadline = time.monotonic() + self.reproduction.timeout_seconds
                 while process.poll() is None:
                     if time.monotonic() >= deadline:
@@ -1478,14 +1774,24 @@ class FoundryInvariantRunner:
                     time.sleep(0.05)
                 return_code = process.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            if process is not None:
-                _stop_process(process)
+            self._verify_managed_selection()
             return _InvariantExecution(
                 status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
                 limitations=[f"isolated invariant execution failed: {type(exc).__name__}"],
             )
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            if process is not None:
+                try:
+                    _stop_process(process)
+                except BaseException:
+                    if primary_error is None:
+                        raise
+        self._verify_managed_selection()
         if timed_out:
             return _InvariantExecution(
                 status=InvariantExecutionStatus.TIMED_OUT,
@@ -1651,6 +1957,7 @@ def _external_executable_version(
     *,
     backend: IsolationBackend,
     private_dir: Path,
+    expected_host_observation: _ScannerExecutableObservation | None = None,
 ) -> str:
     """Probe one trusted compiler only inside the selected hardened isolation backend."""
 
@@ -1664,6 +1971,7 @@ def _external_executable_version(
         workspace,
         private_dir,
         timeout_seconds=10,
+        expected_host_observation=expected_host_observation,
     )
     if probe.status is not ExecutableVersionProbeStatus.SUCCESS or probe.version is None:
         raise ValueError("external compiler version probe failed closed under isolation")

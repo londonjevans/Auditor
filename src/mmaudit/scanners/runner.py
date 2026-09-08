@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shutil
 import stat
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -13,14 +12,19 @@ from pathlib import Path
 
 from mmaudit.config import AuditConfig, ScannerConfig
 from mmaudit.isolation.container import RepositoryJavaScriptIsolationBackend
+from mmaudit.isolation.managed import managed_isolation_backend
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
 from mmaudit.models.schemas import (
+    AuditedSuiteEntityCatalog,
     LanguageCapabilityProfile,
     RepositoryCodeExecutionState,
     ScannerRun,
     ScannerStatus,
     SolidityProjectMetadata,
 )
+from mmaudit.orchestration.managed_fork_archives import ManagedForkArchives
+from mmaudit.orchestration.managed_host_tools import ManagedHostToolMaterialization
+from mmaudit.orchestration.managed_toolchain import MANAGED_SCANNER_ROLES, ManagedToolchainRole
 from mmaudit.scanners.base import (
     ScannerAdapter,
     ScannerIsolationBackend,
@@ -28,6 +32,7 @@ from mmaudit.scanners.base import (
     preflight_scanner_executable,
     retain_scanner_workspace_source_custody,
     sanitized_scanner_environment,
+    scanner_executable_candidate,
 )
 from mmaudit.scanners.codeql import CodeQLScanner
 from mmaudit.scanners.diagnostics import (
@@ -111,7 +116,7 @@ def preflight_configured_scanner_tools(
                 diagnostic=_HARDHAT_CONTAINER_IDENTITY_DIAGNOSTIC,
             )
             continue
-        candidate = shutil.which(adapter.executable)
+        candidate = scanner_executable_candidate(adapter.executable)
         resolved = _resolved_executable(candidate)
         if candidate is not None and resolved is None:
             diagnostics[name] = ScannerExecutablePreflight(
@@ -128,7 +133,11 @@ def preflight_configured_scanner_tools(
                 resolved_path=None,
                 version=None,
                 failure_kind=None,
-                diagnostic="tool was not found on PATH",
+                diagnostic=(
+                    "explicit tool path is unavailable"
+                    if Path(adapter.executable).is_absolute()
+                    else "tool was not found on PATH"
+                ),
             )
             continue
         if resolved is not None and _is_relative_to(resolved, resolved_repository):
@@ -316,10 +325,57 @@ def _preflight_without_isolation(
     )
 
 
-def configured_scanner_adapters(config: AuditConfig) -> dict[str, ScannerAdapter]:
-    """Construct the fixed configured adapter portfolio without resolving isolation."""
+def _managed_scanner_paths(
+    config: AuditConfig, host_tools: ManagedHostToolMaterialization
+) -> dict[str, Path]:
+    """Reverify one exact material/config selection, not installed execution authority."""
 
-    return {
+    if type(host_tools) is not ManagedHostToolMaterialization or type(config) is not AuditConfig:
+        raise ValueError("managed scanner selection requires exact material and config types")
+    if config != host_tools.config:
+        raise ValueError("managed scanner configuration differs from prepared host material")
+    host_tools.verify()
+    by_role = {item.role: host_tools.directory / item.locator for item in host_tools.manifest.files}
+    # The manifest requires every selected direct host role. Image-side roles cannot
+    # occur here; retain their own closed execution boundary without a host substitute.
+    paths = {name: by_role[role] for name, role in MANAGED_SCANNER_ROLES if role in by_role}
+    if ManagedToolchainRole.SOLC in by_role:
+        paths["solc"] = by_role[ManagedToolchainRole.SOLC]
+    return paths
+
+
+def _verify_managed_fork_source(
+    config: AuditConfig,
+    host_tools: ManagedHostToolMaterialization | None,
+    offline_forks: ManagedForkArchives | None,
+) -> None:
+    if offline_forks is not None:
+        if (
+            type(offline_forks) is not ManagedForkArchives
+            or type(host_tools) is not ManagedHostToolMaterialization
+        ):
+            raise ValueError("managed scanner forks require exact prepared material")
+        offline_forks.verify(config)
+        offline_forks.verify_roots(host_tools.directory)
+
+
+def configured_scanner_adapters(
+    config: AuditConfig,
+    *,
+    host_tools: ManagedHostToolMaterialization | None = None,
+    offline_forks: ManagedForkArchives | None = None,
+) -> dict[str, ScannerAdapter]:
+    """Build fixed adapters, optionally bound to reverified explicit host material.
+
+    Managed paths do not attest the backend, transitive dependencies or image-side
+    tools, and cannot authorize an audit. No ambient discovery happens here.
+    """
+
+    paths = _managed_scanner_paths(config, host_tools) if host_tools is not None else {}
+    _verify_managed_fork_source(config, host_tools, offline_forks)
+    if host_tools is not None:
+        config = host_tools.config
+    adapters: dict[str, ScannerAdapter] = {
         "semgrep": SemgrepScanner(),
         "gitleaks": GitleaksScanner(),
         "trivy": TrivyScanner(),
@@ -328,16 +384,24 @@ def configured_scanner_adapters(config: AuditConfig) -> dict[str, ScannerAdapter
             config.scanners.codeql.database_path,
             config.scanners.codeql.query_suite,
         ),
-        "slither": SlitherScanner(config.smart_contracts),
+        "slither": SlitherScanner(config.smart_contracts, solc_path=paths.get("solc")),
         "foundry_fork": FoundryForkScanner(
             config.smart_contracts,
             reproduction=config.reproduction,
+            executable_path=paths.get("foundry_fork"),
+            solc_path=paths.get("solc"),
+            offline_forks=offline_forks,
+            managed_primary_fork=host_tools is not None,
         ),
         "hardhat_fork": HardhatForkScanner(
             config.smart_contracts,
             config.scanners.hardhat_fork,
         ),
     }
+    for name, path in paths.items():
+        if name != "solc":
+            adapters[name].executable = str(path)
+    return adapters
 
 
 class ScannerRunner:
@@ -347,10 +411,35 @@ class ScannerRunner:
         *,
         adapters: dict[str, ScannerAdapter] | None = None,
         backend: ScannerIsolationBackend | None = None,
+        host_tools: ManagedHostToolMaterialization | None = None,
+        offline_forks: ManagedForkArchives | None = None,
     ) -> None:
-        self.config = config
-        self.backend = backend or default_isolation_backend("auto")
-        self.adapters = configured_scanner_adapters(config) if adapters is None else adapters
+        self.backend: ScannerIsolationBackend | None
+        self._managed_host_tools = host_tools
+        self.offline_forks = offline_forks
+        self._managed_offline_forks = offline_forks
+        _verify_managed_fork_source(config, host_tools, offline_forks)
+        if host_tools is not None:
+            if adapters is not None:
+                raise ValueError("managed scanners require fixed adapters")
+            self.adapters = configured_scanner_adapters(
+                config, host_tools=host_tools, offline_forks=offline_forks
+            )
+            self.config = host_tools.config
+            self.backend = backend if backend is not None else managed_isolation_backend(host_tools)
+        else:
+            self.config = config
+            self.backend = backend or default_isolation_backend("auto")
+            self.adapters = configured_scanner_adapters(config) if adapters is None else adapters
+
+    def verify_managed_selection(self) -> None:
+        """Retain the prepared fork input across queued work and public adapter replacement."""
+
+        if self.offline_forks is not self._managed_offline_forks:
+            raise ValueError("managed scanner fork selection changed")
+        if self._managed_host_tools is not None:
+            _managed_scanner_paths(self.config, self._managed_host_tools)
+        _verify_managed_fork_source(self.config, self._managed_host_tools, self.offline_forks)
 
     def scanner_config(self, name: str) -> ScannerConfig:
         value = getattr(self.config.scanners, name)
@@ -370,7 +459,29 @@ class ScannerRunner:
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]:
+        # Rebuild fixed managed adapters from the retained selection for each run;
+        # caller edits to an earlier public adapter view cannot substitute a tool.
+        self.verify_managed_selection()
+        if self.offline_forks is not None:
+            self.offline_forks.verify_roots(root, private_dir)
+            if repository_exclusion_root is not None:
+                self.offline_forks.verify_roots(repository_exclusion_root)
+        adapters = (
+            configured_scanner_adapters(
+                self.config, host_tools=self._managed_host_tools, offline_forks=self.offline_forks
+            )
+            if self._managed_host_tools is not None
+            else self.adapters
+        )
+        canonical_entity_catalog = (
+            AuditedSuiteEntityCatalog.model_validate(
+                audited_suite_entity_catalog.model_dump(mode="json")
+            )
+            if audited_suite_entity_catalog is not None
+            else None
+        )
         try:
             source_custody = retain_scanner_workspace_source_custody(
                 root,
@@ -393,6 +504,13 @@ class ScannerRunner:
                 raise ScannerSourceIntegrityError(
                     "scanner audited source inventory differs from its frozen identity"
                 )
+            if (
+                canonical_entity_catalog is not None
+                and canonical_entity_catalog.repository_sha256 != frozen_repository_sha256
+            ):
+                raise ScannerSourceIntegrityError(
+                    "audited-suite entity catalog differs from frozen source identity"
+                )
             tasks: list[asyncio.Task[ScannerRun]] = []
             results: list[ScannerRun] = []
             semaphore = asyncio.Semaphore(self.config.execution.concurrency)
@@ -401,10 +519,12 @@ class ScannerRunner:
                 adapter: ScannerAdapter,
                 scanner_config: ScannerConfig,
             ) -> ScannerRun:
-                async with semaphore:
+                def dispatch() -> ScannerRun:
+                    # Queued work must not rely on an earlier construction-time check.
+                    if self._managed_host_tools is not None:
+                        self.verify_managed_selection()
                     if type(adapter) is FoundryForkScanner:
-                        return await asyncio.to_thread(
-                            _invoke_builtin_foundry_adapter,
+                        return _invoke_builtin_foundry_adapter(
                             adapter,
                             root,
                             private_dir / adapter.name,
@@ -414,8 +534,7 @@ class ScannerRunner:
                             expected_sha256=scanner_config.sha256,
                         )
                     if type(adapter).run is not ScannerAdapter.run:
-                        return await asyncio.to_thread(
-                            adapter.run,
+                        return adapter.run(
                             root,
                             private_dir / adapter.name,
                             self.config.execution.scanner_timeout_seconds,
@@ -423,8 +542,7 @@ class ScannerRunner:
                             expected_version=scanner_config.version,
                             expected_sha256=scanner_config.sha256,
                         )
-                    return await asyncio.to_thread(
-                        adapter.run_source_bound,
+                    return adapter.run_source_bound(
                         root,
                         private_dir / adapter.name,
                         self.config.execution.scanner_timeout_seconds,
@@ -437,7 +555,10 @@ class ScannerRunner:
                         allow_custom_repository_exclusion=(allow_custom_repository_exclusion),
                     )
 
-            for name, adapter in self.adapters.items():
+                async with semaphore:
+                    return await asyncio.to_thread(dispatch)
+
+            for name, adapter in adapters.items():
                 scanner_config = self.scanner_config(name)
                 evm_scanner_outside_capability = (
                     self.config.language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
@@ -478,6 +599,7 @@ class ScannerRunner:
                         projects=projects,
                         expected_repository_sha256=frozen_repository_sha256,
                         repository_exclusion_root=repository_exclusion_root,
+                        audited_suite_entity_catalog=canonical_entity_catalog,
                     )
                 elif isinstance(adapter, HardhatForkScanner):
                     adapter = adapter.with_runtime_allowance(allow_fork_probing)
@@ -493,6 +615,8 @@ class ScannerRunner:
                     if isinstance(outcome, BaseException):
                         raise outcome
                     results.append(outcome)
+            if self._managed_host_tools is not None:
+                await asyncio.to_thread(self.verify_managed_selection)
             return sorted(results, key=lambda result: result.scanner)
         finally:
             if not source_custody.closed:

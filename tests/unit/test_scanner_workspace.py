@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,43 @@ from mmaudit.scanners.base import (
     scanner_workspace_exclusion_path,
     scanner_workspace_sha256,
 )
+
+
+def test_workspace_file_fifo_swap_is_rejected_without_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs unavailable")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    source = repository / "Source.sol"
+    source.write_text("contract Source {}\n", encoding="utf-8")
+    real_open = os.open
+    swapped = False
+
+    def swap_to_fifo_before_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if not swapped and path == source.name and dir_fd is not None:
+            assert flags & os.O_NONBLOCK
+            swapped = True
+            source.unlink()
+            os.mkfifo(source, mode=0o600)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(scanner_base.os, "open", swap_to_fifo_before_open)
+
+    with pytest.raises(ValueError, match="source identity changed during access"):
+        scanner_workspace_sha256(repository)
+
+    assert swapped is True
+    assert stat.S_ISFIFO(source.stat().st_mode)
 
 
 def test_excluded_output_is_pruned_without_opening_or_enumerating_it(

@@ -15,9 +15,569 @@
       "title": "AnalysisState",
       "type": "string"
     },
+    "AuditModelRefreshEvidence": {
+      "additionalProperties": false,
+      "description": "Pinned refresh comparison evidence that remains permanently non-authorizing.",
+      "properties": {
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "audit_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Model Ids",
+          "type": "array"
+        },
+        "audit_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Route Set Sha256",
+          "type": "string"
+        },
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "audit_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Audit Selection Authorized",
+          "type": "boolean"
+        },
+        "audit_selection_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Capability Sha256",
+          "type": "string"
+        },
+        "audit_selection_expires_at": {
+          "format": "date-time",
+          "title": "Audit Selection Expires At",
+          "type": "string"
+        },
+        "audit_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Sha256",
+          "type": "string"
+        },
+        "authority_mode": {
+          "const": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
+          "default": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
+          "title": "Authority Mode",
+          "type": "string"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "current_candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Candidate Registry Sha256",
+          "type": "string"
+        },
+        "diff_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Diff Sha256",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "expected_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Workflow Status Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "freshness_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Freshness Sha256",
+          "type": "string"
+        },
+        "hard_max_age_hours": {
+          "maximum": 2160,
+          "minimum": 2,
+          "title": "Hard Max Age Hours",
+          "type": "integer"
+        },
+        "previous_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Workflow Status Sha256",
+          "type": "string"
+        },
+        "pricing_tolerance_fraction": {
+          "maxLength": 66,
+          "minLength": 1,
+          "pattern": "^(?:0|1|0\\.[0-9]*[1-9])$",
+          "title": "Pricing Tolerance Fraction",
+          "type": "string"
+        },
+        "production_promotion_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Promotion Authorized",
+          "type": "boolean"
+        },
+        "provider_access_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Access Authorized",
+          "type": "boolean"
+        },
+        "refresh_current_through": {
+          "format": "date-time",
+          "title": "Refresh Current Through",
+          "type": "string"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/AuditModelRefreshRouteEvidence"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Sha256",
+          "type": "string"
+        },
+        "snapshot_retrieved_at": {
+          "format": "date-time",
+          "title": "Snapshot Retrieved At",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "soft_max_age_hours": {
+          "maximum": 720,
+          "minimum": 1,
+          "title": "Soft Max Age Hours",
+          "type": "integer"
+        },
+        "source_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Evidence Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "technical_candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Candidate Registry Sha256",
+          "type": "string"
+        },
+        "technical_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Technical Model Ids",
+          "type": "array"
+        },
+        "technical_production_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Production Selection Sha256",
+          "type": "string"
+        },
+        "technical_qualification_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Qualification Capability Sha256",
+          "type": "string"
+        },
+        "technical_qualification_expires_at": {
+          "format": "date-time",
+          "title": "Technical Qualification Expires At",
+          "type": "string"
+        },
+        "technical_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Route Set Sha256",
+          "type": "string"
+        },
+        "technical_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Technical Selection Authorized",
+          "type": "boolean"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        },
+        "workflow_run_attempt": {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "title": "Workflow Run Attempt",
+          "type": "string"
+        },
+        "workflow_run_id": {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "title": "Workflow Run Id",
+          "type": "string"
+        },
+        "workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workflow Status Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_workflow_status_sha256",
+        "workflow_status_sha256",
+        "source_commit",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "previous_workflow_status_sha256",
+        "current_candidate_registry_sha256",
+        "source_evidence_sha256",
+        "snapshot_sha256",
+        "semantic_sha256",
+        "diff_sha256",
+        "freshness_sha256",
+        "pricing_tolerance_fraction",
+        "soft_max_age_hours",
+        "hard_max_age_hours",
+        "snapshot_retrieved_at",
+        "verified_at",
+        "refresh_current_through",
+        "technical_qualification_capability_sha256",
+        "technical_production_selection_sha256",
+        "technical_candidate_registry_sha256",
+        "technical_qualification_expires_at",
+        "audit_selection_capability_sha256",
+        "audit_selection_sha256",
+        "audit_selection_expires_at",
+        "audit_scope_sha256",
+        "source_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "technical_model_ids",
+        "audit_model_ids",
+        "routes",
+        "technical_route_set_sha256",
+        "audit_route_set_sha256",
+        "expires_at",
+        "evidence_sha256"
+      ],
+      "title": "AuditModelRefreshEvidence",
+      "type": "object"
+    },
+    "AuditModelRefreshPricingEvidence": {
+      "additionalProperties": false,
+      "description": "Pinned bounded pricing-schedule comparisons that remain non-authorizing.",
+      "properties": {
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "audit_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Model Ids",
+          "type": "array"
+        },
+        "audit_pricing_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Pricing Route Set Sha256",
+          "type": "string"
+        },
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "audit_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Audit Selection Authorized",
+          "type": "boolean"
+        },
+        "audit_selection_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Capability Sha256",
+          "type": "string"
+        },
+        "audit_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Sha256",
+          "type": "string"
+        },
+        "authority_mode": {
+          "const": "NON_AUTHORIZING_BOUNDED_PRICE_COMPARISON",
+          "default": "NON_AUTHORIZING_BOUNDED_PRICE_COMPARISON",
+          "title": "Authority Mode",
+          "type": "string"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "current_candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Candidate Registry Sha256",
+          "type": "string"
+        },
+        "current_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Snapshot Sha256",
+          "type": "string"
+        },
+        "current_source_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Source Evidence Sha256",
+          "type": "string"
+        },
+        "diff_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Diff Sha256",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "expected_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Workflow Status Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "previous_candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Candidate Registry Sha256",
+          "type": "string"
+        },
+        "previous_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Snapshot Sha256",
+          "type": "string"
+        },
+        "previous_source_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Source Evidence Sha256",
+          "type": "string"
+        },
+        "previous_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Workflow Status Sha256",
+          "type": "string"
+        },
+        "pricing_tolerance_fraction": {
+          "maxLength": 66,
+          "minLength": 1,
+          "pattern": "^(?:0|1|0\\.[0-9]*[1-9])$",
+          "title": "Pricing Tolerance Fraction",
+          "type": "string"
+        },
+        "pricing_use_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Pricing Use Authorized",
+          "type": "boolean"
+        },
+        "production_promotion_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Promotion Authorized",
+          "type": "boolean"
+        },
+        "provider_access_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Access Authorized",
+          "type": "boolean"
+        },
+        "refresh_audit_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Audit Route Set Sha256",
+          "type": "string"
+        },
+        "refresh_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Evidence Sha256",
+          "type": "string"
+        },
+        "refresh_expires_at": {
+          "format": "date-time",
+          "title": "Refresh Expires At",
+          "type": "string"
+        },
+        "refresh_guard_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Guard Capability Sha256",
+          "type": "string"
+        },
+        "refresh_technical_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Technical Route Set Sha256",
+          "type": "string"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/AuditModelRefreshPricingRouteEvidence"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "technical_candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Candidate Registry Sha256",
+          "type": "string"
+        },
+        "technical_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Technical Model Ids",
+          "type": "array"
+        },
+        "technical_pricing_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Pricing Route Set Sha256",
+          "type": "string"
+        },
+        "technical_production_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Production Selection Sha256",
+          "type": "string"
+        },
+        "technical_qualification_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Qualification Capability Sha256",
+          "type": "string"
+        },
+        "technical_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Technical Selection Authorized",
+          "type": "boolean"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        },
+        "workflow_run_attempt": {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "title": "Workflow Run Attempt",
+          "type": "string"
+        },
+        "workflow_run_id": {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "title": "Workflow Run Id",
+          "type": "string"
+        },
+        "workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workflow Status Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_workflow_status_sha256",
+        "workflow_status_sha256",
+        "source_commit",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "previous_workflow_status_sha256",
+        "previous_candidate_registry_sha256",
+        "previous_source_evidence_sha256",
+        "previous_snapshot_sha256",
+        "current_candidate_registry_sha256",
+        "current_source_evidence_sha256",
+        "current_snapshot_sha256",
+        "diff_sha256",
+        "refresh_evidence_sha256",
+        "refresh_guard_capability_sha256",
+        "refresh_technical_route_set_sha256",
+        "refresh_audit_route_set_sha256",
+        "technical_qualification_capability_sha256",
+        "technical_production_selection_sha256",
+        "technical_candidate_registry_sha256",
+        "audit_selection_capability_sha256",
+        "audit_selection_sha256",
+        "audit_scope_sha256",
+        "source_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "pricing_tolerance_fraction",
+        "verified_at",
+        "refresh_expires_at",
+        "expires_at",
+        "technical_model_ids",
+        "audit_model_ids",
+        "routes",
+        "technical_pricing_route_set_sha256",
+        "audit_pricing_route_set_sha256",
+        "evidence_sha256"
+      ],
+      "title": "AuditModelRefreshPricingEvidence",
+      "type": "object"
+    },
     "AuditModelRefreshPricingRouteEvidence": {
       "additionalProperties": false,
-      "description": "Exact baseline/current price comparison for one selected technical route.\n\nThis durable record proves only that a resolver observed a bounded comparison. It\ncannot authorize a request, select a model, or replace the qualification price hash.",
+      "description": "Exact baseline/current pricing-schedule comparison for one selected technical route.\n\nThis durable record proves only that a resolver observed a bounded comparison. It\ncannot authorize a request, select a model, or replace the qualification price hash.",
       "properties": {
         "approved_provider_endpoint": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
@@ -46,6 +606,25 @@
           },
           "title": "Baseline Pricing",
           "type": "object"
+        },
+        "baseline_pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "title": "Baseline Pricing Overrides",
+          "type": "array"
+        },
+        "baseline_pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "baseline_pricing_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -91,6 +670,25 @@
           },
           "title": "Current Pricing",
           "type": "object"
+        },
+        "current_pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "title": "Current Pricing Overrides",
+          "type": "array"
+        },
+        "current_pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "current_pricing_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -710,6 +1308,124 @@
       "title": "CostLedgerAttemptEvidence",
       "type": "object"
     },
+    "ExactRoutePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/RoutePriceComponent"
+        },
+        "unit_price": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "title": "Unit Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "unit_price"
+      ],
+      "title": "ExactRoutePrice",
+      "type": "object"
+    },
+    "ExactRoutePriceTier": {
+      "additionalProperties": false,
+      "description": "One ordered prompt-threshold tier of exact partial price replacements.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Pricing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "pricing"
+      ],
+      "title": "ExactRoutePriceTier",
+      "type": "object"
+    },
+    "ExactRoutePricingSchedule": {
+      "additionalProperties": false,
+      "description": "Exact conditional pricing plus its conservative component-wise maximum.",
+      "properties": {
+        "base_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Base Pricing",
+          "type": "array"
+        },
+        "conservative_for_sub_threshold_prompts": {
+          "const": true,
+          "default": true,
+          "title": "Conservative For Sub Threshold Prompts",
+          "type": "boolean"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_pricing": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePrice"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Maximum Pricing",
+          "type": "array"
+        },
+        "pricing_schedule_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Schedule Sha256",
+          "type": "string"
+        },
+        "projection_method": {
+          "const": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "default": "MMAUDIT_TIERED_MAXIMUM_RATE_V1",
+          "title": "Projection Method",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tiers": {
+          "items": {
+            "$ref": "#/$defs/ExactRoutePriceTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Tiers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_pricing",
+        "tiers",
+        "maximum_pricing",
+        "pricing_schedule_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ExactRoutePricingSchedule",
+      "type": "object"
+    },
     "ExecutionEvidenceKind": {
       "description": "Whether a runtime record came from a real process or a test double.",
       "enum": [
@@ -950,6 +1666,31 @@
           "title": "Pricing Observation",
           "type": "string"
         },
+        "pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Pricing Overrides",
+          "type": "array"
+        },
+        "pricing_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRoutePricingSchedule"
+            },
+            {
+              "const": "unavailable",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing Schedule"
+        },
         "pricing_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Pricing Sha256",
@@ -1063,6 +1804,47 @@
       ],
       "title": "OpenRouterIdentityStrength",
       "type": "string"
+    },
+    "OpenRouterPricingOverrideTier": {
+      "additionalProperties": false,
+      "description": "One ordered, threshold-conditional partial endpoint price replacement.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "prices": {
+          "additionalProperties": {
+            "maxLength": 49,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "audio",
+              "completion",
+              "input_audio_cache",
+              "input_cache_read",
+              "input_cache_write",
+              "input_cache_write_1h",
+              "prompt"
+            ]
+          },
+          "title": "Prices",
+          "type": "object"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "prices"
+      ],
+      "title": "OpenRouterPricingOverrideTier",
+      "type": "object"
     },
     "PolicyEligibilityExclusion": {
       "additionalProperties": false,
@@ -1736,6 +2518,20 @@
         "failed_before_send"
       ],
       "title": "ReleaseReason",
+      "type": "string"
+    },
+    "RoutePriceComponent": {
+      "enum": [
+        "completion",
+        "image",
+        "input_cache_read",
+        "input_cache_write",
+        "internal_reasoning",
+        "prompt",
+        "request",
+        "web_search"
+      ],
+      "title": "RoutePriceComponent",
       "type": "string"
     },
     "RunCostLedgerEvidence": {
@@ -2660,282 +3456,7 @@
     "audit_model_refresh_evidence": {
       "anyOf": [
         {
-          "additionalProperties": false,
-          "description": "Pinned refresh comparison evidence that remains permanently non-authorizing.",
-          "properties": {
-            "audit_context_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Context Sha256",
-              "type": "string"
-            },
-            "audit_model_ids": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Audit Model Ids",
-              "type": "array"
-            },
-            "audit_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Route Set Sha256",
-              "type": "string"
-            },
-            "audit_scope_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Scope Sha256",
-              "type": "string"
-            },
-            "audit_selection_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Audit Selection Authorized",
-              "type": "boolean"
-            },
-            "audit_selection_capability_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Selection Capability Sha256",
-              "type": "string"
-            },
-            "audit_selection_expires_at": {
-              "format": "date-time",
-              "title": "Audit Selection Expires At",
-              "type": "string"
-            },
-            "audit_selection_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Selection Sha256",
-              "type": "string"
-            },
-            "authority_mode": {
-              "const": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
-              "default": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
-              "title": "Authority Mode",
-              "type": "string"
-            },
-            "client_constraints_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Client Constraints Sha256",
-              "type": "string"
-            },
-            "current_candidate_registry_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Current Candidate Registry Sha256",
-              "type": "string"
-            },
-            "diff_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Diff Sha256",
-              "type": "string"
-            },
-            "evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Evidence Sha256",
-              "type": "string"
-            },
-            "expected_workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Expected Workflow Status Sha256",
-              "type": "string"
-            },
-            "expires_at": {
-              "format": "date-time",
-              "title": "Expires At",
-              "type": "string"
-            },
-            "freshness_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Freshness Sha256",
-              "type": "string"
-            },
-            "hard_max_age_hours": {
-              "maximum": 2160,
-              "minimum": 2,
-              "title": "Hard Max Age Hours",
-              "type": "integer"
-            },
-            "previous_workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Previous Workflow Status Sha256",
-              "type": "string"
-            },
-            "pricing_tolerance_fraction": {
-              "maxLength": 66,
-              "minLength": 1,
-              "pattern": "^(?:0|1|0\\.[0-9]*[1-9])$",
-              "title": "Pricing Tolerance Fraction",
-              "type": "string"
-            },
-            "production_promotion_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Production Promotion Authorized",
-              "type": "boolean"
-            },
-            "provider_access_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Provider Access Authorized",
-              "type": "boolean"
-            },
-            "refresh_current_through": {
-              "format": "date-time",
-              "title": "Refresh Current Through",
-              "type": "string"
-            },
-            "routes": {
-              "items": {
-                "$ref": "#/$defs/AuditModelRefreshRouteEvidence"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Routes",
-              "type": "array"
-            },
-            "schema_version": {
-              "const": "1.0",
-              "default": "1.0",
-              "title": "Schema Version",
-              "type": "string"
-            },
-            "semantic_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Semantic Sha256",
-              "type": "string"
-            },
-            "snapshot_retrieved_at": {
-              "format": "date-time",
-              "title": "Snapshot Retrieved At",
-              "type": "string"
-            },
-            "snapshot_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Snapshot Sha256",
-              "type": "string"
-            },
-            "soft_max_age_hours": {
-              "maximum": 720,
-              "minimum": 1,
-              "title": "Soft Max Age Hours",
-              "type": "integer"
-            },
-            "source_commit": {
-              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
-              "title": "Source Commit",
-              "type": "string"
-            },
-            "source_evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Source Evidence Sha256",
-              "type": "string"
-            },
-            "source_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Source Sha256",
-              "type": "string"
-            },
-            "technical_candidate_registry_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Candidate Registry Sha256",
-              "type": "string"
-            },
-            "technical_model_ids": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Technical Model Ids",
-              "type": "array"
-            },
-            "technical_production_selection_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Production Selection Sha256",
-              "type": "string"
-            },
-            "technical_qualification_capability_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Qualification Capability Sha256",
-              "type": "string"
-            },
-            "technical_qualification_expires_at": {
-              "format": "date-time",
-              "title": "Technical Qualification Expires At",
-              "type": "string"
-            },
-            "technical_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Route Set Sha256",
-              "type": "string"
-            },
-            "technical_selection_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Technical Selection Authorized",
-              "type": "boolean"
-            },
-            "verified_at": {
-              "format": "date-time",
-              "title": "Verified At",
-              "type": "string"
-            },
-            "workflow_run_attempt": {
-              "pattern": "^[1-9][0-9]{0,19}$",
-              "title": "Workflow Run Attempt",
-              "type": "string"
-            },
-            "workflow_run_id": {
-              "pattern": "^[1-9][0-9]{0,19}$",
-              "title": "Workflow Run Id",
-              "type": "string"
-            },
-            "workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Workflow Status Sha256",
-              "type": "string"
-            }
-          },
-          "required": [
-            "expected_workflow_status_sha256",
-            "workflow_status_sha256",
-            "source_commit",
-            "workflow_run_id",
-            "workflow_run_attempt",
-            "previous_workflow_status_sha256",
-            "current_candidate_registry_sha256",
-            "source_evidence_sha256",
-            "snapshot_sha256",
-            "semantic_sha256",
-            "diff_sha256",
-            "freshness_sha256",
-            "pricing_tolerance_fraction",
-            "soft_max_age_hours",
-            "hard_max_age_hours",
-            "snapshot_retrieved_at",
-            "verified_at",
-            "refresh_current_through",
-            "technical_qualification_capability_sha256",
-            "technical_production_selection_sha256",
-            "technical_candidate_registry_sha256",
-            "technical_qualification_expires_at",
-            "audit_selection_capability_sha256",
-            "audit_selection_sha256",
-            "audit_selection_expires_at",
-            "audit_scope_sha256",
-            "source_sha256",
-            "audit_context_sha256",
-            "client_constraints_sha256",
-            "technical_model_ids",
-            "audit_model_ids",
-            "routes",
-            "technical_route_set_sha256",
-            "audit_route_set_sha256",
-            "expires_at",
-            "evidence_sha256"
-          ],
-          "title": "AuditModelRefreshEvidence",
-          "type": "object"
+          "$ref": "#/$defs/AuditModelRefreshEvidence"
         },
         {
           "type": "null"
@@ -2947,286 +3468,7 @@
     "audit_model_refresh_pricing_evidence": {
       "anyOf": [
         {
-          "additionalProperties": false,
-          "description": "Pinned bounded price comparisons that remain permanently non-authorizing.",
-          "properties": {
-            "audit_context_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Context Sha256",
-              "type": "string"
-            },
-            "audit_model_ids": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Audit Model Ids",
-              "type": "array"
-            },
-            "audit_pricing_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Pricing Route Set Sha256",
-              "type": "string"
-            },
-            "audit_scope_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Scope Sha256",
-              "type": "string"
-            },
-            "audit_selection_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Audit Selection Authorized",
-              "type": "boolean"
-            },
-            "audit_selection_capability_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Selection Capability Sha256",
-              "type": "string"
-            },
-            "audit_selection_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Audit Selection Sha256",
-              "type": "string"
-            },
-            "authority_mode": {
-              "const": "NON_AUTHORIZING_BOUNDED_PRICE_COMPARISON",
-              "default": "NON_AUTHORIZING_BOUNDED_PRICE_COMPARISON",
-              "title": "Authority Mode",
-              "type": "string"
-            },
-            "client_constraints_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Client Constraints Sha256",
-              "type": "string"
-            },
-            "current_candidate_registry_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Current Candidate Registry Sha256",
-              "type": "string"
-            },
-            "current_snapshot_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Current Snapshot Sha256",
-              "type": "string"
-            },
-            "current_source_evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Current Source Evidence Sha256",
-              "type": "string"
-            },
-            "diff_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Diff Sha256",
-              "type": "string"
-            },
-            "evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Evidence Sha256",
-              "type": "string"
-            },
-            "expected_workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Expected Workflow Status Sha256",
-              "type": "string"
-            },
-            "expires_at": {
-              "format": "date-time",
-              "title": "Expires At",
-              "type": "string"
-            },
-            "previous_candidate_registry_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Previous Candidate Registry Sha256",
-              "type": "string"
-            },
-            "previous_snapshot_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Previous Snapshot Sha256",
-              "type": "string"
-            },
-            "previous_source_evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Previous Source Evidence Sha256",
-              "type": "string"
-            },
-            "previous_workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Previous Workflow Status Sha256",
-              "type": "string"
-            },
-            "pricing_tolerance_fraction": {
-              "maxLength": 66,
-              "minLength": 1,
-              "pattern": "^(?:0|1|0\\.[0-9]*[1-9])$",
-              "title": "Pricing Tolerance Fraction",
-              "type": "string"
-            },
-            "pricing_use_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Pricing Use Authorized",
-              "type": "boolean"
-            },
-            "production_promotion_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Production Promotion Authorized",
-              "type": "boolean"
-            },
-            "provider_access_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Provider Access Authorized",
-              "type": "boolean"
-            },
-            "refresh_audit_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Refresh Audit Route Set Sha256",
-              "type": "string"
-            },
-            "refresh_evidence_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Refresh Evidence Sha256",
-              "type": "string"
-            },
-            "refresh_expires_at": {
-              "format": "date-time",
-              "title": "Refresh Expires At",
-              "type": "string"
-            },
-            "refresh_guard_capability_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Refresh Guard Capability Sha256",
-              "type": "string"
-            },
-            "refresh_technical_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Refresh Technical Route Set Sha256",
-              "type": "string"
-            },
-            "routes": {
-              "items": {
-                "$ref": "#/$defs/AuditModelRefreshPricingRouteEvidence"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Routes",
-              "type": "array"
-            },
-            "schema_version": {
-              "const": "1.0",
-              "default": "1.0",
-              "title": "Schema Version",
-              "type": "string"
-            },
-            "source_commit": {
-              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
-              "title": "Source Commit",
-              "type": "string"
-            },
-            "source_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Source Sha256",
-              "type": "string"
-            },
-            "technical_candidate_registry_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Candidate Registry Sha256",
-              "type": "string"
-            },
-            "technical_model_ids": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 128,
-              "minItems": 1,
-              "title": "Technical Model Ids",
-              "type": "array"
-            },
-            "technical_pricing_route_set_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Pricing Route Set Sha256",
-              "type": "string"
-            },
-            "technical_production_selection_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Production Selection Sha256",
-              "type": "string"
-            },
-            "technical_qualification_capability_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Technical Qualification Capability Sha256",
-              "type": "string"
-            },
-            "technical_selection_authorized": {
-              "const": false,
-              "default": false,
-              "title": "Technical Selection Authorized",
-              "type": "boolean"
-            },
-            "verified_at": {
-              "format": "date-time",
-              "title": "Verified At",
-              "type": "string"
-            },
-            "workflow_run_attempt": {
-              "pattern": "^[1-9][0-9]{0,19}$",
-              "title": "Workflow Run Attempt",
-              "type": "string"
-            },
-            "workflow_run_id": {
-              "pattern": "^[1-9][0-9]{0,19}$",
-              "title": "Workflow Run Id",
-              "type": "string"
-            },
-            "workflow_status_sha256": {
-              "pattern": "^[0-9a-f]{64}$",
-              "title": "Workflow Status Sha256",
-              "type": "string"
-            }
-          },
-          "required": [
-            "expected_workflow_status_sha256",
-            "workflow_status_sha256",
-            "source_commit",
-            "workflow_run_id",
-            "workflow_run_attempt",
-            "previous_workflow_status_sha256",
-            "previous_candidate_registry_sha256",
-            "previous_source_evidence_sha256",
-            "previous_snapshot_sha256",
-            "current_candidate_registry_sha256",
-            "current_source_evidence_sha256",
-            "current_snapshot_sha256",
-            "diff_sha256",
-            "refresh_evidence_sha256",
-            "refresh_guard_capability_sha256",
-            "refresh_technical_route_set_sha256",
-            "refresh_audit_route_set_sha256",
-            "technical_qualification_capability_sha256",
-            "technical_production_selection_sha256",
-            "technical_candidate_registry_sha256",
-            "audit_selection_capability_sha256",
-            "audit_selection_sha256",
-            "audit_scope_sha256",
-            "source_sha256",
-            "audit_context_sha256",
-            "client_constraints_sha256",
-            "pricing_tolerance_fraction",
-            "verified_at",
-            "refresh_expires_at",
-            "expires_at",
-            "technical_model_ids",
-            "audit_model_ids",
-            "routes",
-            "technical_pricing_route_set_sha256",
-            "audit_pricing_route_set_sha256",
-            "evidence_sha256"
-          ],
-          "title": "AuditModelRefreshPricingEvidence",
-          "type": "object"
+          "$ref": "#/$defs/AuditModelRefreshPricingEvidence"
         },
         {
           "type": "null"

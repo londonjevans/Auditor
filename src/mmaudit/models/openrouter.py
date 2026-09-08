@@ -38,6 +38,7 @@ from pydantic_core import SchemaValidator
 import mmaudit.config as config_module
 import mmaudit.models.candidate_revocation as candidate_revocation_module
 import mmaudit.models.generation_evidence as generation_evidence_module
+import mmaudit.models.price_lexemes as price_lexemes_module
 import mmaudit.models.route_constraints as route_constraints_module
 import mmaudit.models.usage as usage_module
 import mmaudit.orchestration.budgets as budgets_module
@@ -127,6 +128,20 @@ from mmaudit.models.output_modes import (
     supports_provider_structured_output,
     supports_reasoning_request,
 )
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    CapturedOpenRouterJSONNumber,
+    OpenRouterPriceLexemeLayout,
+    captured_openrouter_json_number_decimal,
+    captured_openrouter_json_number_matches_path,
+    decode_openrouter_price_metadata_json,
+    detach_captured_openrouter_json_number,
+    openrouter_json_number_digest_channels,
+    openrouter_json_number_is_price_path,
+    price_lexeme_callables_are_pristine,
+    revoke_captured_openrouter_json_number,
+)
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
@@ -143,8 +158,12 @@ from mmaudit.models.reasoning import (
 )
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
+    ExactRoutePricingSchedule,
     ExactRouteRole,
+    ProviderPriceCapAlgorithm,
     RouteConstraintError,
+    RoutePredicateProfile,
+    RoutePriceComponentUnitEnvelope,
     normalize_exact_route_pricing,
     project_provider_price_cap,
     project_route_emitted_request_parameters,
@@ -460,10 +479,10 @@ _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
         "internal_reasoning",
     }
 )
-# OpenRouter bills cache reads as a discounted prompt-token input dimension.  A route is
-# admissible only when that snapshot discount is no greater than its fresh prompt price.
-# The transmitted ``provider.max_price.prompt`` then supplies the conservative unit ceiling.
-_PROMPT_DOMINATED_PRICING_FIELDS = frozenset({"input_cache_read"})
+# OpenRouter bills cache reads as a discounted prompt-token input dimension.  The reserved V3
+# algorithm modeled cache writes as prompt-dominated, but the provider contract does not bind that
+# charge; trusted cap projection and request-cost preview therefore reject V3 before transport.
+_ALWAYS_PROMPT_DOMINATED_PRICING_FIELDS = frozenset({"input_cache_read"})
 _TRUSTED_ASYNC_CLIENT_SEND = httpx.AsyncClient.send
 _TRUSTED_ASYNC_CLIENT_GETATTRIBUTE = httpx.AsyncClient.__getattribute__
 _TRUSTED_ASYNC_CLIENT_REQUEST = httpx.AsyncClient.request
@@ -1290,6 +1309,8 @@ class _AuditModelRefreshPricingRequestControl:
     qualified_pricing_snapshot_sha256: str
     current_pricing: tuple[tuple[str, str], ...]
     current_pricing_sha256: str
+    current_pricing_schedule: ExactRoutePricingSchedule | None
+    route_predicate_profile: RoutePredicateProfile | None
     route_evidence_sha256: str
     evidence_sha256: str
     authority_capability_sha256: str
@@ -1596,6 +1617,8 @@ class _RegisteredEndpointPricing:
     structured_output_parameters: tuple[str, ...]
     supported_output_modes: tuple[StructuredOutputMode, ...]
     structured_output_mode: StructuredOutputMode
+    pricing_schedule: ExactRoutePricingSchedule | None = None
+    route_predicate_profile: RoutePredicateProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -2080,6 +2103,68 @@ class OpenRouterRequestCostPreviewError(OpenRouterCostControlError):
     """An exact provider-free request-cost preview could not be proven or matched."""
 
 
+def _prompt_dominated_pricing_fields(
+    algorithm: ProviderPriceCapAlgorithm,
+) -> frozenset[str]:
+    """Return only the pricing fields dominated under the selected cap algorithm."""
+
+    if type(algorithm) is not ProviderPriceCapAlgorithm:
+        raise OpenRouterCostControlError("provider price-cap algorithm has an invalid type")
+    return _ALWAYS_PROMPT_DOMINATED_PRICING_FIELDS
+
+
+def _uses_component_unit_envelopes(algorithm: ProviderPriceCapAlgorithm) -> bool:
+    """Return whether the algorithm retains the exact V2 request-unit envelope."""
+
+    return (
+        algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+        or algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+    )
+
+
+def _require_registered_zero_unit_request_shape(
+    body: dict[str, Any],
+    endpoint_policy: _RegisteredEndpointPolicy | None,
+) -> None:
+    """Bind zero-unit component evidence to the exact provider request body."""
+
+    if endpoint_policy is None:
+        return
+    algorithm, envelopes = _registered_price_component_policy(endpoint_policy.endpoints)
+    if algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1:
+        if envelopes:
+            raise OpenRouterProviderPolicyError(
+                "legacy endpoint price policy unexpectedly carries request-unit evidence"
+            )
+        return
+    if not _uses_component_unit_envelopes(algorithm) or not is_exact_openrouter_model_id(
+        body.get("model")
+    ):
+        raise OpenRouterProviderPolicyError(
+            "endpoint price-component request-unit policy is unsupported"
+        )
+    provider = body.get("provider")
+    if type(provider) is not dict:
+        raise OpenRouterProviderPolicyError(
+            "endpoint price-component request-unit policy lacks provider controls"
+        )
+    observed_parameters = tuple(
+        sorted(
+            field
+            for field in ("max_tokens", "reasoning", "response_format", "temperature")
+            if field in body
+        )
+    )
+    for envelope in envelopes:
+        if observed_parameters != envelope.emitted_request_parameters or any(
+            field in body or field in provider for field in envelope.prohibited_request_fields
+        ):
+            raise OpenRouterProviderPolicyError(
+                "provider request can reach a price component sealed as zero-unit"
+            )
+
+
 def _require_exact_openrouter_request_body(
     body: dict[str, Any],
     *,
@@ -2142,6 +2227,7 @@ def _require_exact_openrouter_request_body(
         raise error_type(
             "request body differs from its sealed provider policy or structured request plan"
         )
+    _require_registered_zero_unit_request_shape(body, endpoint_policy)
     body_sha256 = _TRUSTED_CANONICAL_SHA256(body)
     if expected_sha256 is not None and body_sha256 != expected_sha256:
         raise OpenRouterModelRefreshPricingError(
@@ -2699,7 +2785,7 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
     artifact_kind: Literal["openrouter_structured_request_cost_preview"] = (
         "openrouter_structured_request_cost_preview"
     )
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     logical_request_id: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=128)
     exact_model_id: str = Field(min_length=3, max_length=384)
@@ -2721,6 +2807,25 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
     endpoint_record_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_policy_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    route_predicate_profile_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    route_predicate_profile: RoutePredicateProfile | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    price_cap_algorithm: ProviderPriceCapAlgorithm | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    price_component_unit_envelopes: tuple[RoutePriceComponentUnitEnvelope, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=len(_SUPPORTED_TEXT_PRICING_FIELDS),
+        exclude_if=lambda value: value is None,
+    )
     output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     reasoning_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -2814,6 +2919,32 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
 
     @model_validator(mode="after")
     def exact_units_cost_and_hash_are_consistent(self) -> Self:
+        component_policy = (
+            self.route_predicate_profile_sha256,
+            self.route_predicate_profile,
+            self.price_cap_algorithm,
+            self.price_component_unit_envelopes,
+        )
+        component_policy_algorithm = {
+            "1.2": ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2,
+        }.get(self.schema_version)
+        if component_policy_algorithm is not None:
+            if (
+                self.route_predicate_profile_sha256 is None
+                or self.route_predicate_profile is None
+                or self.price_cap_algorithm is not component_policy_algorithm
+                or self.price_component_unit_envelopes is None
+            ):
+                raise ValueError("current request-cost preview lacks component-unit custody")
+            if (
+                self.route_predicate_profile.profile_sha256 != self.route_predicate_profile_sha256
+                or self.route_predicate_profile.price_cap_algorithm is not self.price_cap_algorithm
+                or self.route_predicate_profile.price_component_unit_envelopes
+                != self.price_component_unit_envelopes
+            ):
+                raise ValueError("request-cost preview component-unit custody is inconsistent")
+        elif any(value is not None for value in component_policy):
+            raise ValueError("legacy request-cost preview cannot carry component-unit custody")
         fields = tuple(component.pricing_field for component in self.cost_components)
         if fields != tuple(sorted(fields)) or len(fields) != len(set(fields)):
             raise ValueError("request-cost preview components must be unique and sorted")
@@ -2856,22 +2987,25 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
             component.pricing_field: component.unit_price_usd_exact
             for component in self.cost_components
         }
-        if set(pricing).intersection(_UNENFORCEABLE_VARIABLE_PRICING_FIELDS):
-            raise ValueError(
-                "request-cost preview contains an uncappable variable pricing component"
-            )
         cache_read_price = pricing.get("input_cache_read")
         if cache_read_price is not None and Decimal(cache_read_price) != Decimal(pricing["prompt"]):
             raise ValueError(
                 "request-cost preview input-cache-read bound differs from its prompt-price bound"
             )
-        if any(
-            field not in _ROUTER_MAX_PRICE_FIELDS
-            and field not in _PROMPT_DOMINATED_PRICING_FIELDS
-            and Decimal(price) != 0
-            for field, price in pricing.items()
-        ):
-            raise ValueError("request-cost preview contains an uncappable nonzero component")
+        try:
+            exact_pricing = normalize_exact_route_pricing(pricing)
+            project_provider_price_cap(
+                exact_pricing,
+                algorithm=(
+                    self.price_cap_algorithm
+                    or ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                ),
+                price_component_unit_envelopes=(self.price_component_unit_envelopes or ()),
+            )
+        except (RouteConstraintError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "request-cost preview pricing lacks exact cap or zero-unit custody"
+            ) from exc
         maximum_units = {
             component.pricing_field: component.maximum_units for component in self.cost_components
         }
@@ -3476,7 +3610,19 @@ def _structured_request_pricing_unit_ceilings(
     *,
     request_material: str,
     request_token_plan: RequestTokenPlan,
+    endpoint_policy: _RegisteredEndpointPolicy,
 ) -> dict[str, int]:
+    algorithm, _envelopes = _registered_price_component_policy(endpoint_policy.endpoints)
+    if _uses_component_unit_envelopes(algorithm):
+        try:
+            request_body = json.loads(request_material)
+        except (TypeError, ValueError) as exc:
+            raise OpenRouterCostControlError(
+                "component-unit request material is not exact JSON"
+            ) from exc
+        if type(request_body) is not dict:
+            raise OpenRouterCostControlError("component-unit request material is not an object")
+        _require_registered_zero_unit_request_shape(request_body, endpoint_policy)
     request_bytes = max(1, len(request_material.encode("utf-8")))
     prompt_pricing_units = max(
         request_bytes,
@@ -3519,6 +3665,14 @@ def _provider_free_registered_endpoint_policy(
             "provider-free request-cost preview requires singleton endpoint evidence"
         )
     endpoint = endpoint_snapshot.endpoints[0]
+    pricing_projection = endpoint.tiered_pricing_cost_projection
+    if endpoint.pricing_overrides and type(pricing_projection) is not ExactRoutePricingSchedule:
+        raise OpenRouterRequestCostPreviewError(
+            "conditional endpoint pricing is retained but lacks a bounded cost projection"
+        )
+    pricing_schedule = (
+        pricing_projection if type(pricing_projection) is ExactRoutePricingSchedule else None
+    )
     pricing = dict(endpoint.pricing)
     if not {"prompt", "completion"}.issubset(pricing) or not set(pricing).issubset(
         _SUPPORTED_TEXT_PRICING_FIELDS
@@ -3562,6 +3716,8 @@ def _provider_free_registered_endpoint_policy(
         structured_output_parameters=endpoint.structured_output_parameters,
         supported_output_modes=endpoint.supported_output_modes,
         structured_output_mode=endpoint.structured_output_mode,
+        pricing_schedule=pricing_schedule,
+        route_predicate_profile=endpoint_snapshot.route_predicate_profile,
     )
     selected = _registered_endpoints_for_output_mode(
         (registered,),
@@ -3615,6 +3771,21 @@ def _build_structured_request_cost_preview(
         raise OpenRouterRequestCostPreviewError(
             "provider-free request-cost preview lacks its exact endpoint pricing record"
         )
+    route_profile = endpoint.route_predicate_profile
+    component_unit_profile = (
+        route_profile
+        if route_profile is not None
+        and _uses_component_unit_envelopes(route_profile.price_cap_algorithm)
+        else None
+    )
+    if (
+        component_unit_profile is not None
+        and component_unit_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "V3 cache-write pricing cannot produce a provider-enforced request-cost preview"
+        )
     maximum_cost = _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound)
     components = tuple(
         OpenRouterRequestCostComponentPreview(
@@ -3637,7 +3808,11 @@ def _build_structured_request_cost_preview(
     )
     values: dict[str, Any] = {
         "artifact_kind": "openrouter_structured_request_cost_preview",
-        "schema_version": ("1.1" if request_token_plan.schema_version == "3.0" else "1.0"),
+        "schema_version": (
+            "1.2"
+            if component_unit_profile is not None
+            else ("1.1" if request_token_plan.schema_version == "3.0" else "1.0")
+        ),
         "logical_request_id": request_token_plan.request_id,
         "role": request_token_plan.role,
         "exact_model_id": discovery_evidence.exact_model_id,
@@ -3712,6 +3887,18 @@ def _build_structured_request_cost_preview(
         "grants_review_credit": False,
         "grants_completion_credit": False,
     }
+    if component_unit_profile is not None:
+        values.update(
+            {
+                "route_predicate_profile_sha256": component_unit_profile.profile_sha256,
+                "route_predicate_profile": component_unit_profile.model_dump(mode="python"),
+                "price_cap_algorithm": component_unit_profile.price_cap_algorithm,
+                "price_component_unit_envelopes": tuple(
+                    item.model_dump(mode="python")
+                    for item in component_unit_profile.price_component_unit_envelopes or ()
+                ),
+            }
+        )
     if request_token_plan.schema_version == "3.0":
         values.update(
             {
@@ -4018,6 +4205,7 @@ def preview_openrouter_structured_request_cost(
     ceilings = _structured_request_pricing_unit_ceilings(
         request_material=request_material,
         request_token_plan=request_token_plan,
+        endpoint_policy=endpoint_policy,
     )
     bounded_pricing = dict(
         _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
@@ -4095,6 +4283,13 @@ def _require_matching_structured_request_cost_preview(
         raise OpenRouterRequestCostPreviewError(
             "provider dispatch lacks the exact endpoint bound by its cost preview"
         )
+    route_profile = endpoint.route_predicate_profile
+    component_unit_profile = (
+        route_profile
+        if route_profile is not None
+        and _uses_component_unit_envelopes(route_profile.price_cap_algorithm)
+        else None
+    )
     maximum_cost = _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound)
     context_sha256 = (
         context_request_evidence.evidence_sha256 if context_request_evidence is not None else None
@@ -4123,6 +4318,20 @@ def _require_matching_structured_request_cost_preview(
         "endpoint_record_snapshot_sha256": endpoint.snapshot_sha256,
         "endpoint_policy_pricing_sha256": endpoint_policy.policy_pricing_sha256,
         "endpoint_pricing_sha256": endpoint.pricing_sha256,
+        "route_predicate_profile_sha256": (
+            component_unit_profile.profile_sha256 if component_unit_profile is not None else None
+        ),
+        "route_predicate_profile": component_unit_profile,
+        "price_cap_algorithm": (
+            component_unit_profile.price_cap_algorithm
+            if component_unit_profile is not None
+            else None
+        ),
+        "price_component_unit_envelopes": (
+            component_unit_profile.price_component_unit_envelopes
+            if component_unit_profile is not None
+            else None
+        ),
         "output_capability_sha256": endpoint_policy.output_capability_sha256,
         "reasoning_capability_sha256": reasoning_plan.endpoint_capability_sha256,
         "structured_output_mode": structured_output_plan.mode,
@@ -9886,10 +10095,44 @@ _DISCOVERY_REPLAY_MAX_JSON_DEPTH = 256
 _DISCOVERY_REPLAY_MAX_JSON_NODES = 2_000_000
 
 
-def _detach_exact_discovery_json_object(value: object, *, label: str) -> dict[str, Any]:
+def _detach_exact_discovery_json_object(
+    value: object,
+    *,
+    label: str,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
+    _price_lexeme_guard: Callable[[], bool] = price_lexeme_callables_are_pristine,
+    _price_number_detacher: Callable[
+        ..., CapturedOpenRouterJSONNumber | None
+    ] = detach_captured_openrouter_json_number,
+    _price_number_revoker: Callable[[object], None] = revoke_captured_openrouter_json_number,
+) -> dict[str, Any]:
     """Detach one exact decoded JSON object before hashing and replaying it."""
 
-    def detach(current: object, *, depth: int, nodes: int) -> tuple[Any, int]:
+    if (
+        price_lexemes_module.price_lexeme_callables_are_pristine is not _price_lexeme_guard
+        or detach_captured_openrouter_json_number is not _price_number_detacher
+        or price_lexemes_module.detach_captured_openrouter_json_number is not _price_number_detacher
+        or revoke_captured_openrouter_json_number is not _price_number_revoker
+        or price_lexemes_module.revoke_captured_openrouter_json_number is not _price_number_revoker
+        or not _price_lexeme_guard()
+        or (
+            price_lexeme_layout is not None
+            and (
+                type(price_lexeme_layout) is not str
+                or price_lexeme_layout
+                not in {MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT, ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT}
+            )
+        )
+    ):
+        raise OpenRouterPrivacyError("REAL discovery price-lexeme custody changed")
+
+    def detach(
+        current: object,
+        *,
+        path: tuple[str | int, ...],
+        depth: int,
+        nodes: int,
+    ) -> tuple[Any, int]:
         nodes += 1
         if depth > _DISCOVERY_REPLAY_MAX_JSON_DEPTH or nodes > _DISCOVERY_REPLAY_MAX_JSON_NODES:
             raise OpenRouterPrivacyError("REAL discovery replay JSON exceeds its structural bound")
@@ -9900,15 +10143,42 @@ def _detach_exact_discovery_json_object(value: object, *, label: str) -> dict[st
                     raise OpenRouterPrivacyError(
                         "REAL discovery replay JSON contains a non-string object key"
                     )
-                detached_item, nodes = detach(item, depth=depth + 1, nodes=nodes)
+                detached_item, nodes = detach(
+                    item,
+                    path=(*path, key),
+                    depth=depth + 1,
+                    nodes=nodes,
+                )
                 detached[key] = detached_item
             return detached, nodes
         if type(current) is list:
             detached_items: list[Any] = []
-            for item in list.__iter__(current):
-                detached_item, nodes = detach(item, depth=depth + 1, nodes=nodes)
+            for index, item in enumerate(list.__iter__(current)):
+                detached_item, nodes = detach(
+                    item,
+                    path=(*path, index),
+                    depth=depth + 1,
+                    nodes=nodes,
+                )
                 detached_items.append(detached_item)
             return detached_items, nodes
+        if type(current) is CapturedOpenRouterJSONNumber:
+            if price_lexeme_layout is None:
+                _price_number_revoker(current)
+                raise OpenRouterPrivacyError(
+                    "REAL discovery replay JSON contains an off-path price lexeme"
+                )
+            detached_number = _price_number_detacher(
+                current,
+                layout=price_lexeme_layout,
+                path=path,
+            )
+            if detached_number is None:
+                raise OpenRouterPrivacyError(
+                    "REAL discovery replay JSON contains an off-path price lexeme "
+                    "or invalid binding"
+                )
+            return detached_number, nodes
         if current is None or type(current) in {str, int, bool}:
             return current, nodes
         if type(current) is float and math.isfinite(current):
@@ -9917,7 +10187,7 @@ def _detach_exact_discovery_json_object(value: object, *, label: str) -> dict[st
 
     if type(value) is not dict:
         raise OpenRouterPrivacyError(f"{label} is not an exact decoded JSON object")
-    detached, _nodes = detach(value, depth=0, nodes=0)
+    detached, _nodes = detach(value, path=(), depth=0, nodes=0)
     assert type(detached) is dict
     return detached
 
@@ -9926,6 +10196,7 @@ def _detach_exact_discovery_json_mapping(
     value: object,
     *,
     label: str,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Detach an exact model-ID-to-response mapping without invoking subclass hooks."""
 
@@ -9938,6 +10209,7 @@ def _detach_exact_discovery_json_mapping(
         detached[model_id] = _detach_exact_discovery_json_object(
             payload,
             label=f"{label} response",
+            price_lexeme_layout=price_lexeme_layout,
         )
     return detached
 
@@ -11158,7 +11430,10 @@ class OpenRouterClient:
         """
 
         _require_exact_model_id(exact_model_id)
-        response = await self._request_metadata(openrouter_endpoint_query(exact_model_id))
+        response = await self._request_metadata(
+            openrouter_endpoint_query(exact_model_id),
+            price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        )
         data = response.get("data")
         if not isinstance(data, dict) or data.get("id") != exact_model_id:
             raise OpenRouterModelError(
@@ -11210,7 +11485,10 @@ class OpenRouterClient:
             raise OpenRouterModelError("candidate revocation boundary changed")
         _candidate_revocation_preflight(self, model_ids=(model,))
         _require_exact_model_id(model)
-        response = await self._request_metadata(openrouter_endpoint_query(model))
+        response = await self._request_metadata(
+            openrouter_endpoint_query(model),
+            price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        )
         data = response.get("data")
         if not isinstance(data, dict):
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
@@ -11295,7 +11573,10 @@ class OpenRouterClient:
     async def get_zdr_endpoint_metadata(self) -> dict[str, Any]:
         """Return the complete ZDR listing, including an authenticated empty result."""
 
-        response = await self._request_metadata(OPENROUTER_ZDR_QUERY)
+        response = await self._request_metadata(
+            OPENROUTER_ZDR_QUERY,
+            price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        )
         data = response.get("data")
         if not isinstance(data, list) or any(not isinstance(endpoint, dict) for endpoint in data):
             raise OpenRouterPrivacyError("OpenRouter returned invalid ZDR endpoint metadata")
@@ -11336,6 +11617,7 @@ class OpenRouterClient:
             detached_zdr_payload = _detach_exact_discovery_json_object(
                 zdr_payload,
                 label="REAL discovery ZDR payload",
+                price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
             )
             detached_single_model_payloads = _detach_exact_discovery_json_mapping(
                 single_model_payloads,
@@ -11344,6 +11626,7 @@ class OpenRouterClient:
             detached_endpoint_payloads = _detach_exact_discovery_json_mapping(
                 endpoint_payloads,
                 label="REAL discovery endpoint payloads",
+                price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
             )
             if type(candidate_routes) is not tuple or any(
                 type(route) is not DiscoveryCandidateRoute for route in candidate_routes
@@ -12935,6 +13218,19 @@ class OpenRouterClient:
         identity_owners: dict[str, str] = {}
         for configured_endpoint in configured:
             endpoint = evidence.endpoint(configured_endpoint)
+            pricing_projection = endpoint.tiered_pricing_cost_projection
+            if (
+                endpoint.pricing_overrides
+                and type(pricing_projection) is not ExactRoutePricingSchedule
+            ):
+                raise OpenRouterCostControlError(
+                    "conditional endpoint pricing is retained but lacks a bounded cost projection"
+                )
+            pricing_schedule = (
+                pricing_projection
+                if type(pricing_projection) is ExactRoutePricingSchedule
+                else None
+            )
             pricing = endpoint.pricing
             if (
                 not pricing
@@ -12989,6 +13285,8 @@ class OpenRouterClient:
                     structured_output_parameters=endpoint.structured_output_parameters,
                     supported_output_modes=endpoint.supported_output_modes,
                     structured_output_mode=endpoint.structured_output_mode,
+                    pricing_schedule=pricing_schedule,
+                    route_predicate_profile=evidence.route_predicate_profile,
                 )
             )
             pricing_hashes[endpoint.provider_endpoint] = endpoint.pricing_sha256
@@ -13730,6 +14028,7 @@ class OpenRouterClient:
             route.current_snapshot_sha256 == refresh_binding.evidence.snapshot_sha256,
             route.current_pricing == live_route.pricing,
             route.current_pricing_sha256 == live_route.pricing_sha256,
+            route.current_pricing_schedule == live_route.pricing_schedule,
             route.refresh_route_evidence_sha256 == refresh_routing_evidence.route_evidence_sha256,
             route.audit_selected,
             not route.pricing_use_authorized,
@@ -13810,6 +14109,8 @@ class OpenRouterClient:
             and dict(registered_endpoint.pricing) == route.current_pricing,
             registered_endpoint is not None
             and registered_endpoint.pricing_sha256 == route.current_pricing_sha256,
+            registered_endpoint is not None
+            and registered_endpoint.pricing_schedule == route.current_pricing_schedule,
             live_route.routing_identity_unambiguous,
             live_route.operational,
             live_route.structured_output_supported,
@@ -13854,11 +14155,17 @@ class OpenRouterClient:
             or registered_endpoint is None
             or dict(registered_endpoint.pricing) != route.current_pricing
             or registered_endpoint.pricing_sha256 != route.current_pricing_sha256
+            or registered_endpoint.pricing_schedule != route.current_pricing_schedule
         ):
             raise OpenRouterModelRefreshPricingError(
                 "current endpoint pricing changed before request-price sealing"
             )
         routing_max_price = tuple(_routing_max_price((registered_endpoint,)).items())
+        route_predicate_profile = registered_endpoint.route_predicate_profile
+        if route_predicate_profile is not None and not _uses_component_unit_envelopes(
+            route_predicate_profile.price_cap_algorithm
+        ):
+            route_predicate_profile = None
         try:
             cost_bound_pricing = _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
                 registered_endpoint,
@@ -13881,9 +14188,20 @@ class OpenRouterClient:
             "routing_max_price": routing_max_price,
             "cost_bound_pricing": tuple(cost_bound_pricing),
         }
+        hashed_values = dict(values)
+        if route.current_pricing_schedule is not None:
+            hashed_values["current_pricing_schedule"] = route.current_pricing_schedule.model_dump(
+                mode="json"
+            )
+        if route_predicate_profile is not None:
+            hashed_values["route_predicate_profile"] = route_predicate_profile.model_dump(
+                mode="json"
+            )
         return _AuditModelRefreshPricingRequestControl(
             **values,
-            control_sha256=_canonical_sha256(values),
+            current_pricing_schedule=route.current_pricing_schedule,
+            route_predicate_profile=route_predicate_profile,
+            control_sha256=_canonical_sha256(hashed_values),
         )
 
     def require_audit_policy_binding(
@@ -14566,10 +14884,27 @@ class OpenRouterClient:
         *,
         max_bytes: int = 20_000_000,
         exact_decimal_json: bool = False,
+        price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
         maximum_attempts: int | None = None,
         not_found_is_pending: bool = False,
         _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
+        _price_decoder: Callable[..., dict[str, object]] = (decode_openrouter_price_metadata_json),
+        _price_lexeme_guard: Callable[[], bool] = price_lexeme_callables_are_pristine,
+        _price_lexeme_module: ModuleType = price_lexemes_module,
     ) -> dict[str, Any]:
+        if exact_decimal_json and price_lexeme_layout is not None:
+            raise OpenRouterModelError("metadata decimal decode modes are mutually exclusive")
+        if price_lexeme_layout is not None and (
+            type(price_lexeme_layout) is not str
+            or price_lexeme_layout
+            not in {MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT, ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT}
+            or decode_openrouter_price_metadata_json is not _price_decoder
+            or price_lexemes_module is not _price_lexeme_module
+            or _price_lexeme_module.decode_openrouter_price_metadata_json is not _price_decoder
+            or _price_lexeme_module.price_lexeme_callables_are_pristine is not _price_lexeme_guard
+            or not _price_lexeme_guard()
+        ):
+            raise OpenRouterModelError("endpoint price-lexeme decoder changed")
         attempt_limit = (
             self.execution.max_model_retries + 1 if maximum_attempts is None else maximum_attempts
         )
@@ -14648,12 +14983,19 @@ class OpenRouterClient:
                 )
             break
         try:
-            payload = json.loads(
-                response.content,
-                parse_float=Decimal if exact_decimal_json else float,
-                parse_constant=_reject_nonfinite_json_constant,
-                object_pairs_hook=_unique_json_object,
-            )
+            if price_lexeme_layout is not None:
+                payload: object = _price_decoder(
+                    response.content,
+                    layout=price_lexeme_layout,
+                )
+            else:
+                payload = json.loads(
+                    response.content,
+                    parse_float=Decimal if exact_decimal_json else float,
+                    parse_int=int,
+                    parse_constant=_reject_nonfinite_json_constant,
+                    object_pairs_hook=_unique_json_object,
+                )
             _require_finite_json_numbers(payload)
         except ValueError:
             payload = None
@@ -15120,32 +15462,39 @@ class OpenRouterClient:
         )
         routing_max_price: Mapping[str, float] | None = None
         if refresh_pricing_control is not None:
+            refresh_pricing_control_values: dict[str, Any] = {
+                "exact_model_id": refresh_pricing_control.exact_model_id,
+                "provider_endpoint": refresh_pricing_control.provider_endpoint,
+                "current_endpoint_snapshot_sha256": (
+                    refresh_pricing_control.current_endpoint_snapshot_sha256
+                ),
+                "qualified_pricing_snapshot_sha256": (
+                    refresh_pricing_control.qualified_pricing_snapshot_sha256
+                ),
+                "current_pricing": refresh_pricing_control.current_pricing,
+                "current_pricing_sha256": refresh_pricing_control.current_pricing_sha256,
+                "route_evidence_sha256": refresh_pricing_control.route_evidence_sha256,
+                "evidence_sha256": refresh_pricing_control.evidence_sha256,
+                "authority_capability_sha256": (
+                    refresh_pricing_control.authority_capability_sha256
+                ),
+                "routing_max_price": refresh_pricing_control.routing_max_price,
+                "cost_bound_pricing": refresh_pricing_control.cost_bound_pricing,
+            }
+            if refresh_pricing_control.current_pricing_schedule is not None:
+                refresh_pricing_control_values["current_pricing_schedule"] = (
+                    refresh_pricing_control.current_pricing_schedule.model_dump(mode="json")
+                )
+            if refresh_pricing_control.route_predicate_profile is not None:
+                refresh_pricing_control_values["route_predicate_profile"] = (
+                    refresh_pricing_control.route_predicate_profile.model_dump(mode="json")
+                )
             if (
                 refresh_pricing_control.exact_model_id != model
                 or effective_provider_policy.configured_endpoints
                 != (refresh_pricing_control.provider_endpoint,)
                 or refresh_pricing_control.control_sha256
-                != _canonical_sha256(
-                    {
-                        "exact_model_id": refresh_pricing_control.exact_model_id,
-                        "provider_endpoint": refresh_pricing_control.provider_endpoint,
-                        "current_endpoint_snapshot_sha256": (
-                            refresh_pricing_control.current_endpoint_snapshot_sha256
-                        ),
-                        "qualified_pricing_snapshot_sha256": (
-                            refresh_pricing_control.qualified_pricing_snapshot_sha256
-                        ),
-                        "current_pricing": refresh_pricing_control.current_pricing,
-                        "current_pricing_sha256": (refresh_pricing_control.current_pricing_sha256),
-                        "route_evidence_sha256": refresh_pricing_control.route_evidence_sha256,
-                        "evidence_sha256": refresh_pricing_control.evidence_sha256,
-                        "authority_capability_sha256": (
-                            refresh_pricing_control.authority_capability_sha256
-                        ),
-                        "routing_max_price": refresh_pricing_control.routing_max_price,
-                        "cost_bound_pricing": refresh_pricing_control.cost_bound_pricing,
-                    }
-                )
+                != _canonical_sha256(refresh_pricing_control_values)
             ):
                 raise OpenRouterModelRefreshPricingError(
                     "sealed refresh pricing control differs from the exact request route"
@@ -16882,7 +17231,7 @@ class OpenRouterClient:
                             is not _authrunner_cleanup_call_roots
                             or _authrunner_cleanup_call_roots is None
                             or expected_request_cost_preview is None
-                            or expected_request_cost_preview.schema_version != "1.1"
+                            or expected_request_cost_preview.schema_version not in {"1.1", "1.2"}
                             or expected_request_cost_preview.token_detail_accounting_method
                             != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
                         ):
@@ -19723,6 +20072,7 @@ class OpenRouterClient:
         ceilings = _structured_request_pricing_unit_ceilings(
             request_material=request_material,
             request_token_plan=request_token_plan,
+            endpoint_policy=registered_policy,
         )
         output_tokens = request_token_plan.requested_completion_tokens
         registered_endpoints = registered_policy.endpoints
@@ -19740,6 +20090,7 @@ class OpenRouterClient:
                 len(matches) != 1
                 or dict(matches[0].pricing) != dict(refresh_pricing_control.current_pricing)
                 or matches[0].pricing_sha256 != refresh_pricing_control.current_pricing_sha256
+                or matches[0].pricing_schedule != refresh_pricing_control.current_pricing_schedule
             ):
                 raise UnprovenCostBoundError(
                     "refreshed-price control differs from exact endpoint pricing"
@@ -19953,6 +20304,7 @@ class OpenRouterClient:
                         pricing_route=refresh_pricing_attempt_routes[reservation.identifier],
                         endpoint_cost_bound=endpoint_cost_bound,
                         provider_max_price=dict(refresh_pricing_control.routing_max_price),
+                        route_predicate_profile=(refresh_pricing_control.route_predicate_profile),
                     )
                 )
         except (AttributeError, KeyError, ValueError) as exc:
@@ -21373,6 +21725,33 @@ def _identity_snapshot_from_discovery(
     reasoning_requested: bool,
 ) -> OpenRouterModelEndpointIdentitySnapshot:
     endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    route_profile = evidence.endpoint_snapshot.route_predicate_profile
+    if endpoint.pricing_overrides:
+        pricing_projection = endpoint.tiered_pricing_cost_projection
+        if type(pricing_projection) is not ExactRoutePricingSchedule:
+            raise OpenRouterProviderPolicyError(
+                "conditional endpoint pricing is retained but lacks a bounded cost projection"
+            )
+        try:
+            exact_pricing = normalize_exact_route_pricing(endpoint.pricing)
+            project_provider_price_cap(
+                exact_pricing,
+                schedule=pricing_projection,
+                algorithm=(
+                    route_profile.price_cap_algorithm
+                    if route_profile is not None
+                    else ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                ),
+                price_component_unit_envelopes=(
+                    route_profile.price_component_unit_envelopes or ()
+                    if route_profile is not None
+                    else ()
+                ),
+            )
+        except (RouteConstraintError, TypeError, ValueError) as exc:
+            raise OpenRouterProviderPolicyError(
+                "conditional endpoint pricing lacks a valid shared maximum-rate projection"
+            ) from exc
     if reasoning_requested and not supports_reasoning_request(evidence.reasoning_parameters):
         raise OpenRouterProviderPolicyError(
             "requested reasoning lacks exact model/endpoint parameter support"
@@ -22061,6 +22440,15 @@ _TRUSTED_FETCH_GENERATION_ATTESTATIONS = (
     OpenRouterClient._fetch_generation_attestations_with_deadline
 )
 _TRUSTED_REQUEST_METADATA = OpenRouterClient._request_metadata
+_TRUSTED_PRICE_LEXEMES_MODULE = price_lexemes_module
+_TRUSTED_PRICE_LEXEME_GUARD = price_lexeme_callables_are_pristine
+_TRUSTED_PRICE_DECODER = decode_openrouter_price_metadata_json
+_TRUSTED_PRICE_DECIMAL_ACCESSOR = captured_openrouter_json_number_decimal
+_TRUSTED_PRICE_NUMBER_PATH_MATCHER = captured_openrouter_json_number_matches_path
+_TRUSTED_PRICE_NUMBER_DETACHER = detach_captured_openrouter_json_number
+_TRUSTED_PRICE_NUMBER_REVOKER = revoke_captured_openrouter_json_number
+_TRUSTED_PRICE_DIGEST_CHANNELS = openrouter_json_number_digest_channels
+_TRUSTED_PRICE_PATH_VALIDATOR = openrouter_json_number_is_price_path
 _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
 _TRUSTED_BUILD_REQUEST = OpenRouterClient.build_request
 _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = (
@@ -22490,6 +22878,17 @@ def _openrouter_client_callables_are_pristine(
     _route_pricing_normalizer: Callable[..., object] = normalize_exact_route_pricing,
     _route_price_cap_projection: Callable[..., object] = project_provider_price_cap,
     _structured_request_assembler: Callable[..., object] = _assemble_structured_request_body,
+    _exact_request_body_guard: Callable[..., object] = _require_exact_openrouter_request_body,
+    _registered_zero_unit_request_shape_guard: Callable[..., object] = (
+        _require_registered_zero_unit_request_shape
+    ),
+    _prompt_dominated_pricing_fields_guard: Callable[..., object] = (
+        _prompt_dominated_pricing_fields
+    ),
+    _component_unit_envelope_algorithm_guard: Callable[..., object] = (
+        _uses_component_unit_envelopes
+    ),
+    _registered_price_component_policy_guard: Callable[..., object] | None = None,
     _routing_price_projector: Callable[..., object] | None = None,
     _discovery_revalidator: Callable[..., object] = _revalidate_openrouter_discovery_payload,
     _discovery_sealer: Callable[..., object] = OpenRouterClient.seal_real_model_discovery_run,
@@ -22497,6 +22896,15 @@ def _openrouter_client_callables_are_pristine(
     _discovery_json_mapping_detacher: Callable[..., object] = (
         _detach_exact_discovery_json_mapping
     ),
+    _price_lexemes_module: ModuleType = _TRUSTED_PRICE_LEXEMES_MODULE,
+    _price_lexeme_guard: Callable[[], bool] = _TRUSTED_PRICE_LEXEME_GUARD,
+    _price_decoder: Callable[..., object] = _TRUSTED_PRICE_DECODER,
+    _price_decimal_accessor: Callable[..., object] = _TRUSTED_PRICE_DECIMAL_ACCESSOR,
+    _price_number_path_matcher: Callable[..., object] = _TRUSTED_PRICE_NUMBER_PATH_MATCHER,
+    _price_number_detacher: Callable[..., object] = _TRUSTED_PRICE_NUMBER_DETACHER,
+    _price_number_revoker: Callable[..., object] = _TRUSTED_PRICE_NUMBER_REVOKER,
+    _price_digest_channels: Callable[..., object] = _TRUSTED_PRICE_DIGEST_CHANNELS,
+    _price_path_validator: Callable[..., object] = _TRUSTED_PRICE_PATH_VALIDATOR,
     _retry_policy_guard: Callable[..., object] = _require_current_model_retry_policy,
     _retry_outcome_classifier: Callable[..., object] = (_terminal_model_retry_attempt_outcome),
     _retry_evidence_builder: Callable[..., object] = _model_retry_routing_evidence,
@@ -22996,6 +23404,44 @@ def _openrouter_client_callables_are_pristine(
         and _TRUSTED_DETACH_EXACT_DISCOVERY_JSON_OBJECT is _discovery_json_detacher
         and _detach_exact_discovery_json_mapping is _discovery_json_mapping_detacher
         and _TRUSTED_DETACH_EXACT_DISCOVERY_JSON_MAPPING is _discovery_json_mapping_detacher
+        and price_lexemes_module is _price_lexemes_module
+        and _price_lexemes_module is _TRUSTED_PRICE_LEXEMES_MODULE
+        and CapturedOpenRouterJSONNumber is _TRUSTED_PRICE_NUMBER_TYPE
+        and _price_lexemes_module.CapturedOpenRouterJSONNumber is _TRUSTED_PRICE_NUMBER_TYPE
+        and _OpenRouterPriceLexemeHashRequired is _TRUSTED_PRICE_HASH_REQUIRED_TYPE
+        and _debug_json_default is _TRUSTED_PRICE_DEBUG_JSON_DEFAULT
+        and MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT is _TRUSTED_MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT
+        and _price_lexemes_module.MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT
+        is _TRUSTED_MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT
+        and ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT is _TRUSTED_ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT
+        and _price_lexemes_module.ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT
+        is _TRUSTED_ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT
+        and price_lexeme_callables_are_pristine is _price_lexeme_guard
+        and _price_lexeme_guard is _TRUSTED_PRICE_LEXEME_GUARD
+        and _price_lexemes_module.price_lexeme_callables_are_pristine is _price_lexeme_guard
+        and _price_lexeme_guard()
+        and decode_openrouter_price_metadata_json is _price_decoder
+        and _price_decoder is _TRUSTED_PRICE_DECODER
+        and _price_lexemes_module.decode_openrouter_price_metadata_json is _price_decoder
+        and captured_openrouter_json_number_decimal is _price_decimal_accessor
+        and _price_decimal_accessor is _TRUSTED_PRICE_DECIMAL_ACCESSOR
+        and _price_lexemes_module.captured_openrouter_json_number_decimal is _price_decimal_accessor
+        and captured_openrouter_json_number_matches_path is _price_number_path_matcher
+        and _price_number_path_matcher is _TRUSTED_PRICE_NUMBER_PATH_MATCHER
+        and _price_lexemes_module.captured_openrouter_json_number_matches_path
+        is _price_number_path_matcher
+        and detach_captured_openrouter_json_number is _price_number_detacher
+        and _price_number_detacher is _TRUSTED_PRICE_NUMBER_DETACHER
+        and _price_lexemes_module.detach_captured_openrouter_json_number is _price_number_detacher
+        and revoke_captured_openrouter_json_number is _price_number_revoker
+        and _price_number_revoker is _TRUSTED_PRICE_NUMBER_REVOKER
+        and _price_lexemes_module.revoke_captured_openrouter_json_number is _price_number_revoker
+        and openrouter_json_number_digest_channels is _price_digest_channels
+        and _price_digest_channels is _TRUSTED_PRICE_DIGEST_CHANNELS
+        and _price_lexemes_module.openrouter_json_number_digest_channels is _price_digest_channels
+        and openrouter_json_number_is_price_path is _price_path_validator
+        and _price_path_validator is _TRUSTED_PRICE_PATH_VALIDATOR
+        and _price_lexemes_module.openrouter_json_number_is_price_path is _price_path_validator
         and sys.modules.get("mmaudit.models.route_admission") is _TRUSTED_ROUTE_ADMISSION_MODULE
         and (
             getattr(_TRUSTED_ROUTE_ADMISSION_MODULE, "route_admission_callables_are_pristine", None)
@@ -23060,6 +23506,19 @@ def _openrouter_client_callables_are_pristine(
         and (route_constraints_module.project_provider_price_cap is _route_price_cap_projection)
         and project_provider_price_cap is _route_price_cap_projection
         and _assemble_structured_request_body is _structured_request_assembler
+        and _require_exact_openrouter_request_body is _exact_request_body_guard
+        and _TRUSTED_REQUIRE_EXACT_OPENROUTER_REQUEST_BODY is _exact_request_body_guard
+        and (
+            _require_registered_zero_unit_request_shape is _registered_zero_unit_request_shape_guard
+        )
+        and (
+            _TRUSTED_REQUIRE_REGISTERED_ZERO_UNIT_REQUEST_SHAPE
+            is _registered_zero_unit_request_shape_guard
+        )
+        and _prompt_dominated_pricing_fields is _prompt_dominated_pricing_fields_guard
+        and _uses_component_unit_envelopes is _component_unit_envelope_algorithm_guard
+        and _registered_price_component_policy is _registered_price_component_policy_guard
+        and (_TRUSTED_REGISTERED_PRICE_COMPONENT_POLICY is _registered_price_component_policy_guard)
         and _routing_max_price is _routing_price_projector
         and (_provider_capped_cost_bound_pricing is _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING)
         and copy.deepcopy is _TRUSTED_COPY_DEEPCOPY
@@ -23472,7 +23931,26 @@ def _owned_httpx_callables_are_pristine(
     )
 
 
-def _debug_json_default(value: Any) -> str:
+class _OpenRouterPriceLexemeHashRequired(TypeError):
+    """Signal that canonical hashing requires the exact-number sidecar domain."""
+
+
+def _debug_json_default(
+    value: Any,
+    *,
+    _captured_type: type[CapturedOpenRouterJSONNumber] = CapturedOpenRouterJSONNumber,
+    _hash_required_type: type[_OpenRouterPriceLexemeHashRequired] = (
+        _OpenRouterPriceLexemeHashRequired
+    ),
+) -> str:
+    if (
+        CapturedOpenRouterJSONNumber is not _captured_type
+        or price_lexemes_module.CapturedOpenRouterJSONNumber is not _captured_type
+        or _OpenRouterPriceLexemeHashRequired is not _hash_required_type
+    ):
+        raise TypeError("provider price-lexeme digest custody changed")
+    if type(value) is _captured_type:
+        raise _hash_required_type
     if isinstance(value, Decimal):
         return format(value, "f")
     raise TypeError("unsupported debug JSON value")
@@ -23495,6 +23973,10 @@ def _require_finite_json_numbers(value: Any) -> None:
     pending = [value]
     while pending:
         current = pending.pop()
+        if type(current) is CapturedOpenRouterJSONNumber:
+            captured_decimal = captured_openrouter_json_number_decimal(current)
+            if captured_decimal is None or not captured_decimal.is_finite():
+                raise ValueError("non-finite decoded JSON number")
         if isinstance(current, float) and not math.isfinite(current):
             raise ValueError("non-finite decoded JSON number")
         if isinstance(current, dict):
@@ -23503,17 +23985,78 @@ def _require_finite_json_numbers(value: Any) -> None:
             pending.extend(current)
 
 
-def _canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(
+def _canonical_sha256(
+    value: Any,
+    *,
+    _debug_default: Callable[..., str] = _debug_json_default,
+    _debug_default_code: CodeType = _debug_json_default.__code__,
+    _debug_default_defaults: tuple[object, ...] | None = _debug_json_default.__defaults__,
+    _debug_default_kwdefaults: dict[str, object] | None = _debug_json_default.__kwdefaults__,
+    _debug_default_kwdefault_items: tuple[tuple[str, object], ...] = tuple(
+        sorted((_debug_json_default.__kwdefaults__ or {}).items())
+    ),
+    _hash_required_type: type[_OpenRouterPriceLexemeHashRequired] = (
+        _OpenRouterPriceLexemeHashRequired
+    ),
+    _captured_type: type[CapturedOpenRouterJSONNumber] = CapturedOpenRouterJSONNumber,
+    _digest_channels: Callable[
+        [object], tuple[object, tuple[dict[str, object], ...]] | None
+    ] = openrouter_json_number_digest_channels,
+    _price_guard: Callable[[], bool] = price_lexeme_callables_are_pristine,
+    _model_layout: OpenRouterPriceLexemeLayout = MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    _zdr_layout: OpenRouterPriceLexemeLayout = ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+) -> str:
+    current_debug_kwdefaults = _debug_default.__kwdefaults__
+    if (
+        _debug_json_default is not _debug_default
+        or _debug_default.__code__ is not _debug_default_code
+        or _debug_default.__defaults__ is not _debug_default_defaults
+        or current_debug_kwdefaults is not _debug_default_kwdefaults
+        or type(current_debug_kwdefaults) is not dict
+        or len(current_debug_kwdefaults) != len(_debug_default_kwdefault_items)
+        or any(
+            current_debug_kwdefaults.get(name) is not item
+            for name, item in _debug_default_kwdefault_items
+        )
+        or _OpenRouterPriceLexemeHashRequired is not _hash_required_type
+        or CapturedOpenRouterJSONNumber is not _captured_type
+        or price_lexemes_module.CapturedOpenRouterJSONNumber is not _captured_type
+        or openrouter_json_number_digest_channels is not _digest_channels
+        or price_lexemes_module.openrouter_json_number_digest_channels is not _digest_channels
+        or price_lexeme_callables_are_pristine is not _price_guard
+        or price_lexemes_module.price_lexeme_callables_are_pristine is not _price_guard
+        or MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT is not _model_layout
+        or price_lexemes_module.MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT is not _model_layout
+        or ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT is not _zdr_layout
+        or price_lexemes_module.ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT is not _zdr_layout
+    ):
+        raise TypeError("provider price-lexeme digest custody changed")
+    try:
+        canonical = json.dumps(
             value,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
             allow_nan=False,
-            default=_debug_json_default,
+            default=_debug_default,
         ).encode()
-    ).hexdigest()
+    except _hash_required_type:
+        if not _price_guard():
+            raise TypeError("provider price-lexeme digest custody changed") from None
+        channels = _digest_channels(value)
+        if channels is None:
+            raise TypeError("provider price-lexeme digest channels are missing") from None
+        payload, lexemes = channels
+        channel_json = json.dumps(
+            {"lexemes": lexemes, "payload": payload},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+            default=_debug_default,
+        ).encode()
+        canonical = b"mmaudit.openrouter-exact-json-number-digest.v1\x00" + channel_json
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _generation_reconciliation_expectation_sha256(
@@ -23573,6 +24116,11 @@ _TRUSTED_JSON_ENCODER_MODULE: Any = json.encoder
 _TRUSTED_JSON_ENCODE_BASESTRING_ASCII = _TRUSTED_JSON_ENCODER_MODULE.encode_basestring_ascii
 _TRUSTED_JSON_MAKE_ENCODER: Any = _TRUSTED_JSON_ENCODER_MODULE.c_make_encoder
 _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS = _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS
+_TRUSTED_PRICE_NUMBER_TYPE = CapturedOpenRouterJSONNumber
+_TRUSTED_PRICE_HASH_REQUIRED_TYPE = _OpenRouterPriceLexemeHashRequired
+_TRUSTED_PRICE_DEBUG_JSON_DEFAULT = _debug_json_default
+_TRUSTED_MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT = MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT
+_TRUSTED_ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT = ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT
 _TRUSTED_CANONICAL_SHA256 = _canonical_sha256
 _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_SHA256 = (
     _generation_reconciliation_expectation_sha256
@@ -23595,6 +24143,32 @@ _TRUSTED_PROJECT_PROVIDER_PRICE_CAP = project_provider_price_cap
 _TRUSTED_ASSEMBLE_STRUCTURED_REQUEST_BODY = _assemble_structured_request_body
 
 
+def _registered_price_component_policy(
+    endpoints: tuple[_RegisteredEndpointPricing, ...],
+) -> tuple[
+    ProviderPriceCapAlgorithm,
+    tuple[RoutePriceComponentUnitEnvelope, ...],
+]:
+    """Return one exact profile-bound component policy shared by all registered routes."""
+
+    if not endpoints or any(type(item) is not _RegisteredEndpointPricing for item in endpoints):
+        raise OpenRouterCostControlError("registered endpoint price-component policy is invalid")
+    profiles = tuple(endpoint.route_predicate_profile for endpoint in endpoints)
+    if any(profile != profiles[0] for profile in profiles[1:]):
+        raise OpenRouterCostControlError("registered endpoint price-component policies differ")
+    profile = profiles[0]
+    if profile is None:
+        return ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1, ()
+    if type(profile) is not RoutePredicateProfile:
+        raise OpenRouterCostControlError("registered route predicate profile has an invalid type")
+    return profile.price_cap_algorithm, profile.price_component_unit_envelopes or ()
+
+
+_TRUSTED_REQUIRE_EXACT_OPENROUTER_REQUEST_BODY = _require_exact_openrouter_request_body
+_TRUSTED_REQUIRE_REGISTERED_ZERO_UNIT_REQUEST_SHAPE = _require_registered_zero_unit_request_shape
+_TRUSTED_REGISTERED_PRICE_COMPONENT_POLICY = _registered_price_component_policy
+
+
 def _routing_max_price(
     endpoints: tuple[_RegisteredEndpointPricing, ...],
     *,
@@ -23605,8 +24179,14 @@ def _routing_max_price(
 
     if not endpoints:
         raise OpenRouterCostControlError("endpoint pricing policy is empty")
+    algorithm, component_unit_envelopes = _registered_price_component_policy(endpoints)
+    prompt_dominated_fields = _prompt_dominated_pricing_fields(algorithm)
+    unenforceable_fields = _UNENFORCEABLE_VARIABLE_PRICING_FIELDS.difference(
+        prompt_dominated_fields
+    )
     if len(endpoints) == 1:
-        raw_pricing = endpoints[0].pricing
+        endpoint = endpoints[0]
+        raw_pricing = endpoint.pricing
         raw_fields = tuple(field for field, _raw_price in raw_pricing)
         if (
             any(type(field) is not str for field in raw_fields)
@@ -23616,7 +24196,7 @@ def _routing_max_price(
             raise OpenRouterCostControlError(
                 "endpoint pricing contains an unknown or duplicate component"
             )
-        if set(raw_fields).intersection(_UNENFORCEABLE_VARIABLE_PRICING_FIELDS):
+        if set(raw_fields).intersection(unenforceable_fields):
             raise OpenRouterCostControlError(
                 "variable endpoint pricing component cannot be provider-capped"
             )
@@ -23627,7 +24207,12 @@ def _routing_max_price(
             ):
                 raise RouteConstraintError("route price-cap projection changed")
             exact_pricing = _normalize_pricing(dict(raw_pricing))
-            projected_cap = _project_price_cap(exact_pricing)
+            projected_cap = _project_price_cap(
+                exact_pricing,
+                schedule=endpoint.pricing_schedule,
+                algorithm=algorithm,
+                price_component_unit_envelopes=component_unit_envelopes,
+            )
         except (RouteConstraintError, TypeError, ValueError) as exc:
             raise OpenRouterCostControlError(
                 "endpoint pricing cannot produce the shared provider price cap"
@@ -23637,7 +24222,41 @@ def _routing_max_price(
         context.prec = 160
         maxima: dict[str, Decimal] = {}
         for endpoint in endpoints:
-            fields = tuple(field for field, _raw_price in endpoint.pricing)
+            schedule = endpoint.pricing_schedule
+            raw_pricing = endpoint.pricing
+            try:
+                if (
+                    (schedule is not None and type(schedule) is not ExactRoutePricingSchedule)
+                    or _normalize_pricing is not _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING
+                    or _project_price_cap is not _TRUSTED_PROJECT_PROVIDER_PRICE_CAP
+                ):
+                    raise RouteConstraintError("route price-cap projection changed")
+                base_pricing = _normalize_pricing(dict(raw_pricing))
+                base_prices = {
+                    item.component.value: Decimal(item.unit_price) for item in base_pricing
+                }
+                for field in prompt_dominated_fields:
+                    dominated_price = base_prices.get(field)
+                    if dominated_price is not None and dominated_price > base_prices["prompt"]:
+                        raise OpenRouterCostControlError(
+                            f"{field.replace('_', '-')} endpoint price exceeds its "
+                            "provider-capped prompt price"
+                        )
+                _project_price_cap(
+                    base_pricing,
+                    schedule=schedule,
+                    algorithm=algorithm,
+                    price_component_unit_envelopes=component_unit_envelopes,
+                )
+            except (RouteConstraintError, TypeError, ValueError) as exc:
+                raise OpenRouterCostControlError(
+                    "endpoint pricing cannot produce the shared provider price cap"
+                ) from exc
+            if schedule is not None:
+                raw_pricing = tuple(
+                    (item.component.value, item.unit_price) for item in schedule.maximum_pricing
+                )
+            fields = tuple(field for field, _raw_price in raw_pricing)
             if any(type(field) is not str for field in fields):
                 raise OpenRouterCostControlError(
                     "endpoint pricing contains an unknown or duplicate component"
@@ -23648,12 +24267,16 @@ def _routing_max_price(
                 raise OpenRouterCostControlError(
                     "endpoint pricing contains an unknown or duplicate component"
                 )
+            if set(fields).intersection(unenforceable_fields):
+                raise OpenRouterCostControlError(
+                    "variable endpoint pricing component cannot be provider-capped"
+                )
             if not {"prompt", "completion"}.issubset(fields):
                 raise OpenRouterCostControlError(
                     "endpoint pricing cannot produce provider-side prompt and completion caps"
                 )
             prices: dict[str, Decimal] = {}
-            for field, raw_price in endpoint.pricing:
+            for field, raw_price in raw_pricing:
                 if type(raw_price) is not str or not raw_price or raw_price != raw_price.strip():
                     raise OpenRouterCostControlError(
                         "endpoint price must be an exact finite nonnegative decimal string"
@@ -23669,23 +24292,17 @@ def _routing_max_price(
                         "endpoint price must be an exact finite nonnegative decimal string"
                     )
                 prices[field] = price
-            cache_read_price = prices.get("input_cache_read")
-            if cache_read_price is not None and cache_read_price > prices["prompt"]:
-                raise OpenRouterCostControlError(
-                    "input-cache-read endpoint price exceeds its provider-capped prompt price"
-                )
-            for field, price in prices.items():
-                if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
+            for field in prompt_dominated_fields:
+                dominated_price = prices.get(field)
+                if dominated_price is not None and dominated_price > prices["prompt"]:
                     raise OpenRouterCostControlError(
-                        "variable endpoint pricing component cannot be provider-capped"
+                        f"{field.replace('_', '-')} endpoint price exceeds its "
+                        "provider-capped prompt price"
                     )
-                if field in _PROMPT_DOMINATED_PRICING_FIELDS:
+            for field, price in prices.items():
+                if field in prompt_dominated_fields:
                     continue
                 if field not in _ROUTER_MAX_PRICE_FIELDS:
-                    if price != 0:
-                        raise OpenRouterCostControlError(
-                            "nonzero endpoint pricing component cannot be provider-capped"
-                        )
                     continue
                 maxima[field] = max(maxima.get(field, Decimal(0)), price)
         if not {"prompt", "completion"}.issubset(maxima):
@@ -23712,16 +24329,33 @@ def _provider_capped_cost_bound_pricing(
 ) -> tuple[tuple[str, str], ...]:
     """Price every component at an exact transmitted cap or a dominated prompt ceiling.
 
-    Cache-read is preserved as its own full-input component but priced at the transmitted
-    prompt cap, not at its stale discounted snapshot rate.  The request bound therefore adds
-    full prompt and full cache-read unit ceilings at that cap and remains conservative even if
-    provider accounting reports both dimensions.
+    Cache-read is preserved as its own full-input component but priced at the transmitted prompt
+    cap, not at its stale discounted snapshot rate. The request bound therefore adds full prompt
+    and full cache-read unit ceilings at that cap and remains conservative even if provider
+    accounting reports both dimensions.
     """
 
     if type(endpoint) is not _RegisteredEndpointPricing or type(routing_max_price) is not dict:
         raise OpenRouterCostControlError("provider-capped cost-bound inputs are invalid")
     if not routing_max_price or not set(routing_max_price).issubset(_ROUTER_MAX_PRICE_FIELDS):
         raise OpenRouterCostControlError("transmitted provider max_price fields are invalid")
+    algorithm, component_unit_envelopes = _registered_price_component_policy((endpoint,))
+    prompt_dominated_fields = _prompt_dominated_pricing_fields(algorithm)
+    unenforceable_fields = _UNENFORCEABLE_VARIABLE_PRICING_FIELDS.difference(
+        prompt_dominated_fields
+    )
+    try:
+        exact_base_pricing = _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING(dict(endpoint.pricing))
+        _TRUSTED_PROJECT_PROVIDER_PRICE_CAP(
+            exact_base_pricing,
+            schedule=endpoint.pricing_schedule,
+            algorithm=algorithm,
+            price_component_unit_envelopes=component_unit_envelopes,
+        )
+    except (RouteConstraintError, TypeError, ValueError) as exc:
+        raise OpenRouterCostControlError(
+            "endpoint pricing cannot produce the shared provider price cap"
+        ) from exc
     transmitted_caps: dict[str, Decimal] = {}
     with localcontext() as context:
         context.prec = 160
@@ -23744,7 +24378,27 @@ def _provider_capped_cost_bound_pricing(
                 cap /= Decimal(1_000_000)
             transmitted_caps[field] = cap
 
-        raw_fields = tuple(field for field, _raw_price in endpoint.pricing)
+        pricing_pairs = endpoint.pricing
+        schedule = endpoint.pricing_schedule
+        if schedule is not None:
+            try:
+                if type(schedule) is not ExactRoutePricingSchedule:
+                    raise RouteConstraintError("route pricing schedule has an invalid type")
+                exact_pricing = _TRUSTED_NORMALIZE_EXACT_ROUTE_PRICING(dict(pricing_pairs))
+                _TRUSTED_PROJECT_PROVIDER_PRICE_CAP(
+                    exact_pricing,
+                    schedule=schedule,
+                    algorithm=algorithm,
+                    price_component_unit_envelopes=component_unit_envelopes,
+                )
+            except (RouteConstraintError, TypeError, ValueError) as exc:
+                raise OpenRouterCostControlError(
+                    "endpoint pricing schedule cannot produce a shared cost bound"
+                ) from exc
+            pricing_pairs = tuple(
+                (item.component.value, item.unit_price) for item in schedule.maximum_pricing
+            )
+        raw_fields = tuple(field for field, _raw_price in pricing_pairs)
         if any(type(field) is not str for field in raw_fields) or len(raw_fields) != len(
             set(raw_fields)
         ):
@@ -23752,7 +24406,7 @@ def _provider_capped_cost_bound_pricing(
         if not {"prompt", "completion"}.issubset(raw_fields):
             raise OpenRouterCostControlError("endpoint pricing is incomplete for cost bounding")
         raw_pricing: dict[str, Decimal] = {}
-        for field, raw_price in endpoint.pricing:
+        for field, raw_price in pricing_pairs:
             if (
                 field not in _SUPPORTED_TEXT_PRICING_FIELDS
                 or type(raw_price) is not str
@@ -23777,14 +24431,15 @@ def _provider_capped_cost_bound_pricing(
             )
         bounded: list[tuple[str, str]] = []
         for field, current in raw_pricing.items():
-            if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
+            if field in unenforceable_fields:
                 raise OpenRouterCostControlError(
                     "variable endpoint pricing component cannot be provider-capped"
                 )
-            if field in _PROMPT_DOMINATED_PRICING_FIELDS:
+            if field in prompt_dominated_fields:
                 if current > raw_pricing["prompt"]:
                     raise OpenRouterCostControlError(
-                        "input-cache-read endpoint price exceeds its provider-capped prompt price"
+                        f"{field.replace('_', '-')} endpoint price exceeds its "
+                        "provider-capped prompt price"
                     )
                 price_bound = prompt_cap
             elif field in _ROUTER_MAX_PRICE_FIELDS:
@@ -23795,10 +24450,6 @@ def _provider_capped_cost_bound_pricing(
                     )
                 price_bound = router_cap
             else:
-                if current != 0:
-                    raise OpenRouterCostControlError(
-                        "nonzero endpoint pricing component cannot be provider-capped"
-                    )
                 price_bound = current
             bounded.append((field, _format_cost_decimal(price_bound)))
         return tuple(bounded)
@@ -23811,6 +24462,7 @@ if type(_route_pristine_kwdefaults) is not dict:
     raise RuntimeError("provider route-pristine keyword defaults are unavailable")
 _openrouter_client_callables_are_pristine.__kwdefaults__ = {
     **_route_pristine_kwdefaults,
+    "_registered_price_component_policy_guard": _registered_price_component_policy,
     "_routing_price_projector": _routing_max_price,
 }
 del _route_pristine_kwdefaults
@@ -25190,8 +25842,15 @@ _install_provider_authority_function_graph(
         BudgetManager.reserve,
         OpenRouterClient.seal_real_model_discovery_run,
         _assemble_structured_request_body,
+        _require_exact_openrouter_request_body,
+        _require_registered_zero_unit_request_shape,
+        _prompt_dominated_pricing_fields,
+        _uses_component_unit_envelopes,
+        _registered_price_component_policy,
         _candidate_review_request_token_plan_projection_sha256,
         request_token_plan_projection_sha256,
+        _debug_json_default,
+        _canonical_sha256,
         _routing_max_price,
         project_route_emitted_request_parameters,
         normalize_exact_route_pricing,

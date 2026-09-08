@@ -7,6 +7,10 @@ import json
 import os
 import re
 import stat
+import threading
+import weakref
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -25,6 +29,11 @@ from mmaudit.scanners.base import (
     retain_scanner_workspace_source_custody,
     scanner_workspace_file_sha256,
     scanner_workspace_sha256,
+)
+from mmaudit.scanners.runtime_evidence import (
+    _HOST_REPOSITORY_SUITE_REVOCATION_LEASE,
+    _ProcessLocalRevocationLease,
+    _RevocationLeaseUnavailable,
 )
 
 _MAX_MUTATION_FILES = 100_000
@@ -481,6 +490,21 @@ class MutationCampaignExecutor(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class _StagedMutationCampaignCleanup:
+    """Private same-invocation bridge from completed cleanup to campaign issuance."""
+
+    campaign: MutationCampaignEvidence
+    observation: MutationSuiteObservation | None
+    plan: MutationApplicabilityPlan
+    specification: SourceMutationSpec
+    source_repository: Path
+    private_root: Path
+    private_root_device: int
+    private_root_inode: int
+    executor: MutationCampaignExecutor
+
+
 class MutationTestOutcome(StrEnum):
     """Normalized result of challenging one property with one applicable mutation."""
 
@@ -490,10 +514,11 @@ class MutationTestOutcome(StrEnum):
 
 
 class MutationScorecardEvidenceOrigin(StrEnum):
-    """Trust origin of mutation outcomes; neither member is runtime attestation."""
+    """Trust origin of mutation outcomes; process origin still needs a live opaque seal."""
 
     DECLARATIVE = "declarative"
     PLANNED_UNATTESTED = "planned_unattested"
+    PROCESS_LOCAL_COMPARISON = "process_local_comparison"
 
 
 class MutationPropertyOutcome(StrictModel):
@@ -540,8 +565,12 @@ class PropertyMutationScore(StrictModel):
 class MutationScorecard(StrictModel):
     """Per-property mutation quality evidence; aggregate scores cannot hide weak properties."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_origin: MutationScorecardEvidenceOrigin = MutationScorecardEvidenceOrigin.DECLARATIVE
+    projection_authority: Literal["comparison_only"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     applicability_plan_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     property_corpus_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     minimum_property_kill_score: float = Field(ge=0, le=1)
@@ -618,6 +647,18 @@ class MutationScorecard(StrictModel):
             or self.gate_passed
         ):
             raise ValueError("unattested planned mutation evidence cannot award decisive credit")
+        if self.evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON:
+            if (
+                self.schema_version != "1.1"
+                or self.applicability_plan_sha256 is None
+                or self.projection_authority != "comparison_only"
+            ):
+                raise ValueError(
+                    "process-local mutation comparison requires schema v1.1, its plan hash, "
+                    "and comparison-only authority"
+                )
+        elif self.schema_version != "1.0" or self.projection_authority is not None:
+            raise ValueError("only process-local comparison evidence may use schema v1.1")
         return self
 
     def require_planned_campaign_origin(self) -> None:
@@ -677,7 +718,17 @@ def _score_mutation_outcomes(
         minimum_required=minimum_property_kill_score,
     )
     return MutationScorecard(
+        schema_version=(
+            "1.1"
+            if evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+            else "1.0"
+        ),
         evidence_origin=evidence_origin,
+        projection_authority=(
+            "comparison_only"
+            if evidence_origin is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+            else None
+        ),
         applicability_plan_sha256=applicability_plan_sha256,
         property_corpus_hash=property_corpus_hash,
         minimum_property_kill_score=minimum_property_kill_score,
@@ -770,6 +821,11 @@ def _derive_mutation_suite_outcome(
 ) -> MutationTestOutcome:
     """Pure non-crediting classifier reserved for component tests and future attestation."""
 
+    if (
+        not observation.baseline_compilation_succeeded
+        or not observation.mutant_compilation_succeeded
+    ):
+        return MutationTestOutcome.INCONCLUSIVE
     baseline = {item.test_id: item.status for item in observation.baseline_tests}
     mutant = {item.test_id: item.status for item in observation.mutant_tests}
     if not baseline or set(baseline) != set(mutant):
@@ -792,6 +848,490 @@ def _derive_mutation_suite_outcome(
     if any(status is MutationSuiteTestStatus.FAILED for status in mutant_statuses):
         return MutationTestOutcome.KILLED
     return MutationTestOutcome.SURVIVED
+
+
+def _build_runtime_mutation_scorer(
+    *,
+    campaign_authority_resolver: Callable[[MutationCampaignEvidence], bool],
+    campaign_copy_preserver: Callable[[MutationCampaignEvidence], MutationCampaignEvidence],
+    campaign_revocation_registrar: Callable[
+        [MutationCampaignEvidence, Callable[[], None]],
+        Callable[[], None] | None,
+    ],
+    campaign_authority_lease: Callable[[MutationCampaignEvidence], AbstractContextManager[str]]
+    | None = None,
+    revocation_lease: _ProcessLocalRevocationLease = (_HOST_REPOSITORY_SUITE_REVOCATION_LEASE),
+) -> tuple[
+    Callable[..., MutationScorecard],
+    Callable[[MutationScorecard], bool],
+    Callable[[MutationScorecard], MutationScorecard],
+]:
+    """Build a scorer whose decisive origin exists only beside live campaign seals."""
+
+    trusted_campaign_authority = campaign_authority_resolver
+    trusted_campaign_copy = campaign_copy_preserver
+    trusted_campaign_revocation_registrar = campaign_revocation_registrar
+    trusted_campaign_lease: Callable[[MutationCampaignEvidence], AbstractContextManager[str]]
+
+    if campaign_authority_lease is None:
+
+        @contextmanager
+        def fallback_campaign_lease(
+            campaign: MutationCampaignEvidence,
+        ) -> Iterator[str]:
+            with revocation_lease.hold():
+                if not trusted_campaign_authority(campaign):
+                    raise _RevocationLeaseUnavailable("mutation campaign authority is unavailable")
+                expected_sha256 = _canonical_sha256(campaign.model_dump(mode="json"))
+                try:
+                    yield expected_sha256
+                except BaseException:
+                    with suppress(BaseException):
+                        trusted_campaign_authority(campaign)
+                    raise
+                if not trusted_campaign_authority(campaign):
+                    raise _RevocationLeaseUnavailable(
+                        "mutation campaign authority expired during its lease"
+                    )
+
+        trusted_campaign_lease = fallback_campaign_lease
+
+    else:
+        trusted_campaign_lease = campaign_authority_lease
+
+    @dataclass(frozen=True)
+    class _LiveCampaign:
+        source: MutationCampaignEvidence
+        snapshot: MutationCampaignEvidence
+        authority_sha256: str
+
+    class _ScorecardSeal:
+        __slots__ = (
+            "authority_process_id",
+            "campaign_sha256s",
+            "campaign_unsubscribers",
+            "campaigns",
+            "scorecard",
+            "scorecard_sha256",
+        )
+
+        def __init__(
+            self,
+            *,
+            scorecard: MutationScorecard,
+            campaigns: tuple[MutationCampaignEvidence, ...],
+            campaign_sha256s: tuple[str, ...],
+        ) -> None:
+            self.authority_process_id = authority_process_id
+            self.scorecard = weakref.ref(scorecard)
+            self.scorecard_sha256 = _canonical_sha256(scorecard.model_dump(mode="json"))
+            self.campaigns = campaigns
+            self.campaign_sha256s = campaign_sha256s
+            self.campaign_unsubscribers: list[Callable[[], None]] = []
+
+    registry: dict[int, _ScorecardSeal] = {}
+    lock = threading.RLock()
+    current_process_id = os.getpid
+    authority_process_id = current_process_id()
+
+    def remove_scorecard_seal(
+        key: int,
+        *,
+        expected_seal: _ScorecardSeal | None = None,
+        expected_reference: weakref.ReferenceType[MutationScorecard] | None = None,
+    ) -> bool:
+        try:
+            with revocation_lease.hold():
+                with lock:
+                    current = registry.get(key)
+                    if (
+                        current is None
+                        or (expected_seal is not None and current is not expected_seal)
+                        or (
+                            expected_reference is not None
+                            and current.scorecard is not expected_reference
+                        )
+                    ):
+                        return False
+                    registry.pop(key, None)
+                    unsubscribers = tuple(current.campaign_unsubscribers)
+                    current.campaign_unsubscribers.clear()
+                revocation_lease.defer(unsubscribers)
+                return True
+        except _RevocationLeaseUnavailable:
+            return False
+
+    def revoke_scorecard(scorecard: MutationScorecard) -> None:
+        try:
+            with revocation_lease.hold(), lock:
+                seal = registry.get(id(scorecard))
+                if seal is None or seal.scorecard() is not scorecard:
+                    return
+            remove_scorecard_seal(id(scorecard), expected_seal=seal)
+        except _RevocationLeaseUnavailable:
+            return
+
+    def valid_local_seal_locked(
+        scorecard: MutationScorecard,
+        *,
+        expected_seal: _ScorecardSeal | None = None,
+    ) -> _ScorecardSeal | None:
+        seal = registry.get(id(scorecard))
+        if seal is None or (expected_seal is not None and seal is not expected_seal):
+            return None
+        try:
+            decisive_evidence = {
+                outcome.evidence_sha256
+                for outcome in scorecard.outcomes
+                if outcome.outcome is not MutationTestOutcome.INCONCLUSIVE
+            }
+            valid = bool(
+                current_process_id() == authority_process_id
+                and revocation_lease.is_current_process()
+                and seal.authority_process_id == authority_process_id
+                and seal.scorecard() is scorecard
+                and seal.scorecard_sha256 == _canonical_sha256(scorecard.model_dump(mode="json"))
+                and scorecard.evidence_origin
+                is MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+                and decisive_evidence <= {campaign.evidence_sha256 for campaign in seal.campaigns}
+                and len(seal.campaigns) == len(seal.campaign_sha256s)
+                and all(
+                    _canonical_sha256(campaign.model_dump(mode="json")) == expected_sha256
+                    for campaign, expected_sha256 in zip(
+                        seal.campaigns,
+                        seal.campaign_sha256s,
+                        strict=True,
+                    )
+                )
+            )
+        except Exception:
+            valid = False
+        return seal if valid else None
+
+    def register(
+        scorecard: MutationScorecard,
+        live_campaigns: tuple[_LiveCampaign, ...],
+    ) -> bool:
+        campaigns = tuple(item.source for item in live_campaigns)
+        campaign_sha256s = tuple(item.authority_sha256 for item in live_campaigns)
+        if (
+            current_process_id() != authority_process_id
+            or not revocation_lease.is_current_process()
+            or type(scorecard) is not MutationScorecard
+            or scorecard.evidence_origin
+            is not MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON
+            or not campaigns
+        ):
+            return False
+        decisive_evidence = {
+            outcome.evidence_sha256
+            for outcome in scorecard.outcomes
+            if outcome.outcome is not MutationTestOutcome.INCONCLUSIVE
+        }
+        campaign_evidence = {item.snapshot.evidence_sha256 for item in live_campaigns}
+        if not decisive_evidence <= campaign_evidence:
+            return False
+        key = id(scorecard)
+        seal = _ScorecardSeal(
+            scorecard=scorecard,
+            campaigns=campaigns,
+            campaign_sha256s=campaign_sha256s,
+        )
+
+        def discard(reference: weakref.ReferenceType[MutationScorecard]) -> None:
+            remove_scorecard_seal(key, expected_reference=reference)
+
+        seal.scorecard = weakref.ref(scorecard, discard)
+        inserted = False
+        completed = False
+        try:
+            with revocation_lease.hold():
+                with ExitStack() as campaign_leases:
+                    for item in live_campaigns:
+                        leased_sha256 = campaign_leases.enter_context(
+                            trusted_campaign_lease(item.source)
+                        )
+                        if (
+                            leased_sha256 != item.authority_sha256
+                            or _canonical_sha256(item.snapshot.model_dump(mode="json"))
+                            != item.authority_sha256
+                            or item.source.model_dump(mode="json")
+                            != item.snapshot.model_dump(mode="json")
+                        ):
+                            return False
+                    with lock:
+                        if key in registry:
+                            return False
+                        inserted = True
+                        registry[key] = seal
+
+                    def revoke_from_campaign() -> None:
+                        remove_scorecard_seal(key, expected_seal=seal)
+
+                    for campaign in campaigns:
+                        try:
+                            unsubscribe = trusted_campaign_revocation_registrar(
+                                campaign,
+                                revoke_from_campaign,
+                            )
+                        except Exception:
+                            unsubscribe = None
+                        if unsubscribe is None:
+                            return False
+                        retained = False
+                        with lock:
+                            if registry.get(key) is seal:
+                                seal.campaign_unsubscribers.append(unsubscribe)
+                                retained = True
+                        if not retained:
+                            try:
+                                unsubscribe()
+                            except Exception:
+                                return False
+                            return False
+                    with lock:
+                        registered = (
+                            valid_local_seal_locked(scorecard, expected_seal=seal) is not None
+                        )
+                    if not registered:
+                        return False
+                with lock:
+                    if valid_local_seal_locked(scorecard, expected_seal=seal) is None:
+                        return False
+            with lock:
+                completed = registry.get(key) is seal
+            return completed
+        except _RevocationLeaseUnavailable:
+            return False
+        except BaseException:
+            raise
+        finally:
+            if inserted and not completed:
+                with suppress(BaseException):
+                    remove_scorecard_seal(key, expected_seal=seal)
+
+    def current_seal(scorecard: MutationScorecard) -> _ScorecardSeal | None:
+        seal: _ScorecardSeal | None = None
+        try:
+            with revocation_lease.hold():
+                with lock:
+                    seal = registry.get(id(scorecard))
+                    preliminary = valid_local_seal_locked(scorecard)
+                if preliminary is None:
+                    raise _RevocationLeaseUnavailable("mutation scorecard authority is unavailable")
+                seal = preliminary
+                with ExitStack() as campaign_leases:
+                    for campaign, expected_sha256 in zip(
+                        seal.campaigns,
+                        seal.campaign_sha256s,
+                        strict=True,
+                    ):
+                        leased_sha256 = campaign_leases.enter_context(
+                            trusted_campaign_lease(campaign)
+                        )
+                        if leased_sha256 != expected_sha256:
+                            raise _RevocationLeaseUnavailable(
+                                "mutation campaign authority changed since score issuance"
+                            )
+                    with lock:
+                        current = valid_local_seal_locked(
+                            scorecard,
+                            expected_seal=seal,
+                        )
+                    if current is None:
+                        raise _RevocationLeaseUnavailable(
+                            "mutation scorecard authority expired during dependency validation"
+                        )
+                with lock:
+                    final = valid_local_seal_locked(scorecard, expected_seal=seal)
+                if final is None:
+                    raise _RevocationLeaseUnavailable(
+                        "mutation scorecard authority expired during dependency release"
+                    )
+            with revocation_lease.hold(), lock:
+                return valid_local_seal_locked(scorecard, expected_seal=seal)
+        except _RevocationLeaseUnavailable:
+            if seal is not None:
+                remove_scorecard_seal(id(scorecard), expected_seal=seal)
+            return None
+        except BaseException:
+            if seal is not None:
+                with suppress(BaseException):
+                    remove_scorecard_seal(id(scorecard), expected_seal=seal)
+            raise
+
+    def score(
+        *,
+        plan: MutationApplicabilityPlan,
+        campaigns: list[MutationCampaignEvidence],
+        minimum_property_kill_score: float,
+    ) -> MutationScorecard:
+        canonical_plan = MutationApplicabilityPlan.model_validate(plan.model_dump(mode="python"))
+        source_and_canonical_campaigns = [
+            (campaign, trusted_campaign_copy(campaign)) for campaign in campaigns
+        ]
+        planned_campaigns = [
+            MutationCampaignEvidence.model_validate(campaign.model_dump(mode="python"))
+            for _, campaign in source_and_canonical_campaigns
+        ]
+        campaign_by_mutation: dict[
+            str,
+            tuple[MutationCampaignEvidence, MutationCampaignEvidence],
+        ] = {}
+        for source_campaign, campaign in source_and_canonical_campaigns:
+            if campaign.plan_sha256 != canonical_plan.plan_sha256:
+                raise ValueError("mutation campaign does not bind the applicability plan")
+            if campaign.mutation_id in campaign_by_mutation:
+                raise ValueError("mutation campaigns must be unique by mutation ID")
+            campaign_by_mutation[campaign.mutation_id] = (source_campaign, campaign)
+        specifications = {item.id: item for item in canonical_plan.specifications}
+        unexpected = sorted(set(campaign_by_mutation) - set(specifications))
+        if unexpected:
+            raise ValueError("mutation campaign references an unexpected source mutation")
+
+        authenticated_campaigns: dict[str, _LiveCampaign] = {}
+        for source_campaign, _campaign in source_and_canonical_campaigns:
+            try:
+                with trusted_campaign_lease(source_campaign) as authority_sha256:
+                    snapshot = MutationCampaignEvidence.model_validate(
+                        source_campaign.model_dump(mode="python")
+                    )
+                    snapshot_payload = snapshot.model_dump(mode="json")
+                    if (
+                        snapshot.plan_sha256 != canonical_plan.plan_sha256
+                        or _canonical_sha256(snapshot_payload) != authority_sha256
+                        or source_campaign.model_dump(mode="json") != snapshot_payload
+                    ):
+                        raise _RevocationLeaseUnavailable(
+                            "mutation campaign changed while its score snapshot was captured"
+                        )
+            except (
+                AttributeError,
+                TypeError,
+                ValueError,
+                _RevocationLeaseUnavailable,
+            ):
+                continue
+            if snapshot.mutation_id in authenticated_campaigns:
+                raise ValueError("authoritative mutation campaigns must be unique by mutation ID")
+            authenticated_campaigns[snapshot.mutation_id] = _LiveCampaign(
+                source=source_campaign,
+                snapshot=snapshot,
+                authority_sha256=authority_sha256,
+            )
+
+        live_campaigns: dict[str, _LiveCampaign] = {}
+        outcomes: list[MutationPropertyOutcome] = []
+        for binding in canonical_plan.bindings:
+            specification = specifications[binding.mutation_id]
+            matched_pair = campaign_by_mutation.get(binding.mutation_id)
+            live_campaign = authenticated_campaigns.get(binding.mutation_id)
+            outcome = MutationTestOutcome.INCONCLUSIVE
+            if live_campaign is not None:
+                matched_snapshot = live_campaign.snapshot
+                if matched_snapshot.mutation_id != binding.mutation_id:
+                    raise ValueError("mutation campaign snapshot binding is invalid")
+                if (
+                    matched_snapshot.mutation_specification_sha256
+                    != specification.specification_sha256()
+                ):
+                    raise ValueError("mutation campaign source specification binding is invalid")
+                if (
+                    matched_snapshot.source_repository_sha256
+                    != canonical_plan.source_repository_sha256
+                ):
+                    raise ValueError("mutation campaign source repository binding is invalid")
+                evidence_sha256 = matched_snapshot.evidence_sha256
+                observation = matched_snapshot.executor_observation
+                live_campaigns[matched_snapshot.mutation_id] = live_campaign
+                if (
+                    observation is not None
+                    and observation.mutation_id == binding.mutation_id
+                    and observation.baseline_source_sha256
+                    == matched_snapshot.pristine_workspace_sha256
+                    and observation.mutant_source_sha256
+                    == matched_snapshot.mutated_workspace_sha256
+                    and observation.executor_sha256 == canonical_plan.approved_executor_sha256
+                    and observation.isolation_policy_sha256
+                    == canonical_plan.approved_isolation_policy_sha256
+                ):
+                    outcome = _derive_mutation_suite_outcome(binding, observation)
+            elif matched_pair is None:
+                evidence_sha256 = _canonical_sha256(
+                    {
+                        "plan_sha256": canonical_plan.plan_sha256,
+                        "property_id": binding.property_id,
+                        "mutation_id": binding.mutation_id,
+                        "status": "missing",
+                    }
+                )
+            else:
+                _, matched_campaign = matched_pair
+                if (
+                    matched_campaign.mutation_specification_sha256
+                    != specification.specification_sha256()
+                ):
+                    raise ValueError("mutation campaign source specification binding is invalid")
+                if (
+                    matched_campaign.source_repository_sha256
+                    != canonical_plan.source_repository_sha256
+                ):
+                    raise ValueError("mutation campaign source repository binding is invalid")
+                evidence_sha256 = matched_campaign.evidence_sha256
+            outcomes.append(
+                MutationPropertyOutcome(
+                    mutation_id=binding.mutation_id,
+                    mutation_kind=specification.kind,
+                    property_id=binding.property_id,
+                    outcome=outcome,
+                    evidence_sha256=evidence_sha256,
+                )
+            )
+
+        if not live_campaigns:
+            return score_planned_mutation_campaigns(
+                plan=canonical_plan,
+                campaigns=planned_campaigns,
+                minimum_property_kill_score=minimum_property_kill_score,
+            )
+        scorecard = _score_mutation_outcomes(
+            property_corpus_hash=canonical_plan.property_corpus_hash,
+            expected_property_ids=sorted(canonical_plan.property_repositories),
+            property_repositories=canonical_plan.property_repositories,
+            outcomes=outcomes,
+            minimum_property_kill_score=minimum_property_kill_score,
+            evidence_origin=MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON,
+            applicability_plan_sha256=canonical_plan.plan_sha256,
+        )
+        try:
+            registered = register(
+                scorecard,
+                tuple(live_campaigns[key] for key in sorted(live_campaigns)),
+            )
+            if not registered:
+                return score_planned_mutation_campaigns(
+                    plan=canonical_plan,
+                    campaigns=planned_campaigns,
+                    minimum_property_kill_score=minimum_property_kill_score,
+                )
+            return scorecard
+        except BaseException:
+            revoke_scorecard(scorecard)
+            raise
+
+    def contains(scorecard: MutationScorecard) -> bool:
+        return current_seal(scorecard) is not None
+
+    def validated_copy(scorecard: MutationScorecard) -> MutationScorecard:
+        normalized = MutationScorecard.model_validate(scorecard.model_dump(mode="python"))
+        seal = current_seal(scorecard)
+        if seal is not None and normalized.model_dump(mode="json") == scorecard.model_dump(
+            mode="json"
+        ):
+            return scorecard
+        return normalized
+
+    return score, contains, validated_copy
 
 
 def load_mutation_scorecard(path: Path) -> MutationScorecard:
@@ -1087,13 +1627,14 @@ def mutation_repository_sha256(repository: Path) -> str:
     return scanner_workspace_sha256(repository)
 
 
-def run_owned_mutation_campaign(
+def _run_owned_mutation_campaign_body(
     *,
     source_repository: Path,
     private_root: Path,
     plan: MutationApplicabilityPlan,
     mutation_id: str,
     executor: MutationCampaignExecutor,
+    _stage_cleanup_handoff: Callable[..., None],
 ) -> MutationCampaignEvidence:
     """Run one typed comparison inside one exclusively owned, always-disposed child."""
 
@@ -1152,8 +1693,14 @@ def run_owned_mutation_campaign(
                 mutant_workspace=mutant_workspace,
                 specification=specification,
             )
-            executor_observation = MutationSuiteObservation.model_validate(
-                supplied_observation.model_dump(mode="python")
+            from mmaudit.benchmark.foundry_mutation_executor import (
+                validated_mutation_suite_observation_copy_preserving_runtime_authority,
+            )
+
+            executor_observation = (
+                validated_mutation_suite_observation_copy_preserving_runtime_authority(
+                    supplied_observation
+                )
             )
         except Exception as exc:
             failure_kind = type(exc).__name__
@@ -1199,7 +1746,7 @@ def run_owned_mutation_campaign(
     if not source_preserved:
         failure_kind = failure_kind or "SourceIntegrityError"
 
-    return MutationCampaignEvidence.sealed(
+    campaign = MutationCampaignEvidence.sealed(
         plan_sha256=plan.plan_sha256,
         mutation_id=mutation_id,
         mutation_specification_sha256=specification.specification_sha256(),
@@ -1213,6 +1760,723 @@ def run_owned_mutation_campaign(
         source_preserved=source_preserved,
         disposal_entry_count=removal_budget.removed_entries,
         failure_kind=failure_kind,
+    )
+    _stage_cleanup_handoff(
+        campaign=campaign,
+        observation=executor_observation,
+        plan=plan,
+        specification=specification,
+        source_repository=source,
+        private_root=root.path,
+        private_root_device=root.device,
+        private_root_inode=root.inode,
+        executor=executor,
+    )
+    return campaign
+
+
+def _has_host_mutation_suite_runtime_authority(
+    observation: MutationSuiteObservation,
+) -> bool:
+    """Resolve the captured Foundry observation authority without an import cycle."""
+
+    from mmaudit.benchmark.foundry_mutation_executor import (
+        has_host_mutation_suite_runtime_authority,
+    )
+
+    return has_host_mutation_suite_runtime_authority(observation)
+
+
+def _lease_host_mutation_suite_runtime_authority(
+    observation: MutationSuiteObservation,
+) -> AbstractContextManager[None]:
+    """Resolve the captured Foundry observation lease without an import cycle."""
+
+    from mmaudit.benchmark.foundry_mutation_executor import (
+        _lease_host_mutation_suite_runtime_authority as lease_authority,
+    )
+
+    return lease_authority(observation)
+
+
+def _is_exact_foundry_mutation_executor(executor: MutationCampaignExecutor) -> bool:
+    """Admit only the exact captured executor type at the production campaign boundary."""
+
+    from mmaudit.benchmark.foundry_mutation_executor import ExactFoundryMutationExecutor
+
+    return type(executor) is ExactFoundryMutationExecutor
+
+
+def _has_portable_mutation_campaign_disposal_authority(
+    private_root: Path,
+    executor: MutationCampaignExecutor,
+) -> bool:
+    """Remain closed until a backend proves the retained parent namespace is inaccessible."""
+
+    del private_root, executor
+    return False
+
+
+def _build_mutation_campaign_runtime_authority(
+    *,
+    campaign_body: Callable[..., MutationCampaignEvidence] = _run_owned_mutation_campaign_body,
+    observation_authority_resolver: Callable[
+        [MutationSuiteObservation], bool
+    ] = _has_host_mutation_suite_runtime_authority,
+    executor_authority_resolver: Callable[
+        [MutationCampaignExecutor], bool
+    ] = _is_exact_foundry_mutation_executor,
+    disposal_authority_resolver: Callable[
+        [Path, MutationCampaignExecutor], bool
+    ] = _has_portable_mutation_campaign_disposal_authority,
+    observation_authority_lease: Callable[[MutationSuiteObservation], AbstractContextManager[None]]
+    | None = None,
+    revocation_lease: _ProcessLocalRevocationLease = (_HOST_REPOSITORY_SUITE_REVOCATION_LEASE),
+) -> tuple[
+    Callable[..., MutationCampaignEvidence],
+    Callable[[MutationCampaignEvidence], bool],
+    Callable[[MutationCampaignEvidence], MutationCampaignEvidence],
+    Callable[
+        [MutationCampaignEvidence, Callable[[], None]],
+        Callable[[], None] | None,
+    ],
+    Callable[[MutationCampaignEvidence], AbstractContextManager[str]],
+]:
+    """Bind live suite authority to cleanup-complete campaign evidence."""
+
+    trusted_campaign_body = campaign_body
+    trusted_observation_authority = observation_authority_resolver
+    trusted_executor_authority = executor_authority_resolver
+    trusted_disposal_authority = disposal_authority_resolver
+    trusted_observation_lease: Callable[[MutationSuiteObservation], AbstractContextManager[None]]
+
+    if observation_authority_lease is None:
+        if observation_authority_resolver is _has_host_mutation_suite_runtime_authority:
+            trusted_observation_lease = _lease_host_mutation_suite_runtime_authority
+        else:
+
+            @contextmanager
+            def fallback_observation_lease(
+                observation: MutationSuiteObservation,
+            ) -> Iterator[None]:
+                with revocation_lease.hold():
+                    if not trusted_observation_authority(observation):
+                        raise _RevocationLeaseUnavailable(
+                            "mutation observation authority is unavailable"
+                        )
+                    try:
+                        yield
+                    except BaseException:
+                        with suppress(BaseException):
+                            trusted_observation_authority(observation)
+                        raise
+                    if not trusted_observation_authority(observation):
+                        raise _RevocationLeaseUnavailable(
+                            "mutation observation authority expired during its lease"
+                        )
+
+            trusted_observation_lease = fallback_observation_lease
+
+    else:
+        trusted_observation_lease = observation_authority_lease
+
+    class _CampaignSeal:
+        __slots__ = (
+            "authority_process_id",
+            "campaign",
+            "campaign_sha256",
+            "dependent_revokers",
+            "handoff_is_valid",
+            "observation",
+            "plan",
+        )
+
+        def __init__(
+            self,
+            *,
+            campaign: MutationCampaignEvidence,
+            handoff_is_valid: Callable[[], bool],
+            observation: MutationSuiteObservation,
+            plan: MutationApplicabilityPlan,
+        ) -> None:
+            self.authority_process_id = authority_process_id
+            self.campaign = weakref.ref(campaign)
+            self.campaign_sha256 = _canonical_sha256(campaign.model_dump(mode="json"))
+            self.dependent_revokers: dict[int, Callable[[], None]] = {}
+            self.handoff_is_valid = handoff_is_valid
+            self.observation = observation
+            self.plan = plan
+
+    registry: dict[int, _CampaignSeal] = {}
+    issued_campaigns: dict[int, weakref.ReferenceType[MutationCampaignEvidence]] = {}
+    lock = threading.RLock()
+    current_process_id = os.getpid
+    authority_process_id = current_process_id()
+    authority_effective_user_id = os.geteuid()
+
+    def remove_registered_seal(
+        key: int,
+        *,
+        expected_campaign: MutationCampaignEvidence | None = None,
+        expected_seal: _CampaignSeal | None = None,
+        expected_reference: weakref.ReferenceType[MutationCampaignEvidence] | None = None,
+        expected_handoff: Callable[[], bool] | None = None,
+    ) -> bool:
+        try:
+            with revocation_lease.hold():
+                with lock:
+                    current = registry.get(key)
+                    if (
+                        current is None
+                        or (
+                            expected_campaign is not None
+                            and current.campaign() is not expected_campaign
+                        )
+                        or (expected_seal is not None and current is not expected_seal)
+                        or (
+                            expected_reference is not None
+                            and current.campaign is not expected_reference
+                        )
+                        or (
+                            expected_handoff is not None
+                            and current.handoff_is_valid is not expected_handoff
+                        )
+                    ):
+                        return False
+                    registry.pop(key, None)
+                    revokers = tuple(current.dependent_revokers.values())
+                    current.dependent_revokers.clear()
+                revocation_lease.defer(revokers)
+                return True
+        except _RevocationLeaseUnavailable:
+            return False
+
+    def campaign_matches_observation(
+        campaign: MutationCampaignEvidence,
+        observation: MutationSuiteObservation,
+        plan: MutationApplicabilityPlan,
+    ) -> bool:
+        try:
+            if (
+                type(campaign) is not MutationCampaignEvidence
+                or type(observation) is not MutationSuiteObservation
+                or type(plan) is not MutationApplicabilityPlan
+            ):
+                return False
+            normalized_campaign = MutationCampaignEvidence.model_validate(
+                campaign.model_dump(mode="python")
+            )
+            normalized_plan = MutationApplicabilityPlan.model_validate(
+                plan.model_dump(mode="python")
+            )
+            if normalized_campaign.model_dump(mode="json") != campaign.model_dump(
+                mode="json"
+            ) or normalized_plan.model_dump(mode="json") != plan.model_dump(mode="json"):
+                return False
+            specification = next(
+                item for item in plan.specifications if item.id == campaign.mutation_id
+            )
+            return bool(
+                campaign.plan_sha256 == plan.plan_sha256
+                and campaign.mutation_specification_sha256 == specification.specification_sha256()
+                and campaign.source_repository_sha256 == plan.source_repository_sha256
+                and campaign.failure_kind is None
+                and campaign.restoration_verified
+                and campaign.workspace_disposed
+                and campaign.source_preserved
+                and campaign.source_repository_sha256 == campaign.pristine_workspace_sha256
+                and campaign.source_repository_sha256 == campaign.restored_workspace_sha256
+                and campaign.mutated_workspace_sha256 != campaign.source_repository_sha256
+                and campaign.executor_observation is not None
+                and campaign.executor_observation.observation_sha256
+                == observation.observation_sha256
+                and campaign.executor_observation.model_dump(mode="json")
+                == observation.model_dump(mode="json")
+                and observation.mutation_id == campaign.mutation_id
+                and observation.baseline_source_sha256 == campaign.pristine_workspace_sha256
+                and observation.mutant_source_sha256 == campaign.mutated_workspace_sha256
+                and observation.executor_sha256 == plan.approved_executor_sha256
+                and observation.isolation_policy_sha256 == plan.approved_isolation_policy_sha256
+                and observation.baseline_execution_evidence is ExecutionEvidenceKind.REAL
+                and observation.mutant_execution_evidence is ExecutionEvidenceKind.REAL
+                and observation.baseline_isolation_attestation_sha256 is not None
+                and observation.mutant_isolation_attestation_sha256 is not None
+            )
+        except Exception:
+            return False
+
+    def valid_local_seal_locked(
+        campaign: MutationCampaignEvidence,
+        *,
+        expected_seal: _CampaignSeal | None = None,
+    ) -> _CampaignSeal | None:
+        seal = registry.get(id(campaign))
+        if seal is None or (expected_seal is not None and seal is not expected_seal):
+            return None
+        try:
+            valid = bool(
+                current_process_id() == authority_process_id
+                and revocation_lease.is_current_process()
+                and seal.authority_process_id == authority_process_id
+                and seal.campaign() is campaign
+                and seal.campaign_sha256 == _canonical_sha256(campaign.model_dump(mode="json"))
+                and seal.handoff_is_valid()
+                and campaign_matches_observation(campaign, seal.observation, seal.plan)
+            )
+        except Exception:
+            valid = False
+        return seal if valid else None
+
+    @contextmanager
+    def authority_lease(campaign: MutationCampaignEvidence) -> Iterator[str]:
+        """Hold observation and campaign authority as one process-local transaction."""
+
+        seal: _CampaignSeal | None = None
+        body_failed = False
+        try:
+            with revocation_lease.hold():
+                with lock:
+                    seal = registry.get(id(campaign))
+                    preliminary = valid_local_seal_locked(campaign)
+                if preliminary is None:
+                    raise _RevocationLeaseUnavailable("mutation campaign authority is unavailable")
+                seal = preliminary
+                with trusted_observation_lease(seal.observation):
+                    with lock:
+                        entry = valid_local_seal_locked(campaign, expected_seal=seal)
+                    if entry is None:
+                        raise _RevocationLeaseUnavailable(
+                            "mutation campaign authority is unavailable"
+                        )
+                    try:
+                        yield seal.campaign_sha256
+                    except BaseException:
+                        body_failed = True
+                        try:
+                            with lock:
+                                local_valid = (
+                                    valid_local_seal_locked(campaign, expected_seal=seal)
+                                    is not None
+                                )
+                        except BaseException:
+                            with suppress(BaseException):
+                                remove_registered_seal(
+                                    id(campaign),
+                                    expected_campaign=campaign,
+                                    expected_seal=seal,
+                                )
+                        else:
+                            if not local_valid:
+                                with suppress(BaseException):
+                                    remove_registered_seal(
+                                        id(campaign),
+                                        expected_campaign=campaign,
+                                        expected_seal=seal,
+                                    )
+                        raise
+                    with lock:
+                        current = valid_local_seal_locked(
+                            campaign,
+                            expected_seal=seal,
+                        )
+                    if current is None:
+                        raise _RevocationLeaseUnavailable(
+                            "mutation campaign authority expired during its lease"
+                        )
+                with lock:
+                    final = valid_local_seal_locked(
+                        campaign,
+                        expected_seal=seal,
+                    )
+                if final is None:
+                    raise _RevocationLeaseUnavailable(
+                        "mutation campaign authority expired during dependency release"
+                    )
+        except _RevocationLeaseUnavailable:
+            if seal is not None:
+                remove_registered_seal(
+                    id(campaign),
+                    expected_campaign=campaign,
+                    expected_seal=seal,
+                )
+            raise
+        except BaseException:
+            if not body_failed and seal is not None:
+                with suppress(BaseException):
+                    remove_registered_seal(
+                        id(campaign),
+                        expected_campaign=campaign,
+                        expected_seal=seal,
+                    )
+            raise
+
+    def register(
+        campaign: MutationCampaignEvidence,
+        observation: MutationSuiteObservation,
+        plan: MutationApplicabilityPlan,
+        handoff_is_valid: Callable[[], bool],
+    ) -> bool:
+        key = id(campaign)
+        seal = _CampaignSeal(
+            campaign=campaign,
+            handoff_is_valid=handoff_is_valid,
+            observation=observation,
+            plan=plan,
+        )
+
+        def discard(reference: weakref.ReferenceType[MutationCampaignEvidence]) -> None:
+            remove_registered_seal(key, expected_reference=reference)
+            try:
+                with revocation_lease.hold(), lock:
+                    if issued_campaigns.get(key) is reference:
+                        issued_campaigns.pop(key, None)
+            except _RevocationLeaseUnavailable:
+                return
+
+        seal.campaign = weakref.ref(campaign, discard)
+        inserted = False
+        completed = False
+        try:
+            with revocation_lease.hold():
+                with trusted_observation_lease(observation):
+                    if (
+                        current_process_id() != authority_process_id
+                        or not revocation_lease.is_current_process()
+                        or not handoff_is_valid()
+                        or not campaign_matches_observation(campaign, observation, plan)
+                    ):
+                        return False
+                    with lock:
+                        prior = issued_campaigns.get(key)
+                        if (
+                            (prior is not None and prior() is campaign)
+                            or key in registry
+                            or not handoff_is_valid()
+                        ):
+                            return False
+                        registry[key] = seal
+                        issued_campaigns[key] = seal.campaign
+                        inserted = True
+                        if valid_local_seal_locked(campaign, expected_seal=seal) is None:
+                            return False
+                with lock:
+                    if valid_local_seal_locked(campaign, expected_seal=seal) is None:
+                        return False
+            completed = inserted
+            return completed
+        except _RevocationLeaseUnavailable:
+            return False
+        finally:
+            if inserted and not completed:
+                with suppress(BaseException):
+                    remove_registered_seal(
+                        key,
+                        expected_campaign=campaign,
+                        expected_seal=seal,
+                    )
+                with suppress(BaseException), revocation_lease.hold(), lock:
+                    if issued_campaigns.get(key) is seal.campaign:
+                        issued_campaigns.pop(key, None)
+
+    def was_issued(campaign: MutationCampaignEvidence) -> bool:
+        try:
+            with revocation_lease.hold(), lock:
+                reference = issued_campaigns.get(id(campaign))
+                return reference is not None and reference() is campaign
+        except _RevocationLeaseUnavailable:
+            return False
+
+    def revoke(
+        campaign: MutationCampaignEvidence,
+        *,
+        handoff_is_valid: Callable[[], bool],
+    ) -> None:
+        remove_registered_seal(
+            id(campaign),
+            expected_campaign=campaign,
+            expected_handoff=handoff_is_valid,
+        )
+
+    def current_seal(campaign: MutationCampaignEvidence) -> _CampaignSeal | None:
+        try:
+            with authority_lease(campaign), lock:
+                seal = registry.get(id(campaign))
+        except _RevocationLeaseUnavailable:
+            return None
+        return seal
+
+    def subscribe_to_revocation(
+        campaign: MutationCampaignEvidence,
+        dependent_revoker: Callable[[], None],
+    ) -> Callable[[], None] | None:
+        callback_key = id(dependent_revoker)
+        seal: _CampaignSeal | None = None
+        try:
+            with authority_lease(campaign), lock:
+                seal = registry.get(id(campaign))
+                if (
+                    seal is None
+                    or seal.campaign() is not campaign
+                    or callback_key in seal.dependent_revokers
+                ):
+                    return None
+                seal.dependent_revokers[callback_key] = dependent_revoker
+        except _RevocationLeaseUnavailable:
+            return None
+        if seal is None:
+            return None
+
+        def unsubscribe() -> None:
+            try:
+                with revocation_lease.hold(), lock:
+                    if seal.dependent_revokers.get(callback_key) is dependent_revoker:
+                        seal.dependent_revokers.pop(callback_key, None)
+            except _RevocationLeaseUnavailable:
+                return
+
+        return unsubscribe
+
+    def private_root_matches_stage(stage: _StagedMutationCampaignCleanup) -> bool:
+        try:
+            root_stat = stage.private_root.lstat()
+        except OSError:
+            return False
+        return bool(
+            stat.S_ISDIR(root_stat.st_mode)
+            and not stat.S_ISLNK(root_stat.st_mode)
+            and root_stat.st_uid == authority_effective_user_id
+            and stat.S_IMODE(root_stat.st_mode) == 0o700
+            and (root_stat.st_dev, root_stat.st_ino)
+            == (stage.private_root_device, stage.private_root_inode)
+        )
+
+    def invoke(
+        *,
+        source_repository: Path,
+        private_root: Path,
+        plan: MutationApplicabilityPlan,
+        mutation_id: str,
+        executor: MutationCampaignExecutor,
+    ) -> MutationCampaignEvidence:
+        if current_process_id() != authority_process_id:
+            raise ValueError("mutation campaign authority cannot cross a process boundary")
+        canonical_plan = MutationApplicabilityPlan.model_validate(plan.model_dump(mode="python"))
+        expected_specifications = {item.id: item for item in canonical_plan.specifications}
+        try:
+            expected_specification = expected_specifications[mutation_id]
+        except KeyError as exc:
+            raise ValueError(
+                "mutation campaign ID is not present in the applicability plan"
+            ) from exc
+        expected_source = source_repository.resolve(strict=True)
+        expected_private_root = Path(os.path.abspath(private_root))
+        handoff_lock = threading.RLock()
+        handoff_staged = threading.Event()
+        handoff_replayed = threading.Event()
+        handoff_state = "OPEN"
+        staged: _StagedMutationCampaignCleanup | None = None
+
+        def handoff_is_valid() -> bool:
+            with handoff_lock:
+                return bool(
+                    current_process_id() == authority_process_id
+                    and handoff_state == "CONSUMED"
+                    and not handoff_replayed.is_set()
+                )
+
+        def stage_cleanup_handoff(
+            *,
+            campaign: MutationCampaignEvidence,
+            observation: MutationSuiteObservation | None,
+            plan: MutationApplicabilityPlan,
+            specification: SourceMutationSpec,
+            source_repository: Path,
+            private_root: Path,
+            private_root_device: int,
+            private_root_inode: int,
+            executor: MutationCampaignExecutor,
+        ) -> None:
+            nonlocal handoff_state, staged
+            replayed_campaign: MutationCampaignEvidence | None = None
+            try:
+                with revocation_lease.hold(), handoff_lock:
+                    if handoff_staged.is_set():
+                        handoff_replayed.set()
+                    if handoff_state != "OPEN" or current_process_id() != authority_process_id:
+                        handoff_replayed.set()
+                        handoff_state = "POISONED"
+                        if staged is not None:
+                            replayed_campaign = staged.campaign
+                    else:
+                        handoff_state = "STAGED"
+                        handoff_staged.set()
+                        staged = _StagedMutationCampaignCleanup(
+                            campaign=campaign,
+                            observation=observation,
+                            plan=plan,
+                            specification=specification,
+                            source_repository=source_repository,
+                            private_root=private_root,
+                            private_root_device=private_root_device,
+                            private_root_inode=private_root_inode,
+                            executor=executor,
+                        )
+                    if handoff_state == "POISONED":
+                        if replayed_campaign is not None:
+                            revoke(replayed_campaign, handoff_is_valid=handoff_is_valid)
+                        raise ValueError(
+                            "mutation campaign cleanup handoff is duplicated or replayed"
+                        )
+            except _RevocationLeaseUnavailable as exc:
+                raise ValueError(
+                    "mutation campaign cleanup handoff cannot cross a process boundary"
+                ) from exc
+
+        try:
+            campaign = trusted_campaign_body(
+                source_repository=expected_source,
+                private_root=expected_private_root,
+                plan=canonical_plan,
+                mutation_id=mutation_id,
+                executor=executor,
+                _stage_cleanup_handoff=stage_cleanup_handoff,
+            )
+        except BaseException:
+            with handoff_lock:
+                handoff_state = "POISONED"
+            raise
+
+        try:
+            with handoff_lock:
+                if handoff_state != "STAGED" or staged is None or handoff_replayed.is_set():
+                    handoff_state = "POISONED"
+                    raise ValueError("mutation campaign cleanup handoff is absent or invalid")
+                handoff_state = "FINALIZING"
+            try:
+                changed_identity = bool(
+                    campaign is not staged.campaign
+                    or staged.plan.model_dump(mode="json") != canonical_plan.model_dump(mode="json")
+                    or staged.specification != expected_specification
+                    or staged.source_repository != expected_source
+                    or staged.private_root != expected_private_root
+                    or staged.executor is not executor
+                )
+            except Exception as exc:
+                raise ValueError(
+                    "mutation campaign cleanup handoff changed invocation identity"
+                ) from exc
+            if changed_identity:
+                raise ValueError("mutation campaign cleanup handoff changed invocation identity")
+            if was_issued(campaign):
+                raise ValueError("mutation campaign cleanup handoff replayed an issued campaign")
+            observation = staged.observation
+            eligible = False
+            if observation is not None:
+                try:
+                    eligible = bool(
+                        private_root_matches_stage(staged)
+                        and trusted_executor_authority(executor)
+                        and trusted_disposal_authority(expected_private_root, executor)
+                        and private_root_matches_stage(staged)
+                    )
+                except Exception:
+                    eligible = False
+            with handoff_lock:
+                if handoff_state != "FINALIZING" or handoff_replayed.is_set():
+                    handoff_state = "POISONED"
+                    raise ValueError("mutation campaign cleanup handoff is absent or invalid")
+                handoff_state = "CONSUMED"
+            if (
+                eligible
+                and observation is not None
+                and not register(
+                    campaign,
+                    observation,
+                    canonical_plan,
+                    handoff_is_valid,
+                )
+                and was_issued(campaign)
+            ):
+                raise ValueError("mutation campaign cleanup handoff replayed an issued campaign")
+            if handoff_replayed.is_set():
+                raise ValueError("mutation campaign cleanup handoff is absent or invalid")
+            return campaign
+        except BaseException:
+            with handoff_lock:
+                handoff_state = "POISONED"
+            revoke(campaign, handoff_is_valid=handoff_is_valid)
+            raise
+
+    def contains(campaign: MutationCampaignEvidence) -> bool:
+        return current_seal(campaign) is not None
+
+    def validated_copy(campaign: MutationCampaignEvidence) -> MutationCampaignEvidence:
+        normalized = MutationCampaignEvidence.model_validate(campaign.model_dump(mode="python"))
+        seal = current_seal(campaign)
+        if seal is not None and normalized.model_dump(mode="json") == campaign.model_dump(
+            mode="json"
+        ):
+            return campaign
+        return normalized
+
+    return invoke, contains, validated_copy, subscribe_to_revocation, authority_lease
+
+
+(
+    _invoke_owned_mutation_campaign,
+    has_host_mutation_campaign_runtime_authority,
+    validated_mutation_campaign_copy_preserving_runtime_authority,
+    _subscribe_host_mutation_campaign_revocation,
+    _lease_host_mutation_campaign_runtime_authority,
+) = _build_mutation_campaign_runtime_authority(
+    observation_authority_lease=_lease_host_mutation_suite_runtime_authority,
+    revocation_lease=_HOST_REPOSITORY_SUITE_REVOCATION_LEASE,
+)
+
+(
+    _score_process_local_mutation_campaigns,
+    has_host_mutation_scorecard_runtime_authority,
+    validated_mutation_scorecard_copy_preserving_runtime_authority,
+) = _build_runtime_mutation_scorer(
+    campaign_authority_resolver=has_host_mutation_campaign_runtime_authority,
+    campaign_copy_preserver=validated_mutation_campaign_copy_preserving_runtime_authority,
+    campaign_revocation_registrar=_subscribe_host_mutation_campaign_revocation,
+    campaign_authority_lease=_lease_host_mutation_campaign_runtime_authority,
+    revocation_lease=_HOST_REPOSITORY_SUITE_REVOCATION_LEASE,
+)
+
+
+def run_owned_mutation_campaign(
+    *,
+    source_repository: Path,
+    private_root: Path,
+    plan: MutationApplicabilityPlan,
+    mutation_id: str,
+    executor: MutationCampaignExecutor,
+) -> MutationCampaignEvidence:
+    """Run one owned campaign and retain authority only through verified final cleanup."""
+
+    return _invoke_owned_mutation_campaign(
+        source_repository=source_repository,
+        private_root=private_root,
+        plan=plan,
+        mutation_id=mutation_id,
+        executor=executor,
+    )
+
+
+def score_process_local_mutation_campaigns(
+    *,
+    plan: MutationApplicabilityPlan,
+    campaigns: list[MutationCampaignEvidence],
+    minimum_property_kill_score: float,
+) -> MutationScorecard:
+    """Derive decisive outcomes only from campaigns retaining live process authority."""
+
+    return _score_process_local_mutation_campaigns(
+        plan=plan,
+        campaigns=campaigns,
+        minimum_property_kill_score=minimum_property_kill_score,
     )
 
 

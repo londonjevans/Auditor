@@ -3725,6 +3725,34 @@
           "title": "Preview Sha256",
           "type": "string"
         },
+        "price_cap_algorithm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderPriceCapAlgorithm"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "price_component_unit_envelopes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Component Unit Envelopes"
+        },
         "privacy_config_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Privacy Config Sha256",
@@ -3867,11 +3895,36 @@
           "title": "Role",
           "type": "string"
         },
+        "route_predicate_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutePredicateProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "route_predicate_profile_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Predicate Profile Sha256"
+        },
         "schema_version": {
           "default": "1.0",
           "enum": [
             "1.0",
-            "1.1"
+            "1.1",
+            "1.2"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -3993,6 +4046,15 @@
       ],
       "title": "OpenRouterStructuredRequestCostPreview",
       "type": "object"
+    },
+    "ProviderPriceCapAlgorithm": {
+      "enum": [
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3"
+      ],
+      "title": "ProviderPriceCapAlgorithm",
+      "type": "string"
     },
     "ReasoningControlProfile": {
       "additionalProperties": false,
@@ -4375,6 +4437,344 @@
         "resolution_sha256"
       ],
       "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
+    "RoutePredicateDisposition": {
+      "enum": [
+        "SATISFIED",
+        "REJECTED",
+        "UNAVAILABLE"
+      ],
+      "title": "RoutePredicateDisposition",
+      "type": "string"
+    },
+    "RoutePredicateId": {
+      "description": "The complete, ordered route-admission predicate inventory.",
+      "enum": [
+        "EXACT_MODEL_IDENTITY",
+        "EXACT_PROVIDER_ENDPOINT",
+        "PROVIDER_DISPLAY_NAME_INJECTIVITY",
+        "OPERATIONAL_STATUS",
+        "ZDR_ELIGIBILITY",
+        "EMITS_MAX_TOKENS",
+        "EMITS_TEMPERATURE",
+        "EMITS_RESPONSE_FORMAT",
+        "EMITS_REASONING",
+        "MODEL_STRUCTURED_OUTPUT_MARKER",
+        "ENDPOINT_STRUCTURED_OUTPUT_MARKER",
+        "NATIVE_STRUCTURED_OUTPUT_MODE",
+        "SINGLETON_EXACT_ROUTE",
+        "AUTOMATIC_FALLBACK_DISABLED",
+        "REASONING_POLICY_BINDING",
+        "REASONING_CONTROL_BINDING",
+        "REASONING_CONTROL_VALUES",
+        "REASONING_EFFORT_SUPPORT",
+        "PROMPT_CAPACITY_ENVELOPE",
+        "OUTPUT_CAPACITY_ENVELOPE",
+        "CONTEXT_CAPACITY_ENVELOPE",
+        "METADATA_COMPLETION_CAPACITY",
+        "PRICE_CAP_EXPRESSIBILITY",
+        "PRICE_CAP_NO_WEAKER",
+        "FROZEN_LIVE_EQUIVALENCE",
+        "REGISTRY_SELECTION_HASH_CUSTODY",
+        "REGISTRY_CONSTRAINT_HASH_CUSTODY",
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION"
+      ],
+      "title": "RoutePredicateId",
+      "type": "string"
+    },
+    "RoutePredicateProfile": {
+      "additionalProperties": false,
+      "description": "Shared requirements for every exact AUTHRUNNER route.",
+      "properties": {
+        "accepted_operational_status": {
+          "const": "0",
+          "title": "Accepted Operational Status",
+          "type": "string"
+        },
+        "allow_automatic_fallbacks": {
+          "const": false,
+          "title": "Allow Automatic Fallbacks",
+          "type": "boolean"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "empirical_schema_conformance_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        },
+        "minimum_context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Context Tokens",
+          "type": "integer"
+        },
+        "minimum_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Minimum Prompt Tokens",
+          "type": "integer"
+        },
+        "native_capability_marker": {
+          "const": "structured_outputs",
+          "title": "Native Capability Marker",
+          "type": "string"
+        },
+        "predicate_ids": {
+          "items": {
+            "$ref": "#/$defs/RoutePredicateId"
+          },
+          "maxItems": 29,
+          "minItems": 29,
+          "title": "Predicate Ids",
+          "type": "array"
+        },
+        "price_cap_algorithm": {
+          "$ref": "#/$defs/ProviderPriceCapAlgorithm"
+        },
+        "price_component_unit_envelopes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Component Unit Envelopes"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_control_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Control Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Effort"
+        },
+        "reasoning_exclude": {
+          "title": "Reasoning Exclude",
+          "type": "boolean"
+        },
+        "reasoning_max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Max Tokens"
+        },
+        "reasoning_mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Reasoning Mode",
+          "type": "string"
+        },
+        "reasoning_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Binding Sha256",
+          "type": "string"
+        },
+        "reasoning_role_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Role Profile Sha256",
+          "type": "string"
+        },
+        "require_singleton_route": {
+          "const": true,
+          "title": "Require Singleton Route",
+          "type": "boolean"
+        },
+        "require_zdr": {
+          "const": true,
+          "title": "Require Zdr",
+          "type": "boolean"
+        },
+        "required_completion_limit_source": {
+          "const": "metadata",
+          "title": "Required Completion Limit Source",
+          "type": "string"
+        },
+        "required_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 131072,
+          "title": "Required Completion Tokens",
+          "type": "integer"
+        },
+        "required_output_mode": {
+          "const": "NATIVE_JSON_SCHEMA",
+          "title": "Required Output Mode",
+          "type": "string"
+        },
+        "required_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Required Output Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "1.2"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_detail_convention_disposition": {
+          "$ref": "#/$defs/RoutePredicateDisposition"
+        }
+      },
+      "required": [
+        "predicate_ids",
+        "emitted_request_parameters",
+        "native_capability_marker",
+        "required_output_mode",
+        "accepted_operational_status",
+        "require_zdr",
+        "require_singleton_route",
+        "allow_automatic_fallbacks",
+        "reasoning_policy_sha256",
+        "reasoning_role_profile_sha256",
+        "reasoning_role_binding_sha256",
+        "reasoning_control_profile_sha256",
+        "reasoning_mode",
+        "reasoning_effort",
+        "reasoning_exclude",
+        "reserved_reasoning_tokens",
+        "minimum_prompt_tokens",
+        "required_output_tokens",
+        "required_completion_tokens",
+        "minimum_context_tokens",
+        "required_completion_limit_source",
+        "price_cap_algorithm",
+        "empirical_schema_conformance_disposition",
+        "token_detail_convention_disposition",
+        "profile_sha256"
+      ],
+      "title": "RoutePredicateProfile",
+      "type": "object"
+    },
+    "RoutePriceComponentUnitEnvelope": {
+      "additionalProperties": false,
+      "description": "Self-hashed proof that one unsupported price component has zero reachable units.",
+      "properties": {
+        "component": {
+          "const": "web_search",
+          "title": "Component",
+          "type": "string"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "enforcement_method": {
+          "const": "MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1",
+          "title": "Enforcement Method",
+          "type": "string"
+        },
+        "envelope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Envelope Sha256",
+          "type": "string"
+        },
+        "maximum_cost_usd_exact": {
+          "const": "0",
+          "title": "Maximum Cost Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "const": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "prohibited_request_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "title": "Prohibited Request Fields",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_units",
+        "maximum_cost_usd_exact",
+        "enforcement_method",
+        "emitted_request_parameters",
+        "prohibited_request_fields",
+        "envelope_sha256"
+      ],
+      "title": "RoutePriceComponentUnitEnvelope",
       "type": "object"
     },
     "StructuredOutputMode": {

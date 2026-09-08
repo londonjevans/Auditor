@@ -19,7 +19,11 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, SupportsIndex, runtime_checkable
 from urllib.parse import urlparse
 
-from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    HardhatInventoryPhaseRequest,
+    HardhatTestPhaseRequest,
+)
 from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
 from mmaudit.scanners.read_only_rpc import (
     READ_ONLY_RPC_METHODS,
@@ -447,48 +451,31 @@ class RootlessContainerBackend:
         return rootless_runtime_environment(private_dir / "runtime-client")
 
     def cleanup(self, private_dir: Path) -> None:
-        """Force-remove a residual container and verify that it is absent."""
+        """Bound exact-ID cleanup; no identifier is a no-op, not proof of absence."""
 
-        runtime_dir = private_dir.resolve(strict=True) / "container-runtime"
-        cidfile = runtime_dir / "container.cid"
-        if not cidfile.exists():
-            return
-        container_id = cidfile.read_text(encoding="utf-8").strip()
-        if not re.fullmatch(r"[0-9a-f]{12,64}", container_id):
-            raise RuntimeError("container cleanup refused an invalid runtime identifier")
-        environment = rootless_runtime_environment(runtime_dir)
-        inspect = [self.executable, "container", "inspect", container_id]
-        before = subprocess.run(
-            inspect,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=environment,
-            shell=False,
-        )
-        if before.returncode == 0:
-            subprocess.run(
-                [self.executable, "rm", "--force", container_id],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env=environment,
-                shell=False,
-            )
-        after = subprocess.run(
-            inspect,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=environment,
-            shell=False,
-        )
-        if after.returncode == 0:
-            raise RuntimeError("container cleanup could not verify removal")
-        cidfile.unlink(missing_ok=True)
+        # Import lazily: evidence I/O and process supervision also consume isolation adapters.
+        from mmaudit.isolation.container_cleanup import cleanup_rootless_container
+
+        cleanup_rootless_container(self, private_dir)
+
+
+@dataclass(frozen=True, slots=True)
+class HardhatPhaseCommand:
+    """Request-bound layout/argv observations, never image or launch authority."""
+
+    phase: Literal["inventory", "test"]
+    request_sha256: str
+    private_dir: Path = field(repr=False)
+    output_root: Path = field(repr=False)
+    command: tuple[str, ...] = field(repr=False)
+
+    @property
+    def execution_credit(self) -> Literal[False]:
+        return False
+
+    @property
+    def runtime_authority(self) -> Literal[False]:
+        return False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -612,6 +599,110 @@ class SingleLoopbackHardhatBackend(RootlessContainerBackend):
     ) -> list[str]:
         """Wrap only after a separate process-local bridge authority is verified."""
 
+        return self._wrap_hardhat_with_layout(
+            command,
+            workspace=workspace,
+            private_dir=private_dir,
+            rpc_port=rpc_port,
+        )
+
+    def wrap_hardhat_phase(
+        self,
+        command: tuple[str, ...],
+        request: HardhatInventoryPhaseRequest | HardhatTestPhaseRequest,
+        *,
+        workspace: Path,
+        private_dir: Path,
+        binding: HardhatReadOnlyRpcBridgeBinding,
+    ) -> HardhatPhaseCommand:
+        """Build one fresh phase layout under the exact retained bridge; start no process.
+
+        The returned phase private directory is the cleanup target, not the bridge root.
+        A failed/used phase is retained and cannot be prepared again under the same request.
+        Source content, image identity and execution admission remain separate requirements.
+        """
+
+        if type(request) not in {HardhatInventoryPhaseRequest, HardhatTestPhaseRequest}:
+            raise ValueError("Hardhat phase layout requires an exact typed request")
+        request_json = request.model_dump_json()
+        selected = type(request).model_validate_json(request_json, strict=True)
+        if (
+            type(command) is not tuple
+            or not 1 <= len(command) <= 256
+            or any(type(item) is not str or not item for item in command)
+            or sum(len(item) for item in command) > 128 * 1024
+            or sum(len(item.encode("utf-8")) for item in command) > 128 * 1024
+            or command[0] != "hardhat"
+            or any(
+                any(ord(character) < 32 or ord(character) == 127 for character in item)
+                for item in command
+            )
+            or type(binding) is not HardhatReadOnlyRpcBridgeBinding
+        ):
+            raise ValueError("Hardhat phase layout requires bounded image-side command inputs")
+        private_identity = _hardhat_private_directory_identity(private_dir)
+        source_identity = _hardhat_phase_workspace_identity(workspace, private_identity.path)
+        binding.verify(self, private_identity.path)
+        authority = _require_process_local_hardhat_bridge_authority(self, private_identity.path)
+        expected_state_sha256 = _canonical_sha256(
+            {
+                "version": "MMAUDIT_READ_ONLY_RPC_LIVE_STATE_V1",
+                "origin_endpoint": self.approved_loopback_rpc_endpoint,
+                "expected_chain_id": selected.chain_id,
+                "pinned_block_number": selected.block_number,
+                "pinned_block_hash": selected.block_hash,
+                "preflight_origin_observation_sha256": authority.bridge_preflight_snapshot_sha256,
+            }
+        )
+        if (
+            selected.image != self.image
+            or selected.container_executable_path != _HARDHAT_CONTAINER_EXECUTABLES[command[0]]
+            or selected.isolation_capability_sha256 != self.hardhat_loopback_capability_sha256
+            or selected.bridge_policy_sha256 != authority.bridge_policy_sha256
+            or expected_state_sha256 != authority.bridge_state_sha256
+        ):
+            raise ValueError("Hardhat phase request differs from its live backend or pinned state")
+        phase_root = private_identity.path / f"hardhat-{selected.phase}-{selected.request_sha256}"
+        if phase_root.is_relative_to(workspace) or workspace.is_relative_to(phase_root):
+            raise ValueError("Hardhat phase layout overlaps its read-only source")
+        # Exclusive directory creation is the retained used-state; never recycle failed output.
+        phase_root.mkdir(mode=0o700)
+        phase_identity = _hardhat_private_directory_identity(phase_root)
+        wrapped = self._wrap_hardhat_with_layout(
+            list(command),
+            workspace=workspace,
+            private_dir=private_identity.path,
+            rpc_port=self.approved_loopback_rpc_port,
+            phase_root=phase_root,
+        )
+        binding.verify(self, private_identity.path)
+        if (
+            request.model_dump_json() != request_json
+            or _hardhat_private_directory_identity(private_dir) != private_identity
+            or _hardhat_private_directory_identity(phase_root) != phase_identity
+            or _hardhat_phase_workspace_identity(workspace, private_identity.path)
+            != source_identity
+        ):
+            raise ValueError("Hardhat phase layout changed during construction")
+        _hardhat_private_directory_identity(phase_root / "container-runtime")
+        _hardhat_private_directory_identity(phase_root / "container-output")
+        return HardhatPhaseCommand(
+            selected.phase,
+            selected.request_sha256,
+            phase_root,
+            phase_root / "container-output",
+            tuple(wrapped),
+        )
+
+    def _wrap_hardhat_with_layout(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+        phase_root: Path | None = None,
+    ) -> list[str]:
         if type(rpc_port) is not int or rpc_port != self.approved_loopback_rpc_port:
             raise ValueError("Hardhat RPC port does not match the approved loopback capability")
         image_executable = _HARDHAT_CONTAINER_EXECUTABLES.get(command[0]) if command else None
@@ -655,6 +746,7 @@ class SingleLoopbackHardhatBackend(RootlessContainerBackend):
             rpc_method_policy_sha256=rpc_method_policy_sha256,
             authority_sha256=authority_sha256,
             rpc_port=rpc_port,
+            phase_root=phase_root,
         )
 
     def _wrap_hardhat_command(
@@ -669,6 +761,7 @@ class SingleLoopbackHardhatBackend(RootlessContainerBackend):
         rpc_method_policy_sha256: str,
         authority_sha256: str,
         rpc_port: int,
+        phase_root: Path | None = None,
     ) -> list[str]:
         """Build fixed argv after the non-public authority boundary has succeeded."""
 
@@ -677,13 +770,34 @@ class SingleLoopbackHardhatBackend(RootlessContainerBackend):
         resolved_workspace.relative_to(resolved_private)
         _validate_runtime_path(resolved_private)
         _validate_runtime_path(resolved_workspace)
-        runtime_dir = resolved_private / "container-runtime"
-        writable_dir = resolved_private / "container-output"
+        layout_root = resolved_private if phase_root is None else phase_root
+        if phase_root is not None:
+            _hardhat_private_directory_identity(phase_root)
+            phase_root.relative_to(resolved_private)
+            if (
+                phase_root == resolved_private
+                or phase_root.is_relative_to(resolved_workspace)
+                or resolved_workspace.is_relative_to(phase_root)
+            ):
+                raise ValueError("Hardhat phase layout is not isolated from source and bridge root")
+        runtime_dir = layout_root / "container-runtime"
+        writable_dir = layout_root / "container-output"
         runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         writable_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         seccomp_path = runtime_dir / "hardhat-seccomp.json"
         cidfile = runtime_dir / "container.cid"
-        _write_seccomp_profile(seccomp_path, allow_loopback_rpc=True)
+        if phase_root is None:
+            _write_seccomp_profile(seccomp_path, allow_loopback_rpc=True)
+        else:
+            # Evidence schemas transitively import scanner backends; defer this dependency.
+            from mmaudit.release_io import write_file_evidence
+
+            write_file_evidence(
+                evidence_root=runtime_dir,
+                relative_path="hardhat-seccomp.json",
+                content=_seccomp_profile_bytes(allow_loopback_rpc=True),
+                max_bytes=1_000_000,
+            )
         if image_executable not in _HARDHAT_CONTAINER_EXECUTABLES.values():
             raise ValueError("Hardhat wrapper requires one fixed absolute image executable")
         translated_arguments = _translate_command(
@@ -914,6 +1028,30 @@ class HardhatReadOnlyRpcBridgeBinding:
                 _HARDHAT_BRIDGE_SEALS.pop(self._backend_identity, None)
             self._closed = True
 
+    def verify(
+        self,
+        backend: SingleLoopbackHardhatBackend,
+        private_dir: Path,
+        *,
+        bridge: ReadOnlyRpcBridge | None = None,
+    ) -> None:
+        """Require this exact retained handle, not a replacement seal on an equal backend."""
+
+        if type(self) is not HardhatReadOnlyRpcBridgeBinding:
+            raise ValueError("Hardhat bridge handle has an unsupported type")
+        with _HARDHAT_BRIDGE_SEALS_LOCK:
+            seal = _HARDHAT_BRIDGE_SEALS.get(id(backend))
+            if (
+                self._closed
+                or self._backend_identity != id(backend)
+                or seal is None
+                or seal.binding_reference() is not self
+                or seal.seal_nonce != self._seal_nonce
+                or (bridge is not None and seal.bridge_reference() is not bridge)
+            ):
+                raise ValueError("Hardhat exact retained bridge binding is unavailable")
+            _require_process_local_hardhat_bridge_authority(backend, private_dir)
+
     def __copy__(self) -> HardhatReadOnlyRpcBridgeBinding:
         raise TypeError("Hardhat bridge bindings cannot be copied")
 
@@ -1076,6 +1214,25 @@ def _hardhat_live_bridge_observation(
         return bridge.live_unix_listener_observation()
     except (ReadOnlyRpcBridgeError, ValueError) as exc:
         raise ValueError("Hardhat owner-only Unix bridge is not live and stable") from exc
+
+
+def _hardhat_phase_workspace_identity(
+    workspace: Path,
+    private_dir: Path,
+) -> tuple[int, int, int, int, int]:
+    """Keep the unaliased source directory strictly inside, but not equal to, the bridge root."""
+
+    if (
+        not workspace.is_absolute()
+        or workspace.resolve(strict=True) != workspace
+        or workspace == private_dir
+        or not workspace.is_relative_to(private_dir)
+    ):
+        raise ValueError("Hardhat phase source is not a distinct canonical private-root child")
+    metadata = workspace.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("Hardhat phase source is not a directory")
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid, metadata.st_gid)
 
 
 def _hardhat_private_directory_identity(path: Path) -> _PrivateDirectoryIdentity:

@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "DevelopmentFinding": {
+      "additionalProperties": false,
+      "description": "Unvalidated model hypothesis, deliberately separate from qualified findings.",
+      "properties": {
+        "explanation": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "recommendation": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "violated_invariant": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Violated Invariant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "violated_invariant",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentFinding",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_fixture_review_response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded source review only; no execution, consensus, or validation credit.",
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentFinding"
+      },
+      "maxItems": 16,
+      "title": "Findings",
+      "type": "array"
+    },
+    "summary": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary",
+    "findings"
+  ],
+  "title": "DevelopmentReviewResponse",
+  "type": "object"
+}

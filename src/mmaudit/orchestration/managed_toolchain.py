@@ -22,6 +22,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from mmaudit.config import (
     AuditConfig,
+    ConfigModel,
     RepositoryCleanForkMatrixStateConfig,
     ScannerConfig,
 )
@@ -38,6 +39,8 @@ MANAGED_TOOLCHAIN_OBJECTIVE_SHA256 = (
     "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 )
 MANAGED_TOOLCHAIN_BUNDLE_RESOURCE = "resources/managed_toolchain_bundle.json"
+# Static membership contract only; not evidence that a container uses this reporter.
+MANAGED_HARDHAT_REPORTER_IMAGE_PATH = "/usr/local/lib/mmaudit/hardhat_reporter.cjs"
 MANAGED_TOOLCHAIN_REPORTER_INVENTORY_SCHEMA_SHA256 = (
     "c5eb7d2e536b8a34d2b6bfdef31b83a67b28f411468056aa833b873a53423a27"
 )
@@ -156,6 +159,18 @@ class ManagedToolchainConsumer(StrEnum):
     REPOSITORY_DISCOVERY = "repository-discovery"
     HARDENED_HOST_ISOLATION = "hardened-host-isolation"
     ROOTLESS_CONTAINER = "rootless-container"
+
+
+MANAGED_SCANNER_ROLES: tuple[tuple[str, ManagedToolchainRole], ...] = (
+    ("semgrep", ManagedToolchainRole.SEMGREP),
+    ("gitleaks", ManagedToolchainRole.GITLEAKS),
+    ("trivy", ManagedToolchainRole.TRIVY),
+    ("osv", ManagedToolchainRole.OSV_SCANNER),
+    ("codeql", ManagedToolchainRole.CODEQL),
+    ("slither", ManagedToolchainRole.SLITHER),
+    ("foundry_fork", ManagedToolchainRole.FORGE),
+    ("hardhat_fork", ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT),
+)
 
 
 _ROOTLESS_IMAGE_SIDE_UNREPRESENTED_ROLES = frozenset(
@@ -510,17 +525,7 @@ def _required_managed_toolchain_roles_from_effective(
     solidity_language = effective.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
     solidity_applicable = solidity_language and effective.smart_contracts.enabled
 
-    scanner_roles = {
-        "semgrep": ManagedToolchainRole.SEMGREP,
-        "gitleaks": ManagedToolchainRole.GITLEAKS,
-        "trivy": ManagedToolchainRole.TRIVY,
-        "osv": ManagedToolchainRole.OSV_SCANNER,
-        "codeql": ManagedToolchainRole.CODEQL,
-        "slither": ManagedToolchainRole.SLITHER,
-        "foundry_fork": ManagedToolchainRole.FORGE,
-        "hardhat_fork": ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT,
-    }
-    for name, role in scanner_roles.items():
+    for name, role in MANAGED_SCANNER_ROLES:
         scanner = getattr(effective.scanners, name)
         if not isinstance(scanner, ScannerConfig):
             raise ManagedToolchainError(f"invalid scanner config for {name}")
@@ -661,14 +666,22 @@ def _required_managed_toolchain_roles_from_effective(
     return tuple(sorted(required, key=str))
 
 
-def resolve_managed_toolchain_config(
+def preflight_managed_toolchain_config(
     bundle: ManagedToolchainBundle,
     config: AuditConfig,
-) -> ManagedToolchainPinProjection:
-    """Fail closed and project declared pins without examining installed tools."""
+    *,
+    allow_unresolved: bool = False,
+) -> tuple[ManagedToolchainBundle, AuditConfig, tuple[ManagedToolchainRole, ...]]:
+    """Validate one declaration/config pair without examining installed tools.
+
+    ``allow_unresolved`` permits a caller to build explicit refusal evidence for missing
+    identities. It never permits a pinned member to conflict with per-run trust pins.
+    """
 
     if type(bundle) is not ManagedToolchainBundle:
         raise ManagedToolchainError("managed toolchain bundle must be the exact compiled type")
+    if type(allow_unresolved) is not bool:
+        raise ManagedToolchainError("managed toolchain unresolved policy must be a boolean")
     validated_bundle = ManagedToolchainBundle.model_validate_json(
         bundle.model_dump_json(), strict=True
     )
@@ -689,16 +702,36 @@ def resolve_managed_toolchain_config(
                 "managed rootless execution has unrepresented image-side identities: " + names
             )
     by_role = {member.role: member for member in validated_bundle.members}
-    selected: list[ManagedToolchainMember] = []
-    for role in required_roles:
-        member = by_role[role]
-        if member.disposition is not ManagedToolchainDisposition.PINNED:
+    if not allow_unresolved:
+        for role in required_roles:
+            member = by_role[role]
+            if member.disposition is ManagedToolchainDisposition.PINNED:
+                continue
             raise ManagedToolchainError(
                 f"required managed toolchain role {role.value} is {member.disposition.value}"
             )
-        selected.append(member)
 
-    _require_configured_pin_compatibility(effective, by_role, required_roles)
+    _require_configured_pin_compatibility(
+        effective,
+        by_role,
+        required_roles,
+        allow_unresolved=allow_unresolved,
+    )
+    return validated_bundle, effective, required_roles
+
+
+def resolve_managed_toolchain_config(
+    bundle: ManagedToolchainBundle,
+    config: AuditConfig,
+) -> ManagedToolchainPinProjection:
+    """Fail closed and project declared pins without examining installed tools."""
+
+    validated_bundle, effective, required_roles = preflight_managed_toolchain_config(
+        bundle,
+        config,
+    )
+    by_role = {member.role: member for member in validated_bundle.members}
+    selected = [by_role[role] for role in required_roles]
     runtime_member = by_role.get(ManagedToolchainRole.CONTAINER_RUNTIME)
     image_member = by_role.get(ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE)
     resolved_runtime = (
@@ -735,6 +768,54 @@ def resolve_managed_toolchain_config(
     }
     payload["projection_sha256"] = _canonical_sha256(payload)
     return ManagedToolchainPinProjection.model_validate(payload)
+
+
+def derive_managed_toolchain_config(
+    bundle: ManagedToolchainBundle,
+    config: AuditConfig,
+    *,
+    allow_unresolved: bool = False,
+) -> AuditConfig:
+    """Fill selected consumer pins without changing policy or claiming installed trust.
+
+    Explicit conflicting pins are never overwritten. Unresolved roles are permitted
+    only for partial setup evidence and retain their existing values and refusals.
+    No filesystem, environment, executable lookup, or tool execution is performed.
+    """
+
+    validated_bundle, effective, required_roles = preflight_managed_toolchain_config(
+        bundle, config, allow_unresolved=allow_unresolved
+    )
+    selected = {
+        member.role: member
+        for member in validated_bundle.members
+        if member.role in required_roles
+        and member.disposition is ManagedToolchainDisposition.PINNED
+    }
+    for role, target, version_field, hash_field in _managed_config_pin_targets(effective):
+        member = selected.get(role)
+        if member is not None:
+            setattr(target, version_field, member.version)
+            setattr(target, hash_field, member.sha256)
+    image = selected.get(ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE)
+    if image is not None:
+        effective.reproduction.rootless_container_image = image.locator
+    runtime = selected.get(ManagedToolchainRole.CONTAINER_RUNTIME)
+    if runtime is not None:
+        if runtime.locator not in {"docker", "podman"}:
+            raise ManagedToolchainError("managed toolchain runtime locator is invalid")
+        effective.reproduction.rootless_container_runtime = (
+            "docker" if runtime.locator == "docker" else "podman"
+        )
+
+    # Revalidate after filling both members of each pair, including effective-profile rules.
+    derived = AuditConfig.model_validate(effective.model_dump(mode="python"), strict=True)
+    _, derived, derived_roles = preflight_managed_toolchain_config(
+        validated_bundle, derived, allow_unresolved=allow_unresolved
+    )
+    if derived_roles != required_roles:
+        raise ManagedToolchainError("managed toolchain pin derivation changed the selected roles")
+    return derived
 
 
 def _snapshot_effective_audit_config(config: AuditConfig) -> AuditConfig:
@@ -1008,68 +1089,60 @@ def _load_managed_toolchain_bundle_path(
     return bundle
 
 
+def _managed_config_pin_targets(
+    config: AuditConfig,
+) -> tuple[tuple[ManagedToolchainRole, ConfigModel, str, str], ...]:
+    """Share the exact existing consumer fields between conflict checks and derivation."""
+
+    return (
+        (
+            ManagedToolchainRole.SOLC,
+            config.smart_contracts,
+            "solc_version",
+            "solc_sha256",
+        ),
+        (ManagedToolchainRole.SEMGREP, config.scanners.semgrep, "version", "sha256"),
+        (ManagedToolchainRole.GITLEAKS, config.scanners.gitleaks, "version", "sha256"),
+        (ManagedToolchainRole.TRIVY, config.scanners.trivy, "version", "sha256"),
+        (ManagedToolchainRole.OSV_SCANNER, config.scanners.osv, "version", "sha256"),
+        (ManagedToolchainRole.CODEQL, config.scanners.codeql, "version", "sha256"),
+        (ManagedToolchainRole.SLITHER, config.scanners.slither, "version", "sha256"),
+        (ManagedToolchainRole.FORGE, config.scanners.foundry_fork, "version", "sha256"),
+        (
+            ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT,
+            config.scanners.hardhat_fork,
+            "version",
+            "sha256",
+        ),
+        (ManagedToolchainRole.ECHIDNA, config.formal, "echidna_version", "echidna_sha256"),
+        (ManagedToolchainRole.MEDUSA, config.formal, "medusa_version", "medusa_sha256"),
+        (ManagedToolchainRole.HALMOS, config.formal, "halmos_version", "halmos_sha256"),
+        (
+            ManagedToolchainRole.HALMOS_Z3,
+            config.formal,
+            "halmos_solver_version",
+            "halmos_solver_sha256",
+        ),
+        (ManagedToolchainRole.CERTORA_CLI, config.formal.certora, "cli_version", "cli_sha256"),
+        (ManagedToolchainRole.KONTROL, config.formal, "kontrol_version", "kontrol_sha256"),
+    )
+
+
 def _require_configured_pin_compatibility(
     config: AuditConfig,
     members: dict[ManagedToolchainRole, ManagedToolchainMember],
     required_roles: tuple[ManagedToolchainRole, ...],
+    *,
+    allow_unresolved: bool = False,
 ) -> None:
-    paired: tuple[tuple[ManagedToolchainRole, str | None, str | None], ...] = (
-        (
-            ManagedToolchainRole.SOLC,
-            config.smart_contracts.solc_version,
-            config.smart_contracts.solc_sha256,
-        ),
-        (
-            ManagedToolchainRole.SEMGREP,
-            config.scanners.semgrep.version,
-            config.scanners.semgrep.sha256,
-        ),
-        (
-            ManagedToolchainRole.GITLEAKS,
-            config.scanners.gitleaks.version,
-            config.scanners.gitleaks.sha256,
-        ),
-        (ManagedToolchainRole.TRIVY, config.scanners.trivy.version, config.scanners.trivy.sha256),
-        (ManagedToolchainRole.OSV_SCANNER, config.scanners.osv.version, config.scanners.osv.sha256),
-        (
-            ManagedToolchainRole.CODEQL,
-            config.scanners.codeql.version,
-            config.scanners.codeql.sha256,
-        ),
-        (
-            ManagedToolchainRole.SLITHER,
-            config.scanners.slither.version,
-            config.scanners.slither.sha256,
-        ),
-        (
-            ManagedToolchainRole.FORGE,
-            config.scanners.foundry_fork.version,
-            config.scanners.foundry_fork.sha256,
-        ),
-        (
-            ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT,
-            config.scanners.hardhat_fork.version,
-            config.scanners.hardhat_fork.sha256,
-        ),
-        (ManagedToolchainRole.ECHIDNA, config.formal.echidna_version, config.formal.echidna_sha256),
-        (ManagedToolchainRole.MEDUSA, config.formal.medusa_version, config.formal.medusa_sha256),
-        (ManagedToolchainRole.HALMOS, config.formal.halmos_version, config.formal.halmos_sha256),
-        (
-            ManagedToolchainRole.HALMOS_Z3,
-            config.formal.halmos_solver_version,
-            config.formal.halmos_solver_sha256,
-        ),
-        (
-            ManagedToolchainRole.CERTORA_CLI,
-            config.formal.certora.cli_version,
-            config.formal.certora.cli_sha256,
-        ),
-        (ManagedToolchainRole.KONTROL, config.formal.kontrol_version, config.formal.kontrol_sha256),
-    )
-    for role, version, sha256 in paired:
+    for role, target, version_field, hash_field in _managed_config_pin_targets(config):
+        version = getattr(target, version_field)
+        sha256 = getattr(target, hash_field)
         if version is None and sha256 is None:
             continue
         member = members[role]
+        if allow_unresolved and member.disposition is not ManagedToolchainDisposition.PINNED:
+            continue
         if (
             member.disposition is not ManagedToolchainDisposition.PINNED
             or member.version != version
@@ -1086,21 +1159,32 @@ def _require_configured_pin_compatibility(
     )
     if clean_states:
         anvil = members[ManagedToolchainRole.ANVIL]
-        for state in clean_states:
-            if anvil.version != state.anvil_version or anvil.sha256 != state.anvil_sha256:
-                raise ManagedToolchainError(
-                    "clean-fork Anvil pins conflict with the managed bundle"
-                )
+        if not (allow_unresolved and anvil.disposition is not ManagedToolchainDisposition.PINNED):
+            for state in clean_states:
+                if anvil.version != state.anvil_version or anvil.sha256 != state.anvil_sha256:
+                    raise ManagedToolchainError(
+                        "clean-fork Anvil pins conflict with the managed bundle"
+                    )
 
     image = config.reproduction.rootless_container_image
     image_member = members[ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE]
-    if image is not None and image_member.locator != image:
+    if (
+        image is not None
+        and not (
+            allow_unresolved and image_member.disposition is not ManagedToolchainDisposition.PINNED
+        )
+        and image_member.locator != image
+    ):
         raise ManagedToolchainError("rootless container image conflicts with the managed bundle")
     runtime = config.reproduction.rootless_container_runtime
     runtime_member = members[ManagedToolchainRole.CONTAINER_RUNTIME]
     if (
         ManagedToolchainRole.CONTAINER_RUNTIME in required_roles
         and runtime != "auto"
+        and not (
+            allow_unresolved
+            and runtime_member.disposition is not ManagedToolchainDisposition.PINNED
+        )
         and runtime_member.locator != runtime
     ):
         raise ManagedToolchainError("rootless container runtime conflicts with the managed bundle")

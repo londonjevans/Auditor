@@ -70,6 +70,61 @@ def test_pricing_schemas_expose_canonical_map_key_and_value_bounds() -> None:
     assert re.fullmatch(provider_price_pattern, "1.0") is None
 
 
+def test_tiered_pricing_schema_exposes_exact_field_and_price_bounds() -> None:
+    attempt = _published("audit_model_refresh_pricing_attempt_evidence.schema.json")
+    definitions = attempt["$defs"]
+    override_prices = definitions["OpenRouterPricingOverrideTier"]["properties"]["prices"]
+    exact_price = definitions["ExactRoutePrice"]["properties"]["unit_price"]
+    supported_override_fields = {
+        "audio",
+        "completion",
+        "input_audio_cache",
+        "input_cache_read",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "prompt",
+    }
+
+    assert set(override_prices["propertyNames"]["enum"]) == supported_override_fields
+    assert override_prices["additionalProperties"] == {
+        "maxLength": 49,
+        "minLength": 1,
+        "pattern": (r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"),
+        "type": "string",
+    }
+    assert re.fullmatch(exact_price["pattern"], "0.0000012") is not None
+    assert re.fullmatch(exact_price["pattern"], "0.00000120") is None
+    assert exact_price["maxLength"] == 49
+
+
+def test_pricing_attempt_schema_reserves_v3_without_publishing_a_v3_attempt() -> None:
+    attempt = _published("audit_model_refresh_pricing_attempt_evidence.schema.json")
+    properties = attempt["properties"]
+    definitions = attempt["$defs"]
+
+    assert properties["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert {
+        "route_predicate_profile_sha256",
+        "route_predicate_profile",
+        "price_cap_algorithm",
+        "price_component_unit_envelopes",
+    }.isdisjoint(attempt["required"])
+    assert definitions["ProviderPriceCapAlgorithm"]["enum"] == [
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3",
+    ]
+    envelope = definitions["RoutePriceComponentUnitEnvelope"]["properties"]
+    assert envelope["component"]["const"] == "web_search"
+    assert envelope["maximum_units"]["const"] == 0
+    assert envelope["maximum_cost_usd_exact"]["const"] == "0"
+    assert envelope["enforcement_method"]["const"] == ("MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1")
+    assert envelope["emitted_request_parameters"]["minItems"] == 4
+    assert envelope["emitted_request_parameters"]["maxItems"] == 4
+    assert envelope["prohibited_request_fields"]["minItems"] == 5
+    assert envelope["prohibited_request_fields"]["maxItems"] == 5
+
+
 def _published(filename: str) -> dict[str, Any]:
     loaded = json.loads((SCHEMA_ROOT / filename).read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)

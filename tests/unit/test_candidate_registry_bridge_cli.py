@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import json
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from types import MethodType
 from typing import Any, Literal
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
 import mmaudit.cli as cli_module
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.config import AuditConfig
 from mmaudit.constants import ExitCode
 from mmaudit.models.candidate_registry_bridge import (
@@ -30,7 +36,13 @@ from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryPayload,
     load_model_discovery_run,
+)
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    captured_openrouter_json_number_raw,
 )
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
@@ -44,7 +56,16 @@ from mmaudit.models.reasoning import (
     ReasoningEffort,
     ReasoningPolicyArtifact,
 )
-from mmaudit.models.route_constraints import ExactRouteConstraint, ExactRouteRole
+from mmaudit.models.route_constraints import (
+    ExactRouteConstraint,
+    ExactRoutePricingSchedule,
+    ExactRouteRole,
+    ProviderPriceCapAlgorithm,
+    RoutePriceComponentUnitEnvelope,
+)
+from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.models.usage import UsageLedger
+from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
@@ -314,6 +335,8 @@ def test_emit_selection_plan_successor_is_provider_free_deterministic_and_fresh(
         normalized_output = " ".join(result.output.split())
         assert "NONAUTHORIZING" in normalized_output
         assert "no provider access occurred" in normalized_output
+        assert "endpoint inventory preserved from predecessor" in normalized_output
+        assert "price-cap profile" not in normalized_output
         assert output.stat().st_mode & 0o777 == 0o600
         successor = load_candidate_selection_plan(output)
         assert (
@@ -327,7 +350,16 @@ def test_emit_selection_plan_successor_is_provider_free_deterministic_and_fresh(
 
     assert successors[0] == successors[1]
     selection = successors[0].authenticated_runner_selection
+    predecessor_selection = predecessor.authenticated_runner_selection
     assert selection is not None
+    assert predecessor_selection is not None
+    assert selection.route_predicate_profile == predecessor_selection.route_predicate_profile
+    assert selection.route_predicate_profile.schema_version == "1.0"
+    assert (
+        selection.route_predicate_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    )
+    assert selection.route_predicate_profile.price_component_unit_envelopes is None
     assert selection.candidate_model_id == MODEL_ID
     assert tuple(
         (constraint.role, constraint.exact_model_id, constraint.provider_endpoint)
@@ -359,6 +391,243 @@ def test_emit_selection_plan_successor_is_provider_free_deterministic_and_fresh(
     assert "candidate selection route is revoked" in " ".join(result.output.split())
     assert not revoked_output.exists()
     assert external_access == []
+
+
+def test_emit_selection_plan_successor_refuses_unavailable_active_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_access: list[str] = []
+
+    def forbidden_external_access(*_args: object, **_kwargs: object) -> None:
+        external_access.append("accessed")
+        raise AssertionError("unavailable plan emission must remain provider-free")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+    output = tmp_path / "private" / "successor.json"
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(ROOT / "config" / "models.selection-plan.json"),
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "separately authenticated ancestry transition" in " ".join(result.output.split())
+    assert not output.exists()
+    assert external_access == []
+
+
+def test_emit_selection_plan_successor_explicitly_upgrades_v1_profile_provider_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "inputs")
+    predecessor = load_candidate_selection_plan(plan_path)
+    predecessor_selection = predecessor.authenticated_runner_selection
+    assert predecessor_selection is not None
+    frozen_inputs = {
+        plan_path: plan_path.read_bytes(),
+        ranking_path: ranking_path.read_bytes(),
+        lineage_path: lineage_path.read_bytes(),
+    }
+    external_access: list[str] = []
+
+    def forbidden_external_access(*_args: object, **_kwargs: object) -> None:
+        external_access.append("accessed")
+        raise AssertionError("V2 successor emission must remain provider-free")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+    output = tmp_path / "private" / "v2-successor.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(plan_path),
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--upgrade-price-cap-profile-v2",
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "price-cap profile upgraded V1->V2" in " ".join(result.output.split())
+    successor = load_candidate_selection_plan(output)
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=successor,
+        )
+        == successor
+    )
+    selection = successor.authenticated_runner_selection
+    assert selection is not None
+    profile = selection.route_predicate_profile
+    assert (
+        profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    assert profile.price_component_unit_envelopes == (
+        RoutePriceComponentUnitEnvelope.build_web_search_disabled(),
+    )
+    assert all(
+        constraint.profile_sha256 == profile.profile_sha256
+        for constraint in selection.route_constraints
+    )
+    predecessor_judges = {
+        constraint.role: constraint.constraint_sha256
+        for constraint in predecessor_selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    }
+    assert all(
+        constraint.constraint_sha256 != predecessor_judges[constraint.role]
+        for constraint in selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    )
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert all(path.read_bytes() == content for path, content in frozen_inputs.items())
+    assert external_access == []
+
+
+def test_emit_selection_plan_successor_rejects_v3_profile_provider_free_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "inputs")
+    frozen_inputs = {
+        plan_path: plan_path.read_bytes(),
+        ranking_path: ranking_path.read_bytes(),
+        lineage_path: lineage_path.read_bytes(),
+    }
+    external_access: list[str] = []
+
+    def forbidden_external_access(*_args: object, **_kwargs: object) -> None:
+        external_access.append("accessed")
+        raise AssertionError("V3 successor emission must remain provider-free")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_external_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", forbidden_external_access)
+    v2_output = tmp_path / "private-v2" / "successor.json"
+    v2_result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(plan_path),
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--upgrade-price-cap-profile-v2",
+            "--output",
+            str(v2_output),
+            "--no-color",
+        ],
+    )
+    assert v2_result.exit_code == 0, v2_result.output
+    v2_predecessor = load_candidate_selection_plan(v2_output)
+    predecessor_selection = v2_predecessor.authenticated_runner_selection
+    assert predecessor_selection is not None
+
+    omitted_output = tmp_path / "private-v2-omitted" / "successor.json"
+    omitted_result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(v2_output),
+            "--candidate",
+            f"{MODEL_ID}={REFRESHED_PROVIDER_ENDPOINT}",
+            "--refresh-endpoint-inventory",
+            "--output",
+            str(omitted_output),
+            "--no-color",
+        ],
+    )
+    assert omitted_result.exit_code == 0, omitted_result.output
+    assert "price-cap profile" not in " ".join(omitted_result.output.split())
+    omitted_successor = load_candidate_selection_plan(omitted_output)
+    omitted_selection = omitted_successor.authenticated_runner_selection
+    assert omitted_selection is not None
+    assert omitted_selection.route_predicate_profile == (
+        predecessor_selection.route_predicate_profile
+    )
+    assert (
+        omitted_selection.route_predicate_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    v2_output_bytes = v2_output.read_bytes()
+
+    output = tmp_path / "private-v3" / "successor.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(v2_output),
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--upgrade-price-cap-profile-v3",
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert (
+        "V3 price-cap upgrade is unavailable because provider max_price cannot bind cache-write "
+        "pricing" in " ".join(result.output.split())
+    )
+    assert not output.exists()
+    assert v2_output.read_bytes() == v2_output_bytes
+    assert all(path.read_bytes() == content for path, content in frozen_inputs.items())
+    assert external_access == []
+
+
+def test_emit_selection_plan_successor_rejects_mutually_exclusive_price_cap_upgrades(
+    tmp_path: Path,
+) -> None:
+    plan_path, _ranking_path, _lineage_path = _selection_plan_paths(tmp_path / "inputs")
+    output = tmp_path / "private" / "successor.json"
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "emit-selection-plan-successor",
+            "--predecessor-plan",
+            str(plan_path),
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--upgrade-price-cap-profile-v2",
+            "--upgrade-price-cap-profile-v3",
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "mutually exclusive" in " ".join(result.output.split())
+    assert not output.exists()
 
 
 def test_emit_selection_plan_successor_requires_explicit_unverified_endpoint_refresh(
@@ -505,22 +774,18 @@ def test_discover_rejects_tombstoned_alias_before_any_downstream_access(
     assert not registry_output.exists()
 
 
-def test_discover_unrevoked_route_reaches_staged_source_validation_with_stale_plan(
+def test_discover_unrevoked_route_rejects_unavailable_active_plan_before_any_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     downstream_access: list[str] = []
 
-    def source_probe(*_args: object, **_kwargs: object) -> bytes:
-        downstream_access.append("source")
-        raise ValueError("unrevoked route reached staged source validation")
-
     def forbidden_access(*_args: object, **_kwargs: object) -> None:
         downstream_access.append("accessed")
-        raise AssertionError("source validation failure must reject before later access")
+        raise AssertionError("unavailable active plan must reject before downstream access")
 
-    monkeypatch.setattr(cli_module, "read_candidate_selection_source", source_probe)
     for name in (
+        "read_candidate_selection_source",
         "preflight_candidate_registry_output",
         "_preflight_model_discovery_output_dir",
         "load_config",
@@ -553,8 +818,8 @@ def test_discover_unrevoked_route_reaches_staged_source_validation_with_stale_pl
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "unrevoked route reached staged source validation" in " ".join(result.output.split())
-    assert downstream_access == ["source"]
+    assert "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION" in " ".join(result.output.split())
+    assert downstream_access == []
     assert not discovery_output.exists()
     assert not registry_output.exists()
 
@@ -1230,6 +1495,597 @@ def test_discover_registry_bridge_publishes_exact_selected_registry_without_netw
     assert registry.candidates[0].benchmark_status is CandidateBenchmarkStatus.PENDING
     assert stat.S_IMODE(registry_output.stat().st_mode) == 0o600
     assert CANARY not in result.output
+
+
+def test_discover_selection_plan_preserves_raw_xai_numeric_prices_until_real_seal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    model_id = "x-ai/grok-4.6"
+    provider_endpoint = "amazon-bedrock/us-west-2"
+    config = config_factory(
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+        execution={"max_model_retries": 1},
+    )
+    config_before = config.model_dump_json()
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(
+        tmp_path / "selection",
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+    )
+    plan_before = plan_path.read_bytes()
+    selection_plan = load_candidate_selection_plan(plan_path)
+    authenticated_selection = selection_plan.authenticated_runner_selection
+    assert authenticated_selection is not None
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Amazon Bedrock",
+        canonical_model_id="x-ai/grok-4.6-20260830",
+        native_structured_output_parameter="structured_outputs",
+    )
+    catalog_model = fixtures._catalog_model(spec)
+    endpoint = fixtures._endpoint(spec)
+    endpoint["pricing"] = {
+        "completion": "__EXACT_COMPLETION_PRICE__",
+        "discount": "__EXACT_DISCOUNT__",
+        "input_cache_read": "__EXACT_CACHE_READ_PRICE__",
+        "prompt": "__EXACT_PROMPT_PRICE__",
+        "request": "__EXACT_REQUEST_PRICE__",
+    }
+
+    def decoy_endpoint(
+        *,
+        tag: str,
+        provider_name: str,
+        model: str = model_id,
+    ) -> dict[str, Any]:
+        decoy = fixtures._endpoint(
+            fixtures._CandidateSpec(
+                model_id=model,
+                provider_endpoint=tag,
+                provider_name=provider_name,
+                canonical_model_id=model,
+                native_structured_output_parameter="structured_outputs",
+            )
+        )
+        decoy["pricing"] = {
+            "completion": "0.000002",
+            "prompt": "0.0000012",
+            "request": "0",
+        }
+        return decoy
+
+    endpoint_inventory = [
+        endpoint,
+        decoy_endpoint(tag="xai", provider_name="xAI"),
+        decoy_endpoint(tag="xai/priority", provider_name="xAI Priority"),
+        decoy_endpoint(tag="xai/zdr", provider_name="xAI ZDR"),
+        decoy_endpoint(tag="xai/zdr/priority", provider_name="xAI ZDR Priority"),
+    ]
+    zdr_inventory = [
+        decoy_endpoint(
+            tag="unrelated-provider",
+            provider_name="Unrelated Provider",
+            model="synthetic/unrelated-model",
+        ),
+        decoy_endpoint(tag="xai/zdr", provider_name="xAI ZDR"),
+        endpoint,
+        decoy_endpoint(tag="xai/zdr/priority", provider_name="xAI ZDR Priority"),
+    ]
+
+    def raw_numeric_price_json(payload: object) -> bytes:
+        raw = stable_json(payload).encode("utf-8")
+        replacements = {
+            b'"__EXACT_COMPLETION_PRICE__"': b"0.000002",
+            b'"__EXACT_DISCOUNT__"': b"0.1",
+            b'"__EXACT_CACHE_READ_PRICE__"': b"0.0000002",
+            b'"__EXACT_PROMPT_PRICE__"': b"0.0000012",
+            b'"__EXACT_REQUEST_PRICE__"': b"0",
+        }
+        for marker, lexeme in replacements.items():
+            assert raw.count(marker) == 1
+            raw = raw.replace(marker, lexeme)
+        assert not any(marker in raw for marker in replacements)
+        return raw
+
+    endpoint_raw = raw_numeric_price_json(
+        {
+            "data": {
+                "id": model_id,
+                "endpoints": [
+                    {key: value for key, value in item.items() if key != "model_id"}
+                    for item in endpoint_inventory
+                ],
+            }
+        }
+    )
+    zdr_raw = raw_numeric_price_json({"data": zdr_inventory})
+    request_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_paths.append(request.url.path)
+        if request.url.path.endswith("/key"):
+            return httpx.Response(
+                200,
+                request=request,
+                json={"data": {"label": "synthetic-price-lexeme-test"}},
+            )
+        if request.url.path.endswith("/endpoints/zdr"):
+            return httpx.Response(200, request=request, content=zdr_raw)
+        if request.url.path.endswith(f"/models/{model_id}/endpoints"):
+            return httpx.Response(200, request=request, content=endpoint_raw)
+        if request.url.path.endswith(f"/model/{model_id}"):
+            return httpx.Response(200, request=request, json={"data": catalog_model})
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, request=request, json={"data": [catalog_model]})
+        return httpx.Response(500, request=request, json={"error": "unexpected synthetic path"})
+
+    clients: list[openrouter_module.OpenRouterClient] = []
+    usages: list[UsageLedger] = []
+    budgets: list[BudgetManager] = []
+
+    def test_only_seal(
+        self: openrouter_module.OpenRouterClient,
+        *,
+        run_id: str,
+        retrieved_at: datetime,
+        models_payload: dict[str, Any],
+        zdr_payload: dict[str, Any],
+        single_model_payloads: Mapping[str, dict[str, Any]],
+        endpoint_payloads: Mapping[str, dict[str, Any]],
+        candidate_routes: tuple[DiscoveryCandidateRoute, ...],
+        payloads: tuple[OpenRouterModelDiscoveryPayload, ...],
+    ) -> tuple[
+        OpenRouterDiscoveryRunProvenance,
+        tuple[OpenRouterModelDiscoveryEvidence, ...],
+    ]:
+        assert tuple(route.exact_model_id for route in candidate_routes) == (model_id,)
+        assert len(payloads) == 1
+        endpoint_payload = endpoint_payloads[model_id]
+        endpoint_data = endpoint_payload["data"]
+        assert isinstance(endpoint_data, dict)
+        endpoint_records = endpoint_data["endpoints"]
+        assert isinstance(endpoint_records, list)
+        assert len(endpoint_records) == 5
+        assert endpoint_records[0]["tag"] == provider_endpoint
+        endpoint_pricing = endpoint_records[0]["pricing"]
+        assert isinstance(endpoint_pricing, dict)
+        zdr_records = zdr_payload["data"]
+        assert isinstance(zdr_records, list)
+        assert len(zdr_records) == 4
+        zdr_selected = next(item for item in zdr_records if item.get("tag") == provider_endpoint)
+        assert zdr_records.index(zdr_selected) == 2
+        zdr_pricing = zdr_selected["pricing"]
+        assert isinstance(zdr_pricing, dict)
+        expected_captured_prices = {
+            "completion": "0.000002",
+            "discount": "0.1",
+            "input_cache_read": "0.0000002",
+            "prompt": "0.0000012",
+            "request": "0",
+        }
+        for pricing in (endpoint_pricing, zdr_pricing):
+            assert {
+                field: captured_openrouter_json_number_raw(pricing[field])
+                for field in expected_captured_prices
+            } == expected_captured_prices
+
+        detached_models = openrouter_module._detach_exact_discovery_json_object(
+            models_payload,
+            label="synthetic CLI catalog payload",
+        )
+        detached_zdr = openrouter_module._detach_exact_discovery_json_object(
+            zdr_payload,
+            label="synthetic CLI ZDR payload",
+            price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        )
+        detached_single_models = openrouter_module._detach_exact_discovery_json_mapping(
+            single_model_payloads,
+            label="synthetic CLI single-model payloads",
+        )
+        detached_endpoints = openrouter_module._detach_exact_discovery_json_mapping(
+            endpoint_payloads,
+            label="synthetic CLI endpoint payloads",
+            price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        )
+        detached_endpoint_data = detached_endpoints[model_id]["data"]
+        assert isinstance(detached_endpoint_data, dict)
+        detached_endpoint_records = detached_endpoint_data["endpoints"]
+        assert isinstance(detached_endpoint_records, list)
+        assert len(detached_endpoint_records) == 5
+        assert detached_endpoint_records[0]["tag"] == provider_endpoint
+        detached_endpoint_pricing = detached_endpoint_records[0]["pricing"]
+        assert isinstance(detached_endpoint_pricing, dict)
+        detached_zdr_records = detached_zdr["data"]
+        assert isinstance(detached_zdr_records, list)
+        assert len(detached_zdr_records) == 4
+        detached_zdr_selected = next(
+            item for item in detached_zdr_records if item.get("tag") == provider_endpoint
+        )
+        assert detached_zdr_records.index(detached_zdr_selected) == 2
+        detached_zdr_pricing = detached_zdr_selected["pricing"]
+        assert isinstance(detached_zdr_pricing, dict)
+        for pricing in (detached_endpoint_pricing, detached_zdr_pricing):
+            assert {
+                field: captured_openrouter_json_number_raw(pricing[field])
+                for field in expected_captured_prices
+            } == expected_captured_prices
+
+        supplied = payloads[0]
+        supplied_constraint = supplied.endpoint_snapshot.exact_route_constraint
+        assert supplied_constraint is not None
+        assert supplied_constraint.role is ExactRouteRole.CANDIDATE
+        assert supplied_constraint.exact_model_id == model_id
+        assert supplied_constraint.provider_endpoint == provider_endpoint
+        expected_normalized_prices = {
+            field: raw for field, raw in expected_captured_prices.items() if field != "discount"
+        }
+        assert (
+            supplied.endpoint_snapshot.endpoint(provider_endpoint).pricing
+            == expected_normalized_prices
+        )
+        route = candidate_routes[0]
+        observed = openrouter_module._revalidate_openrouter_discovery_payload(
+            supplied_discovery=supplied,
+            models_payload=detached_models,
+            single_model_payload=detached_single_models[model_id],
+            endpoint_payload=detached_endpoints[model_id],
+            zdr_payload=detached_zdr,
+            route=route,
+            reasoning_policy=self.reasoning_policy,
+            automatic_fallbacks_allowed=self.provider_policy.allow_fallbacks,
+            effective_privacy_policy=self.effective_privacy_policy,
+        )
+        assert observed == supplied
+        return openrouter_module.OpenRouterClient.seal_real_model_discovery_run(
+            self,
+            run_id=run_id,
+            retrieved_at=retrieved_at,
+            models_payload=models_payload,
+            zdr_payload=zdr_payload,
+            single_model_payloads=single_model_payloads,
+            endpoint_payloads=endpoint_payloads,
+            candidate_routes=candidate_routes,
+            payloads=payloads,
+        )
+
+    trusted_client_type = cli_module._TRUSTED_OPENROUTER_CLIENT_TYPE
+    assert trusted_client_type is openrouter_module.OpenRouterClient
+
+    def client_factory(*, api_key: str, **kwargs: Any) -> openrouter_module.OpenRouterClient:
+        usage = kwargs["usage"]
+        budget = kwargs["budget"]
+        client = trusted_client_type(
+            api_key=api_key,
+            execution=kwargs["execution"],
+            privacy=kwargs["privacy"],
+            budget=budget,
+            usage=usage,
+            base_url="https://fake.test/api/v1/",
+            provider_policy=kwargs["provider_policy"],
+            candidate_revocation_route_constraint=kwargs["candidate_revocation_route_constraint"],
+            reasoning_policy=kwargs["reasoning_policy"],
+            test_only_mock_handler=handler,
+        )
+        client.seal_real_model_discovery_run = MethodType(test_only_seal, client)  # type: ignore[method-assign]
+        clients.append(client)
+        usages.append(usage)
+        budgets.append(budget)
+        return client
+
+    secret_file = tmp_path / "synthetic-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", client_factory)
+    discovery_output = tmp_path / "private" / "xai-price-discovery"
+    registry_output = tmp_path / "private" / "xai-price-registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{model_id}={provider_endpoint}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(discovery_output),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    normalized_output = " ".join(result.output.split())
+    assert (
+        "REAL discovery evidence requires an authenticated owned provider client"
+        in normalized_output
+    )
+    assert "endpoint prices must be exact decimal strings" not in normalized_output
+    assert request_paths == [
+        "/api/v1/key",
+        "/api/v1/models",
+        "/api/v1/endpoints/zdr",
+        "/api/v1/model/x-ai/grok-4.6",
+        "/api/v1/models/x-ai/grok-4.6/endpoints",
+    ]
+    assert len(clients) == len(usages) == len(budgets) == 1
+    assert (
+        openrouter_module.trusted_openrouter_execution_evidence(clients[0])
+        is ExecutionEvidenceKind.MOCK
+    )
+    assert usages[0].records == []
+    assert budgets[0].spent_usd_exact == Decimal(0)
+    assert budgets[0].atomic_ledger is None
+    assert config.model_dump_json() == config_before
+    assert plan_path.read_bytes() == plan_before
+    assert config.execution.max_model_retries == 1
+    assert config.execution.max_schema_validation_retries == 0
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
+    assert CANARY not in result.output
+
+
+@pytest.mark.parametrize("upgrade_price_cap_v2", (False, True))
+def test_discover_selection_plan_accepts_xai_tiers_then_reports_independent_caps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    upgrade_price_cap_v2: bool,
+) -> None:
+    model_id = "x-ai/grok-4.6"
+    provider_endpoint = "amazon-bedrock/us-west-2"
+    config = config_factory(
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+        execution={"max_model_retries": 1},
+    )
+    config_before = config.model_dump_json()
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(
+        tmp_path / "selection",
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+    )
+    original_plan_path = plan_path
+    original_plan_bytes = plan_path.read_bytes()
+    if upgrade_price_cap_v2:
+        successor_path = tmp_path / "selection" / "v2-successor.json"
+        upgrade_result = RUNNER.invoke(
+            cli_module.app,
+            [
+                "models",
+                "emit-selection-plan-successor",
+                "--predecessor-plan",
+                str(plan_path),
+                "--candidate",
+                f"{model_id}={provider_endpoint}",
+                "--upgrade-price-cap-profile-v2",
+                "--output",
+                str(successor_path),
+                "--no-color",
+            ],
+        )
+        assert upgrade_result.exit_code == ExitCode.SUCCESS, upgrade_result.output
+        plan_path = successor_path
+    selection = load_candidate_selection_plan(plan_path).authenticated_runner_selection
+    assert selection is not None
+    expected_algorithm = (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+        if upgrade_price_cap_v2
+        else ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    )
+    assert selection.route_predicate_profile.price_cap_algorithm is expected_algorithm
+    plan_before = plan_path.read_bytes()
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Amazon Bedrock",
+        canonical_model_id="x-ai/grok-4.6-20260830",
+        native_structured_output_parameter="structured_outputs",
+    )
+    catalog_model = fixtures._catalog_model(spec)
+    endpoint = fixtures._endpoint(spec)
+    fixture = json.loads(
+        (
+            ROOT / "tests" / "fixtures" / "model_responses" / "openrouter_tiered_pricing_shape.json"
+        ).read_text(encoding="utf-8")
+    )
+    endpoint["pricing"] = fixture["pricing"]
+
+    def decoy_endpoint(
+        *,
+        tag: str,
+        provider_name: str,
+        model: str = model_id,
+    ) -> dict[str, Any]:
+        decoy = fixtures._endpoint(
+            fixtures._CandidateSpec(
+                model_id=model,
+                provider_endpoint=tag,
+                provider_name=provider_name,
+                canonical_model_id=model,
+                native_structured_output_parameter="structured_outputs",
+            )
+        )
+        decoy["pricing"] = {
+            "completion": "0.000002",
+            "prompt": "0.0000012",
+            "request": "0",
+        }
+        return decoy
+
+    endpoint_inventory = [
+        endpoint,
+        decoy_endpoint(tag="xai", provider_name="xAI"),
+        decoy_endpoint(tag="xai/priority", provider_name="xAI Priority"),
+        decoy_endpoint(tag="xai/zdr", provider_name="xAI ZDR"),
+        decoy_endpoint(tag="xai/zdr/priority", provider_name="xAI ZDR Priority"),
+    ]
+    zdr_inventory = [
+        decoy_endpoint(
+            tag="unrelated-provider",
+            provider_name="Unrelated Provider",
+            model="synthetic/unrelated-model",
+        ),
+        decoy_endpoint(tag="xai/zdr", provider_name="xAI ZDR"),
+        endpoint,
+        decoy_endpoint(tag="xai/zdr/priority", provider_name="xAI ZDR Priority"),
+    ]
+    request_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_paths.append(request.url.path)
+        if request.url.path.endswith("/key"):
+            return httpx.Response(
+                200,
+                request=request,
+                json={"data": {"label": "synthetic-price-override-test"}},
+            )
+        if request.url.path.endswith("/endpoints/zdr"):
+            return httpx.Response(200, request=request, json={"data": zdr_inventory})
+        if request.url.path.endswith(f"/models/{model_id}/endpoints"):
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "data": {
+                        "id": model_id,
+                        "endpoints": [
+                            {key: value for key, value in item.items() if key != "model_id"}
+                            for item in endpoint_inventory
+                        ],
+                    }
+                },
+            )
+        if request.url.path.endswith(f"/model/{model_id}"):
+            return httpx.Response(200, request=request, json={"data": catalog_model})
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, request=request, json={"data": [catalog_model]})
+        return httpx.Response(500, request=request, json={"error": "unexpected synthetic path"})
+
+    clients: list[openrouter_module.OpenRouterClient] = []
+    usages: list[UsageLedger] = []
+    budgets: list[BudgetManager] = []
+    trusted_client_type = cli_module._TRUSTED_OPENROUTER_CLIENT_TYPE
+    assert trusted_client_type is openrouter_module.OpenRouterClient
+
+    def client_factory(*, api_key: str, **kwargs: Any) -> openrouter_module.OpenRouterClient:
+        usage = kwargs["usage"]
+        budget = kwargs["budget"]
+        client = trusted_client_type(
+            api_key=api_key,
+            execution=kwargs["execution"],
+            privacy=kwargs["privacy"],
+            budget=budget,
+            usage=usage,
+            base_url="https://fake.test/api/v1/",
+            provider_policy=kwargs["provider_policy"],
+            candidate_revocation_route_constraint=kwargs["candidate_revocation_route_constraint"],
+            reasoning_policy=kwargs["reasoning_policy"],
+            test_only_mock_handler=handler,
+        )
+        clients.append(client)
+        usages.append(usage)
+        budgets.append(budget)
+        return client
+
+    secret_file = tmp_path / "synthetic-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", client_factory)
+    retained_snapshot = cli_module.validate_openrouter_endpoint_snapshot(
+        exact_model_id=model_id,
+        configured_provider_endpoints=(provider_endpoint,),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": model_id,
+                "endpoints": [
+                    {key: value for key, value in item.items() if key != "model_id"}
+                    for item in endpoint_inventory
+                ],
+            }
+        },
+        require_zdr=True,
+        zdr_payload={"data": zdr_inventory},
+    )
+    retained_projection = retained_snapshot.endpoint(
+        provider_endpoint
+    ).tiered_pricing_cost_projection
+    assert isinstance(retained_projection, ExactRoutePricingSchedule)
+    retained_maximum = {
+        price.component.value: price.unit_price for price in retained_projection.maximum_pricing
+    }
+    assert retained_maximum["prompt"] == "0.0000044"
+    assert retained_maximum["completion"] == "0.0000132"
+    discovery_output = tmp_path / "private" / "xai-tiered-discovery"
+    registry_output = tmp_path / "private" / "xai-tiered-registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{model_id}={provider_endpoint}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(discovery_output),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    normalized_output = " ".join(result.output.split())
+    assert "PRICE_CAP_NOT_EXPRESSIBLE" in normalized_output
+    assert "PRICE_CAP_PROOF_UNAVAILABLE" in normalized_output
+    assert f"price-cap projection [{expected_algorithm.value}]" in normalized_output
+    assert "variable price without a provider cap: input_cache_write" in normalized_output
+    assert "endpoint prices must be exact decimal strings" not in normalized_output
+    assert "pricing overrides must" not in normalized_output
+    assert request_paths == [
+        "/api/v1/key",
+        "/api/v1/models",
+        "/api/v1/endpoints/zdr",
+        "/api/v1/model/x-ai/grok-4.6",
+        "/api/v1/models/x-ai/grok-4.6/endpoints",
+    ]
+    assert len(clients) == len(usages) == len(budgets) == 1
+    assert usages[0].records == []
+    assert budgets[0].spent_usd_exact == Decimal(0)
+    assert budgets[0].atomic_ledger is None
+    assert config.model_dump_json() == config_before
+    assert plan_path.read_bytes() == plan_before
+    assert config.execution.max_model_retries == 1
+    assert config.execution.max_schema_validation_retries == 0
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
+    assert CANARY not in result.output
+    assert original_plan_path.read_bytes() == original_plan_bytes
 
 
 @pytest.mark.parametrize(

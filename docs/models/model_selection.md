@@ -18,36 +18,98 @@ own frozen metadata snapshots.
 ## Provider-free current-selection bootstrap
 
 `config/models.selection-plan.json` is a canonical, self-hashed, explicitly
-`NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`. Schema v1.4 binds
-the complete 29-predicate route profile `00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82`,
-including exact effort-high reasoning custody, explicit request parameters, capacity and pricing
-requirements, selected endpoint constraints, and typed unavailable runtime-only gates. It binds the
-exact bytes of the
-operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
-claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
-lineage label is correct, or that any model is qualified. Its endpoint lists are policy
-constraints only. Every discovery, lineage, qualification, runner, benchmark, seal, and
-release authority field is literally false.
+`NONAUTHORIZING` schema-v1.7 unavailable-candidate successor. Its plan SHA-256 is
+`14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3`; its raw-file SHA-256 is
+`4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695`. It derives from predecessor
+`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`. The exact predecessor
+bytes remain at `tests/fixtures/model_selection/revoked-active-plan-v1.4.json` (14,918 bytes; raw
+SHA-256 `0da03b75dd608efade4c41e87de38139fb735576049f824365889be9c9a3ff24`) for historical replay.
+The successor preserves every source binding and roster entry, but its
+`authenticated_runner_selection` is null: no candidate or candidate route is active.
 
-The proposed AUTHRUNNER roles are only planning data: DeepSeek V4 candidate, Z.AI GLM-5.2 PRIMARY,
-and Kimi K3 replay judge. The route allowlists are DeepSeek on `parasail/fp8`, GLM-5.2 on
-`sail-research/fp8`, and Kimi on either `modal/mxfp4` or `phala`. The replay allowlist is sorted
-policy input, not an automatic fallback order: the operator must explicitly choose and freshly
-discover one exact route. The DeepSeek entry SHA-256 is
+The self-hashed unavailable state
+`98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae` records
+`NO_ACTIVE_CANDIDATE_AFTER_REVOCATION` and explicitly preserves the predecessor's V1 price-cap
+profile rather than adopting the private V2 profile. It binds the domain-separated exact matched
+revocation-set digest `7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5`, exact revocation entry
+`67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4`, and withdrawn candidate
+constraint `126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a`.
+Route validation, constrained discovery, registry derivation, and the CLI bridge reject this state
+with the named reason before staged-source reads, secrets, provider construction, or output
+publication. Ordinary successor emission also refuses an unavailable predecessor: a future
+candidate must use the separately scoped repository-pinned ancestry mechanism described below
+before carrying judge or profile custody into an explicit currently eligible non-revoked route.
+Structural plan loading and `models discover` do not authenticate a private plan's
+`predecessor_plan_sha256`; they accept operator-staged, rootless, pending, nonauthorizing discovery
+inputs. Any succession or repository-adoption claim requires
+`validate_candidate_selection_plan_successor` with the exact predecessor artifact. A self-resealed
+private plan therefore cannot claim the unavailable active plan as authenticated ancestry or alter
+the active repository configuration.
+
+### Repository-pinned unavailable-plan ancestry
+
+`models emit-selection-plan-reactivation` is the only supported local construction path from the
+active unavailable schema-v1.7 plan. It has no caller-supplied predecessor or ancestry path. The
+command first reads the compiled exact 14,918-byte archived v1.4 file and 15,163-byte active v1.7
+file under no-follow, regular-file custody, requires their raw SHA-256 values `0da03b75…` and
+`4e7fff76…`, requires their internal plan SHA-256 values `bb3d60c3…` and `14566de1…`, and replays
+the ordinary deterministic v1.4-to-v1.7 unavailable successor validation. A coherently resealed,
+reformatted, substituted, linked, reversed, or read-time-drifting pair is rejected.
+
+Successful replay issues only a PID-local opaque capability. It cannot be directly constructed,
+subclassed, copied, serialized, or reused after `fork`, and every use re-reads the exact repository
+pair before returning a fresh nonauthorizing projection. A capability-consuming derivation accepts
+one operator-chosen route already listed in the v1.7 roster and rejects judge collisions, unlisted
+endpoints, and current revocations. The resulting schema-v1.8 plan names v1.7—not the historical
+v1.4 plan—as its immediate predecessor, retains the exact V1 profile and judge constraints, removes
+only the no-active-candidate requirement, and embeds both ancestors, the unavailable state,
+revocation set, retained custody, and replacement constraint in a self-hashed transition binding.
+Endpoint inventory refresh and V2/V3 profile upgrade are unavailable on this path.
+
+The selected catalogue entry is resealed to exactly the chosen endpoint, preserving its rank and
+lineage; all other entries remain unchanged. Both the source model and exported v1.8 JSON schema
+require an active assignment and the retained V1 profile. No schema-only V2 replacement is accepted.
+
+Publication is a fresh private mode-`0600` file after immediate ancestry and revocation replay.
+The original parent and output descriptors remain held through exact readback, final ancestry
+validation, and final root/path/content/permission checks. Handled validation failures remove only
+the created inode's own leaf, including after a parent rename; foreign replacements are preserved.
+An unknown surviving alias or failed cleanup is an explicit error, not successful publication.
+These are bounded in-process drift checks, not a Python/host sandbox or crash-atomic publication.
+The serialized plan and projection remain explicitly `NONAUTHORIZING`: they confer no provider,
+qualification, production-selection, runner, benchmark, seal, release, or source-egress authority.
+No v1.8 artifact is checked in or adopted by this ticket, and the active v1.7 bytes remain unchanged.
+A later repository adoption still requires a separately selected work unit and fresh admissible-route
+evidence; structural loading alone does not prove ancestry. Ordinary
+`models emit-selection-plan-successor` continues to reject v1.7.
+
+`V3-PLANADOPT-001` remains `COMPLETE`, provider-free, and nonauthorizing. The bounded
+`V3-PLANANCESTRY-001` implementation adds only the provider-free mechanism above; it does not select
+a replacement candidate or mutate active configuration. No provider or operator command,
+credential, private ledger, candidate, route, campaign, run index, qualification, runtime, audit,
+release, or other authority was used or granted.
+
+The retained judge custody is the complete 29-predicate V1 route profile
+`00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82`, including exact
+effort-high reasoning, request-parameter, capacity, and price requirements. Z.AI GLM-5.2 remains
+the retained PRIMARY judge on `sail-research/fp8`; Kimi K3 remains the retained replay judge on
+the two policy endpoints `modal/mxfp4` and `phala`, with no automatic fallback. The DeepSeek route
+is retained only as a nonauthorizing roster allowlist entry, not as an active role constraint. The
+DeepSeek entry SHA-256 is
 `da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b`, the GLM entry SHA-256 is
 `45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef`, the Kimi entry SHA-256 is
 `77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11`, and the
-role-assignment SHA-256 is `7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14`.
+historical predecessor role-assignment SHA-256 is
+`7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14`.
 Tencent/`novita` remains an unselected historical adaptive seed at rank 10. Gemma remains an
 unselected rank-12 record of the superseded r7 proposal rather than being presented as viable for
 the configured high-effort profile. The plan's own advisory entries remain literally
-`documentary_lineage = UNCONFIRMED`, and it records `distinct_root_lineages_verified = false`; those
-sealed plan-local values are not rewritten by later documentary evidence. The separately compiled
-public-lineage manifest confirms the plan/documentary DeepSeek/Z.AI/Moonshot triple and all six
-directed independence pairs. The DeepSeek candidate route is now tombstoned and cannot be a current
-assignment. Neither artifact qualifies a model or authorizes a runner, provider call, benchmark,
-seal, audit, or release.
+`documentary_lineage = UNCONFIRMED`; those sealed plan-local values are not rewritten by later
+documentary evidence. The separately compiled public-lineage manifest confirms the historical
+DeepSeek/Z.AI/Moonshot documentary triple and all six directed independence pairs. The DeepSeek
+candidate route is tombstoned and cannot be a current assignment. Every discovery, lineage,
+qualification, runner, benchmark, seal, release, provider, egress, and selection authority field
+remains literally false.
 
 Historically, the operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
 with operator-reported frozen-registry SHA-256
@@ -864,41 +926,336 @@ index follows. Proposal item 5 is
 `ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8`: bounded typed successful-usage diagnostics keep
 case mismatch separate and avoid premature generation fetch. Item 3's REPLAY allowlist is historical;
 its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain
-`OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`, and
-`V3-AUTONOMY-001` Phase 2 remains paused. No qualification, runner, seal, audit, benchmark, or release
-authority exists.
+`OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`.
+At that historical AUTHRUNNER boundary, `V3-AUTONOMY-001` Phase 2 remained paused; that statement
+does not describe the current local-provisioning slice. No qualification, runner, seal, audit,
+benchmark, or release authority exists.
 
-### Current operator-result reconciliation — 2026-09-01T04:49Z
+### Historical AUTONOMY Phase-2 local provisioning boundary
 
-The current operator-supplied record is 162,656 bytes / 2,902 lines at SHA-256
-`af7a24e382b4f164c7bec0948816e6e6eb3f40e898b2f0688641c4475b697f1b`. It is committed at
-remote-resolved `4c553590fedd4d297442f0a73da703d993f5eec9`, is nonauthorizing, and was not independently
-authenticated by Codex. Its newest entry accepts both outstanding refusals. Candidate requests
-genuinely emit `effort=high` through the shared `model_benchmark` policy and reserve reasoning
-tokens, so `REASONING_EFFORT_SUPPORT` remains required for every role and all four route-constraint
-purposes. The predicate remains unchanged.
+The current work unit closes only a bounded local-provisioning slice;
+`V3-AUTONOMY-001` remains `PARTIAL`. The supported `mmaudit managed provision` interface takes
+explicit `--repo` and `--output-dir` paths plus optional `--config` and `--verify-only` controls. It
+is provider-free and loads configuration from the selected file with ambient configuration
+overrides disabled. It hashes the bounded audited-workspace content inventory, subject to the
+compiled exclusion domain, under retained local custody, but it selects no operator secret source
+and performs no provider or network request. The repository and owned mode-`0700` output directory
+must be absolute and disjoint.
 
-The ordinary JSON numeric-price path also remains inadmissible. Once parsing has converted the
-provider's decimal lexeme to a binary float, `Decimal(str(value))` proves only the chosen
-reserialization, not identity to the original decimal. The operator withdrew the earlier proposal
-to admit numerics that appear to convert without loss and, at the AF7 evidence boundary, queued
-`V3-PRICELEXEME-001` to pursue lossless price-lexeme custody. The operator reports that
-`json.loads(..., parse_float=Decimal)` retains the decimal directly; Codex has not independently
-verified that operator-side experiment. A later direct operator directive now selects
-`V3-PRICELEXEME-001` as the sole `IN_PROGRESS` ticket after `V3-RETRIEVAL-001` reached `COMPLETE`.
-This is a selection-only boundary: `implementation_started=false`, and no decoder, pricing, retry,
-or configuration change has been made. Exactness was not relaxed, and existing sealed evidence must
-remain byte-identical under any future implementation.
+Its sole implemented provisioning action is exact cost-ledger create-or-verify. The ledger path
+must be absolute, have an existing private parent, and remain outside the repository and receipt
+directory. A durable private provisioning marker serializes creation and prevents deleted state and
+its ordinary lock from being treated as a fresh budget. The default path initializes only when no
+prior marker, state, or ordinary lock was observed, or verifies an exact existing ledger;
+`--verify-only` requires an existing exact marker and ledger pair. The receipt binds the marker
+identity and a typed point-in-time snapshot of the immutable cap, ledger identity, entries, active
+reservations, portfolio holds, and held value without reserving, charging, reconciling, clearing, or
+otherwise altering an existing ledger.
 
-The operator names `x-ai/grok-4.6=amazon-bedrock/us-west-2` only as a conditional future route after
-a sound lossless-custody implementation. It is not currently admissible or selected. Under the
-current constraint and custody model there are zero admissible candidates, the active plan remains
-unchanged and non-runnable, and `V3-CANDROUTE-001` remains `PARTIAL`. The AF7 record's queued,
-unselected, and unimplemented description of `V3-PRICELEXEME-001` remains historical evidence at
-that exact boundary; the newer directive changes only the local ticket selection state. The
-operator reports zero new spend, the unchanged 57-entry / `0.68118684` USD ledger, and zero
-completed real audits. No route, command, run index, provider action, campaign, qualification,
-audit, release, or runtime authority is current.
+The output is a self-contained typed plan-and-state receipt. Repository custody finalizes and
+reobserves the original audited-workspace digest before a final receipt name is linked. Canonical
+self-hashed JSON is fully written and synced to a private temporary file before atomic no-replace
+publication under its content-addressed name; an existing destination is accepted only when its
+canonical bytes and typed envelope match exactly. Identity-checked rollback operates under the
+cooperative publication lease and is not an unconditional guarantee against lock-ignoring same-UID
+pathname replacement. The repository digest is point-in-time evidence, not a promise that source
+remains unchanged after finalization. The receipt keeps `spend_admission_evaluated`, `runtime_authority`,
+`managed_run_ready`, `provider_or_network_accessed`, and `operator_secret_sources_accessed` literal
+false. Repository hashing records local evidence and confers no trust, selection, or execution
+authority.
+
+This slice does not create or verify a CodeQL database/query suite, materialize or target-bind a
+dependency snapshot, establish a pinned loopback fork RPC, inspect or install managed-toolchain
+binaries, verify their transitive closure or image-side attestation, establish process/isolation or
+execution evidence, evaluate spend admission, or run a managed audit. It does not benchmark,
+qualify, seal, promote, or release anything. Required unsupported inputs and unresolved toolchain
+roles become closed typed refusals; unused optional inputs remain `NOT_REQUIRED`. The mandatory
+installed-toolchain refusal therefore keeps every current receipt `REFUSED_INCOMPLETE`, even when
+the cost ledger is created or verified exactly.
+
+Selection remains separate and fail-closed. The active repository schema-v1.7 plan retains the
+exact V1 judge profile, with no selected candidate or candidate route. The operator reports an
+externally emitted V2 successor and a completed metadata-only discovery against it; that artifact
+is not adopted or selected, and there is no active selected successor or current live operator
+command. Codex did not invoke the new local command against operator-owned paths.
+
+### Retained PRICECAPCACHE provider-free partial closure
+
+`V3-PRICECAPCACHE-001` is `PARTIAL`, provider-free, and nonauthorizing. V3 remains a
+reserved policy identifier, but the trusted `project_provider_price_cap` boundary rejects it
+unconditionally before discovery proof, registration, cost preview, reservation, or provider
+egress. V1 and V2 behavior remains preserved, including V1/V2 refusal of
+`input_cache_write` even when the observed value is zero.
+
+No supported successor derivation or CLI path emits a V3 plan. The default-off V1→V2 successor
+remains available and unchanged only from an exact historical V1 predecessor; it is unavailable
+from the current schema-v1.7 active plan without a separately authenticated ancestry transition.
+V2→V3 derivation fails closed. Preview schema `1.3` and
+durable pricing-attempt schema `1.2` have been removed; supported preview versions stop at `1.2`
+and supported pricing-attempt versions stop at `1.1`. No V3 preview or attempt can be published,
+adopted, or used for transport.
+
+The requested dominance rule cannot provide the ticket's provider-enforced safety property.
+OpenRouter's
+[prompt-caching documentation](https://openrouter.ai/docs/guides/best-practices/prompt-caching)
+describes provider-specific cache-write prices, while its
+[provider-routing documentation](https://openrouter.ai/docs/guides/routing/provider-selection)
+documents `max_price` ceilings for prompt, completion, request, and image only. It exposes no
+request-bound cache-write or total-cost cap. A metadata-time cache-write-to-prompt comparison is
+therefore non-atomic: pricing can change between metadata refresh and POST without violating the
+transmitted prompt ceiling, and reconciliation observes an overage only after spend.
+
+Independent review also reproduced a second historical schema-`1.2` understatement in which both
+prompt and cache-write units were lowered and the artifact resealed. That format is not repaired or
+accepted as authority; it is neutralized because V3 preview/attempt publication and transport are
+now unreachable.
+
+The repository's active unavailable-candidate plan preserves the exact V1 price-cap profile. The
+operator-reported private V2 plan remains unselected and unadopted, and its prior metadata-only
+refusal did not exercise V3. No candidate, route, command,
+run index, provider/network action, configuration, retry, ledger, completed-audit count,
+qualification, runtime, release, or other authority changed. Resume only if a provider supplies a
+request-bound cache-write or total-cost cap, or an equivalent enforceable atomic contract.
+At the historical pre-verification boundary, remote-resolved HEAD
+`ad013aeeb4ea754ec7f0c751175e4badd5fc95b2` introduced `V3-PLANADOPT-001` over operator-result
+commit `c8a46b9b53a77fcdd4241d8fadeecbebc876346d`. Current remote-resolved HEAD
+`810ed7f32a9f39df104a6959e84b71c59966fb44` records the operator's PLANADOPT verification; the
+provider-free local implementation described above has not issued any external command.
+
+### Historical PRICECAPCOMP selector closure
+
+`V3-PRICECAPCOMP-001` is `COMPLETE`, provider-free, and nonauthorizing. An explicitly selected V2
+route profile may retain nonzero `web_search` pricing only with a self-hashed immutable envelope
+proving the exact emitted request has zero reachable search units and zero search cost. The request
+shape prohibits search, tool, and plugin controls, omits the unsupported component from provider
+`max_price`, and is revalidated before reservation and again at transport. The profile and envelope
+remain joined through discovery, registration, tier-wide cap/cost projection, preview, refresh
+controls and durable attempts, smoke plans, route-runtime evidence, and the frozen provider-egress
+callable graph. Missing, duplicate, substituted, positive-unit, unknown-component, or tampered
+custody fails closed.
+
+A supported operator-facing provider-free selection path now exists:
+`models emit-selection-plan-successor --upgrade-price-cap-profile-v2`. The flag is default-off, and
+omitting it preserves exact V1/default bytes. The opt-in path accepts only an exact V1→V2
+transition, supports a same-route successor, and rebuilds the shared profile plus every resulting
+candidate, PRIMARY, and REPLAY constraint. Validation rejects repeat V2, downgrade, profile or
+constraint drift/tamper, a non-boolean API flag, revocation, and stateful predecessor substitution.
+Successful publication creates a fresh mode-`0600` output. This is a plan-construction capability,
+not a live selection or execution: no successor artifact was selected or inspected and no live
+command or route retest is requested.
+
+At that historical closure boundary, the active selection plan remained schema `1.4` with its
+original V1 price-cap profile and byte/hash identity; configuration, retry behavior, the 57-entry /
+`0.68118684` USD ledger, candidate, and route remained unchanged. The recorded xAI route remains unselected and inadmissible
+because `input_cache_write='0'` still lacks an enforceable provider cap, dominance invariant, or
+immutable disable control. Conditional V2 handling resolves only `web_search='0.01'` for the exact
+zero-unit request and grants no live admission.
+
+The final validation passed `120` focused selector tests and `1,328` affected tests with two known
+warnings; release-schema, autonomy-inventory, and refresh-schema validation passed `79` tests;
+Ruff, strict mypy over `233` sources, canonical generation/verification, and diff integrity passed.
+The regenerated autonomy inventory hashes are raw
+`fcecc2351ab9d5fd7a0e6c0289e9daeb7f6ec83cebfd00552948e9b090617c73`, self
+`0f575febde00869a20192214a40af87e7196660a8e82b5810e8beefb45caad28`, discovery
+`bc80c98c469dc9cce61af880c8849e8387143ad1e3fb7d853d4eca8e9205e340`, universe
+`3f41a8b19a0e7547bc619f1405692e19a05e62d9662471f10736d79a2d619389`, and schema raw
+`88790b6d1d02fff4f2a39ff0bc0c023d062459e6d19d594a1c93cee03871c6c7`; it records 3,941 sources,
+3,944 occurrences, 3,892 gate sources, 49 non-gating controls, and 337 completion entrypoint
+parameters. No full-suite credit, provider action, or authority is claimed. At that boundary,
+current and next tickets were `UNSELECTED`; `V3-PRICECAPCOMP-001` was last complete,
+`V3-MODELREFRESH-001` was last partial, `V3-CANDROUTE-001` remained partial, and the combined
+unfinished count was `40`.
+
+The latest operator-supplied record is SHA-256
+`215ea0f2f312b9674fb51285f6fdf758b166a0a998e2d2d621ac2da42f9a5f19`, 190,177 bytes / 3,377
+lines, latest `2026-09-04T03:39Z`, at remote-resolved commit
+`810ed7f32a9f39df104a6959e84b71c59966fb44`. It verifies the active schema-v1.7 null-selection
+state and treats the unavailable-predecessor ancestry refusal as deliberately fail-closed. It asks
+whether a supported authenticated transition exists. At that operator-evidence boundary none
+existed, so its stop disposition remains accurate historical evidence and no operator command
+follows from the record. The later local `V3-PLANANCESTRY-001` work unit implements only the
+provider-free repository-pinned mechanism described above; it does not retroactively alter the
+operator record or authorize adoption. The 57-entry / `0.68118684` USD ledger and zero completed
+real audits are unchanged. The record is operator-supplied, nonauthorizing, and not independently
+authenticated by Codex.
+
+The prior operator-supplied record is SHA-256
+`63bfe90b281a6382b921c63669e817e65220c81b629fc75a7cb35b3f3e429d5b`, 187,993 bytes / 3,335
+lines, latest `2026-09-03T22:31Z`, at remote-resolved commit
+`c8a46b9b53a77fcdd4241d8fadeecbebc876346d`. It reports a private emitted V2 plan
+`96cc5301111c7b60cf9b8235870d8051e2ece737c80dc5321662a1f6adfa3aea` and one metadata-only
+constrained discovery that genuinely exercised it. Discovery retained the same
+`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE` refusal pair, and the ledger remained at 57
+entries / `0.68118684` USD. This is operator-supplied, nonauthorizing evidence and was not
+independently authenticated by Codex. The private artifact is not adopted or selected; it changes
+neither the active repository plan's retained V1 profile nor route/candidate state, and no further
+command follows.
+
+The immediately preceding operator record is SHA-256
+`d502c61a2525a2bdcc2e7efd79b115821af60f604e715d7be7ccd51b02983ab1`, 185,462 bytes / 3,287
+lines, latest `2026-09-03T21:03Z`, at remote-resolved commit
+`dd141cd580c2a012a6efdef26213d3a727b68041`. Its newest entry accepts that every operator retest
+completed by then used the active V1-derived profile and therefore did not exercise V2, then asks
+whether a real run can select V2. The historical 21:11 answer was that no supported path yet
+existed, and the 21:18 reopening recorded that direct construction did not meet the
+explicit-selection criterion. Those statements remain boundary-local history; the same-ticket
+option above later resolved that gap while leaving the then-active plan unchanged. The record remains
+operator-supplied, nonauthorizing, and not independently authenticated by Codex.
+
+The prior exact operator record,
+`2da419f85a9f6b2d087c1f75dca4247ef91d8fcf23005c719644de5830238b21`, 182,652 bytes / 3,240
+lines, latest `2026-09-03T20:43Z`, at remote-resolved commit
+`b9ea875e70d865b50c1eb847e39ed767162c9c6b`, remains historical evidence. It reports that a
+credentialed metadata-only V1 constrained-discovery retest returned
+`PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE`, created no snapshot, and left the ledger
+unchanged. Its possible flat-only discovery explanation was an operator question, not a root-cause
+claim. Provider-free call-graph inspection showed constrained discovery is schedule-aware and the
+quoted refusal belongs to a separate refresh-only helper. The shared failure pair cannot
+distinguish V1's two component refusals from V2's remaining cache-write refusal. No live command or
+retest follows from either operator record; `completed_real_audits` remains `0` and every authority
+remains false.
+
+### Previous MODELREFRESH tier-schedule closure — 2026-09-03T13:58:58Z
+
+`V3-MODELREFRESH-001` closes a bounded provider-free continuation as `PARTIAL`. Exact ordered
+base-plus-override schedules and their conservative maxima now traverse refresh source parsing,
+snapshots, deterministic drift, durable route and attempt pricing evidence, endpoint registration,
+live preflight, provider caps, reservation, usage, recovery, reporting, manifest, and assurance
+custody. Schedule digests distinguish equal-maximum threshold changes; unavailable, mismatched, and
+tampered schedules fail closed; and flat-route evidence remains byte-identical. Published nested
+schemas expose the same tier-field allowlist and canonical-decimal bounds enforced at runtime.
+
+At that boundary this work did not admit or select the recorded xAI route. Its independent
+`input_cache_write='0'` and `web_search='0.01'` component-cap constraints remained unresolved, and no
+successful current provider snapshot, live artifact round trip, automatic real benchmark, lineage
+re-evaluation, qualification, promotion, or stock live authority quartet exists. Validation covers
+the focused refresh/runtime/OpenRouter/schema path, downstream usage/recovery/assurance custody,
+canonical schemas, Ruff, and strict mypy; no terminal full-suite credit is claimed. At that boundary,
+current and next tickets were `UNSELECTED`; `V3-PRICEOVERRIDES-001` was last complete and
+`V3-MODELREFRESH-001` was last partial. The exact operator correction at `2026-09-03T14:30Z`,
+SHA-256 `e446f2c23f3de0b6dd1352b8f4874f8f95bbb26a128638b2356af29a0850f596`
+(180,312 bytes / 3,194 lines; remote-resolved commit
+`5245c02beb18d1376d14069e3df2b3fcc098aa55`), retracts the prior key-order root-cause claim.
+Full provider ingest already canonicalizes raw tier keys, and the 120-permutation assay yields one
+pricing hash and one snapshot hash. `V3-PRICEKEYORDER-001` is therefore
+`WITHDRAWN_OPERATOR_ERROR` and must not be implemented. The operator-reported post-MODELREFRESH
+live discovery failure remains the same named cap pair, so neither the correction nor the correct
+schedule projection establishes route admission or authority.
+
+### Previous PRICECAPTIER closure — 2026-09-03T11:27:12Z
+
+`V3-PRICECAPTIER-001` is `PARTIAL`, provider-free, and nonauthorizing. For each otherwise
+expressible retained schedule, the implementation computes exact Decimal component maxima across
+the base and every ordered partial tier. Partial tiers inherit prior values, later applicable tiers
+win, and prompt/cache-read dominance is checked in every effective state. The schedule artifact and
+provider-cap proof bind the complete ordered schedule and its exact maximum so equal-max schedules
+cannot substitute for one another. Provider cap, request-cost projection, reserve, spend, and
+reconciliation all consume that same conservative maximum, while flat-route serialization and
+historical digests remain byte-identical.
+
+Indeterminate or provider-unsupported schedules remain unavailable and produce the named
+`PRICE_CAP_NOT_EXPRESSIBLE` and `PRICE_CAP_PROOF_UNAVAILABLE` route results; nested numeric override
+lexemes remain rejected rather than acquiring exact-string custody. The recorded xAI schedule has
+an exact maximum prompt rate of `0.0000044` and completion rate of `0.0000132`, but the route still
+fails the independent `input_cache_write='0'` and `web_search='0.01'` provider-cap constraints.
+Refresh and provider-free live preflight were flat-only at that boundary. Therefore the primary
+route/preflight acceptance criterion was unmet, the route was neither selected nor proven
+admissible, and the ticket could not be marked complete.
+
+Validation passed `280` focused tests, `1251` affected tests with two warnings, and `241`
+adversarial focused tests. Canonical release-schema and autonomy-inventory generation are current;
+Ruff, strict mypy over `233` source files, strict JSON, and diff integrity passed. No terminal full
+suite was run or credited. At that boundary, the exact operator record was
+`37330cfdbc960dbf24691ffbafad10791abf2363767d9adaa4409458c0519cb3` / 176,768 bytes / 3,140
+lines, latest `2026-09-03T11:38Z`, at remote-resolved commit
+`a9bc614f6243b593ad06ca9bf9b87f7cd32aa3bd`; it is operator-supplied and nonauthorizing. It reports
+that direct tier construction rejects provider-order keys and sorted construction succeeds, and
+queues `V3-PRICEKEYORDER-001`. The provider-facing path already sorts raw tier keys before internal
+construction, so the reported full-ingest root cause and sole-blocker conclusion are not confirmed
+or adopted by Codex. The active
+plan, configuration, retry behavior, 57-entry / `0.68118684` USD ledger, zero completed real audits,
+and every external or production authority remain unchanged. Current and next tickets were
+`UNSELECTED`; `V3-PRICEOVERRIDES-001` was last complete and `V3-PRICECAPTIER-001` was last partial at
+that boundary.
+
+### Previous PRICEOVERRIDES closure — 2026-09-03T09:54:24Z
+
+At that closure boundary, the operator-supplied record was 173,635 bytes / 3,084 lines at SHA-256
+`f37f46d56a544af4bef6e2ef662dc9a8e5b23a20f3789391c56aae1bb6968e5f`. Its reported commit
+`af16299f1612df656dbc5f25592230c812a62dc4` is remote-resolved; the record remains
+nonauthorizing and was not independently authenticated by Codex. Its then-latest response-shape
+diagnostic reports that every direct billable value and every nested override price on
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` is an exact string. The non-exempt `overrides` value is a
+list and was the first parser blocker behind the generic exact-decimal-string refusal. No completion
+or new spend is recorded; the active plan and 57-entry / `0.68118684` USD ledger remain unchanged.
+
+`V3-PRICEOVERRIDES-001` is now `COMPLETE`, provider-free, and nonauthorizing. The implementation
+recursively validates and retains a bounded, provider-ordered tuple of exact tier entries; every
+`min_prompt_tokens` is an exact bounded nonnegative integer and every nested billable price is a
+canonical decimal string. Duplicate, descending, malformed, unsupported, nonscalar, negative,
+out-of-range, and nondecimal tier data fail closed with named reasons. Documented strict `>`
+threshold inheritance and later-applicable-entry semantics are covered without granting cost
+authority. `pricing_sha256` domain-binds the base prices and full ordered schedule, the endpoint
+snapshot binds that digest, and ZDR evidence must carry the identical schedule. Existing flat
+endpoint evidence remains byte-identical.
+
+Tiered cost projection is explicitly `unavailable`. Request-cost preview, endpoint registration,
+identity sealing, and flat model-refresh evidence refuse conditional pricing rather than flattening
+or silently dropping a tier. The full synthetic five-endpoint `models discover` regression accepts
+and retains the recorded shape, then reports both independent route constraints:
+`PRICE_CAP_NOT_EXPRESSIBLE` and `PRICE_CAP_PROOF_UNAVAILABLE`. Accordingly,
+`input_cache_write='0'` and `web_search='0.01'` remain unresolved provider-cap constraints;
+`overrides` is not proven to have been the sole blocker, and the conditional xAI route remains
+unselected and not proven admissible. Focused PRICEOVERRIDES tests pass `56`; the affected
+provider-free matrix passes `481`; scoped Ruff and canonical generation pass; strict mypy is clean
+across `233` source files. No terminal full-suite credit is claimed.
+
+`V3-PRICEFORM-001` is `COMPLETE` as a decision-only, nonauthorizing ticket: ordinary parsed numeric
+prices still cannot prove the provider's original decimal lexeme and remain refused. Its later
+price-lexeme successor changes pre-float custody rather than relaxing that decision. The affected
+price matrix passes `795` tests with two warnings, including canonical string storage and cost-bound
+parity; no code or configuration changed for the decision closure.
+
+`V3-PRICELEXEME-001` remains terminal `PARTIAL` provider-free defense-in-depth: its route-specific
+premise is superseded and it no longer blocks the xAI route. Pure Python cannot retrospectively
+detect hostile same-interpreter reflection fully
+restored before any trusted lookup; every observed mismatch is permanently revoked, and arbitrary
+closure reflection is outside the trusted-interpreter boundary. The ordinary binary-float/missing-
+capture refusal stands, candidate requests still emit and reserve `effort=high`, and retry behavior
+and runtime configuration are unchanged. The conditional
+`x-ai/grok-4.6=amazon-bedrock/us-west-2` route remains unselected. The focused live-shaped
+full-`models discover` raw-numeric-price case passes `1` test in `0.76s`; the adjacent
+price-decoder/endpoint/discovery/OpenRouter/CLI matrix passes `793` tests in `17.73s` with two known
+warnings. Its trusted execution evidence remains `MOCK`; exact constrained-route identity,
+normalized pricing, multi-ZDR custody, and MOCK-to-REAL sealing refusal are asserted. A broader
+CLI/pipeline attempt was intentionally interrupted after `111` passes at `193.54s` and has no pass
+or full-suite credit.
+
+`V3-TESTQUALITY-001` is `PARTIAL`, provider-free, and nonauthorizing after the shared process-local
+revocation-lease race slice. One PID-bound domain serializes run, observation, campaign, and score
+authority reads and registrations plus handoff replay. Campaign and score revalidate exact local
+seals after dependency release; decisive scoring uses seal-SHA-matched immutable schema snapshots,
+requires authenticated snapshot `plan_sha256` to equal the canonical score plan, and revalidates
+exact live sources at registration. Callbacks defer beyond the outer lease, partial and
+`BaseException` paths exact-remove without masking the primary exception, and fork paths refuse
+before inherited locks. The capability remains comparison-only: same-interpreter reflection,
+asynchronous-exception micro-gaps, and the post-linearization return boundary remain explicit.
+There is no independent or portable cleanup receipt, current REAL statement or campaign receipt,
+portable same-UID disposal, sealed backend, production plan generator, REAL mutation run/kill
+artifact, or production campaign authority. `V3-TESTQUALITY-001` remains independently `PARTIAL`.
+AF7 remains historical evidence at its exact
+`2026-09-01T04:49Z` boundary. At the later historical PRICECAPCOMP closure,
+`V3-PRICECAPCOMP-001` was the last completed ticket; `V3-MODELREFRESH-001` was the last partial
+ticket, while `V3-PRICECAPTIER-001` and `V3-PRICELEXEME-001` remained partial. The combined queues
+then retained `40` unfinished tickets, `CURRENT_TICKET` was `UNSELECTED`, and no next local ticket
+was selected. Those selection-state statements are historical; the current bounded
+`V3-AUTONOMY-001` partial slice is described above.
+`V3-PRICEKEYORDER-001` is `WITHDRAWN_OPERATOR_ERROR`; do not implement it. The later
+operator-reported private V2 successor remains unadopted and unselected. The active schema-v1.7
+plan records no active candidate while retaining the exact V1 judge profile. Configuration and retry behavior,
+57-entry / `0.68118684` USD ledger, `completed_real_audits == 0`, and no provider, candidate, route,
+operator command, campaign, run index, selection, qualification, audit, release, or other authority
+is granted; all remain unchanged or false.
 
 The historical `2026-08-30T19:00Z` credentialed metadata-only schema-v1.0 survey covered 12 models
 and 112 endpoints, found zero endpoint-level reasoning-effort inventories, and exposed a diagnostic
@@ -933,9 +1290,9 @@ using the flag for an already-listed endpoint is also rejected. A synthetic line
 route proves the refreshed plan can pass constrained discovery and the actual mocked
 `--live-route-preflight-only` boundary with no completion, usage, ledger mutation, or output bundle.
 This is a supported staging and validation path, not evidence that any current real endpoint is
-admissible. `V3-CANDROUTE-001` therefore remains `PARTIAL`; the active v1.4 plan is unchanged and no
-replacement is selected. Fresh operator evidence for a current real route is required before the
-ticket can resume.
+admissible. `V3-CANDROUTE-001` therefore remains `PARTIAL`; at that boundary the active v1.4 plan
+was unchanged and no replacement was selected. Fresh operator evidence for a current real route is
+required before the ticket can resume.
 
 `V3-ENDPOINTLIST-001` supplies the bounded diagnostic surface
 `mmaudit models list-endpoints --model EXACT_ID [--json]`. The operator-reported `2026-08-30T19:00Z`
@@ -952,7 +1309,7 @@ self-hashed, and nonauthorizing: no model completion, cost-ledger open, usage, s
 authority occurs. Codex validated v1.1 only with local synthetic metadata; the operator performed
 the earlier credentialed metadata survey, not Codex. Those v1.0 outputs are historical evidence and
 do not independently validate v1.1. The survey found zero admissible candidates,
-`V3-CANDROUTE-001` remains `PARTIAL`, and the active plan remains unchanged.
+`V3-CANDROUTE-001` remains `PARTIAL`; at that historical boundary the active plan was unchanged.
 
 The immediately preceding operator entry reports that fresh `r23` discovery, the exact materialized
 qualification policy, and paid smoke index 22 cleared the
@@ -962,17 +1319,16 @@ launch gates. The reported smoke cost was `0.04395915` USD; bundle
 Those private registries, bundle, ledger, and campaign bytes were unavailable to Codex and were not
 promoted into repository authority.
 
-The active schema-v1.4 selection plan remains byte-unchanged at self-hash
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f`, keeps every authority flag
-false, and still names DeepSeek V4 on `parasail/fp8` as its candidate constraint. The tombstone makes
-that assignment non-runnable. The plan is not silently rewritten, the operator-reported sweep plan is
-not promoted into repository authority, and no replacement candidate is selected. The completed
-local reconciliation preserves exact candidate/PRIMARY/REPLAY role custody through discovery and
-transport. A synthetic revoked-predecessor-to-live-successor regression proves constrained discovery
-and the actual `--live-route-preflight-only` CLI path without a completion, usage record, ledger
-mutation, output bundle, provider network, or authority. Predecessor-bound discovery remains valid
-historical evidence but cannot substitute for successor custody; the current operator sweep then
-shows that correct custody alone does not make any presently listed route admissible.
+The active schema-v1.7 selection plan has self-hash
+`14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3` and records
+`NO_ACTIVE_CANDIDATE_AFTER_REVOCATION`. It carries no active DeepSeek/Parasail constraint, keeps
+every authority flag false, preserves the exact V1 profile and judge constraints, and explicitly
+does not adopt the operator-reported private V2 plan. The prior schema-v1.4 bytes and revoked
+candidate assignment remain immutable historical evidence only. No replacement candidate is
+selected. Provider-free regressions prove exact predecessor derivation, revocation custody,
+resurrection rejection, judge carry-forward, and pre-I/O refusal. Predecessor-bound discovery
+remains valid historical evidence but cannot substitute for a future non-revoked successor or make
+any presently listed route admissible.
 
 The operator reports that the 24-case campaign launched, then failed closed after roughly 24 logical
 requests and `0.20264508` USD. Nine requests reached `SCHEMA_VALIDATION_FAILED`; 15 completed
@@ -1034,8 +1390,9 @@ route capability—not repair—is the correction.
 The full 24-case REAL command is deliberately withheld. Operator evidence reports that
 `V3-RUNTIMEADMIT-001` admitted one campaign, which failed closed on the candidate and grants no
 reusable admission. The active plan
-`bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f` still selects the revoked
-DeepSeek/Parasail candidate. The completed provider-free `V3-REVOKERECON-001` mechanism allows an
+`14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3` has no active candidate and
+fails closed with `NO_ACTIVE_CANDIDATE_AFTER_REVOCATION`. The completed provider-free
+`V3-REVOKERECON-001` mechanism allows an
 unrevoked requested assignment to be evaluated without resurrecting the incumbent, and
 `V3-PLANSUCCESSOR-001` supplies exact predecessor-bound constrained custody. The current operator
 record reports that the emitter produced sweep artifact `00b6aa8f...`, but a complete constrained

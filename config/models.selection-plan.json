@@ -1,26 +1,10 @@
 {
   "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
-  "authenticated_runner_selection": {
-    "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
-    "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "z-ai/glm-5.2",
-    "replay_judge_model_id": "moonshotai/kimi-k3",
-    "required_completion_limit_source": "metadata",
-    "required_output_mode": "NATIVE_JSON_SCHEMA",
-    "required_reasoning_effort": "high",
-    "required_supported_parameters": [
-      "structured_outputs"
-    ],
-    "role_assignment_sha256": "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14",
-    "route_constraints": [
-      {
-        "constraint_sha256": "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
-        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
-        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
-        "provider_endpoint": "parasail/fp8",
-        "role": "candidate",
-        "schema_version": "1.0"
-      },
+  "authenticated_runner_selection": null,
+  "authenticated_runner_unavailability": {
+    "candidate_selection_authorized": false,
+    "disposition": "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+    "judge_route_constraints": [
       {
         "constraint_sha256": "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
         "exact_model_id": "z-ai/glm-5.2",
@@ -45,6 +29,14 @@
         "role": "replay_judge",
         "schema_version": "1.0"
       }
+    ],
+    "matched_revocation_set_sha256": "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5",
+    "predecessor_role_assignment_sha256": "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14",
+    "price_cap_profile_decision": "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION",
+    "primary_judge_model_id": "z-ai/glm-5.2",
+    "replay_judge_model_id": "moonshotai/kimi-k3",
+    "revocation_entry_sha256s": [
+      "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4"
     ],
     "route_predicate_profile": {
       "accepted_operational_status": "0",
@@ -109,7 +101,12 @@
       "reserved_reasoning_tokens": 4096,
       "schema_version": "1.0",
       "token_detail_convention_disposition": "UNAVAILABLE"
-    }
+    },
+    "schema_version": "1.0",
+    "state_sha256": "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae",
+    "withdrawn_candidate_constraint_sha256s": [
+      "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a"
+    ]
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -299,7 +296,8 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f",
+  "plan_sha256": "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3",
+  "predecessor_plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -307,7 +305,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.4",
+  "schema_version": "1.7",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [
@@ -339,6 +337,7 @@
     "Frontier retention-consent routes remain unusable unless exact ZDR eligibility is freshly proven.",
     "Meta Muse and Nemotron 3.5 ancestry remain unconfirmed.",
     "Mistral is excluded because the staged review supplies no exact current model ID.",
+    "No active candidate remains after exact revocation reconciliation; a separately authorized non-revoked successor is required.",
     "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
     "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
     "Operator results SHA-256 5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f records the metadata-only r7/r8/r7 completion-capacity rejection and the nonauthorizing DeepSeek/parasail-fp8 and Kimi/Wafer successor routes; fresh exact discovery remains required.",

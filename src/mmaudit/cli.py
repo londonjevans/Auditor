@@ -14,7 +14,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 
 import typer
@@ -80,9 +80,14 @@ from mmaudit.config import (
     validate_model_independence,
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
+from mmaudit.development_cli import development_app
 from mmaudit.forensic_export import (
     export_complete_forensic_bundle,
     verify_complete_forensic_bundle,
+)
+from mmaudit.isolation.dependency_snapshot import (
+    DependencySnapshotBuildError,
+    build_managed_dependency_snapshot,
 )
 from mmaudit.logging import configure_logging
 from mmaudit.models.authenticated_runner_durable_bundle import (
@@ -120,6 +125,12 @@ from mmaudit.models.candidate_benchmark import (
     run_candidate_registry_benchmarks,
     validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
+)
+from mmaudit.models.candidate_plan_ancestry import (
+    candidate_selection_plan_ancestry_projection,
+    derive_candidate_selection_plan_reactivation,
+    resolve_verified_candidate_selection_plan_ancestry,
+    write_candidate_selection_plan_reactivation,
 )
 from mmaudit.models.candidate_registry_bridge import (
     derive_candidate_registry_from_discovery,
@@ -307,6 +318,15 @@ from mmaudit.orchestration.certification import (
 )
 from mmaudit.orchestration.ci import LoadedCIBaseline, load_ci_baseline_bundle
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostLedgerError
+from mmaudit.orchestration.managed_provisioning import (
+    ManagedProvisioningStateStatus,
+)
+from mmaudit.orchestration.managed_provisioning_runtime import (
+    ManagedDependencySource,
+    ManagedProvisioningRuntimeError,
+    provision_managed_local_run,
+)
+from mmaudit.orchestration.managed_toolchain import load_packaged_managed_toolchain_bundle
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     canonical_sha256,
@@ -362,6 +382,7 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Inspect and validate explicit OpenRouter model IDs.")
 app.add_typer(models_app, name="models")
+app.add_typer(development_app, name="development")
 benchmark_app = typer.Typer(
     help="Evaluate and certify deterministic benchmark evidence.",
     invoke_without_command=True,
@@ -370,6 +391,8 @@ benchmark_app = typer.Typer(
 app.add_typer(benchmark_app, name="benchmark")
 snapshot_app = typer.Typer(help="Validate and import offline deployment snapshots.")
 app.add_typer(snapshot_app, name="snapshot")
+managed_app = typer.Typer(help="Record bounded, nonauthorizing managed setup evidence.")
+app.add_typer(managed_app, name="managed")
 quote_app = typer.Typer(help="Create, accept, and reconcile provider-free bounded quotes.")
 app.add_typer(quote_app, name="quote")
 console = Console()
@@ -1109,6 +1132,26 @@ def models_emit_selection_plan_successor(
             ),
         ),
     ] = False,
+    upgrade_price_cap_profile_v2: Annotated[
+        bool,
+        typer.Option(
+            "--upgrade-price-cap-profile-v2",
+            help=(
+                "Explicitly rebuild the predecessor's shared V1 route profile and every exact "
+                "candidate/judge constraint with the V2 zero-web-search request-unit contract."
+            ),
+        ),
+    ] = False,
+    upgrade_price_cap_profile_v3: Annotated[
+        bool,
+        typer.Option(
+            "--upgrade-price-cap-profile-v3",
+            help=(
+                "Reserved V2-to-V3 cache-write profile transition. This currently fails closed "
+                "because provider max_price has no cache-write dimension."
+            ),
+        ),
+    ] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Derive a provider-free successor plan without selecting or contacting a provider."""
@@ -1126,6 +1169,8 @@ def models_emit_selection_plan_successor(
             candidate_model_id=candidate_model_id,
             provider_endpoint=provider_endpoint,
             refresh_endpoint_inventory=refresh_endpoint_inventory,
+            upgrade_price_cap_profile_v2=upgrade_price_cap_profile_v2,
+            upgrade_price_cap_profile_v3=upgrade_price_cap_profile_v3,
         )
         published = write_candidate_selection_plan_successor(
             path=output,
@@ -1135,12 +1180,83 @@ def models_emit_selection_plan_successor(
     except ValueError as exc:
         local_console.print(f"[red]Selection-plan successor invalid:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    price_cap_transition = (
+        "price-cap profile upgraded V1->V2; "
+        if upgrade_price_cap_profile_v2
+        else "price-cap profile upgraded V2->V3; "
+        if upgrade_price_cap_profile_v3
+        else ""
+    )
+    predecessor_entry = next(
+        entry for entry in predecessor.entries if entry.exact_model_id == candidate_model_id
+    )
+    endpoint_inventory_transition = (
+        "staged as unverified"
+        if refresh_endpoint_inventory
+        else (
+            "preserved from predecessor"
+            if predecessor_entry.allowed_provider_endpoints == (provider_endpoint,)
+            else "narrowed from predecessor"
+        )
+    )
     local_console.print(
         f"[green]Published NONAUTHORIZING selection-plan successor "
         f"{published.plan_sha256} at {output}; predecessor "
         f"{predecessor.plan_sha256}; endpoint inventory "
-        f"{'staged as unverified' if refresh_endpoint_inventory else 'narrowed from predecessor'}; "
+        f"{endpoint_inventory_transition}; "
+        f"{price_cap_transition}"
         f"no provider access occurred.[/green]"
+    )
+
+
+@models_app.command("emit-selection-plan-reactivation")
+def models_emit_selection_plan_reactivation(
+    candidate: Annotated[
+        str,
+        typer.Option(
+            "--candidate",
+            help="Operator-chosen existing MODEL_ID=PROVIDER_ENDPOINT reactivation route.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private JSON file for the nonauthorizing schema-v1.8 plan.",
+        ),
+    ],
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Derive a private reactivation only from compiled exact repository ancestry."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        routes = _parse_model_discovery_candidates(
+            [candidate],
+            context="selection-plan reactivation",
+        )
+        candidate_model_id, provider_endpoint = routes[0]
+        ancestry = resolve_verified_candidate_selection_plan_ancestry()
+        projection = candidate_selection_plan_ancestry_projection(ancestry)
+        successor = derive_candidate_selection_plan_reactivation(
+            ancestry,
+            candidate_model_id=candidate_model_id,
+            provider_endpoint=provider_endpoint,
+        )
+        published = write_candidate_selection_plan_reactivation(
+            ancestry,
+            path=output,
+            successor=successor,
+        )
+    except ValueError as exc:
+        local_console.print(f"[red]Selection-plan reactivation invalid:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        f"[green]Published NONAUTHORIZING schema-v1.8 selection-plan reactivation "
+        f"{published.plan_sha256} at {output}; immediate predecessor "
+        f"{published.predecessor_plan_sha256}; verified selected ancestor "
+        f"{projection.selected_ancestor_plan_sha256}; retained V1 profile; no provider access "
+        f"occurred and the plan was not adopted.[/green]"
     )
 
 
@@ -1299,6 +1415,7 @@ def models_discover(
                 raise ConfigError("candidate selection plan inputs are incomplete")
             try:
                 selection_plan = load_candidate_selection_plan(candidate_selection_plan)
+                validate_candidate_selection_routes(selection_plan, routes=candidate_routes)
                 source_names = {
                     binding.kind: binding.filename for binding in selection_plan.source_bindings
                 }
@@ -1327,7 +1444,6 @@ def models_discover(
                     ranking_source_bytes=ranking_source_bytes,
                     lineage_review_source_bytes=lineage_review_source_bytes,
                 )
-                validate_candidate_selection_routes(selection_plan, routes=candidate_routes)
                 registry_output_path = preflight_candidate_registry_output(
                     candidate_registry_output
                 )
@@ -4059,6 +4175,141 @@ def models_init_cost_ledger(
     Console(no_color=no_color).print(
         "[green]Initialized cumulative paid-provider cost ledger.[/green]"
     )
+
+
+@managed_app.command("build-dependency-snapshot")
+def managed_build_dependency_snapshot(
+    repo: Annotated[
+        Path, typer.Option("--repo", help="Absolute authorized local target repository.")
+    ],
+    archive_root: Annotated[
+        Path,
+        typer.Option("--archive-root", help="Local store of <sha512-hex>.tgz files; no download."),
+    ],
+    advisory_path: Annotated[
+        Path, typer.Option("--advisory-path", help="Explicit local versioned advisory JSON input.")
+    ],
+    advisory_sha256: Annotated[
+        str, typer.Option("--advisory-sha256", help="Exact SHA-256 of the supplied advisory input.")
+    ],
+    verify_only: Annotated[
+        bool,
+        typer.Option("--verify-only", help="Verify completed output without creating material."),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Prepare inert, lock-authenticated offline dependencies without runtime authority."""
+
+    target = Console(no_color=no_color)
+    try:
+        result = build_managed_dependency_snapshot(
+            repository=repo,
+            archive_root=archive_root,
+            advisory_path=advisory_path,
+            advisory_sha256=advisory_sha256,
+            verify_only=verify_only,
+        )
+    except DependencySnapshotBuildError as exc:
+        target.print(str(exc), markup=False)
+        raise typer.Exit(ExitCode.INCOMPLETE) from exc
+    target.print(
+        f"Offline dependency snapshot {result.action}; projects={result.project_count}; "
+        f"packages={result.package_count}; NONAUTHORIZING",
+        markup=False,
+    )
+    snapshot_path = result.config.offline_snapshot_path
+    assert snapshot_path is not None
+    target.print(
+        f"Generated config: {PurePosixPath(snapshot_path).parent}/dependencies.toml", markup=False
+    )
+
+
+@managed_app.command("provision")
+def managed_provision(
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Existing private directory for nonauthorizing setup receipts.",
+        ),
+    ],
+    repo: Annotated[
+        Path,
+        typer.Option(
+            "--repo",
+            help="Absolute repository whose bounded audited contents are bound by the setup plan.",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    archive_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--archive-root", help="Build and select dependencies from this local archive store."
+        ),
+    ] = None,
+    advisory_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--advisory-path", help="Local advisory JSON; requires both archive store and digest."
+        ),
+    ] = None,
+    advisory_sha256: Annotated[
+        str | None,
+        typer.Option(
+            "--advisory-sha256", help="Exact digest of the explicitly supplied local advisories."
+        ),
+    ] = None,
+    verify_only: Annotated[
+        bool,
+        typer.Option(
+            "--verify-only",
+            help="Refuse missing ledger or dependency material instead of creating it.",
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Record bounded local setup evidence without granting runtime authority."""
+
+    target = Console(no_color=no_color)
+    try:
+        dependency_source = None
+        if any(value is not None for value in (archive_root, advisory_path, advisory_sha256)):
+            if archive_root is None or advisory_path is None or advisory_sha256 is None:
+                raise ValueError("automatic dependency setup requires all three local inputs")
+            dependency_source = ManagedDependencySource(
+                archive_root=archive_root,
+                advisory_path=advisory_path,
+                advisory_sha256=advisory_sha256,
+            )
+        config = load_config(config_path, environ={})
+        run = provision_managed_local_run(
+            config=config,
+            bundle=load_packaged_managed_toolchain_bundle(),
+            repository=repo,
+            output_dir=output_dir,
+            verify_only=verify_only,
+            dependency_source=dependency_source,
+        )
+    except DependencySnapshotBuildError as exc:
+        target.print(str(exc), markup=False)
+        raise typer.Exit(ExitCode.INCOMPLETE) from exc
+    except (ConfigError, ManagedProvisioningRuntimeError, OSError, ValueError) as exc:
+        target.print(
+            "[red]mmaudit failed safely:[/red] managed provisioning could not record "
+            "exact local evidence"
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+
+    receipt = run.receipt
+    state = receipt.state
+    target.print(
+        "Managed provisioning recorded "
+        f"status={state.status.value}; receipt={receipt.receipt_sha256}; "
+        f"verified={len(state.verified_requirement_ids)}; refusals={len(state.refusals)}",
+        markup=False,
+    )
+    if state.status is ManagedProvisioningStateStatus.REFUSED_INCOMPLETE:
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 def _read_quote_json(path: Path) -> bytes:

@@ -1,0 +1,369 @@
+{
+  "$defs": {
+    "ByokObservation": {
+      "enum": [
+        "ABSENT",
+        "FALSE",
+        "TRUE",
+        "INVALID"
+      ],
+      "type": "string"
+    },
+    "DevelopmentRoutingContext": {
+      "additionalProperties": false,
+      "description": "Supplied request/discovery binding, not independently authenticated provider evidence.",
+      "properties": {
+        "canonical_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Model Id"
+        },
+        "catalog_identity_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog Identity Binding Sha256"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "identity_basis": {
+          "enum": [
+            "REQUEST_ID_ONLY",
+            "SUPPLIED_DISCOVERY_BOUND"
+          ],
+          "title": "Identity Basis",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Metadata Snapshot Sha256"
+        },
+        "provider_endpoint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "endpoint_snapshot_sha256",
+        "identity_basis"
+      ],
+      "title": "DevelopmentRoutingContext",
+      "type": "object"
+    },
+    "DevelopmentRoutingEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "provider": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        }
+      },
+      "required": [
+        "model",
+        "provider"
+      ],
+      "title": "DevelopmentRoutingEndpoint",
+      "type": "object"
+    },
+    "DevelopmentRoutingFailure": {
+      "enum": [
+        "RETURNED_MODEL",
+        "RESPONSE_PROVIDER",
+        "ROUTER_METADATA",
+        "REQUESTED_MODEL",
+        "STRATEGY",
+        "ROUTER_ATTEMPT",
+        "BYOK_EVIDENCE_MISSING",
+        "BYOK_REPORTED",
+        "BYOK_INVALID",
+        "PIPELINE",
+        "ENDPOINT_SHAPE",
+        "SELECTION_COUNT",
+        "SELECTED_MODEL",
+        "SELECTED_PROVIDER",
+        "ATTEMPT_SHAPE",
+        "ATTEMPT_MODEL",
+        "ATTEMPT_PROVIDER",
+        "ATTEMPT_STATUS",
+        "GENERATION_HEADER",
+        "GENERATION_REUSE"
+      ],
+      "title": "DevelopmentRoutingFailure",
+      "type": "string"
+    },
+    "DevelopmentRoutingIdentity": {
+      "additionalProperties": false,
+      "description": "Unknown response strings are suppressed completely, not heuristically echoed.",
+      "properties": {
+        "status": {
+          "enum": [
+            "REQUESTED",
+            "CANONICAL",
+            "PROVIDER",
+            "UNBOUND",
+            "ABSENT",
+            "INVALID",
+            "REDACTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "DevelopmentRoutingIdentity",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_routing_observation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_kind": {
+      "const": "development_routing_observation",
+      "default": "development_routing_observation",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "attempt_count": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Attempt Count"
+    },
+    "attempts": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+      },
+      "maxItems": 128,
+      "title": "Attempts",
+      "type": "array"
+    },
+    "available_count": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Available Count"
+    },
+    "context": {
+      "$ref": "#/$defs/DevelopmentRoutingContext"
+    },
+    "endpoint_total": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Endpoint Total"
+    },
+    "evidence_class": {
+      "const": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+      "default": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+      "title": "Evidence Class",
+      "type": "string"
+    },
+    "failure_codes": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentRoutingFailure"
+      },
+      "maxItems": 20,
+      "title": "Failure Codes",
+      "type": "array"
+    },
+    "metadata_shape": {
+      "enum": [
+        "ABSENT",
+        "OBJECT",
+        "INVALID"
+      ],
+      "title": "Metadata Shape",
+      "type": "string"
+    },
+    "pipeline_count": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Pipeline Count"
+    },
+    "requested_model": {
+      "$ref": "#/$defs/DevelopmentRoutingIdentity"
+    },
+    "response_provider": {
+      "$ref": "#/$defs/DevelopmentRoutingIdentity"
+    },
+    "returned_model": {
+      "$ref": "#/$defs/DevelopmentRoutingIdentity"
+    },
+    "router_attempt": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Router Attempt"
+    },
+    "router_byok": {
+      "$ref": "#/$defs/ByokObservation"
+    },
+    "runtime_authority": {
+      "const": false,
+      "default": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_endpoints": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+      },
+      "maxItems": 128,
+      "title": "Selected Endpoints",
+      "type": "array"
+    },
+    "strategy": {
+      "enum": [
+        "ABSENT",
+        "DIRECT",
+        "OTHER",
+        "INVALID"
+      ],
+      "title": "Strategy",
+      "type": "string"
+    },
+    "usage_byok": {
+      "$ref": "#/$defs/ByokObservation"
+    }
+  },
+  "required": [
+    "context",
+    "returned_model",
+    "response_provider",
+    "requested_model",
+    "metadata_shape",
+    "strategy",
+    "router_attempt",
+    "router_byok",
+    "usage_byok",
+    "endpoint_total",
+    "available_count",
+    "selected_endpoints",
+    "attempt_count",
+    "attempts",
+    "pipeline_count",
+    "failure_codes"
+  ],
+  "title": "DevelopmentRoutingEvidence",
+  "type": "object"
+}

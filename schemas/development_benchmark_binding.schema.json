@@ -1,0 +1,309 @@
+{
+  "$defs": {
+    "DevelopmentAuditSource": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Line Count",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "exclusiveMinimum": 0,
+          "maximum": 16384,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size",
+        "line_count"
+      ],
+      "title": "DevelopmentAuditSource",
+      "type": "object"
+    },
+    "DevelopmentBenchmarkTruth": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_kind": {
+          "const": "development_constructed_truth",
+          "default": "development_constructed_truth",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "controls": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentTruthControl"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Controls",
+          "type": "array"
+        },
+        "corpus_id": {
+          "$ref": "#/$defs/DevelopmentCorpusId"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "provenance": {
+          "const": "AGENT_CONSTRUCTED_PUBLIC_LABELLED_DEVELOPMENT_CONTROL",
+          "default": "AGENT_CONSTRUCTED_PUBLIC_LABELLED_DEVELOPMENT_CONTROL",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentAuditSource"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Sources",
+          "type": "array"
+        },
+        "truth_scope": {
+          "const": "RESPONSE_INDEPENDENT_NOT_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+          "default": "RESPONSE_INDEPENDENT_NOT_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+          "title": "Truth Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "corpus_id",
+        "corpus_sha256",
+        "sources",
+        "controls"
+      ],
+      "title": "DevelopmentBenchmarkTruth",
+      "type": "object"
+    },
+    "DevelopmentCorpusId": {
+      "enum": [
+        "unit-ledger-a-v1",
+        "unit-ledger-b-v1"
+      ],
+      "type": "string"
+    },
+    "DevelopmentRootCauseReference": {
+      "additionalProperties": false,
+      "description": "Model-proposed origin coordinates, never proof that a root cause is valid.",
+      "properties": {
+        "filename": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,95}\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentRootCauseReference",
+      "type": "object"
+    },
+    "DevelopmentTruthControl": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_sites": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRootCauseReference"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Claim Sites",
+          "type": "array"
+        },
+        "control_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "title": "Control Id",
+          "type": "string"
+        },
+        "expected": {
+          "enum": [
+            "PLANTED",
+            "GUARDED"
+          ],
+          "title": "Expected",
+          "type": "string"
+        },
+        "invariant": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Invariant",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/DevelopmentRootCauseReference"
+        },
+        "required_origin_line": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Required Origin Line",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "vulnerability_class": {
+          "enum": [
+            "access_control",
+            "accounting",
+            "reservation",
+            "pause",
+            "other"
+          ],
+          "title": "Vulnerability Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "control_id",
+        "expected",
+        "vulnerability_class",
+        "severity",
+        "invariant",
+        "origin",
+        "required_origin_line",
+        "claim_sites"
+      ],
+      "title": "DevelopmentTruthControl",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_benchmark_binding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Pre-dispatch scoring inputs; a digest establishes identity, not authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "development_benchmark_binding",
+      "default": "development_benchmark_binding",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scorer_version": {
+      "const": "structural-controls-v1",
+      "default": "structural-controls-v1",
+      "title": "Scorer Version",
+      "type": "string"
+    },
+    "truth": {
+      "$ref": "#/$defs/DevelopmentBenchmarkTruth"
+    },
+    "truth_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Truth File Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan_sha256",
+    "truth_file_sha256",
+    "truth"
+  ],
+  "title": "DevelopmentBenchmarkBinding",
+  "type": "object"
+}

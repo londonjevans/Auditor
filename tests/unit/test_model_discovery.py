@@ -6,7 +6,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -47,6 +47,12 @@ from mmaudit.models.openrouter import (
     _revalidate_openrouter_discovery_payload,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    captured_openrouter_json_number_raw,
+    decode_openrouter_price_metadata_json,
+)
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     ReasoningControlProfile,
@@ -308,6 +314,7 @@ def _constrained_discover(
     endpoint_id: str = "approved-provider/fp8",
     model: dict[str, Any] | None = None,
     endpoint: dict[str, Any] | None = None,
+    zdr_endpoint: dict[str, Any] | None = None,
     endpoint_inventory: tuple[dict[str, Any], ...] | None = None,
     automatic_fallbacks_allowed: bool = False,
 ) -> tuple[
@@ -321,6 +328,7 @@ def _constrained_discover(
         max_completion_tokens=20_000,
     )
     observed_endpoints = endpoint_inventory or (selected_endpoint,)
+    selected_zdr_endpoint = zdr_endpoint or selected_endpoint
     policy, profile, constraint = _constrained_route_bundle(
         exact_model_id=exact_model_id,
         endpoint_id=endpoint_id,
@@ -341,7 +349,7 @@ def _constrained_discover(
             }
         },
         require_zdr=True,
-        zdr_payload={"data": [selected_endpoint]},
+        zdr_payload={"data": [selected_zdr_endpoint]},
         route_predicate_profile=profile,
         exact_route_constraint=constraint,
         expected_selection_plan_sha256="1" * 64,
@@ -349,6 +357,38 @@ def _constrained_discover(
         automatic_fallbacks_allowed=automatic_fallbacks_allowed,
     )
     return payload, profile, constraint
+
+
+def _decode_endpoint_with_numeric_prices(
+    endpoint: dict[str, Any],
+    *,
+    layout: Literal["model_endpoints", "zdr_endpoints"],
+    completion: str,
+    prompt: str,
+) -> dict[str, Any]:
+    encoded_endpoint = copy.deepcopy(endpoint)
+    encoded_endpoint["pricing"] = {
+        "completion": "__mmaudit_completion_price__",
+        "prompt": "__mmaudit_prompt_price__",
+    }
+    payload: dict[str, Any]
+    if layout == MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT:
+        encoded_endpoint.pop("model_id", None)
+        payload = {
+            "data": {
+                "id": endpoint["model_id"],
+                "endpoints": [encoded_endpoint],
+            }
+        }
+    else:
+        payload = {"data": [encoded_endpoint]}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    raw = raw.replace('"__mmaudit_completion_price__"', completion)
+    raw = raw.replace('"__mmaudit_prompt_price__"', prompt)
+    decoded = decode_openrouter_price_metadata_json(raw.encode(), layout=layout)
+    if layout == MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT:
+        return decoded["data"]["endpoints"][0]
+    return decoded["data"][0]
 
 
 def _real_evidence(
@@ -504,6 +544,189 @@ def test_xai_shaped_constrained_numeric_price_emits_no_discovery_artifact_or_rep
         )
 
     assert emitted_discovery_artifacts == []
+
+
+def test_captured_numeric_price_detaches_and_revalidates_without_lexeme_loss() -> None:
+    model = _model(max_completion_tokens=20_000)
+    endpoint_template = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    endpoint = _decode_endpoint_with_numeric_prices(
+        endpoint_template,
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        completion="0.000002",
+        prompt="0.0000012",
+    )
+    zdr_endpoint = _decode_endpoint_with_numeric_prices(
+        endpoint_template,
+        layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        completion="0.000002",
+        prompt="0.0000012",
+    )
+    models_payload = {"data": [model]}
+    single_model_payload = {"data": copy.deepcopy(model)}
+    endpoint_payload = {
+        "data": {
+            "id": "alpha/atlas-secure",
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+    zdr_payload = {"data": [zdr_endpoint]}
+
+    detached_endpoint_payload = _detach_exact_discovery_json_object(
+        endpoint_payload,
+        label="synthetic endpoint discovery payload",
+        price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    detached_zdr_payload = _detach_exact_discovery_json_object(
+        zdr_payload,
+        label="synthetic ZDR discovery payload",
+        price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    )
+    original_price = endpoint_payload["data"]["endpoints"][0]["pricing"]["prompt"]
+    detached_price = detached_endpoint_payload["data"]["endpoints"][0]["pricing"]["prompt"]
+    detached_zdr_price = detached_zdr_payload["data"][0]["pricing"]["prompt"]
+    assert detached_price is original_price
+    assert detached_zdr_price is zdr_endpoint["pricing"]["prompt"]
+    assert captured_openrouter_json_number_raw(detached_price) == "0.0000012"
+    assert captured_openrouter_json_number_raw(detached_zdr_price) == "0.0000012"
+
+    supplied, profile, constraint = _constrained_discover(
+        model=model,
+        endpoint=endpoint,
+        zdr_endpoint=zdr_endpoint,
+    )
+    reasoning_policy, expected_profile, expected_constraint = _constrained_route_bundle()
+    assert profile == expected_profile
+    assert constraint == expected_constraint
+    observed = _revalidate_openrouter_discovery_payload(
+        supplied_discovery=supplied,
+        models_payload=models_payload,
+        single_model_payload=single_model_payload,
+        endpoint_payload=detached_endpoint_payload,
+        zdr_payload=detached_zdr_payload,
+        route=DiscoveryCandidateRoute(
+            exact_model_id="alpha/atlas-secure",
+            approved_provider_endpoint="approved-provider/fp8",
+        ),
+        reasoning_policy=reasoning_policy,
+        automatic_fallbacks_allowed=False,
+        effective_privacy_policy=None,
+    )
+
+    assert observed == supplied
+    endpoint_evidence = observed.endpoint_snapshot.endpoint("approved-provider/fp8")
+    assert endpoint_evidence.pricing == {
+        "completion": "0.000002",
+        "prompt": "0.0000012",
+    }
+    assert (
+        endpoint_evidence.pricing_sha256
+        == hashlib.sha256(b'{"completion":"0.000002","prompt":"0.0000012"}').hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("placement", "layout"),
+    [
+        pytest.param(
+            "catalog",
+            None,
+            id="catalog",
+        ),
+        pytest.param(
+            "endpoint-off-path",
+            MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+            id="endpoint-off-path",
+        ),
+        pytest.param(
+            "endpoint-fake-nested-pricing",
+            MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+            id="endpoint-fake-nested-pricing",
+        ),
+    ],
+)
+def test_discovery_detachment_rejects_captured_numbers_outside_exact_price_paths(
+    placement: str,
+    layout: Literal["model_endpoints", "zdr_endpoints"] | None,
+) -> None:
+    endpoint = _decode_endpoint_with_numeric_prices(
+        _endpoint(max_prompt_tokens=180_000, max_completion_tokens=20_000),
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        completion="0.000002",
+        prompt="0.1",
+    )
+    marker = endpoint["pricing"]["prompt"]
+    if placement == "catalog":
+        payload = {"data": {"score": marker}}
+    elif placement == "endpoint-off-path":
+        payload = {"data": {"endpoints": [{"score": marker}]}}
+    else:
+        payload = {
+            "data": {
+                "endpoints": [{"metadata": {"pricing": {"prompt": marker}}}],
+            }
+        }
+    with pytest.raises(OpenRouterPrivacyError, match="off-path price lexeme"):
+        _detach_exact_discovery_json_object(
+            payload,
+            label="synthetic off-path discovery payload",
+            price_lexeme_layout=layout,
+        )
+    if placement == "catalog":
+        assert captured_openrouter_json_number_raw(marker) is None
+        restored_payload = {
+            "data": {
+                "endpoints": [{"pricing": {"prompt": marker}}],
+            }
+        }
+        with pytest.raises(OpenRouterPrivacyError, match="invalid binding"):
+            _detach_exact_discovery_json_object(
+                restored_payload,
+                label="synthetic restored endpoint discovery payload",
+                price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+            )
+
+
+def test_captured_numeric_prices_preserve_pinned_legacy_string_evidence_bytes() -> None:
+    legacy_payload, _, _ = _constrained_discover()
+    endpoint_template = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    numeric_endpoint = _decode_endpoint_with_numeric_prices(
+        endpoint_template,
+        layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        completion="0.000002",
+        prompt="0.000001",
+    )
+    numeric_zdr_endpoint = _decode_endpoint_with_numeric_prices(
+        endpoint_template,
+        layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+        completion="0.000002",
+        prompt="0.000001",
+    )
+    numeric_payload, _, _ = _constrained_discover(
+        endpoint=numeric_endpoint,
+        zdr_endpoint=numeric_zdr_endpoint,
+    )
+
+    legacy_payload_bytes = legacy_payload.model_dump_json().encode()
+    assert numeric_payload.model_dump_json().encode() == legacy_payload_bytes
+    assert len(legacy_payload_bytes) == 12_641
+    assert hashlib.sha256(legacy_payload_bytes).hexdigest() == (
+        "3ba4d4a601cc5a8041ed8461eaa76eb82b6aa075a1bb243eaf2dc9e5bad75c0e"
+    )
+
+    legacy_evidence = _real_evidence((legacy_payload,))[0]
+    numeric_evidence = _real_evidence((numeric_payload,))[0]
+    legacy_evidence_bytes = legacy_evidence.model_dump_json().encode()
+    assert numeric_evidence.model_dump_json().encode() == legacy_evidence_bytes
+    assert len(legacy_evidence_bytes) == 14_260
+    assert hashlib.sha256(legacy_evidence_bytes).hexdigest() == (
+        "1281300a2aa6a5d21b59d588a088ba9ab9acd9eec7448a1560b0cdd98d671ab3"
+    )
 
 
 def test_constrained_discovery_allows_unrelated_provider_display_name_duplicates() -> None:
@@ -1778,6 +2001,23 @@ def test_atomic_run_write_load_and_reuse_rejection(tmp_path: Path) -> None:
     assert destination.stat().st_mode & 0o777 == 0o700
     assert all(
         item.stat().st_mode & 0o777 == 0o600 for item in destination.iterdir() if item.is_file()
+    )
+    candidate_path = (
+        destination
+        / "candidate-b0a00f9a13ce47d627e1641643deaf920e0ab45f91189f63c83e921bcf204d1a.json"
+    )
+    candidate_bytes = candidate_path.read_bytes()
+    manifest_bytes = (destination / "model-discovery-manifest.json").read_bytes()
+    assert len(candidate_bytes) == 7_766
+    assert hashlib.sha256(candidate_bytes).hexdigest() == (
+        "99aa16d949d17c6516399529e27aa1de04ecd4ea3407480dbd3c96067a40ece8"
+    )
+    assert len(manifest_bytes) == 2_444
+    assert hashlib.sha256(manifest_bytes).hexdigest() == (
+        "25a959396a9ce795e135a1b032aadcbdf20c97200889e609b7e358f1e670d80b"
+    )
+    assert manifest.manifest_sha256 == (
+        "abfc7017a948202550deefc093c261dbd6607afd11f9f9696113e81607fa9860"
     )
 
     with pytest.raises(ValueError, match="fresh"):

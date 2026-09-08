@@ -1,0 +1,2 @@
+SYNTHETIC STATIC MEMBERSHIP CONTROL ONLY.
+This inert text is not a runtime, tool implementation, script, or deployable image.

@@ -340,6 +340,191 @@ mmaudit scan --repo . --language-profile generic-source-review
 
 That result is a reduced generic source review and carries no Solidity/EVM assurance claim.
 
+## Development-only cost estimates
+
+`V3-DEVCOST-001` adds an **offline preview**, not a paid development runner. Given an existing
+validated endpoint-snapshot JSON and the exact intended text-only request JSON:
+
+```bash
+mmaudit development preview-cost \
+  --endpoint-snapshot /absolute/local/endpoint-snapshot.json \
+  --request-file /absolute/local/request.json \
+  --budget-usd 20 --per-attempt-usd 5 \
+  --accept-estimate-risk
+```
+
+The explicit acknowledgement is required. These are spending **targets**, not provider-enforced
+ceilings: actual charges can exceed both the reservation and total target. The default multiplier
+is `2`; `--safety-multiplier` accepts exact decimal strings from `2` through `10`.
+`--maximum-attempts` defaults to `1` (no retry), is bounded to `32`, and is included in the estimate.
+Per-attempt and aggregate targets are positive exact decimals, at most USD 250, with the former
+not exceeding the latter.
+
+Estimation uses maximum retained tier prices, full serialized UTF-8 request bytes as conservative
+input units, and the full output-token allowance. Cache-write allowance is at least the prompt
+rate even when the quoted cache-write price is zero. Cache reads are counted additionally.
+The request must pin one operational ZDR endpoint with no fallback or data collection, and cannot
+contain tools, search, images, plugins, or streaming. Unsupported charging units and unavailable
+price schedules are rejected. Snapshot prices are observations, not promises of current pricing.
+
+The preview requires absolute input paths and reads bounded local JSON without credentials,
+networking, ledger creation, or plan selection. It prints a prompt-free JSON estimate; exceeding
+a target prints the estimate but exits `INCOMPLETE`. Its `provider_enforced_ceiling`,
+`qualification_eligible`, and `release_eligible`
+markers remain false. The schemas are `schemas/development_cost_{policy,estimate}.schema.json`.
+Existing `mmaudit run`, qualification, strict price-cap algorithms, and release evidence do not
+accept this exception or the new risk switch.
+
+The accompanying `DevelopmentBudgetSession` reuses an existing cumulative ledger with the same
+target; it does not initialize or reset one. Reservations are serialized while any prior charge is
+pending or unknown. Actual overages are recorded before stopping later reservations, including
+after restart. Unknown charges require reconciliation, not another attempt. The separate
+`V3-DEVRUN-001` fixture transport below binds dispatch to the estimated request bytes; neither
+the preview nor that development transport completes an audit or establishes deployment readiness.
+
+### Pinned development fixture review
+
+`mmaudit development review-fixture --help` documents the new paid-capable, explicitly opt-in
+request path. Local integration tests exercise the full CLI with synthetic credentials and HTTP
+mocks; no real provider result is implied by those tests.
+
+Only exact copies of `tests/fixtures/solidity/development_review/ControlA.sol` and `ControlB.sol`
+are accepted. These are small abstract, non-deployable fixtures for the declared administrator-only
+limit-update invariant, including a guarded counterpart. Their filenames and source hashes are
+pinned in code. Arbitrary repositories, request JSON, URLs, tools, commands, or source modifications
+cannot enter this command. The request uses native JSON Schema, high reasoning, and the existing
+strict local decoder without response repair. Findings remain unvalidated model hypotheses.
+
+The command requires absolute, distinct `--endpoint-snapshot`, `--fixture-file`, `--cost-ledger`,
+and `--secrets-env-file` paths; an explicit `--request-id`; exact `--budget-usd` and
+`--per-attempt-usd` targets; and both `--accept-estimate-risk` and `--allow-code-egress`.
+The budget must match the **existing cumulative ledger's cap**, not a new per-command allowance.
+The command never creates or resets a ledger and never chooses credentials from the environment.
+It clears its explicit credential holder after success or failure and does not print raw HTTP errors,
+request bodies, reasoning text, or credentials.
+
+For `review-fixture`, `--endpoint-snapshot` accepts either a standalone
+`OpenRouterEndpointSnapshotEvidence` document or the complete `candidate-<model-id-sha256>.json`
+file published by `mmaudit models discover` in its explicitly selected output directory. The
+complete discovery file is the preferred handoff: ordinary discovery stores model-level reasoning
+in `model_supported_reasoning_efforts` outside the nested `endpoint_snapshot`, so extracting only
+that snapshot can discard required evidence. Validated structural `OpenRouterModelDiscoveryPayload`
+JSON is also accepted for local integration; neither structural nor serialized provenance fields
+grant paid, qualification or release authority. `models list-endpoints --json` is a diagnostic
+inventory, not one of these input formats. The separate `preview-cost` command still accepts only
+the standalone snapshot format.
+
+The review uses the same reasoning-inventory resolver as production admission: endpoint metadata
+takes precedence; only its absence permits model-level fallback. Empty, unsupported, contradictory
+or wholly missing inventories still refuse the request. A standalone constrained snapshot can use
+its already-bound `normalized_route_facts.model_supported_reasoning_efforts`; an unconstrained
+snapshot with neither inventory cannot. Complete discovery inputs retain their model/endpoint
+bindings and are revalidated again before reservation/dispatch. Published effort names cannot
+override negative model parameter support or missing native JSON Schema support.
+
+No new standalone-snapshot producer, extraction script or live discovery invocation is required by
+this repair. This command reads supplied local metadata; it does not fetch or refresh it, establish
+freshness or adopt the recorded route. A future explicitly selected paid trial still needs current
+approved metadata and the existing privacy/accounting controls. No such trial is selected here.
+
+Each invocation makes at most one completion POST, after a durable reservation. `--attempt`
+defaults to `1`; a subsequent explicit attempt requires the same logical request ID, a sufficient
+`--maximum-attempts` policy, and prior settled accounting. No HTTP, schema, or ambiguous-cost retry
+is automatic. The default output allowance is 4096 tokens, configurable by
+`--maximum-completion-tokens` within endpoint and policy bounds. Dispatch is fixed to OpenRouter
+TLS with no ambient proxy, redirect, fallback, or transport retry, with a 180-second send/read deadline
+and a 1 MB response bound. Revocations are checked during preparation and again before dispatch.
+
+The adapter requests [router metadata](https://openrouter.ai/docs/guides/features/router-metadata)
+and requires direct, single-attempt routing to the pinned model/provider, without a reported plugin
+pipeline. Complete supplied discovery binds the request ID and its exact canonical slug; either
+may appear as the returned, selected or attempted model. The router's `requested` field must still
+equal the request ID. A standalone snapshot, including a constrained one, permits only that ID:
+response strings cannot create new aliases. This follows the documented distinction between
+[request IDs and canonical slugs](https://openrouter.ai/docs/guides/overview/models), not proof of
+metadata freshness or real execution. Both identities remain subject to revocation.
+
+Non-BYOK evidence must be explicit `false` in router metadata or the documented
+[`usage.is_byok` flag](https://openrouter.ai/blog/announcements/gif-prompts-omni-search-tool-caching-and-byok-flags/).
+Any `true` or malformed marker in either location refuses, even if the other is `false`.
+Absence in both locations is unknown, never silently treated as false.
+
+Decoded HTTP-200 observations include optional `routing_evidence`: a bounded non-authorizing
+projection of supplied identity bindings, recognized identities, counts, flags and named refusal
+codes. Unknown strings are suppressed; credential/secret-like echoes are redacted. Arbitrary router
+metadata, pipeline content, headers and raw response bodies are not retained. Its schema is
+`development_routing_observation.schema.json`; runtime validation additionally enforces binding and
+refusal consistency. Older observations without this field remain readable with `null` evidence,
+not reconstructed diagnostics. Pre-decoding/HTTP failures may also have no routing evidence.
+
+Model or provider mismatch, truncation, refusal, tool output, invalid JSON, secret-like
+content, or out-of-range source lines make the observation `INCOMPLETE`. A known reported charge
+is still recorded; missing/invalid cost is held as uncertain, and actual overages stop later calls.
+Provider-reported cost is an observation, not a billing guarantee or independently authenticated
+generation record. In-memory/mock transport labels never grant qualifying usage credit.
+
+JSON output uses `development_fixture_review_observation`; exit success means only a valid
+`OBSERVED` request response with settled cost. `findings_validated`, `audit_complete`,
+`qualification_eligible`, and `release_eligible` stay false. The response and observation schemas
+are `schemas/development_fixture_review_{response,observation}.schema.json`. There is no code
+execution, source-to-sharded-audit pipeline, held-out quality measurement, or release evidence in
+this fixture-only slice. An operator-reported fixture call returned `INCOMPLETE` with an identity
+mismatch; it does not establish a successful review or the cause of that refusal.
+
+### Frozen three-file development audit
+
+`mmaudit development audit-corpus --help` describes the separate opt-in multi-file command. It
+accepts only `unit-ledger-a-v1` or `unit-ledger-b-v1`, using the exact three source files under
+`tests/fixtures/solidity/development_audit/a` or `b`. The paired abstract synthetic corpora contain
+no funds, credentials or deployable application. Other files in the directory are not discovered
+or sent; changed or missing required bytes refuse preparation.
+
+The command requires absolute, distinct `--endpoint-snapshot`, `--corpus-root`, `--cost-ledger`,
+`--secrets-env-file` and new `--output-dir` paths, plus `--corpus-id`, `--run-id`, `--budget-usd`,
+`--per-attempt-usd`, `--accept-estimate-risk` and `--allow-code-egress`. It uses the same metadata
+formats, reasoning, routing, source-egress and estimated-cost protections described above. The
+budget must match the existing selected ledger's cap. It does not initialize, reset or settle a
+ledger, read ambient credentials, select a provider, or establish current metadata freshness.
+
+Preparation covers all primary files exactly once, including the full corpus context in every
+request. It validates each estimate and their sum before dispatch. Execution is sequential, with
+one attempt per shard, reservation before each POST, and no automatic retry, fallback or resume.
+Incomplete responses, unknown costs, overruns, deadline expiry or output failures stop subsequent
+requests. `--maximum-run-seconds` defaults to 600 and is bounded to 1800; the existing per-request
+180-second deadline also applies. Synchronous local filesystem operations are checked between
+steps, not forcibly preempted by a hard process-level deadline.
+
+The output directory's parent must already exist as a private, unlinked directory (mode 0700).
+The runner creates only the new run directory; it does not recursively create missing parents.
+The private new output directory receives exclusive `plan.json`, `file-01.json` through
+`file-03.json` as responses arrive, and `result.json`. Existing paths or previously recorded run
+request IDs refuse replay. Aggregate output retains primary-file gaps, per-file hypotheses and
+cost entries, including a still-active hold when reconciliation cannot persist. Cancellation
+preserves earlier records and makes a best-effort incomplete aggregate before propagating the
+interruption. If output custody itself fails, no trustworthy aggregate may be published; retained
+files and the ledger must be inspected before any separately authorized attempt.
+
+`OBSERVED_ALL_SHARDS` and exit success mean only three accepted request observations with settled
+reported costs. All `findings_validated`, `audit_complete`, `qualification_eligible` and
+`release_eligible` fields remain false. Schemas are `development_audit_plan.schema.json`,
+`development_audit_shard_observation.schema.json` and `development_audit_observation.schema.json`.
+This is not arbitrary-project intake, semantic coverage, exploit/remediation validation, an
+unattended qualified audit or evidence of audit quality. The public annotated pair is not a
+held-out benchmark. The operator's September-8 report describes two complete non-qualifying corpus
+observations; private request/ledger bytes and semantic correctness were not independently verified
+here. No paid command is selected by this documentation. Per-shard and aggregate observations
+preserve the same bounded routing evidence,
+including refusal codes for generation-header mismatch and repeated cross-shard generation IDs.
+
+An optional absolute `--truth-manifest` selects the v2 advisory/invariant response contract and
+automatic development measurement. Use the exact paired `truth-a.json` or `truth-b.json` under
+`tests/fixtures/solidity/development_audit`; the manifest is never included in a model prompt.
+The run retains `benchmark-plan.json` before dispatch and automatically writes `score.json`
+alongside its exact `result.json`, including on safely finalized incomplete attempts. Without
+this option the v1 request and observation interpretation are unchanged. See
+[development measurement](docs/development_benchmark.md) for exact matching rules, denominators,
+costs, missing evidence and the explicitly non-qualifying, agent-constructed truth boundary.
+
 ## Solidity smart-contract analysis
 
 Solidity discovery is enabled by default and is read-only. `mmaudit` detects Foundry, Hardhat, mixed,
@@ -418,6 +603,284 @@ external vulnerability database was queried.
 Every run emits `dependency-preparation.json` and `dependency-sbom.json`; the latter follows the
 bounded schema in `schemas/dependency_sbom.schema.json`. Set `required = true` to make rejection or
 validation failure render the run incomplete.
+
+For supplied local npm archives, `mmaudit managed build-dependency-snapshot` now constructs the
+snapshot and exact configuration without hand-authoring package-tree hashes:
+
+```bash
+mmaudit managed build-dependency-snapshot --repo /absolute/authorized-fixture \
+  --archive-root /absolute/local-archive-store \
+  --advisory-path /absolute/local-advisories.json --advisory-sha256 <exact-sha256>
+```
+
+The archive store must be separate from the target and contain `<sha512-hex>.tgz` files matching
+every locked package's actual SHA-512 digest. No archive is downloaded and no package code runs.
+The advisory input is explicitly pinned JSON with `schema_version: "1.0"` and an `advisories` list
+using the existing snapshot advisory format. All Hardhat roots in the bounded audited-workspace
+inventory are included; missing lockfiles, unsafe members, lifecycle scripts, identity mismatches
+and resource excess refuse the build. Output is private and content-addressed under
+`.mmaudit/managed-dependencies/`, including `snapshot.json`, provenance and `dependencies.toml`.
+The TOML contains only the dependency configuration, not the rest of an audit profile.
+
+A repeat verifies every output byte without overwriting it; `--verify-only` cannot create missing
+material. Incomplete output remains explicit and is not repaired or reset. Construction authenticates
+material against the supplied lockfile, not the trustworthiness of that lockfile or the freshness
+and completeness of the advisory data. Runtime readiness remains false.
+
+Once the generated dependency section is explicitly selected in an audit configuration,
+`mmaudit managed provision` verifies it and records the existing typed dependency observation.
+Verification checks the complete detected Hardhat project set, exact locks, private owned package
+directories/files (modes `0700`/`0600`), package identities, inert contents, tree hashes and supplied
+exact-version advisories. It applies the selected resource limits, capped at the builder's maximum
+limits. It does not download material, run packages, or reauthenticate the original archives.
+Aggregate metadata checks and pre/post-publication rechecks reject material drift; a newly published
+receipt is rolled back on detected drift, while a pre-existing historical receipt is preserved.
+These are point-in-time observations, not a filesystem lock or permission to skip audit-time checks.
+
+New receipts bind setup policy v2; v1 receipts retain their original identity and are not upgraded
+by parsing. Missing tooling, CodeQL, fork and other prerequisites still leave the receipt
+`REFUSED_INCOMPLETE` and the CLI exits incomplete. Archive/feed distribution, advisory
+freshness/completeness, installed-tool verification and a zero-input
+end-to-end audit remain unfinished. No receipt grants provider, spend, execution or audit authority.
+
+To build and select dependencies in the same setup operation, use the original audit profile
+without existing dependency snapshot pins:
+
+```bash
+mmaudit managed provision --repo /absolute/authorized-fixture \
+  --config /absolute/audit-profile.toml --output-dir /absolute/private-receipts \
+  --archive-root /absolute/local-archive-store \
+  --advisory-path /absolute/local-advisories.json --advisory-sha256 <exact-sha256>
+```
+
+All three source options are required together; no network source is inferred. The archive-building
+step derives only the dependency section, using the tighter of the selected limits and builder defaults.
+Existing snapshot pins conflict with this mode even if dependency preparation is disabled; select
+either automatic construction or preconfigured material. The original profile is never rewritten.
+Repeat with that same original profile and source inputs. `--verify-only` cannot create missing
+dependency material or a ledger; failed construction leaves existing material and receipts intact.
+The archive store and advisory input must remain outside the receipt output directory.
+
+For programmatic orchestration, `provision_managed_local_run` returns the receipt and a detached
+canonical `config` whose stable hash matches the receipt's effective-config binding. The existing
+dependency-preparation adapter consumes that config directly, without hand-copied paths or hashes.
+Setup also fills the existing compiler/scanner/formal version/hash fields for roles selected by the
+effective profile and pinned in the supplied managed bundle. Selected container image/runtime values
+are derived where the existing config permits their absence. Explicit conflicts refuse setup before
+writes; engine selection, profile, limits and unrelated configuration remain unchanged. The pure
+`derive_managed_toolchain_config` API performs the same derivation and requires resolved roles by
+default. Partial receipt construction leaves unresolved roles explicit instead of inventing pins.
+This does not install or verify tools, their dependency closures, or image contents. Existing
+required input fields (including clean-fork Anvil pins) and audit-time verification remain required.
+The config/receipt pair is local setup output, not an audit profile persisted or activated on disk,
+an executed audit, or permission to bypass any downstream checks.
+
+The same API optionally accepts `host_tool_source=ManagedHostToolSource(blob_root=...)` with a
+supplied bundle whose required host roles are already pinned. It copies only matching local
+`<sha256>.blob` files into a content-addressed subdirectory of the existing private output root,
+outside the audited repository and input store. Files are owned mode-`0500`; the exact canonical
+`host-tool-material.json` manifest is mode-`0600` and published last. Per-file and aggregate limits
+bound copying. Partial, linked, unexpected or changed material is refused, never overwritten.
+The returned `host_tools` carries the same final config as the receipt, including automatically
+prepared dependencies. `host_tools.executable_for(role)` reverifies the selected material before
+returning an absolute path for a pinned consumer. A repeat may use `ManagedHostToolSource()`
+without the original store; `verify_only=True` cannot create missing material.
+This is an API-level direct-file preparation capability, not a new CLI installer: the packaged
+bundle still has unresolved roles. It performs no PATH search, download, install script or probe.
+Declared versions are not observed versions; architecture, interpreter/shared-library closure,
+container images and installed readiness remain unverified. Legacy receipts retain the mandatory
+installed-toolchain refusal and all runtime/readiness flags remain false.
+
+`ScannerRunner(prepared.config, host_tools=prepared.host_tools)` consumes that
+verified material through the existing fixed scanner portfolio. For pipeline-wide preparation,
+use the explicit `AuditPipeline` handoff below. With no explicit backend it constructs the selected
+Bubblewrap boundary only on a matching declared Linux/CPU platform, verifies the launcher pin and
+retains that admission through all six mandatory probes. Every wrap reverifies the closed material
+directory and exposes it read-only; writable-private overlap is refused. No PATH discovery or
+unsupported-platform/backend fallback runs. An explicitly supplied `backend=backend` is preserved.
+Managed mode requires a matching config, rejects custom adapter injection and detaches the config.
+It rebuilds fixed adapters for each run and rechecks material/config before queued dispatch and
+after outcomes.
+Primary host executable paths and Slither/Foundry `solc` paths are explicit; missing paths never
+fall back to PATH or the compiler environment variable. Foundry runtime clones preserve both paths.
+Disabled scanners and Hardhat's separate image-side refusal remain unchanged. This is not a CLI
+managed audit or installed-closure attestation: child-process PATH/dependency resolution, the
+doctor paths, image identity and complete backend provisioning
+remain outside this verified handoff. Audit-time pin, source and isolation checks still apply.
+
+The existing `compile_solidity_projects` API also accepts `host_tools=prepared.host_tools`
+with `prepared.config.smart_contracts`. It selects exact prepared Forge/Solc, rejects mismatched
+config or nonstandard build arguments before setup writes, and forces the selected Solc path with
+compiler auto-detection disabled. Network-disabled configurations retain the fixed offline build.
+Both declared versions must pass isolated probes before compilation; retained file identities are
+rechecked during probe preparation and around build execution, including same-byte replacements.
+An omitted backend uses the same matching-Linux factory; an explicit backend stays explicit.
+Material cannot overlap audited source or writable compiler state. Disabled/plain projects and
+Hardhat's off-host boundary remain unchanged. Local integration tests use fixed trusted-Python
+controls, not real Forge/Solc; actual managed compiler execution and full-pipeline provisioning
+remain unverified. This handoff does not establish installed dependency closure or atomic exec.
+
+`FormalRunner(prepared.config.formal, host_tools=prepared.host_tools)` also accepts exact prepared
+material. Managed mode rebuilds the fixed eight-engine portfolio, rejects custom adapters and
+config drift, and resolves primary engines without PATH discovery. It checks primary pins and
+isolated versions before target execution, passes prepared Z3 to Halmos and prepared Solc to
+Foundry invariants with compiler auto-detection disabled. Existing property, trust and Certora
+service prerequisites still apply; preparing a CLI does not authorize service use. Retained tool
+identities are checked around probes, launch preparation and outcomes; source/private overlap
+refuses. An omitted backend uses the matching-Linux factory, with no ambient fallback. Local
+controls prove this handoff only: real formal engines, transitive child compiler/interpreter
+resolution, Linux isolation and a complete automated audit remain unverified.
+
+`FoundryInvariantRunner(prepared.config.reproduction, prepared.config.smart_contracts,
+host_tools=prepared.host_tools)` consumes the same prepared Forge/Solc for enabled source-local
+generated invariants. Managed mode rejects explicit path overrides, mismatched config and
+source/private overlap; disabled or nonlocal harnesses cannot probe tools or read a fork RPC.
+Typed harness/project inputs are detached before probing. Both versions must match their pins;
+the compiler is used directly from prepared material with auto-detection disabled, not copied
+into writable test source. Retained identities are rechecked through launch preparation, clean
+replays and recursive minimization. Existing capability, structured-output and replay checks stay
+mandatory. An omitted backend uses the matching-Linux factory; explicit backends remain explicit.
+Local integrations use fixed trusted-Python controls and UNVERIFIED execution evidence, not actual
+Forge/Solc or Solidity-invariant proof. Installed closure, real Linux execution, fork provisioning
+and a complete managed audit remain unverified.
+
+`ForkReproductionRunner(prepared.config.reproduction, prepared.config.smart_contracts,
+host_tools=prepared.host_tools)` accepts prepared Forge/Solc as well. Managed reproduction requires
+enabled execution, explicit fork acknowledgment, prepared chain/block pins and an isolation backend
+that supports the existing loopback-only RPC boundary. It does not start or provision a fork.
+Typed candidate/project/test inputs are detached; mismatched candidate IDs, config/path overrides,
+source/private overlap and tool drift refuse. Exact pins precede isolated version checks, Solc is
+selected directly with auto-detection off, and retained identities are checked through clean replay
+and result publication. Disabled/unacknowledged mode does not construct a backend or read the RPC
+setting. The matching-Linux factory remains network-denied, so its incompatible fork mode refuses.
+Fixed offline Python controls prove path/process handoff only and remain UNVERIFIED; actual engines,
+fork isolation/provisioning, installed closure and complete managed auditing remain unverified.
+
+When `prepared.host_tools` is present, `AuditPipeline(prepared.config, repo=repository,
+output=audit_output, host_tools=prepared.host_tools)` constructs the fixed scanner, formal,
+invariant, reproduction and repository-matrix consumers with one prepared backend, even when
+reproduction is disabled.
+It also passes that material and backend to compilation. Keep audit output disjoint from the tool
+material directory; neither may contain the other. An optional explicit `managed_backend` retains
+its existing evidence level; it requires prepared material and cannot grant execution authority.
+Custom runner overrides and matrices without prepared Forge/Solc/Anvil roles are rejected. Config, roots,
+selected consumers/backends and retained tool identities are rechecked across phase/run boundaries;
+failed preflight cannot invoke a compiler with a downgraded configuration. Refusal clears credentials
+and closes the run log. Offline scanner-only pipeline controls exercise this composition, including
+create/reopen and post-scanner tool replacement; their evidence remains UNVERIFIED and reports
+remain incomplete. This is programmatic wiring, not CLI provisioning, real-engine qualification,
+atomic execution custody, primary-fork preparation, or proof of an unattended audit. Provider, privacy,
+dependency, scope and quality admission remain separate mandatory checks.
+
+The clean-chain launcher also accepts prepared material programmatically through
+`TrustedCleanAnvilLauncher(host_tools=material)`. It selects the pinned ANVIL file without an
+executable environment lookup and rejects mixed environment overrides. Only the prepared
+clean-state configuration is accepted; a detached copy enters the existing private-copy lifecycle
+after material, file-identity and root checks. Version, descriptor, state/listener, deadline and
+cleanup checks are unchanged. Local version-only controls are not proof of an Anvil engine or a
+running chain.
+
+`RepositoryForkMatrixRunner(..., host_tools=material, managed_backend=backend)` composes the fixed
+prepared clean launcher and fresh Foundry scanners with explicit Forge/Solc paths. Only paired
+declared state overrides are accepted, and each scanner receives detached prepared configuration.
+Custom dependencies, configuration/tool identity drift and overlapping or aliased material roots
+refuse. Execution still requires the same qualifying baseline, exact prepared Forge pins and an
+unchanged currently attested backend that supports local-only fork RPC. These checks are repeated
+at state, attempt and result boundaries; existing scope, bridge, deadline and cleanup gates remain.
+The managed pipeline uses this composition automatically. The default managed Linux backend still
+denies fork RPC; the optional offline-state handoff below does not override that refusal. Offline controls produce
+truthful failed matrix reports without running engines or contacting endpoints; they do not prove
+real matrix execution, installed closure or a complete unattended audit.
+
+The programmatic `load_offline_fork_rpc_archive` API accepts an absolute source root, a relative
+archive path and exact SHA-256/chain/block pins. Its strict `offline_fork_rpc_archive.schema.json`
+input contains canonical hash-bound read results, not a complete EVM snapshot. Stable bounded
+no-link reads and the shared RPC policy reject missing, malformed or contradictory data; recorded
+account summaries must agree with their individual fields. A digest identifies supplied bytes,
+not their provenance, state-root correctness or benchmark ground truth.
+The returned replay object's `respond(bytes)` handles bounded atomic JSON-RPC requests entirely
+in memory. Missing reads fail instead of becoming zero state or upstream requests; lifetime request
+and call budgets saturate, and response construction is bounded incrementally. `verify_source()`
+explicitly rechecks the original file; later file changes do not alter the already frozen replay.
+This API starts no listener, process or chain. It grants no execution or state-completeness
+authority. Existing fork, isolation, source-authority and completion gates remain mandatory.
+
+`OfflineForkRpcLease(replay)` provides the separately bounded local transport for that admitted
+replay. Its one-shot context manager binds only `127.0.0.1` on an OS-assigned port; no target URL,
+upstream connection, DNS discovery or tool execution is accepted. One worker handles one strictly
+framed JSON POST per connection. Fixed ceilings cover headers (16 KiB), request bodies (1 MiB),
+responses (8 MiB), received/reserved-response traffic (64 MiB) and accepted connections (10,000).
+Request deadlines default to two seconds (maximum five); the lease defaults to 300 seconds
+(maximum 3,600) and expires without operator cleanup. `stop(deadline=...)` uses the earlier caller
+deadline or a two-second shutdown limit. Source is reverified before bind and by the worker after
+closing; drift, expiry, exhausted budgets or failed cleanup cannot be reported as a clean stop.
+Actual owned-loopback clients and the unchanged scoped bridge are tested against synthetic reads.
+This is not a complete state snapshot, chain, engine or isolation attestation. Supported fork
+isolation and source authority remain required before a complete unattended matrix run can be claimed.
+
+Managed setup accepts `offline_fork_source=ManagedForkArchiveSource(archive_root=...,
+primary_archive_sha256=..., reproduction_archive_sha256=..., invariant_archive_sha256=...)`
+as an optional programmatic input. The three digests are optional, separate roles. The primary selects
+exactly `<sha256>.json` for the acknowledged Foundry baseline scanner, bound to the final config's
+chain/block pins. The reproduction digest binds the acknowledged reproduction runner's exact
+final chain/block pins independently of baseline scanner or matrix selection. The invariant digest
+joins enabled generated invariants, fork acknowledgement and final chain/block pins without requiring
+candidate reproduction to be enabled. Each declared pinned matrix state's existing
+`state_source_sha256` separately selects its exact file. Individual and combined role selections
+are supported; no directory discovery or URL lookup runs. Selected bytes must match the state
+chain/block and full final setup config. At most seven matrix archives plus one primary, one
+reproduction and one invariant archive, 16 MiB each and 64 MiB selected total, are read from a store
+disjoint from source, output and host material. Each role counts toward the aggregate ceiling, even
+when roles share a file. Setup starts no listener and does not change the legacy receipt's fork or
+installed-toolchain refusal. It returns a detached `prepared.offline_forks` handle.
+Pass that handle with `prepared.host_tools` to `AuditPipeline(..., offline_forks=prepared.offline_forks)`
+or the fixed `ScannerRunner`, `ForkReproductionRunner`, `FoundryInvariantRunner` or
+`RepositoryForkMatrixRunner`. Consumers reverify exact config, source and roots; managed primary
+Foundry, reproduction, invariant and pinned matrix states never fall back to ambient RPC variables
+if archives are missing. Each execution gets a fresh owned lease with normal/error cleanup, including
+the captured Foundry runtime producer. Primary startup consumes the scanner's existing absolute
+deadline; its original three-way timeout policy plus cleanup must fit the service lifetime. Source
+drift or failed cleanup prevents returning/registering a result. The entire matrix state budget, including
+all repetitions and fixed overhead, must fit the existing 3,600-second lease ceiling and remaining
+matrix deadline; child timeouts are never shortened to fit. Larger selections explicitly refuse.
+Reproduction and fork invariants own a separate lease per replay attempt, after eligibility/tool
+preflight and workspace preparation. Each attempt's original child timeout is reserved alongside
+15 seconds for startup, 15 seconds for process cleanup and two seconds for service shutdown.
+Budget checks before/after service startup
+and process construction reject exhausted capacity; they never shorten the configured timeout.
+Child interruption enters process cleanup, then lease closure/source postflight, before attempt
+evidence or a result can be returned. Independent runs use distinct private workspaces; an occupied
+workspace is not silently reused. Managed fork invariants use the pinned Forge/Solc tools and an
+explicit block argument. Source-local invariants remain network-free even when archives are prepared.
+Synthetic transport and tool controls remain UNVERIFIED.
+This handoff supplies primary Foundry, reproduction and invariant reads, not Hardhat fork consumers,
+complete EVM state or real-engine qualification. Scope, qualifying-baseline and current isolation
+checks remain mandatory; default managed Linux still refuses local fork RPC. It remains programmatic, not a
+CLI-managed audit entry point or evidence of best-in-class or unattended audit completion.
+
+The per-run maximum-assurance requirement is shared by preflight, both quality-gate evaluations
+and the final assessment. Requesting it with a standard profile does not silently change the
+profile or prepared configuration: missing profile/analysis requirements produce non-complete
+reports with failed clauses. JSON, Markdown, SARIF and artifact-manifest checks preserve that
+result. Reusing a pipeline resolves the requirement afresh; contradictory explicit require-and-
+downgrade options still refuse before output or execution.
+
+The common scanner consumer rejects incomplete or mismatched version/hash pins before copying
+source or running a version probe. It observes the canonical host executable with bounded,
+nonblocking, no-follow reads and rechecks its bytes and file identity before probing, after the
+probe's own preparation, and before the scan starts. Detectable changes refuse execution even when
+no pin was requested; unchanged matching pins retain the normal version and isolation checks.
+These are boundary-local checks, not atomic custody through exec, transitive-dependency verification,
+image-side attestation or installed-toolchain readiness. Setup still refuses incomplete provisioning.
+
+Built-in isolation launchers use the same bounded identity observer before policy construction and
+before/after every preflight invocation. Launcher and policy must remain unchanged through all six
+mandatory probes; an identity refusal is never a successful negative observation. Process-local
+seals retain file identity, so byte restoration or same-byte replacement requires a fresh preflight;
+a failed reseal revokes previous evidence. This does not attest helper/dependency closure or hold
+the executable atomically through exec. Managed Linux backend construction is implemented, but
+its real Linux integration remains unverified on the current macOS development host. Other managed
+backends, complete installed provisioning and a fully unattended audit remain incomplete.
 
 The compilation environment is scrubbed, bounded, and uses a temporary private workspace. Hardhat
 receives a writable disposable copy inside the rootless boundary; the operator's source tree is
@@ -533,6 +996,79 @@ evidence, but real Hardhat suite execution receives no credit until the required
 digest-pinned rootless single-loopback toolchain is supplied. Missing prerequisites are
 `unavailable`, never a pass. Candidate-specific generated reproduction remains controlled by
 `[reproduction]`.
+
+Independent parent-side Hardhat phase capture is locally tested with fixed finite Python controls.
+It binds the exact typed request, requires explicit launch inputs and separate private output,
+bounds captured streams/report bytes and phase time, observes the real exit, and cleans the owned
+process group before returning detached observations. An exclusive retained claim prevents output
+reuse. This is a prerequisite only: the production adapter remains `UNAVAILABLE`; capture grants
+no execution credit and does not supply image identity, container isolation/teardown, or semantic
+report authentication. See the operator guide's Hardhat section for the remaining executor boundary.
+
+Captured inventory now feeds the existing source binder to prepare an exact second-phase request
+and selection automatically. Captured test reports rejoin both phases and current source/config,
+enforce pinned reporter schemas and combined retained-byte/duration ceilings, and check actual
+exit consistency. A normal nonzero exit can retain matching failure observations; skipped tests
+stay skipped. These locally tested protocol joins do not authenticate reporter claims or admit a
+Hardhat command. The executor still needs a live attested boundary and an aggregate wall-clock
+deadline covering the gap between phases and container cleanup.
+
+Request-bound Hardhat command layout now gives inventory and test phases separate, single-use
+private output and runtime/CID directories while retaining the exact live bridge and read-only
+source mount. Reused layouts, cross-phase paths and changed requests/bindings refuse construction.
+Local bridge and fixed-control captures test this prerequisite; the returned command is still
+unverified. Image admission, the complete executor deadline and actual container teardown remain
+required before the production adapter can run.
+
+The independent two-phase driver now sequences inventory capture, source-bound test preparation,
+test capture and protocol consumption under one owned live bridge. Both phases share a deadline
+and retained-output budget; bridge shutdown and final source/protocol checks precede a result.
+This is locally tested with fixed reporters, not Hardhat. Its required programmatic launch boundary
+must independently admit the image/command and finalize containers; no production implementation
+or execution authority is supplied. Expiry rejects results while still allowing emergency cleanup.
+
+Rootless cleanup now distinguishes a missing CID from a successful exact-ID absence response.
+Runtime errors, ambiguous replies, timeouts and changed CID/runtime custody refuse cleanup credit.
+Control processes have bounded output and one finite shared cleanup deadline, with owned-child
+reaping on failures and interrupts. The local fixed-process tests mock runtime replies: they do
+not prove actual container removal, image identity or launch admission. The production Hardhat
+boundary remains unavailable. A started launch must not treat `NO_IDENTIFIER` as verified absence.
+
+A single-use phase finalizer now retains the exact launch environment, host executable observation
+and phase/CID custody through typed cleanup. Changed ambient routing cannot redirect cleanup of
+an entered phase. Ordinary phase drift still attempts cleanup of the original safe selection;
+unsafe cleanup-root or executable drift refuses to invoke a different runtime. Original failures
+survive secondary finalization errors, with a non-sensitive incompleteness note. This context is
+locally tested inside both fixed-reporter phases; it neither admits a launch nor authenticates an
+image, daemon/storage route or actual container. Those production prerequisites remain unproved.
+
+The offline `read_managed_image_metadata` API now joins an existing managed bundle's image and
+platform-manifest pins to exact local OCI index/manifest/config bytes. It reads only the selected
+SHA-256-named metadata blobs, checks raw hashes/sizes and declared platform compatibility, and
+retains ordered layer references and config diff IDs. Config IDs cannot substitute for manifest
+digests. The supported subset is one flat OCI index or a direct manifest, with baseline Linux
+amd64/arm64; ambiguous selection, alternate descriptor locations and unsupported forms refuse.
+This is a metadata-only prerequisite: no layer bytes, final filesystem, executable/reporter,
+runtime defaults, daemon or actual execution are attested. Production Hardhat remains UNAVAILABLE.
+
+The next layer of that check, `verify_managed_image_layers`, now reads the actual selected local
+tar/gzip layer bytes under shared stored/expanded byte and time limits. A retained read-only stream
+authenticates the stored digest before decompression, then rehashes complete consumption and checks
+file/path custody before closing. Bounded gzip processing checks complete members and the config
+diff IDs; metadata and bundle identity are revalidated before returning. No files are extracted or
+written. Zstd content is explicitly unsupported by this consumer. Even matching bytes do not prove
+valid tar semantics, filesystem overlays, executable/reporter membership or runtime identity.
+
+The separate `verify_managed_image_files` consumer now derives four selected file hashes from a
+bounded in-memory layer view. It reuses that exact byte boundary, supports USTAR and bounded local
+PAX records, applies lower-layer whiteouts before same-layer additions and resolves supported
+in-image links without host path lookup. Unsupported archive/link semantics refuse. Hardhat, Node
+and relay paths use the existing bundle contract; the reporter has the new fixed image path
+`/usr/local/lib/mmaudit/hardhat_reporter.cjs` and must match the compiled source hash/version.
+Synthetic local controls prove only this static membership join. Image construction, launch use of
+the reporter path, transitive dependencies, actual tool versions/architecture, runtime permissions
+and container identity remain unproved. Nothing is extracted, executed or admitted; production
+Hardhat remains UNAVAILABLE.
 
 A current, hash-bound deterministic execution that violates an invariant may originate a typed
 candidate without model attribution. Models may analyze its impact, exploitability, and remediation,
@@ -776,21 +1312,48 @@ commit requires a newly prepared and validated external report.
 
 ## CI
 
-Automatic GitHub Actions triggers are paused during engine stabilization. Both workflow definitions
-retain only `workflow_dispatch`; push, pull-request and scheduled triggers are absent. Continue local
-validation with `make check PYTHON=.venv/bin/python` and focused tests. Restore automatic CI once the
-hosted environment and validation baseline pass reliably, before deployment. A manual run remains
-an intentional checkpoint, not a deployment or audit-readiness claim.
+Automatic hosted CI is paused during engine stabilization. Both workflow definitions retain only
+`workflow_dispatch`; pushes, pull requests, and the daily metadata-refresh schedule do not trigger
+them. The two existing workflows in `londonjevans/Auditor` were also disabled on GitHub on
+2026-09-06 to stop existing automatic triggers immediately. Manual dispatch requires publishing
+these manual-only definitions to the default branch and re-enabling the selected workflow first.
+This pause does not make failing checks pass or extend model-metadata freshness windows.
 
-Framed-review integrity checks regenerate all schema roots together on every invocation, sharing
-definitions only within that invocation. Bounded mutable-input snapshots and renderer/model checks
-reject drift during schema generation. This does not cache a passing integrity decision or change
-provider wire schemas.
+Continue local validation with `make check PYTHON=.venv/bin/python` and focused tests for each
+ticket. The fast, read-only `make governance PYTHON=.venv/bin/python` check runs before pytest in
+`make test` and `make check`; it verifies queue agreement, current artifact bindings and worklog
+headers without granting provider or release authority. Current engineering coordination lives only in
+`current_engineering_state` in runtime-status/traceability metadata; surrounding historical fields
+retain their original scope and cannot select today's work. Restore automatic CI once the hosted
+environment and validation baseline pass reliably, before deployment; use deliberate manual
+checkpoints while stabilizing that baseline. Provider
+metadata refresh remains an explicit prerequisite whenever current metadata is required.
 
-Automatic formatting/lint discovery excludes the exact externally authored evidence file
-`docs/remediation/v3/operator_results.md`. Owned source and adjacent documentation remain in scope.
-Do not pass that evidence file directly to a mutating formatter: explicit file arguments can bypass
-directory-discovery exclusions unless `--force-exclude` is supplied.
+Framed-review integrity checks regenerate a complete schema inventory on every invocation using
+Pydantic's [multi-model schema generation](https://pydantic.dev/docs/validation/latest/api/pydantic/json_schema/#models_json_schema).
+Shared definitions are reused only within that invocation. Validator generations, model descriptors,
+renderer bindings and mutable schema/configuration inputs are checked across generation; in-place
+changes remain visible, including changes made by a later schema callback. The per-call input
+snapshot is bounded and rejects unsupported mutable containers. This does not cache a passing
+integrity decision or change the provider wire schemas.
+Local performance measurements and their scope are recorded in `docs/codex_worklog.md`.
+
+Automatic formatting/lint discovery excludes the exact external-evidence file
+`docs/remediation/v3/operator_results.md`, alongside the existing source/capture exclusions.
+Its quoted code is an observation, not owned source to rewrite; governance still verifies its
+exact bytes and reported accounting. Owned source and adjacent documentation remain in scope.
+Ruff's [exclusion rules](https://docs.astral.sh/ruff/settings/#extend-exclude) apply to directory
+discovery; explicit file arguments can override them unless `--force-exclude` is supplied.
+Do not pass the operator evidence file directly to a mutating formatter.
+
+New operator reports can change the current evidence digest without changing the pinned original
+September-4 report. Governance checks preserve that original introduction/history byte-for-byte
+and bind today's summary to the exact new report bytes, latest dated entry and explicit reported
+accounting. Ordinary line wrapping and inline accounting sentences are accepted without joining
+facts across paragraphs or hidden examples. Quoted/code examples, absent or ambiguous accounting,
+and stale summaries cannot supply current facts. The [operator guide](docs/remediation/v3/operator_prerequisites.md#current-engineering-coordination-versus-historical-evidence)
+describes the bounded report format. This is local consistency checking, not ledger authentication,
+an append-only journal for every later report, or paid-execution authority.
 
 `.github/workflows/mmaudit.yml` is the provider-free deterministic path. Manual invocations call
 `mmaudit ci`, which is structurally scanner-only and cannot schedule model roles. The workflow file

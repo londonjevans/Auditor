@@ -37,11 +37,12 @@ def _run_script(step: str) -> str:
     return textwrap.dedent(script)
 
 
-def test_refresh_runs_daily_only_on_the_default_branch_and_protected_environment() -> None:
+def test_refresh_runs_manually_only_on_the_default_branch_and_protected_environment() -> None:
     workflow = _read()
     provider_job = _job_block(workflow, "provider-check")
 
-    assert 'cron: "17 3 * * *"' in workflow
+    triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert re.findall(r"(?m)^  ([a-z_]+):", triggers) == ["workflow_dispatch"]
     assert "pull_request" not in workflow
     assert "pull_request_target" not in workflow
     assert "environment: mmaudit-provider" in provider_job

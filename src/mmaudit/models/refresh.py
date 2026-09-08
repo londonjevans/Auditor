@@ -37,10 +37,15 @@ from mmaudit.models.discovery import (
 )
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
+    OpenRouterPricingOverrideTier,
     canonicalize_openrouter_endpoint_identity,
     canonicalize_openrouter_endpoint_token_limits,
     canonicalize_openrouter_pricing,
+    canonicalize_openrouter_pricing_schedule,
     canonicalize_openrouter_supported_parameters,
+    effective_openrouter_pricing,
+    openrouter_pricing_schedule_sha256,
+    project_openrouter_pricing_schedule,
 )
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
@@ -48,6 +53,12 @@ from mmaudit.models.identifiers import (
     is_exact_openrouter_model_id,
     is_openrouter_catalog_model_id,
     require_exact_openrouter_model_id,
+)
+from mmaudit.models.price_lexemes import (
+    MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+    OpenRouterJSONPath,
+    OpenRouterPriceLexemeLayout,
 )
 
 if TYPE_CHECKING:
@@ -65,6 +76,7 @@ from mmaudit.models.qualification import (
     CandidateOperationalStatus,
     CandidateRegistry,
 )
+from mmaudit.models.route_constraints import ExactRoutePricingSchedule
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
@@ -220,6 +232,12 @@ class ModelRefreshEndpointSource(_FrozenModel):
     max_completion_tokens: int | None = Field(default=None, ge=1, le=2**31 - 1)
     supported_parameters: tuple[_BoundedParameter, ...] = Field(max_length=_MAX_PARAMETERS)
     pricing: dict[str, _CanonicalPrice] = Field(max_length=_MAX_PRICING_FIELDS)
+    pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        min_length=1,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
 
     @field_validator("exact_model_id")
     @classmethod
@@ -262,7 +280,10 @@ class ModelRefreshEndpointSource(_FrozenModel):
             raise ValueError("refresh source endpoint parameters are not canonical")
         if tuple(self.pricing) != tuple(sorted(self.pricing)):
             raise ValueError("refresh source endpoint pricing fields must be sorted")
-        if _canonical_pricing(self.pricing) != self.pricing:
+        canonical_pricing, canonical_overrides = _canonical_pricing_schedule(
+            _pricing_payload(self.pricing, self.pricing_overrides)
+        )
+        if canonical_pricing != self.pricing or canonical_overrides != self.pricing_overrides:
             raise ValueError("refresh source endpoint pricing is not canonical")
         return self
 
@@ -412,6 +433,16 @@ class ProviderRouteState(_FrozenModel):
     reasoning_supported: bool
     pricing_observation: PricingObservationKind
     pricing: dict[str, str] | None = Field(default=None, max_length=_MAX_PRICING_FIELDS)
+    pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        min_length=1,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
+    pricing_schedule: ExactRoutePricingSchedule | Literal["unavailable"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
     route_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -425,6 +456,25 @@ class ProviderRouteState(_FrozenModel):
     def provider_name_is_safe_display_text(cls, value: str) -> str:
         if value != value.strip() or any(not character.isprintable() for character in value):
             raise ValueError("refresh route provider name is invalid")
+        return value
+
+    @field_validator("pricing_schedule", mode="before")
+    @classmethod
+    def pricing_schedule_rehydrates_strict_json(
+        cls,
+        value: object,
+    ) -> object:
+        if type(value) is dict:
+            return ExactRoutePricingSchedule.model_validate_json(
+                json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ),
+                strict=True,
+            )
         return value
 
     @model_validator(mode="after")
@@ -478,12 +528,29 @@ class ProviderRouteState(_FrozenModel):
                 raise ValueError("exact refresh route lacks exact capability evidence")
             if tuple(self.pricing) != tuple(sorted(self.pricing)):
                 raise ValueError("refresh route pricing fields must be sorted")
-            if _canonical_pricing(self.pricing) != self.pricing:
+            canonical_pricing, canonical_overrides = _canonical_pricing_schedule(
+                _pricing_payload(self.pricing, self.pricing_overrides)
+            )
+            if canonical_pricing != self.pricing or canonical_overrides != self.pricing_overrides:
                 raise ValueError("refresh route pricing is not canonical")
-            if self.pricing_sha256 != _canonical_sha256(self.pricing):
+            expected_schedule = (
+                project_openrouter_pricing_schedule(self.pricing, self.pricing_overrides)
+                if self.pricing_overrides
+                else None
+            )
+            if self.pricing_schedule != expected_schedule:
+                raise ValueError("refresh route pricing schedule is inconsistent")
+            if self.pricing_sha256 != openrouter_pricing_schedule_sha256(
+                self.pricing,
+                self.pricing_overrides,
+            ):
                 raise ValueError("refresh route pricing hash is inconsistent")
         else:
-            if self.pricing is not None:
+            if (
+                self.pricing is not None
+                or self.pricing_overrides
+                or self.pricing_schedule is not None
+            ):
                 raise ValueError("hash-only refresh pricing cannot retain exact values")
         expected = _canonical_sha256(self.model_dump(mode="json", exclude={"route_sha256"}))
         if self.route_sha256 != expected:
@@ -500,6 +567,7 @@ class ProviderRouteState(_FrozenModel):
             and self.zdr_eligible
             and _REQUIRED_PARAMETERS.issubset(self.supported_parameters)
             and self.pricing_observation is PricingObservationKind.EXACT
+            and self.pricing_schedule != "unavailable"
         )
 
 
@@ -1046,7 +1114,7 @@ def build_model_refresh_source_evidence(
 
     zdr_endpoints: list[ModelRefreshEndpointSource] = []
     excluded_zdr_counts: dict[str, int] = {}
-    for raw in raw_zdr:
+    for raw_index, raw in enumerate(raw_zdr):
         model_id = raw.get("model_id")
         if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
             raise ModelRefreshValidationError("ZDR catalogue contains an invalid model ID")
@@ -1057,6 +1125,8 @@ def build_model_refresh_source_evidence(
             _endpoint_source_from_raw(
                 exact_model_id=model_id,
                 raw=raw,
+                price_lexeme_layout=ZDR_ENDPOINT_PRICE_LEXEME_LAYOUT,
+                price_lexeme_parent_path=("data", raw_index, "pricing"),
             )
         )
 
@@ -1079,8 +1149,15 @@ def build_model_refresh_source_evidence(
                     _endpoint_source_from_raw(
                         exact_model_id=model_id,
                         raw=endpoint,
+                        price_lexeme_layout=MODEL_ENDPOINT_PRICE_LEXEME_LAYOUT,
+                        price_lexeme_parent_path=(
+                            "data",
+                            "endpoints",
+                            endpoint_index,
+                            "pricing",
+                        ),
                     )
-                    for endpoint in endpoints
+                    for endpoint_index, endpoint in enumerate(endpoints)
                 ),
                 key=_endpoint_source_sort_key,
             )
@@ -1388,6 +1465,7 @@ def _build_model_refresh_snapshot_from_payloads(
             )
         )
 
+    serialized_models = [model.model_dump(mode="json") for model in models]
     values: dict[str, Any] = {
         "schema_version": "2.0",
         "retrieved_at": retrieved_at,
@@ -1399,10 +1477,15 @@ def _build_model_refresh_snapshot_from_payloads(
         "zdr_snapshot_sha256": _canonical_sha256(zdr_payload),
         "catalog_model_count": len(raw_models),
         "excluded_routed_model_ids": sorted(excluded),
-        "models": [model.model_dump(mode="json") for model in models],
-        "semantic_sha256": _canonical_sha256([model.model_dump(mode="json") for model in models]),
+        "models": tuple(models),
+        "semantic_sha256": _canonical_sha256(serialized_models),
     }
-    values["snapshot_sha256"] = _canonical_sha256(values)
+    values["snapshot_sha256"] = _canonical_sha256(
+        {
+            **values,
+            "models": serialized_models,
+        }
+    )
     return ModelRefreshSnapshot.model_validate(values)
 
 
@@ -1465,6 +1548,8 @@ def _endpoint_source_from_raw(
     *,
     exact_model_id: str,
     raw: Mapping[str, Any],
+    price_lexeme_layout: OpenRouterPriceLexemeLayout,
+    price_lexeme_parent_path: OpenRouterJSONPath,
 ) -> ModelRefreshEndpointSource:
     item_model_id = raw.get("model_id")
     if item_model_id is not None and item_model_id != exact_model_id:
@@ -1477,20 +1562,27 @@ def _endpoint_source_from_raw(
     status: int | str = raw_status if isinstance(raw_status, int) else normalized_status
     context, prompt, prompt_source, output, output_source = _endpoint_token_limits(raw)
     parameters = _endpoint_supported_parameters(raw.get("supported_parameters"))
-    pricing = _canonical_pricing(raw.get("pricing"))
+    pricing, pricing_overrides = _canonical_pricing_schedule(
+        raw.get("pricing"),
+        price_lexeme_layout=price_lexeme_layout,
+        price_lexeme_parent_path=price_lexeme_parent_path,
+    )
+    values: dict[str, Any] = {
+        "exact_model_id": exact_model_id,
+        "endpoint_tag": identity["tag"],
+        "endpoint_slug": identity["slug"],
+        "provider_name": identity["provider_name"],
+        "status": status,
+        "context_length": context,
+        "max_prompt_tokens": None if prompt_source == "context_limit" else prompt,
+        "max_completion_tokens": None if output_source == "context_limit" else output,
+        "supported_parameters": parameters,
+        "pricing": pricing,
+    }
+    if pricing_overrides:
+        values["pricing_overrides"] = [tier.model_dump(mode="json") for tier in pricing_overrides]
     try:
-        return ModelRefreshEndpointSource(
-            exact_model_id=exact_model_id,
-            endpoint_tag=identity["tag"],
-            endpoint_slug=identity["slug"],
-            provider_name=identity["provider_name"],
-            status=status,
-            context_length=context,
-            max_prompt_tokens=None if prompt_source == "context_limit" else prompt,
-            max_completion_tokens=None if output_source == "context_limit" else output,
-            supported_parameters=parameters,
-            pricing=pricing,
-        )
+        return ModelRefreshEndpointSource.model_validate(values)
     except ValueError as exc:
         raise ModelRefreshValidationError("endpoint source projection is invalid") from exc
 
@@ -1527,7 +1619,7 @@ def _endpoint_source_payload(source: ModelRefreshEndpointSource) -> dict[str, An
         "max_prompt_tokens": source.max_prompt_tokens,
         "max_completion_tokens": source.max_completion_tokens,
         "supported_parameters": list(source.supported_parameters),
-        "pricing": dict(source.pricing),
+        "pricing": _pricing_payload(source.pricing, source.pricing_overrides),
     }
     if source.endpoint_tag is not None:
         payload["tag"] = source.endpoint_tag
@@ -2382,7 +2474,12 @@ def _route_state_from_raw(
         output_limit_source,
     ) = _endpoint_token_limits(raw)
     route_parameters = _endpoint_supported_parameters(raw.get("supported_parameters"))
-    pricing = _canonical_pricing(raw.get("pricing"))
+    pricing, pricing_overrides = _canonical_pricing_schedule(raw.get("pricing"))
+    pricing_schedule = (
+        project_openrouter_pricing_schedule(pricing, pricing_overrides)
+        if pricing_overrides
+        else None
+    )
     effective_modes = mutually_supported_output_modes(
         (model_supported_parameters, route_parameters)
     )
@@ -2406,7 +2503,9 @@ def _route_state_from_raw(
         structured_output_mode=effective_modes[0],
         pricing_observation=PricingObservationKind.EXACT,
         pricing=pricing,
-        pricing_sha256=_canonical_sha256(pricing),
+        pricing_overrides=pricing_overrides,
+        pricing_schedule=pricing_schedule,
+        pricing_sha256=openrouter_pricing_schedule_sha256(pricing, pricing_overrides),
     )
 
 
@@ -2462,6 +2561,8 @@ def _seal_route_state(
     pricing_observation: PricingObservationKind,
     pricing: dict[str, str] | None,
     pricing_sha256: str,
+    pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = (),
+    pricing_schedule: ExactRoutePricingSchedule | Literal["unavailable"] | None = None,
 ) -> ProviderRouteState:
     values: dict[str, Any] = {
         "schema_version": "2.0",
@@ -2497,8 +2598,24 @@ def _seal_route_state(
         "pricing": pricing,
         "pricing_sha256": pricing_sha256,
     }
-    values["route_sha256"] = _canonical_sha256(values)
-    return ProviderRouteState.model_validate(values)
+    if pricing_overrides:
+        values["pricing_overrides"] = pricing_overrides
+    if pricing_schedule is not None:
+        values["pricing_schedule"] = pricing_schedule
+    hash_values = dict(values)
+    if pricing_overrides:
+        hash_values["pricing_overrides"] = [
+            tier.model_dump(mode="json") for tier in pricing_overrides
+        ]
+    if isinstance(pricing_schedule, ExactRoutePricingSchedule):
+        hash_values["pricing_schedule"] = pricing_schedule.model_dump(mode="json")
+    values["route_sha256"] = _canonical_sha256(hash_values)
+    route_model = (
+        LiveProviderRouteState
+        if pricing_observation is PricingObservationKind.EXACT
+        else ProviderRouteState
+    )
+    return route_model.model_validate(values)
 
 
 def _seal_catalog_model_state(
@@ -2548,11 +2665,16 @@ def _seal_catalog_model_state(
         "reasoning_supported": supports_reasoning_request(
             reasoning_capability_parameters(supported_parameters)
         ),
-        "routes": [route.model_dump(mode="json") for route in ordered],
+        "routes": ordered,
         "eligible_provider_endpoints": list(eligible),
     }
-    values["state_sha256"] = _canonical_sha256(values)
-    return CatalogModelState.model_validate(values)
+    hash_values = {
+        **values,
+        "routes": [route.model_dump(mode="json") for route in ordered],
+    }
+    values["state_sha256"] = _canonical_sha256(hash_values)
+    model_type = LiveCatalogModelState if exact_observation else CatalogModelState
+    return model_type.model_validate(values)
 
 
 def _compare_model_pricing(
@@ -2573,14 +2695,15 @@ def _compare_model_pricing(
         if before.pricing_sha256 == after.pricing_sha256:
             continue
         changed = True
-        if before.pricing is None or after.pricing is None:
+        route_increases = _route_pricing_increase_fields(
+            before=before,
+            after=after,
+            tolerance=tolerance,
+        )
+        if route_increases is None:
             not_evaluable = True
             continue
-        for field in sorted(set(before.pricing) | set(after.pricing)):
-            old = Decimal(before.pricing.get(field, "0"))
-            new = Decimal(after.pricing.get(field, "0"))
-            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
-                increases.add(f"{endpoint}:{field}")
+        increases.update(f"{endpoint}:{field}" for field in route_increases)
     if not_evaluable:
         return PricingComparisonState.NOT_EVALUABLE, changed, increases
     return PricingComparisonState.EVALUATED, changed, increases
@@ -2598,15 +2721,55 @@ def _endpoints_with_pricing_increase(
     result: set[str] = set()
     for route in after.routes:
         prior = before_routes.get(route.provider_endpoint)
-        if prior is None or prior.pricing is None or route.pricing is None:
+        if prior is None:
             continue
-        for field in set(prior.pricing) | set(route.pricing):
-            old = Decimal(prior.pricing.get(field, "0"))
-            new = Decimal(route.pricing.get(field, "0"))
-            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
-                result.add(route.provider_endpoint)
-                break
+        increases = _route_pricing_increase_fields(
+            before=prior,
+            after=route,
+            tolerance=tolerance,
+        )
+        if increases:
+            result.add(route.provider_endpoint)
     return result
+
+
+def _route_pricing_increase_fields(
+    *,
+    before: ProviderRouteState,
+    after: ProviderRouteState,
+    tolerance: Decimal,
+) -> set[str] | None:
+    """Compare every reachable state of two exact, expressible step schedules."""
+
+    if (
+        before.pricing is None
+        or after.pricing is None
+        or before.pricing_schedule == "unavailable"
+        or after.pricing_schedule == "unavailable"
+    ):
+        return None
+    increases: set[str] = set()
+    points = {0}
+    for tier in (*before.pricing_overrides, *after.pricing_overrides):
+        if tier.min_prompt_tokens < 2**31 - 1:
+            points.add(tier.min_prompt_tokens + 1)
+    for prompt_tokens in sorted(points):
+        old_prices = effective_openrouter_pricing(
+            before.pricing,
+            before.pricing_overrides,
+            prompt_tokens=prompt_tokens,
+        )
+        new_prices = effective_openrouter_pricing(
+            after.pricing,
+            after.pricing_overrides,
+            prompt_tokens=prompt_tokens,
+        )
+        for field in sorted(set(old_prices) | set(new_prices)):
+            old = Decimal(old_prices.get(field, "0"))
+            new = Decimal(new_prices.get(field, "0"))
+            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
+                increases.add(field)
+    return increases
 
 
 def _price_exceeds_tolerance(*, old: Decimal, new: Decimal, tolerance: Decimal) -> bool:
@@ -2747,11 +2910,54 @@ def _endpoint_token_limits(
         raise ModelRefreshValidationError("endpoint token-limit metadata is invalid") from exc
 
 
-def _canonical_pricing(value: Any) -> dict[str, str]:
+def _canonical_pricing(
+    value: Any,
+    *,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
+    price_lexeme_parent_path: OpenRouterJSONPath | None = None,
+) -> dict[str, str]:
     try:
-        return canonicalize_openrouter_pricing(value)
+        return canonicalize_openrouter_pricing(
+            value,
+            price_lexeme_layout=price_lexeme_layout,
+            price_lexeme_parent_path=price_lexeme_parent_path,
+        )
     except EndpointSnapshotValidationError as exc:
-        raise ModelRefreshValidationError("endpoint price metadata is malformed") from exc
+        raise ModelRefreshValidationError(f"endpoint price metadata is malformed: {exc}") from exc
+
+
+def _canonical_pricing_schedule(
+    value: Any,
+    *,
+    price_lexeme_layout: OpenRouterPriceLexemeLayout | None = None,
+    price_lexeme_parent_path: OpenRouterJSONPath | None = None,
+) -> tuple[dict[str, str], tuple[OpenRouterPricingOverrideTier, ...]]:
+    try:
+        return canonicalize_openrouter_pricing_schedule(
+            value,
+            price_lexeme_layout=price_lexeme_layout,
+            price_lexeme_parent_path=price_lexeme_parent_path,
+        )
+    except EndpointSnapshotValidationError as exc:
+        raise ModelRefreshValidationError(f"endpoint price metadata is malformed: {exc}") from exc
+
+
+def _pricing_payload(
+    pricing: Mapping[str, str],
+    overrides: Sequence[OpenRouterPricingOverrideTier],
+) -> dict[str, Any]:
+    """Rehydrate canonical source pricing without changing legacy flat payloads."""
+
+    payload: dict[str, Any] = dict(pricing)
+    if overrides:
+        payload["overrides"] = [
+            {
+                "min_prompt_tokens": tier.min_prompt_tokens,
+                **dict(tier.prices),
+            }
+            for tier in overrides
+        ]
+    return payload
 
 
 def _canonical_fraction(value: str) -> Decimal:

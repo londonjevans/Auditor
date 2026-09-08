@@ -28,8 +28,11 @@ class SlitherScanner(ScannerAdapter):
     may_execute_repository_code = True
     strict_machine_output = True
 
-    def __init__(self, smart_contracts: SmartContractsConfig | None = None) -> None:
+    def __init__(
+        self, smart_contracts: SmartContractsConfig | None = None, *, solc_path: Path | None = None
+    ) -> None:
         self.smart_contracts = smart_contracts
+        self.solc_path = solc_path
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
         if self.smart_contracts is None:
@@ -37,7 +40,9 @@ class SlitherScanner(ScannerAdapter):
         if not self._uses_pinned_compiler():
             raise ValueError("configured Slither requires exact solc_version and solc_sha256 pins")
         _prepare_private_solc_select_state(private_dir)
-        compiler = _stage_pinned_compiler(root, private_dir, self.smart_contracts)
+        compiler = _stage_pinned_compiler(
+            root, private_dir, self.smart_contracts, explicit_path=self.solc_path
+        )
         entrypoint = _stage_analysis_entrypoint(root, private_dir)
         return [
             self.executable,
@@ -220,15 +225,20 @@ def _stage_pinned_compiler(
     root: Path,
     private_dir: Path,
     config: SmartContractsConfig,
+    *,
+    explicit_path: Path | None = None,
 ) -> Path:
     """Copy the exact configured compiler into the private scanner toolchain."""
 
     if config.solc_sha256 is None:
         raise ValueError("Slither requires configured Solidity compiler SHA-256")
-    raw_path = os.environ.get(config.solc_executable_env, "")
-    if not raw_path:
-        raise ValueError("configured Solidity compiler executable is unavailable")
-    source = Path(raw_path)
+    if explicit_path is None:
+        raw_path = os.environ.get(config.solc_executable_env, "")
+        if not raw_path:
+            raise ValueError("configured Solidity compiler executable is unavailable")
+        source = Path(raw_path)
+    else:
+        source = explicit_path
     try:
         source_metadata = source.lstat()
         resolved_source = source.resolve(strict=True)

@@ -1,0 +1,922 @@
+{
+  "$defs": {
+    "ByokObservation": {
+      "enum": [
+        "ABSENT",
+        "FALSE",
+        "TRUE",
+        "INVALID"
+      ],
+      "type": "string"
+    },
+    "CostEntryStatus": {
+      "description": "Persisted lifecycle state for one unique provider request.",
+      "enum": [
+        "reserved",
+        "reconciled",
+        "released",
+        "uncertain_accounted",
+        "reservation_overrun"
+      ],
+      "title": "CostEntryStatus",
+      "type": "string"
+    },
+    "DevelopmentCostComponent": {
+      "additionalProperties": false,
+      "description": "One observed rate and the deliberately conservative estimation allowance.",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/DevelopmentPriceField"
+        },
+        "estimated_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Unit Price Usd"
+        },
+        "estimated_units": {
+          "maximum": 4000000,
+          "minimum": 0,
+          "title": "Estimated Units",
+          "type": "integer"
+        },
+        "observed_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Observed Unit Price Usd"
+        }
+      },
+      "required": [
+        "component",
+        "observed_unit_price_usd",
+        "estimated_unit_price_usd",
+        "estimated_units"
+      ],
+      "title": "DevelopmentCostComponent",
+      "type": "object"
+    },
+    "DevelopmentCostEstimate": {
+      "additionalProperties": false,
+      "description": "Non-qualifying explanatory output, not an admission or execution capability.",
+      "properties": {
+        "artifact_kind": {
+          "const": "development_cost_estimate",
+          "default": "development_cost_estimate",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentCostComponent"
+          },
+          "maxItems": 7,
+          "minItems": 2,
+          "title": "Components",
+          "type": "array"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "estimated_cost_all_attempts_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Cost All Attempts Usd"
+        },
+        "estimated_cost_per_attempt_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Cost Per Attempt Usd"
+        },
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "maximum_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Maximum Completion Tokens",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/DevelopmentCostPolicy"
+        },
+        "provider_endpoint": {
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_enforced_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Ceiling",
+          "type": "boolean"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "request_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 4000000,
+          "title": "Request Bytes",
+          "type": "integer"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "warning": {
+          "const": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+          "default": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+          "title": "Warning",
+          "type": "string"
+        },
+        "within_estimated_budget": {
+          "title": "Within Estimated Budget",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy",
+        "request_id",
+        "request_sha256",
+        "endpoint_snapshot_sha256",
+        "exact_model_id",
+        "provider_endpoint",
+        "request_bytes",
+        "maximum_completion_tokens",
+        "components",
+        "estimated_cost_per_attempt_usd",
+        "estimated_cost_all_attempts_usd",
+        "within_estimated_budget"
+      ],
+      "title": "DevelopmentCostEstimate",
+      "type": "object"
+    },
+    "DevelopmentCostPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit target budgets, not hard guarantees; defaults keep retries off.",
+      "properties": {
+        "maximum_attempts": {
+          "default": 1,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "overspend_risk_accepted": {
+          "const": true,
+          "title": "Overspend Risk Accepted",
+          "type": "boolean"
+        },
+        "per_attempt_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Per Attempt Budget Usd",
+          "type": "string"
+        },
+        "purpose": {
+          "const": "DEVELOPMENT_ONLY_ESTIMATED",
+          "default": "DEVELOPMENT_ONLY_ESTIMATED",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "safety_multiplier": {
+          "default": "2",
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Safety Multiplier",
+          "type": "string"
+        },
+        "total_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Total Budget Usd",
+          "type": "string"
+        }
+      },
+      "required": [
+        "overspend_risk_accepted",
+        "total_budget_usd",
+        "per_attempt_budget_usd"
+      ],
+      "title": "DevelopmentCostPolicy",
+      "type": "object"
+    },
+    "DevelopmentFinding": {
+      "additionalProperties": false,
+      "description": "Unvalidated model hypothesis, deliberately separate from qualified findings.",
+      "properties": {
+        "explanation": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "recommendation": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "violated_invariant": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Violated Invariant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "violated_invariant",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentFinding",
+      "type": "object"
+    },
+    "DevelopmentPriceField": {
+      "enum": [
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "request",
+        "image",
+        "web_search"
+      ],
+      "type": "string"
+    },
+    "DevelopmentReviewDiagnostic": {
+      "enum": [
+        "HTTP_ERROR",
+        "TRANSPORT_ERROR",
+        "TIMEOUT",
+        "INVALID_RESPONSE",
+        "IDENTITY_MISMATCH",
+        "INCOMPLETE_OUTPUT",
+        "SECRET_OUTPUT",
+        "UNKNOWN_COST",
+        "COST_OVERRUN"
+      ],
+      "title": "DevelopmentReviewDiagnostic",
+      "type": "string"
+    },
+    "DevelopmentReviewResponse": {
+      "additionalProperties": false,
+      "description": "Bounded source review only; no execution, consensus, or validation credit.",
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentFinding"
+          },
+          "maxItems": 16,
+          "title": "Findings",
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "findings"
+      ],
+      "title": "DevelopmentReviewResponse",
+      "type": "object"
+    },
+    "DevelopmentRoutingContext": {
+      "additionalProperties": false,
+      "description": "Supplied request/discovery binding, not independently authenticated provider evidence.",
+      "properties": {
+        "canonical_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Model Id"
+        },
+        "catalog_identity_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog Identity Binding Sha256"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "identity_basis": {
+          "enum": [
+            "REQUEST_ID_ONLY",
+            "SUPPLIED_DISCOVERY_BOUND"
+          ],
+          "title": "Identity Basis",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Metadata Snapshot Sha256"
+        },
+        "provider_endpoint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "endpoint_snapshot_sha256",
+        "identity_basis"
+      ],
+      "title": "DevelopmentRoutingContext",
+      "type": "object"
+    },
+    "DevelopmentRoutingEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "provider": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        }
+      },
+      "required": [
+        "model",
+        "provider"
+      ],
+      "title": "DevelopmentRoutingEndpoint",
+      "type": "object"
+    },
+    "DevelopmentRoutingEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_kind": {
+          "const": "development_routing_observation",
+          "default": "development_routing_observation",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "attempt_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Attempt Count"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+          },
+          "maxItems": 128,
+          "title": "Attempts",
+          "type": "array"
+        },
+        "available_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Available Count"
+        },
+        "context": {
+          "$ref": "#/$defs/DevelopmentRoutingContext"
+        },
+        "endpoint_total": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Total"
+        },
+        "evidence_class": {
+          "const": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+          "default": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+          "title": "Evidence Class",
+          "type": "string"
+        },
+        "failure_codes": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingFailure"
+          },
+          "maxItems": 20,
+          "title": "Failure Codes",
+          "type": "array"
+        },
+        "metadata_shape": {
+          "enum": [
+            "ABSENT",
+            "OBJECT",
+            "INVALID"
+          ],
+          "title": "Metadata Shape",
+          "type": "string"
+        },
+        "pipeline_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pipeline Count"
+        },
+        "requested_model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "response_provider": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "returned_model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "router_attempt": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Router Attempt"
+        },
+        "router_byok": {
+          "$ref": "#/$defs/ByokObservation"
+        },
+        "runtime_authority": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authority",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_endpoints": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+          },
+          "maxItems": 128,
+          "title": "Selected Endpoints",
+          "type": "array"
+        },
+        "strategy": {
+          "enum": [
+            "ABSENT",
+            "DIRECT",
+            "OTHER",
+            "INVALID"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "usage_byok": {
+          "$ref": "#/$defs/ByokObservation"
+        }
+      },
+      "required": [
+        "context",
+        "returned_model",
+        "response_provider",
+        "requested_model",
+        "metadata_shape",
+        "strategy",
+        "router_attempt",
+        "router_byok",
+        "usage_byok",
+        "endpoint_total",
+        "available_count",
+        "selected_endpoints",
+        "attempt_count",
+        "attempts",
+        "pipeline_count",
+        "failure_codes"
+      ],
+      "title": "DevelopmentRoutingEvidence",
+      "type": "object"
+    },
+    "DevelopmentRoutingFailure": {
+      "enum": [
+        "RETURNED_MODEL",
+        "RESPONSE_PROVIDER",
+        "ROUTER_METADATA",
+        "REQUESTED_MODEL",
+        "STRATEGY",
+        "ROUTER_ATTEMPT",
+        "BYOK_EVIDENCE_MISSING",
+        "BYOK_REPORTED",
+        "BYOK_INVALID",
+        "PIPELINE",
+        "ENDPOINT_SHAPE",
+        "SELECTION_COUNT",
+        "SELECTED_MODEL",
+        "SELECTED_PROVIDER",
+        "ATTEMPT_SHAPE",
+        "ATTEMPT_MODEL",
+        "ATTEMPT_PROVIDER",
+        "ATTEMPT_STATUS",
+        "GENERATION_HEADER",
+        "GENERATION_REUSE"
+      ],
+      "title": "DevelopmentRoutingFailure",
+      "type": "string"
+    },
+    "DevelopmentRoutingIdentity": {
+      "additionalProperties": false,
+      "description": "Unknown response strings are suppressed completely, not heuristically echoed.",
+      "properties": {
+        "status": {
+          "enum": [
+            "REQUESTED",
+            "CANONICAL",
+            "PROVIDER",
+            "UNBOUND",
+            "ABSENT",
+            "INVALID",
+            "REDACTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "DevelopmentRoutingIdentity",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_fixture_review_observation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A request observation, never an audit completion or trusted usage record.",
+  "properties": {
+    "accounted_cost_usd": {
+      "anyOf": [
+        {
+          "exclusiveMaximum": 1000000000000.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Accounted Cost Usd"
+    },
+    "accounting_status": {
+      "$ref": "#/$defs/CostEntryStatus"
+    },
+    "artifact_kind": {
+      "const": "development_fixture_review_observation",
+      "default": "development_fixture_review_observation",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "attempt": {
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentReviewDiagnostic"
+      },
+      "maxItems": 10,
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "estimate": {
+      "$ref": "#/$defs/DevelopmentCostEstimate"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "generation_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Generation Id"
+    },
+    "http_status": {
+      "anyOf": [
+        {
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Http Status"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "reported_cost_usd": {
+      "anyOf": [
+        {
+          "exclusiveMaximum": 1000000000000.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reported Cost Usd"
+    },
+    "response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentReviewResponse"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "response_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Response Sha256"
+    },
+    "routing_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentRoutingEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source_filename": {
+      "title": "Source Filename",
+      "type": "string"
+    },
+    "source_scope": {
+      "const": "PINNED_SYNTHETIC_FIXTURE",
+      "default": "PINNED_SYNTHETIC_FIXTURE",
+      "title": "Source Scope",
+      "type": "string"
+    },
+    "source_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OBSERVED",
+        "INCOMPLETE"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "transport": {
+      "enum": [
+        "MOCK_HTTP",
+        "HTTP_OBSERVATION"
+      ],
+      "title": "Transport",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_filename",
+    "source_sha256",
+    "estimate",
+    "attempt",
+    "transport",
+    "status",
+    "diagnostics",
+    "http_status",
+    "response_sha256",
+    "generation_id",
+    "accounting_status",
+    "reported_cost_usd",
+    "accounted_cost_usd",
+    "response"
+  ],
+  "title": "DevelopmentReviewObservation",
+  "type": "object"
+}

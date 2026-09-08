@@ -4,12 +4,13 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.route_constraints as route_constraints_module
 import mmaudit.models.usage as usage_module
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationRunKind
 from mmaudit.models.authenticated_runner_cost_plan import (
@@ -20,10 +21,13 @@ from mmaudit.models.authenticated_runner_cost_plan import (
 from mmaudit.models.candidate_selection import (
     seal_authenticated_runner_route_predicate_profile,
 )
+from mmaudit.models.endpoint_snapshots import EndpointSnapshotValidationError
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.openrouter import (
     OpenRouterCostControlError,
+    OpenRouterPrivacyError,
     OpenRouterProviderPolicy,
+    OpenRouterProviderPolicyError,
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
     preview_openrouter_structured_request_cost,
@@ -34,6 +38,11 @@ from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     ReasoningControlProfile,
     ReasoningPolicyArtifact,
+)
+from mmaudit.models.route_constraints import (
+    ExactRoutePricingSchedule,
+    ProviderPriceCapAlgorithm,
+    RoutePredicateProfile,
 )
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
@@ -48,7 +57,7 @@ from mmaudit.models.usage import (
     noncrediting_unknown_token_smoke_usage_diagnostics,
 )
 from mmaudit.orchestration.budgets import BudgetManager
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
 from tests.unit.test_openrouter import (
     Answer,
     _as_v3_unknown_token_smoke_usage,
@@ -57,6 +66,8 @@ from tests.unit.test_openrouter import (
     _generation_payload,
     _model_discovery_run,
 )
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "model_responses"
 
 _PROMPT_DOMINATED_CACHE_READ_PRICING = {
     "completion": "0.00001",
@@ -88,6 +99,27 @@ def _high_effort_reasoning_policy() -> ReasoningPolicyArtifact:
             )
             for role in CANONICAL_REASONING_POLICY_ROLES
         }
+    )
+
+
+def _component_envelope_profile(
+    reasoning_policy: ReasoningPolicyArtifact,
+    *,
+    price_cap_algorithm: ProviderPriceCapAlgorithm = (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    ),
+) -> RoutePredicateProfile:
+    role_policy = reasoning_policy.role_policy_for_request("model_benchmark")
+    return RoutePredicateProfile.build(
+        reasoning_policy_sha256=reasoning_policy.artifact_sha256,
+        reasoning_role_profile_sha256=reasoning_policy.role_profile.profile_sha256,
+        reasoning_role_binding_sha256=role_policy.binding_sha256,
+        reasoning_control_profile_sha256=role_policy.control.profile_sha256,
+        reserved_reasoning_tokens=role_policy.control.reserved_reasoning_tokens,
+        minimum_prompt_tokens=100_000,
+        required_output_tokens=4_096,
+        minimum_context_tokens=120_000,
+        price_cap_algorithm=price_cap_algorithm,
     )
 
 
@@ -293,6 +325,733 @@ def test_provider_free_request_cost_preview_is_exact_stable_and_nonauthorizing(
     assert not first.authorizes_provider_transport
     assert not first.grants_review_credit
     assert not first.grants_completion_credit
+
+
+@pytest.mark.asyncio
+async def test_conditional_pricing_uses_exact_maximum_for_caps_and_cost_bounds(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    tiered_pricing = cast(
+        dict[str, str],
+        {
+            "completion": "0.0000066",
+            "prompt": "0.0000022",
+            "request": "0",
+            "overrides": [
+                {
+                    "min_prompt_tokens": 80_000,
+                    "prompt": "0.0000044",
+                },
+                {
+                    "min_prompt_tokens": 120_000,
+                    "completion": "0.0000132",
+                },
+            ],
+        },
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=tiered_pricing,
+    )
+    endpoint = evidence.endpoint_snapshot.endpoints[0]
+    assert tuple(tier.min_prompt_tokens for tier in endpoint.pricing_overrides) == (
+        80_000,
+        120_000,
+    )
+    schedule = endpoint.tiered_pricing_cost_projection
+    assert type(schedule) is ExactRoutePricingSchedule
+    assert {item.component.value: item.unit_price for item in schedule.maximum_pricing} == {
+        "completion": "0.0000132",
+        "prompt": "0.0000044",
+        "request": "0",
+    }
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=_disabled_reasoning_policy(),
+    )
+    components = {item.pricing_field: item for item in preview.cost_components}
+    assert components["completion"].unit_price_usd_exact == "0.0000132"
+    assert components["prompt"].unit_price_usd_exact == "0.0000044"
+    assert components["request"].unit_price_usd_exact == "0"
+    assert preview.endpoint_pricing_sha256 == endpoint.pricing_sha256
+
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+        )
+
+    atomic_ledger = AtomicCostLedger.initialize(
+        tmp_path / "tiered-preview-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        atomic_ledger=atomic_ledger,
+        require_endpoint_cost_bound=True,
+    )
+    client, http_client, _usage = _client(
+        config,
+        handler,
+        provider_policy=policy,
+        reasoning_policy=_disabled_reasoning_policy(),
+        qualification_routing=(),
+        budget=budget,
+    )
+    try:
+        client.register_model_discovery(evidence=evidence, manifest=manifest)
+        registered = client._endpoint_pricing[evidence.exact_model_id]
+        assert dict(registered.routing_max_price) == {
+            "completion": 13.2,
+            "prompt": 4.4,
+            "request": 0.0,
+        }
+        assert registered.endpoints[0].pricing_schedule == schedule
+        result = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=["alpha/atlas-secure"],
+            system_prompt="bounded synthetic system prompt",
+            user_prompt="synthetic provider-free request",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="authrunner-candidate-case-001",
+            expected_request_cost_preview=preview,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert result.value.answer == "ok"
+    assert len(observed) == 1
+    assert json.loads(observed[0].content)["provider"]["max_price"] == {
+        "completion": 13.2,
+        "prompt": 4.4,
+        "request": 0.0,
+    }
+    ledger_snapshot = atomic_ledger.snapshot()
+    assert len(ledger_snapshot.entries) == 1
+    cost_entry = ledger_snapshot.entries[0]
+    assert cost_entry.status is CostEntryStatus.RECONCILED
+    assert cost_entry.reserved_usd == Decimal(preview.maximum_cost_usd_per_attempt_exact)
+    assert cost_entry.actual_cost_usd == Decimal("0.01")
+    assert cost_entry.accounted_cost_usd == Decimal("0.01")
+    assert ledger_snapshot.active_reserved_usd == 0
+    assert budget.spent_usd_exact == Decimal("0.01")
+
+
+@pytest.mark.asyncio
+async def test_conditional_pricing_upward_rounds_singleton_schedule_maximum(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    exact_tier_prompt_price = "0.000001000000000000000000000000000001"
+    config = config_factory()
+    tiered_pricing = cast(
+        dict[str, str],
+        {
+            "completion": "0.000002",
+            "prompt": "0.000001",
+            "overrides": [
+                {
+                    "min_prompt_tokens": 80_000,
+                    "prompt": exact_tier_prompt_price,
+                }
+            ],
+        },
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=tiered_pricing,
+    )
+    endpoint = evidence.endpoint_snapshot.endpoints[0]
+    schedule = endpoint.tiered_pricing_cost_projection
+    assert type(schedule) is ExactRoutePricingSchedule
+    assert {item.component.value: item.unit_price for item in schedule.maximum_pricing}[
+        "prompt"
+    ] == exact_tier_prompt_price
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=_disabled_reasoning_policy(),
+    )
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    try:
+        client.register_model_discovery(evidence=evidence, manifest=manifest)
+        routing_max_price = dict(
+            client._endpoint_pricing[evidence.exact_model_id].routing_max_price
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    transmitted_prompt_cap = Decimal(str(routing_max_price["prompt"])) / Decimal(1_000_000)
+    assert transmitted_prompt_cap > Decimal(exact_tier_prompt_price)
+    components = {item.pricing_field: item for item in preview.cost_components}
+    assert Decimal(components["prompt"].unit_price_usd_exact) == transmitted_prompt_cap
+
+
+def test_conditional_pricing_without_exact_projection_remains_refused(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    unsupported_tier_pricing = cast(
+        dict[str, str],
+        {
+            "completion": "0.0000066",
+            "prompt": "0.0000022",
+            "request": "0",
+            "overrides": [
+                {
+                    "audio": "0.0000033",
+                    "min_prompt_tokens": 200_000,
+                }
+            ],
+        },
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=unsupported_tier_pricing,
+    )
+    endpoint = evidence.endpoint_snapshot.endpoints[0]
+    assert endpoint.tiered_pricing_cost_projection == "unavailable"
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    with pytest.raises(
+        OpenRouterRequestCostPreviewError,
+        match="conditional endpoint pricing is retained but lacks a bounded cost projection",
+    ):
+        _preview(
+            config=config,
+            manifest=manifest,
+            evidence=evidence,
+            policy=policy,
+            reasoning_policy=_disabled_reasoning_policy(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_conditional_pricing_preserves_independent_uncappable_component_refusal(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    tiered_pricing = cast(
+        dict[str, str],
+        {
+            "completion": "0.0000066",
+            "input_cache_write": "0",
+            "prompt": "0.0000022",
+            "request": "0",
+            "web_search": "0.01",
+            "overrides": [
+                {
+                    "completion": "0.0000132",
+                    "input_cache_write": "0",
+                    "min_prompt_tokens": 200_000,
+                    "prompt": "0.0000044",
+                }
+            ],
+        },
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=tiered_pricing,
+    )
+    endpoint = evidence.endpoint_snapshot.endpoints[0]
+    assert endpoint.tiered_pricing_cost_projection != "unavailable"
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    with pytest.raises(
+        OpenRouterCostControlError,
+        match="variable endpoint pricing component cannot be provider-capped",
+    ):
+        _preview(
+            config=config,
+            manifest=manifest,
+            evidence=evidence,
+            policy=policy,
+            reasoning_policy=_disabled_reasoning_policy(),
+        )
+
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response('{"answer":"must-not-run"}'),
+        provider_policy=policy,
+    )
+    try:
+        with pytest.raises(
+            OpenRouterProviderPolicyError,
+            match="conditional endpoint pricing lacks a valid shared maximum-rate projection",
+        ):
+            client.register_model_discovery(evidence=evidence, manifest=manifest)
+        assert evidence.exact_model_id not in client._endpoint_pricing
+        assert evidence.exact_model_id not in client._model_identities
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+
+def test_zero_unit_web_search_pricing_is_retained_without_router_cap(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    reasoning_policy = _high_effort_reasoning_policy()
+    profile = _component_envelope_profile(reasoning_policy)
+    parameters = (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+        model_reasoning={"supported_efforts": ["high"]},
+        endpoint_reasoning_requested=True,
+        endpoint_pricing={
+            "completion": "0.0000066",
+            "prompt": "0.0000022",
+            "request": "0",
+            "web_search": "0.01",
+        },
+        route_predicate_profile=profile,
+        route_reasoning_policy=reasoning_policy,
+    )
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=reasoning_policy,
+    )
+    components = {item.pricing_field: item for item in preview.cost_components}
+    assert preview.schema_version == "1.2"
+    assert preview.route_predicate_profile_sha256 == profile.profile_sha256
+    assert preview.price_cap_algorithm is (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    assert preview.price_component_unit_envelopes == profile.price_component_unit_envelopes
+    assert components["web_search"].unit_price_usd_exact == "0.01"
+    assert components["web_search"].maximum_units == 0
+
+    registered = openrouter_module._provider_free_registered_endpoint_policy(
+        evidence=evidence,
+        provider_policy=policy,
+        privacy=config.privacy,
+    )
+    assert dict(registered.routing_max_price) == {
+        "completion": 6.6,
+        "prompt": 2.2,
+        "request": 0.0,
+    }
+    request_body = {
+        "model": evidence.exact_model_id,
+        "provider": {"max_price": dict(registered.routing_max_price)},
+        "max_tokens": 8_192,
+        "reasoning": {"effort": "high"},
+        "response_format": {"type": "json_schema"},
+        "temperature": 0,
+    }
+    openrouter_module._require_registered_zero_unit_request_shape(request_body, registered)
+
+    for field in (
+        "plugins",
+        "tool_choice",
+        "tools",
+        "web_search",
+        "web_search_options",
+    ):
+        for placement in ("body", "provider"):
+            mutated = (
+                {**request_body, field: []}
+                if placement == "body"
+                else {
+                    **request_body,
+                    "provider": {**request_body["provider"], field: []},
+                }
+            )
+            with pytest.raises(OpenRouterProviderPolicyError, match="zero-unit"):
+                openrouter_module._require_registered_zero_unit_request_shape(
+                    mutated,
+                    registered,
+                )
+
+
+@pytest.mark.parametrize(
+    "cache_write_price",
+    (None, "0", "0.0000011"),
+    ids=("absent", "zero", "positive"),
+)
+def test_v3_profile_is_reserved_but_projection_and_discovery_fail_closed(
+    tmp_path: Path,
+    cache_write_price: str | None,
+) -> None:
+    reasoning_policy = _high_effort_reasoning_policy()
+    profile = _component_envelope_profile(
+        reasoning_policy,
+        price_cap_algorithm=(
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+        ),
+    )
+    v2_profile = _component_envelope_profile(reasoning_policy)
+    assert profile.price_component_unit_envelopes == v2_profile.price_component_unit_envelopes
+    assert profile.price_cap_algorithm is (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+    )
+    endpoint_pricing = {
+        "completion": "0.0000066",
+        "input_cache_read": "0.0000004",
+        "prompt": "0.0000022",
+        "request": "0",
+        "web_search": "0.01",
+    }
+    if cache_write_price is not None:
+        endpoint_pricing["input_cache_write"] = cache_write_price
+    with pytest.raises(
+        route_constraints_module.RouteConstraintError,
+        match="V3 cache-write pricing cannot be bound by the provider max_price contract",
+    ):
+        route_constraints_module.project_provider_price_cap(
+            route_constraints_module.normalize_exact_route_pricing(endpoint_pricing),
+            algorithm=profile.price_cap_algorithm,
+            price_component_unit_envelopes=(profile.price_component_unit_envelopes or ()),
+        )
+
+    parameters = (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    )
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE",
+    ):
+        _model_discovery_run(
+            tmp_path,
+            model_supported_parameters=parameters,
+            endpoint_supported_parameters=parameters,
+            model_reasoning={"supported_efforts": ["high"]},
+            endpoint_reasoning_requested=True,
+            endpoint_pricing=endpoint_pricing,
+            route_predicate_profile=profile,
+            route_reasoning_policy=reasoning_policy,
+        )
+
+
+def test_recorded_xai_tiered_cache_write_shape_fails_closed_before_preview(
+    tmp_path: Path,
+) -> None:
+    fixture = json.loads(
+        (FIXTURES / "openrouter_tiered_pricing_shape.json").read_text(encoding="utf-8")
+    )
+    pricing = cast(dict[str, str], fixture["pricing"])
+    reasoning_policy = _high_effort_reasoning_policy()
+    profile = _component_envelope_profile(
+        reasoning_policy,
+        price_cap_algorithm=(
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+        ),
+    )
+    parameters = (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    )
+    assert pricing["input_cache_write"] == "0"
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="PRICE_CAP_NOT_EXPRESSIBLE,PRICE_CAP_PROOF_UNAVAILABLE",
+    ):
+        _model_discovery_run(
+            tmp_path,
+            model_supported_parameters=parameters,
+            endpoint_supported_parameters=parameters,
+            model_reasoning={"supported_efforts": ["high"]},
+            endpoint_reasoning_requested=True,
+            endpoint_pricing=pricing,
+            route_predicate_profile=profile,
+            route_reasoning_policy=reasoning_policy,
+        )
+
+
+@pytest.mark.asyncio
+async def test_v2_component_unit_preview_registers_reserves_and_reconciles_exact_mock_request(
+    config_factory: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+            reasoning_tokens=6,
+        )
+
+    config = config_factory()
+    reasoning_policy = _high_effort_reasoning_policy()
+    profile = _component_envelope_profile(reasoning_policy)
+    parameters = (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+        model_reasoning={"supported_efforts": ["high"]},
+        endpoint_reasoning_requested=True,
+        endpoint_pricing={
+            "completion": "0.0000066",
+            "prompt": "0.0000022",
+            "request": "0",
+            "web_search": "0.01",
+        },
+        route_predicate_profile=profile,
+        route_reasoning_policy=reasoning_policy,
+    )
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=reasoning_policy,
+    )
+    assert preview.schema_version == "1.2"
+    assert preview.price_cap_algorithm is (
+        ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "v2-component-unit-dispatch-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=policy,
+        reasoning_policy=reasoning_policy,
+        qualification_routing=(),
+        budget=budget,
+        candidate_revocation_route_constraint=(evidence.endpoint_snapshot.exact_route_constraint),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    before = ledger.snapshot()
+    try:
+        result = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=["alpha/atlas-secure"],
+            system_prompt="bounded synthetic system prompt",
+            user_prompt="synthetic provider-free request",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="authrunner-candidate-case-001",
+            expected_request_cost_preview=preview,
+        )
+        before_rejection = ledger.snapshot()
+        rejected_preview = _preview(
+            config=config,
+            manifest=manifest,
+            evidence=evidence,
+            policy=policy,
+            reasoning_policy=reasoning_policy,
+            logical_request_id="authrunner-candidate-case-002",
+        )
+        require_zero_unit_shape = openrouter_module._require_registered_zero_unit_request_shape
+
+        def inject_prohibited_tool_shape(body: dict[str, Any], endpoint_policy: Any) -> None:
+            require_zero_unit_shape({**body, "tools": []}, endpoint_policy)
+
+        monkeypatch.setattr(
+            openrouter_module,
+            "_require_registered_zero_unit_request_shape",
+            inject_prohibited_tool_shape,
+        )
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="network-capable injected provider clients are not permitted",
+        ):
+            await client.complete_with_evidence(
+                role="model_benchmark",
+                models=["alpha/atlas-secure"],
+                system_prompt="bounded synthetic system prompt",
+                user_prompt="synthetic provider-free request",
+                response_model=Answer,
+                schema_name="answer",
+                logical_request_id="authrunner-candidate-case-002",
+                expected_request_cost_preview=rejected_preview,
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert result.value.answer == "ok"
+    assert len(observed) == 1
+    body = json.loads(observed[0].content)
+    assert body["reasoning"] == {"effort": "high", "exclude": False}
+    assert "web_search" not in body["provider"]["max_price"]
+    assert "input_cache_write" not in body["provider"]["max_price"]
+    assert all(
+        field not in body and field not in body["provider"]
+        for field in profile.price_component_unit_envelopes[0].prohibited_request_fields
+    )
+    after = ledger.snapshot()
+    assert len(before.entries) == 0
+    assert len(after.entries) == 1
+    entry = after.entries[0]
+    assert entry.status is CostEntryStatus.RECONCILED
+    assert entry.reserved_usd == Decimal(preview.maximum_cost_usd_per_attempt_exact)
+    assert entry.actual_cost_usd == Decimal("0.01")
+    assert entry.accounted_cost_usd == Decimal("0.01")
+    assert after.active_reserved_usd == 0
+    assert budget.spent_usd_exact == Decimal("0.01")
+    assert usage.records == [result.usage_record]
+    assert result.usage_record.routing["request_cost_preview_sha256"] == preview.preview_sha256
+    assert ledger.snapshot() == before_rejection
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing",
+        "duplicate",
+        "positive_units",
+        "unknown_component",
+        "profile_substitution",
+    ),
+)
+def test_component_unit_preview_rejects_self_resealed_proof_drift(
+    config_factory: Any,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    config = config_factory()
+    reasoning_policy = _high_effort_reasoning_policy()
+    profile = _component_envelope_profile(reasoning_policy)
+    parameters = (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    )
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+        model_reasoning={"supported_efforts": ["high"]},
+        endpoint_reasoning_requested=True,
+        endpoint_pricing={
+            "completion": "0.0000066",
+            "prompt": "0.0000022",
+            "web_search": "0.01",
+        },
+        route_predicate_profile=profile,
+        route_reasoning_policy=reasoning_policy,
+    )
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            certification=True,
+        ),
+        reasoning_policy=reasoning_policy,
+    )
+    payload = preview.model_dump(mode="python")
+    envelopes = payload["price_component_unit_envelopes"]
+    if mutation == "missing":
+        payload.pop("price_component_unit_envelopes")
+    elif mutation == "duplicate":
+        payload["price_component_unit_envelopes"] = (*envelopes, envelopes[0])
+    elif mutation == "positive_units":
+        envelopes[0]["maximum_units"] = 1
+        envelopes[0]["envelope_sha256"] = route_constraints_module._canonical_sha256(
+            {key: value for key, value in envelopes[0].items() if key != "envelope_sha256"}
+        )
+    elif mutation == "unknown_component":
+        envelopes[0]["component"] = "image"
+        envelopes[0]["envelope_sha256"] = route_constraints_module._canonical_sha256(
+            {key: value for key, value in envelopes[0].items() if key != "envelope_sha256"}
+        )
+    else:
+        payload["route_predicate_profile_sha256"] = "f" * 64
+    payload["preview_sha256"] = openrouter_module._canonical_sha256(
+        {key: value for key, value in payload.items() if key != "preview_sha256"}
+    )
+
+    with pytest.raises(ValueError):
+        OpenRouterStructuredRequestCostPreview.model_validate(payload, strict=True)
 
 
 def test_schema_retry_quota_is_in_retry_inclusive_cost_and_attempt_inventory(

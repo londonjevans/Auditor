@@ -15,15 +15,18 @@ import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import CellType, CodeType, FunctionType
-from typing import Any, Literal, Protocol, Self, cast
+from typing import Annotated, Any, Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import mmaudit.models.candidate_revocation as candidate_revocation_module
 import mmaudit.models.route_constraints as route_constraints_module
 from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationEntry,
     CandidateSelectionRevocationError,
+    CandidateSelectionRevocationRegistry,
     candidate_revocation_callables_are_pristine,
+    load_candidate_selection_revocation_registry,
     require_candidate_assignment_eligible,
     require_selection_plan_routes_eligible,
 )
@@ -50,6 +53,7 @@ from mmaudit.models.reasoning import ReasoningEffort, ReasoningPolicyArtifact
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
+    ProviderPriceCapAlgorithm,
     RouteConstraintPurpose,
     RoutePredicateProfile,
     bind_registry_route_facts,
@@ -66,11 +70,16 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 _SAFE_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
 _ADVISORY_GROUP_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9 ._:/+-]{0,199}$"
+_Sha256Value = Annotated[str, Field(pattern=_SHA256_PATTERN)]
 _MAX_PLAN_BYTES = 2_000_000
 _MAX_SOURCE_BYTES = 2_000_000
 _PRIVATE_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 _NONBLOCK_FLAG = getattr(os, "O_NONBLOCK", 0)
+NO_ACTIVE_CANDIDATE_REQUIREMENT = (
+    "No active candidate remains after exact revocation reconciliation; a separately authorized "
+    "non-revoked successor is required."
+)
 type _CandidateRevocationCallRoots = tuple[
     Callable[[], bool],
     Callable[..., None],
@@ -301,6 +310,191 @@ class AuthenticatedRunnerSelection(StrictModel):
         return self
 
 
+class CandidateSelectionUnavailableState(StrictModel):
+    """Inactive judge custody after every predecessor candidate route was revoked."""
+
+    schema_version: Literal["1.0"]
+    disposition: Literal["NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"]
+    price_cap_profile_decision: Literal["PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"]
+    predecessor_role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
+    matched_revocation_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    revocation_entry_sha256s: tuple[_Sha256Value, ...] = Field(min_length=1, max_length=16)
+    withdrawn_candidate_constraint_sha256s: tuple[_Sha256Value, ...] = Field(
+        min_length=1,
+        max_length=16,
+    )
+    primary_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    replay_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    route_predicate_profile: RoutePredicateProfile
+    judge_route_constraints: tuple[ExactRouteConstraint, ...] = Field(
+        min_length=2,
+        max_length=17,
+    )
+    candidate_selection_authorized: Literal[False]
+    state_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("primary_judge_model_id", "replay_judge_model_id")
+    @classmethod
+    def judge_model_id_is_exact(cls, value: str) -> str:
+        try:
+            require_exact_openrouter_model_id(value)
+        except ValueError as exc:
+            raise ValueError("unavailable candidate judge model ID must be exact") from exc
+        return value
+
+    @field_validator(
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+    )
+    @classmethod
+    def hashes_are_sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("unavailable candidate hashes must be unique and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def inactive_judge_custody_is_exact(self) -> Self:
+        if self.primary_judge_model_id == self.replay_judge_model_id:
+            raise ValueError("unavailable candidate judge models must remain distinct")
+        profile = RoutePredicateProfile.model_validate_json(
+            self.route_predicate_profile.model_dump_json(),
+            strict=True,
+        )
+        if (
+            profile.schema_version != "1.0"
+            or profile.price_cap_algorithm
+            is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+            or profile.price_component_unit_envelopes is not None
+        ):
+            raise ValueError("unavailable candidate state must preserve the predecessor V1 profile")
+        expected_order = tuple(
+            sorted(
+                self.judge_route_constraints,
+                key=lambda item: (item.role.value, item.exact_model_id, item.provider_endpoint),
+            )
+        )
+        if self.judge_route_constraints != expected_order:
+            raise ValueError("unavailable candidate judge constraints are not canonically ordered")
+        keys = tuple(
+            (item.role, item.exact_model_id, item.provider_endpoint)
+            for item in self.judge_route_constraints
+        )
+        if len(keys) != len(set(keys)):
+            raise ValueError("unavailable candidate judge constraints are not unique")
+        role_models = {
+            ExactRouteRole.PRIMARY_JUDGE: self.primary_judge_model_id,
+            ExactRouteRole.REPLAY_JUDGE: self.replay_judge_model_id,
+        }
+        if {item.role for item in self.judge_route_constraints} != set(role_models):
+            raise ValueError("unavailable candidate state must retain both judge roles only")
+        if any(
+            item.profile_sha256 != profile.profile_sha256
+            or item.exact_model_id != role_models[item.role]
+            for item in self.judge_route_constraints
+        ):
+            raise ValueError(
+                "unavailable candidate judge constraint differs from its role or profile"
+            )
+        expected_revocation_set = canonical_sha256(
+            {
+                "schema_version": "1.0",
+                "artifact_kind": "MATCHED_CANDIDATE_SELECTION_REVOCATIONS",
+                "revocation_entry_sha256s": list(self.revocation_entry_sha256s),
+            }
+        )
+        if self.matched_revocation_set_sha256 != expected_revocation_set:
+            raise ValueError("unavailable candidate matched revocation set digest is inconsistent")
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"state_sha256"}))
+        if self.state_sha256 != expected:
+            raise ValueError("unavailable candidate state self-hash is inconsistent")
+        return self
+
+
+class CandidateSelectionPlanAncestryTransitionBinding(StrictModel):
+    """Nonauthorizing durable binding for one capability-verified reactivation."""
+
+    schema_version: Literal["1.0"]
+    artifact_kind: Literal["REPOSITORY_PINNED_SELECTION_PLAN_ANCESTRY_TRANSITION"]
+    selected_ancestor_raw_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_ancestor_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_predecessor_raw_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_predecessor_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    unavailable_state_sha256: str = Field(pattern=_SHA256_PATTERN)
+    matched_revocation_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    ancestry_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    revocation_entry_sha256s: tuple[_Sha256Value, ...] = Field(min_length=1, max_length=16)
+    withdrawn_candidate_constraint_sha256s: tuple[_Sha256Value, ...] = Field(
+        min_length=1,
+        max_length=16,
+    )
+    selected_ancestor_role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
+    retained_route_predicate_profile_sha256: str = Field(pattern=_SHA256_PATTERN)
+    retained_judge_constraint_sha256s: tuple[_Sha256Value, ...] = Field(
+        min_length=2,
+        max_length=17,
+    )
+    replacement_candidate_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    replacement_provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
+    replacement_candidate_constraint_sha256: str = Field(pattern=_SHA256_PATTERN)
+    opaque_ancestry_capability_required: Literal[True]
+    endpoint_inventory_refresh_authorized: Literal[False]
+    price_cap_profile_upgrade_authorized: Literal[False]
+    provider_call_authorized: Literal[False]
+    source_egress_authorized: Literal[False]
+    qualification_authorized: Literal[False]
+    production_selection_authorized: Literal[False]
+    runner_authority_authorized: Literal[False]
+    benchmark_authorized: Literal[False]
+    seal_publication_authorized: Literal[False]
+    release_authorized: Literal[False]
+    serialized_authority: Literal[False]
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("replacement_candidate_model_id")
+    @classmethod
+    def replacement_model_id_is_exact(cls, value: str) -> str:
+        try:
+            return require_exact_openrouter_model_id(value)
+        except ValueError as exc:
+            raise ValueError("ancestry-transition candidate model ID must be exact") from exc
+
+    @field_validator("replacement_provider_endpoint")
+    @classmethod
+    def replacement_endpoint_is_canonical(cls, value: str) -> str:
+        if value != value.casefold():
+            raise ValueError("ancestry-transition provider endpoint must be canonical lowercase")
+        return value
+
+    @field_validator(
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "retained_judge_constraint_sha256s",
+    )
+    @classmethod
+    def hashes_are_sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("ancestry-transition hashes must be unique and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def binding_is_nonauthorizing_and_self_hashed(self) -> Self:
+        if self.selected_ancestor_plan_sha256 == self.unavailable_predecessor_plan_sha256:
+            raise ValueError("ancestry transition must bind distinct plan generations")
+        expected_revocation_set = canonical_sha256(
+            {
+                "schema_version": "1.0",
+                "artifact_kind": "MATCHED_CANDIDATE_SELECTION_REVOCATIONS",
+                "revocation_entry_sha256s": list(self.revocation_entry_sha256s),
+            }
+        )
+        if self.matched_revocation_set_sha256 != expected_revocation_set:
+            raise ValueError("ancestry-transition matched revocation set is inconsistent")
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"binding_sha256"}))
+        if self.binding_sha256 != expected:
+            raise ValueError("ancestry-transition binding self-hash is inconsistent")
+        return self
+
+
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
@@ -340,11 +534,60 @@ class CandidateSelectionPlan(StrictModel):
                     },
                     "else": {"not": {"required": ["endpoint_inventory_refresh"]}},
                 },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.7"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "authenticated_runner_selection": {"type": "null"},
+                            "authenticated_runner_unavailability": {
+                                "not": {"type": "null"},
+                            },
+                        },
+                        "required": ["authenticated_runner_unavailability"],
+                    },
+                    "else": {"not": {"required": ["authenticated_runner_unavailability"]}},
+                },
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": "1.8"}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {
+                        "properties": {
+                            "authenticated_runner_selection": {
+                                "type": "object",
+                                "properties": {
+                                    "route_predicate_profile": {
+                                        "type": "object",
+                                        "properties": {
+                                            "schema_version": {"const": "1.0"},
+                                            "price_cap_algorithm": {
+                                                "const": ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1.value
+                                            },
+                                            "price_component_unit_envelopes": {"type": "null"},
+                                        },
+                                        "required": ["schema_version", "price_cap_algorithm"],
+                                    }
+                                },
+                                "required": ["route_predicate_profile"],
+                            },
+                            "ancestry_transition_binding": {"not": {"type": "null"}},
+                        },
+                        "required": [
+                            "authenticated_runner_selection",
+                            "ancestry_transition_binding",
+                        ],
+                    },
+                    "else": {"not": {"required": ["ancestry_transition_binding"]}},
+                },
             ]
         }
     )
 
-    schema_version: Literal["1.4", "1.5", "1.6"]
+    schema_version: Literal["1.4", "1.5", "1.6", "1.7", "1.8"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -359,7 +602,15 @@ class CandidateSelectionPlan(StrictModel):
     )
     entries: tuple[CandidateSelectionEntry, ...] = Field(min_length=1, max_length=64)
     authenticated_runner_selection: AuthenticatedRunnerSelection | None = None
+    authenticated_runner_unavailability: CandidateSelectionUnavailableState | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     endpoint_inventory_refresh: CandidateSelectionEndpointInventoryRefresh | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    ancestry_transition_binding: CandidateSelectionPlanAncestryTransitionBinding | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -397,6 +648,8 @@ class CandidateSelectionPlan(StrictModel):
             raise ValueError("candidate selection plan binds the wrong objective")
         predecessor_supplied = "predecessor_plan_sha256" in self.model_fields_set
         refresh_supplied = "endpoint_inventory_refresh" in self.model_fields_set
+        unavailability_supplied = "authenticated_runner_unavailability" in self.model_fields_set
+        ancestry_supplied = "ancestry_transition_binding" in self.model_fields_set
         if self.schema_version == "1.4":
             predecessor_is_valid = not predecessor_supplied and self.predecessor_plan_sha256 is None
         else:
@@ -414,6 +667,32 @@ class CandidateSelectionPlan(StrictModel):
             raise ValueError("candidate selection plan predecessor custody differs from its schema")
         if not refresh_is_valid:
             raise ValueError("candidate selection endpoint refresh differs from its schema")
+        unavailability_is_valid = (
+            self.schema_version == "1.7"
+            and unavailability_supplied
+            and self.authenticated_runner_unavailability is not None
+            and self.authenticated_runner_selection is None
+        ) or (
+            self.schema_version != "1.7"
+            and not unavailability_supplied
+            and self.authenticated_runner_unavailability is None
+        )
+        if not unavailability_is_valid:
+            raise ValueError("candidate selection unavailability differs from its schema")
+        ancestry_is_valid = (
+            self.schema_version == "1.8"
+            and ancestry_supplied
+            and self.ancestry_transition_binding is not None
+            and self.authenticated_runner_selection is not None
+            and self.authenticated_runner_unavailability is None
+            and self.endpoint_inventory_refresh is None
+        ) or (
+            self.schema_version != "1.8"
+            and not ancestry_supplied
+            and self.ancestry_transition_binding is None
+        )
+        if not ancestry_is_valid:
+            raise ValueError("candidate selection ancestry transition differs from its schema")
         kinds = tuple(binding.kind for binding in self.source_bindings)
         expected_kinds = ("MODEL_RANKING_IMPLEMENTATION", "OPERATOR_LINEAGE_REVIEW")
         if kinds != expected_kinds:
@@ -477,6 +756,65 @@ class CandidateSelectionPlan(StrictModel):
                 raise ValueError(
                     "endpoint inventory refresh differs from the exact candidate assignment"
                 )
+        if self.authenticated_runner_unavailability is not None:
+            unavailable = self.authenticated_runner_unavailability
+            if NO_ACTIVE_CANDIDATE_REQUIREMENT not in self.unresolved_requirements:
+                raise ValueError(
+                    "unavailable candidate plan lacks its named unresolved requirement"
+                )
+            entries_by_id = {entry.exact_model_id: entry for entry in self.entries}
+            for role, model_id in (
+                (ExactRouteRole.PRIMARY_JUDGE, unavailable.primary_judge_model_id),
+                (ExactRouteRole.REPLAY_JUDGE, unavailable.replay_judge_model_id),
+            ):
+                entry = entries_by_id.get(model_id)
+                retained_endpoints = {
+                    constraint.provider_endpoint
+                    for constraint in unavailable.judge_route_constraints
+                    if constraint.role is role
+                }
+                if entry is None or retained_endpoints != set(entry.allowed_provider_endpoints):
+                    raise ValueError(
+                        "unavailable candidate judge constraints differ from endpoint policy"
+                    )
+        if self.ancestry_transition_binding is not None:
+            transition = self.ancestry_transition_binding
+            ancestry_selection = self.authenticated_runner_selection
+            if ancestry_selection is None or self.predecessor_plan_sha256 != (
+                transition.unavailable_predecessor_plan_sha256
+            ):
+                raise ValueError("ancestry transition differs from the immediate predecessor")
+            candidate_constraints = tuple(
+                constraint
+                for constraint in ancestry_selection.route_constraints
+                if constraint.role is ExactRouteRole.CANDIDATE
+            )
+            judge_constraint_sha256s = tuple(
+                sorted(
+                    constraint.constraint_sha256
+                    for constraint in ancestry_selection.route_constraints
+                    if constraint.role is not ExactRouteRole.CANDIDATE
+                )
+            )
+            if (
+                len(candidate_constraints) != 1
+                or candidate_constraints[0].exact_model_id
+                != transition.replacement_candidate_model_id
+                or candidate_constraints[0].provider_endpoint
+                != transition.replacement_provider_endpoint
+                or candidate_constraints[0].constraint_sha256
+                != transition.replacement_candidate_constraint_sha256
+                or ancestry_selection.route_predicate_profile.profile_sha256
+                != transition.retained_route_predicate_profile_sha256
+                or ancestry_selection.route_predicate_profile.schema_version != "1.0"
+                or ancestry_selection.route_predicate_profile.price_cap_algorithm
+                is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+                or ancestry_selection.route_predicate_profile.price_component_unit_envelopes
+                is not None
+                or judge_constraint_sha256s != transition.retained_judge_constraint_sha256s
+                or NO_ACTIVE_CANDIDATE_REQUIREMENT in self.unresolved_requirements
+            ):
+                raise ValueError("ancestry transition differs from its reactivated assignment")
         expected = canonical_sha256(self.model_dump(mode="json", exclude={"plan_sha256"}))
         if self.plan_sha256 != expected:
             raise ValueError("candidate selection plan self-hash is inconsistent")
@@ -617,6 +955,92 @@ def seal_authenticated_runner_selection(
         raise CandidateSelectionError("authenticated runner seed assignment is invalid") from exc
 
 
+def _seal_candidate_selection_unavailable_state(
+    *,
+    predecessor_selection: AuthenticatedRunnerSelection,
+    revocation_registry: CandidateSelectionRevocationRegistry,
+    revocation_entries: tuple[CandidateSelectionRevocationEntry, ...],
+) -> CandidateSelectionUnavailableState:
+    """Seal inactive judge custody for a fully revoked predecessor candidate assignment."""
+
+    if type(predecessor_selection) is not AuthenticatedRunnerSelection:
+        raise CandidateSelectionError(
+            "unavailable candidate predecessor selection has the wrong exact type"
+        )
+    if type(revocation_registry) is not CandidateSelectionRevocationRegistry:
+        raise CandidateSelectionError(
+            "unavailable candidate revocation registry has the wrong exact type"
+        )
+    if (
+        type(revocation_entries) is not tuple
+        or not revocation_entries
+        or any(type(entry) is not CandidateSelectionRevocationEntry for entry in revocation_entries)
+    ):
+        raise CandidateSelectionError("unavailable candidate revocation entries are not exact")
+    try:
+        selection = AuthenticatedRunnerSelection.model_validate_json(
+            predecessor_selection.model_dump_json(),
+            strict=True,
+        )
+        registry = CandidateSelectionRevocationRegistry.model_validate_json(
+            revocation_registry.model_dump_json(),
+            strict=True,
+        )
+        entries_by_sha = {entry.entry_sha256: entry for entry in registry.entries}
+        canonical_revocations = tuple(
+            entries_by_sha[entry.entry_sha256] for entry in revocation_entries
+        )
+    except (KeyError, ValueError) as exc:
+        raise CandidateSelectionError(
+            "unavailable candidate revocation custody is invalid"
+        ) from exc
+    if len(canonical_revocations) != len(set(canonical_revocations)):
+        raise CandidateSelectionError("unavailable candidate revocation entries repeat")
+    candidate_constraints = tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is ExactRouteRole.CANDIDATE
+    )
+    judge_constraints = tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    )
+    revocation_entry_sha256s = sorted(entry.entry_sha256 for entry in canonical_revocations)
+    values: dict[str, object] = {
+        "schema_version": "1.0",
+        "disposition": "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        "price_cap_profile_decision": "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION",
+        "predecessor_role_assignment_sha256": selection.role_assignment_sha256,
+        "matched_revocation_set_sha256": canonical_sha256(
+            {
+                "schema_version": "1.0",
+                "artifact_kind": "MATCHED_CANDIDATE_SELECTION_REVOCATIONS",
+                "revocation_entry_sha256s": revocation_entry_sha256s,
+            }
+        ),
+        "revocation_entry_sha256s": revocation_entry_sha256s,
+        "withdrawn_candidate_constraint_sha256s": sorted(
+            constraint.constraint_sha256 for constraint in candidate_constraints
+        ),
+        "primary_judge_model_id": selection.primary_judge_model_id,
+        "replay_judge_model_id": selection.replay_judge_model_id,
+        "route_predicate_profile": selection.route_predicate_profile.model_dump(mode="json"),
+        "judge_route_constraints": [
+            constraint.model_dump(mode="json") for constraint in judge_constraints
+        ],
+        "candidate_selection_authorized": False,
+    }
+    values["state_sha256"] = canonical_sha256(values)
+    try:
+        return CandidateSelectionUnavailableState.model_validate_json(
+            stable_json(values),
+            strict=True,
+        )
+    except ValueError as exc:
+        raise CandidateSelectionError("unavailable candidate state is invalid") from exc
+
+
 def seal_authenticated_runner_route_predicate_profile(
     *,
     reasoning_policy: ReasoningPolicyArtifact,
@@ -672,6 +1096,7 @@ def seal_candidate_selection_plan(
         source_bindings=source_bindings,
         entries=entries,
         authenticated_runner_selection=authenticated_runner_selection,
+        authenticated_runner_unavailability=None,
         endpoint_inventory_refresh=None,
         unresolved_requirements=unresolved_requirements,
         predecessor_plan_sha256=None,
@@ -683,9 +1108,11 @@ def _seal_candidate_selection_plan(
     source_bindings: tuple[CandidateSelectionSourceBinding, ...],
     entries: tuple[CandidateSelectionEntry, ...],
     authenticated_runner_selection: AuthenticatedRunnerSelection | None,
+    authenticated_runner_unavailability: CandidateSelectionUnavailableState | None,
     endpoint_inventory_refresh: CandidateSelectionEndpointInventoryRefresh | None,
     unresolved_requirements: tuple[str, ...],
     predecessor_plan_sha256: str | None,
+    ancestry_transition_binding: CandidateSelectionPlanAncestryTransitionBinding | None = None,
 ) -> CandidateSelectionPlan:
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
@@ -693,7 +1120,15 @@ def _seal_candidate_selection_plan(
         "schema_version": (
             "1.4"
             if predecessor_plan_sha256 is None
-            else ("1.6" if endpoint_inventory_refresh is not None else "1.5")
+            else (
+                "1.8"
+                if ancestry_transition_binding is not None
+                else (
+                    "1.7"
+                    if authenticated_runner_unavailability is not None
+                    else ("1.6" if endpoint_inventory_refresh is not None else "1.5")
+                )
+            )
         ),
         "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
         "status": "NONAUTHORIZING",
@@ -719,8 +1154,12 @@ def _seal_candidate_selection_plan(
     }
     if predecessor_plan_sha256 is not None:
         values["predecessor_plan_sha256"] = predecessor_plan_sha256
+    if authenticated_runner_unavailability is not None:
+        values["authenticated_runner_unavailability"] = authenticated_runner_unavailability
     if endpoint_inventory_refresh is not None:
         values["endpoint_inventory_refresh"] = endpoint_inventory_refresh.model_dump(mode="json")
+    if ancestry_transition_binding is not None:
+        values["ancestry_transition_binding"] = ancestry_transition_binding.model_dump(mode="json")
     values["plan_sha256"] = canonical_sha256(
         {
             **values,
@@ -728,6 +1167,24 @@ def _seal_candidate_selection_plan(
                 None
                 if authenticated_runner_selection is None
                 else authenticated_runner_selection.model_dump(mode="json")
+            ),
+            **(
+                {}
+                if authenticated_runner_unavailability is None
+                else {
+                    "authenticated_runner_unavailability": (
+                        authenticated_runner_unavailability.model_dump(mode="json")
+                    )
+                }
+            ),
+            **(
+                {}
+                if ancestry_transition_binding is None
+                else {
+                    "ancestry_transition_binding": ancestry_transition_binding.model_dump(
+                        mode="json"
+                    )
+                }
             ),
         }
     )
@@ -761,6 +1218,8 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
         CandidateSelectionEntry,
         CandidateSelectionEndpointInventoryRefresh,
         AuthenticatedRunnerSelection,
+        CandidateSelectionUnavailableState,
+        CandidateSelectionPlanAncestryTransitionBinding,
         CandidateSelectionPlan,
         RoutePredicateProfile,
         ExactRouteConstraint,
@@ -813,11 +1272,18 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
             CandidateSelectionEndpointInventoryRefresh,
         ),
         ("AuthenticatedRunnerSelection", AuthenticatedRunnerSelection),
+        ("CandidateSelectionUnavailableState", CandidateSelectionUnavailableState),
+        (
+            "CandidateSelectionPlanAncestryTransitionBinding",
+            CandidateSelectionPlanAncestryTransitionBinding,
+        ),
         ("CandidateSelectionPlan", CandidateSelectionPlan),
         ("CandidateSelectionError", CandidateSelectionError),
         ("RoutePredicateProfile", RoutePredicateProfile),
         ("ExactRouteConstraint", ExactRouteConstraint),
         ("ExactRouteRole", ExactRouteRole),
+        ("ProviderPriceCapAlgorithm", ProviderPriceCapAlgorithm),
+        ("NO_ACTIVE_CANDIDATE_REQUIREMENT", NO_ACTIVE_CANDIDATE_REQUIREMENT),
         ("canonical_sha256", canonical_sha256),
         ("stable_json", stable_json),
         ("seal_candidate_selection_entry", seal_candidate_selection_entry),
@@ -826,6 +1292,10 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
             _seal_candidate_selection_endpoint_inventory_refresh,
         ),
         ("seal_authenticated_runner_selection", seal_authenticated_runner_selection),
+        (
+            "_seal_candidate_selection_unavailable_state",
+            _seal_candidate_selection_unavailable_state,
+        ),
         ("_seal_candidate_selection_plan", _seal_candidate_selection_plan),
         ("route_constraint_callables_are_pristine", route_constraint_callables_are_pristine),
     )
@@ -928,6 +1398,7 @@ def _build_candidate_selection_successor_dependency_guard() -> Callable[[], bool
                 seal_candidate_selection_entry,
                 _seal_candidate_selection_endpoint_inventory_refresh,
                 seal_authenticated_runner_selection,
+                _seal_candidate_selection_unavailable_state,
                 _seal_candidate_selection_plan,
                 canonical_sha256,
                 stable_json,
@@ -1119,6 +1590,8 @@ type _CandidateSelectionSuccessorDerivationCallRoots = tuple[
     CodeType,
     Callable[..., CandidateSelectionPlan],
     CodeType,
+    Callable[..., CandidateSelectionPlan],
+    CodeType,
     Callable[[], bool],
     CodeType,
     Callable[[], bool],
@@ -1132,30 +1605,71 @@ def _derive_candidate_selection_plan_successor_unchecked(
     candidate_model_id: str,
     provider_endpoint: str,
     refresh_endpoint_inventory: bool = False,
+    upgrade_price_cap_profile_v2: bool = False,
+    upgrade_price_cap_profile_v3: bool = False,
 ) -> CandidateSelectionPlan:
     """Reproduce one structural successor without reinterpreting current eligibility."""
 
+    function_defaults = _derive_candidate_selection_plan_successor_unchecked.__kwdefaults__
+    if (
+        type(function_defaults) is not dict
+        or len(function_defaults) != 3
+        or function_defaults.get("refresh_endpoint_inventory") is not False
+        or function_defaults.get("upgrade_price_cap_profile_v2") is not False
+        or function_defaults.get("upgrade_price_cap_profile_v3") is not False
+    ):
+        raise CandidateSelectionError("candidate selection successor call boundary changed")
     if type(predecessor) is not CandidateSelectionPlan:
         raise CandidateSelectionError("candidate selection predecessor has the wrong exact type")
     try:
         canonical_predecessor = CandidateSelectionPlan.model_validate_json(
-            predecessor.model_dump_json(),
+            CandidateSelectionPlan.model_dump_json(predecessor),
             strict=True,
         )
     except ValueError as exc:
         raise CandidateSelectionError("candidate selection predecessor is invalid") from exc
     selection = canonical_predecessor.authenticated_runner_selection
+    unavailability = canonical_predecessor.authenticated_runner_unavailability
+    if unavailability is not None:
+        raise CandidateSelectionError(
+            "unavailable candidate predecessor requires a separately authenticated "
+            "ancestry transition"
+        )
     if selection is None:
         raise CandidateSelectionError(
             "candidate selection predecessor has no authenticated runner assignment"
         )
+    primary_judge_model_id = selection.primary_judge_model_id
+    replay_judge_model_id = selection.replay_judge_model_id
+    predecessor_profile = selection.route_predicate_profile
+    retained_judge_constraints = tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    )
+    predecessor_candidate_routes = {
+        (constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in selection.route_constraints
+        if constraint.role is ExactRouteRole.CANDIDATE
+    }
     if (
         type(candidate_model_id) is not str
         or type(provider_endpoint) is not str
         or type(refresh_endpoint_inventory) is not bool
+        or type(upgrade_price_cap_profile_v2) is not bool
+        or type(upgrade_price_cap_profile_v3) is not bool
     ):
         raise CandidateSelectionError(
             "candidate selection successor route has the wrong exact type"
+        )
+    if upgrade_price_cap_profile_v2 and upgrade_price_cap_profile_v3:
+        raise CandidateSelectionError(
+            "candidate selection price-cap profile upgrades are mutually exclusive"
+        )
+    if upgrade_price_cap_profile_v3:
+        raise CandidateSelectionError(
+            "candidate selection V3 price-cap upgrade is unavailable because provider "
+            "max_price cannot bind cache-write pricing"
         )
     entries_by_id = {entry.exact_model_id: entry for entry in canonical_predecessor.entries}
     selected_entry = entries_by_id.get(candidate_model_id)
@@ -1171,16 +1685,16 @@ def _derive_candidate_selection_plan_successor_unchecked(
             "candidate endpoint inventory refresh requires a previously unlisted endpoint"
         )
     if candidate_model_id in {
-        selection.primary_judge_model_id,
-        selection.replay_judge_model_id,
+        primary_judge_model_id,
+        replay_judge_model_id,
     }:
         raise CandidateSelectionError("candidate selection successor would collide with a judge")
-    predecessor_candidate_routes = {
-        (constraint.exact_model_id, constraint.provider_endpoint)
-        for constraint in selection.route_constraints
-        if constraint.role is ExactRouteRole.CANDIDATE
-    }
-    if (candidate_model_id, provider_endpoint) in predecessor_candidate_routes:
+    if (
+        candidate_model_id,
+        provider_endpoint,
+    ) in predecessor_candidate_routes and not (
+        upgrade_price_cap_profile_v2 or upgrade_price_cap_profile_v3
+    ):
         raise CandidateSelectionError(
             "candidate selection successor must change the candidate route"
         )
@@ -1199,18 +1713,71 @@ def _derive_candidate_selection_plan_successor_unchecked(
         for entry in canonical_predecessor.entries
     )
     profile = RoutePredicateProfile.model_validate_json(
-        selection.route_predicate_profile.model_dump_json(),
+        predecessor_profile.model_dump_json(),
         strict=True,
     )
-    preserved_judge_constraints = tuple(
-        ExactRouteConstraint.model_validate_json(constraint.model_dump_json(), strict=True)
-        for constraint in selection.route_constraints
-        if constraint.role is not ExactRouteRole.CANDIDATE
-    )
+    if upgrade_price_cap_profile_v2:
+        if (
+            profile.schema_version != "1.0"
+            or profile.price_cap_algorithm
+            is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+            or profile.price_component_unit_envelopes is not None
+        ):
+            raise CandidateSelectionError(
+                "candidate selection V2 price-cap upgrade requires an exact V1 predecessor"
+            )
+        profile = RoutePredicateProfile.build(
+            reasoning_policy_sha256=profile.reasoning_policy_sha256,
+            reasoning_role_profile_sha256=profile.reasoning_role_profile_sha256,
+            reasoning_role_binding_sha256=profile.reasoning_role_binding_sha256,
+            reasoning_control_profile_sha256=profile.reasoning_control_profile_sha256,
+            reserved_reasoning_tokens=profile.reserved_reasoning_tokens,
+            minimum_prompt_tokens=profile.minimum_prompt_tokens,
+            required_output_tokens=profile.required_output_tokens,
+            minimum_context_tokens=profile.minimum_context_tokens,
+            price_cap_algorithm=(ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2),
+        )
+    elif upgrade_price_cap_profile_v3:
+        if (
+            profile.schema_version != "1.1"
+            or profile.price_cap_algorithm
+            is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+        ):
+            raise CandidateSelectionError(
+                "candidate selection V3 price-cap upgrade requires an exact V2 predecessor"
+            )
+        profile = RoutePredicateProfile.build(
+            reasoning_policy_sha256=profile.reasoning_policy_sha256,
+            reasoning_role_profile_sha256=profile.reasoning_role_profile_sha256,
+            reasoning_role_binding_sha256=profile.reasoning_role_binding_sha256,
+            reasoning_control_profile_sha256=profile.reasoning_control_profile_sha256,
+            reserved_reasoning_tokens=profile.reserved_reasoning_tokens,
+            minimum_prompt_tokens=profile.minimum_prompt_tokens,
+            required_output_tokens=profile.required_output_tokens,
+            minimum_context_tokens=profile.minimum_context_tokens,
+            price_cap_algorithm=(
+                ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+            ),
+        )
+    if upgrade_price_cap_profile_v2 or upgrade_price_cap_profile_v3:
+        judge_constraints = tuple(
+            ExactRouteConstraint.build(
+                role=constraint.role,
+                exact_model_id=constraint.exact_model_id,
+                provider_endpoint=constraint.provider_endpoint,
+                profile=profile,
+            )
+            for constraint in retained_judge_constraints
+        )
+    else:
+        judge_constraints = tuple(
+            ExactRouteConstraint.model_validate_json(constraint.model_dump_json(), strict=True)
+            for constraint in retained_judge_constraints
+        )
     successor_selection = seal_authenticated_runner_selection(
         candidate_model_id=candidate_model_id,
-        primary_judge_model_id=selection.primary_judge_model_id,
-        replay_judge_model_id=selection.replay_judge_model_id,
+        primary_judge_model_id=primary_judge_model_id,
+        replay_judge_model_id=replay_judge_model_id,
         route_predicate_profile=profile,
         route_constraints=(
             ExactRouteConstraint.build(
@@ -1219,13 +1786,14 @@ def _derive_candidate_selection_plan_successor_unchecked(
                 provider_endpoint=provider_endpoint,
                 profile=profile,
             ),
-            *preserved_judge_constraints,
+            *judge_constraints,
         ),
     )
     successor = _seal_candidate_selection_plan(
         source_bindings=canonical_predecessor.source_bindings,
         entries=rebuilt_entries,
         authenticated_runner_selection=successor_selection,
+        authenticated_runner_unavailability=None,
         endpoint_inventory_refresh=(
             _seal_candidate_selection_endpoint_inventory_refresh(
                 predecessor_entry=selected_entry,
@@ -1234,15 +1802,114 @@ def _derive_candidate_selection_plan_successor_unchecked(
             if refresh_endpoint_inventory
             else None
         ),
-        unresolved_requirements=canonical_predecessor.unresolved_requirements,
+        unresolved_requirements=tuple(
+            item
+            for item in canonical_predecessor.unresolved_requirements
+            if item != NO_ACTIVE_CANDIDATE_REQUIREMENT
+        ),
         predecessor_plan_sha256=canonical_predecessor.plan_sha256,
     )
     return successor
 
 
+def _derive_candidate_selection_plan_unavailable_successor_unchecked(
+    *,
+    predecessor: CandidateSelectionPlan,
+    _revocation_registry_loader: Callable[[], CandidateSelectionRevocationRegistry] = (
+        load_candidate_selection_revocation_registry
+    ),
+) -> CandidateSelectionPlan:
+    """Derive one inactive successor only when every predecessor candidate route is tombstoned."""
+
+    function_defaults = (
+        _derive_candidate_selection_plan_unavailable_successor_unchecked.__kwdefaults__
+    )
+    if (
+        type(function_defaults) is not dict
+        or len(function_defaults) != 1
+        or function_defaults.get("_revocation_registry_loader") is not _revocation_registry_loader
+        or load_candidate_selection_revocation_registry is not _revocation_registry_loader
+        or candidate_revocation_module.load_candidate_selection_revocation_registry
+        is not _revocation_registry_loader
+        or not candidate_revocation_callables_are_pristine()
+    ):
+        raise CandidateSelectionError("candidate selection revocation boundary changed")
+    if type(predecessor) is not CandidateSelectionPlan:
+        raise CandidateSelectionError("candidate selection predecessor has the wrong exact type")
+    try:
+        canonical_predecessor = CandidateSelectionPlan.model_validate_json(
+            CandidateSelectionPlan.model_dump_json(predecessor),
+            strict=True,
+        )
+    except ValueError as exc:
+        raise CandidateSelectionError("candidate selection predecessor is invalid") from exc
+    selection = canonical_predecessor.authenticated_runner_selection
+    if selection is None or canonical_predecessor.authenticated_runner_unavailability is not None:
+        raise CandidateSelectionError(
+            "candidate selection predecessor lacks one active runner assignment"
+        )
+    profile = selection.route_predicate_profile
+    if (
+        profile.schema_version != "1.0"
+        or profile.price_cap_algorithm
+        is not ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+        or profile.price_component_unit_envelopes is not None
+    ):
+        raise CandidateSelectionError(
+            "candidate selection unavailable successor must preserve an exact V1 predecessor"
+        )
+    candidate_constraints = tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is ExactRouteRole.CANDIDATE
+    )
+    if not candidate_constraints:
+        raise CandidateSelectionError("candidate selection predecessor has no candidate route")
+    registry = _revocation_registry_loader()
+    matches: list[CandidateSelectionRevocationEntry] = []
+    for constraint in candidate_constraints:
+        exact_matches = tuple(
+            entry
+            for entry in registry.entries
+            if entry.selection_plan_sha256 == canonical_predecessor.plan_sha256
+            and entry.role is ExactRouteRole.CANDIDATE
+            and entry.exact_model_id == constraint.exact_model_id
+            and entry.provider_endpoint.casefold() == constraint.provider_endpoint.casefold()
+            and entry.exact_route_constraint_sha256 == constraint.constraint_sha256
+        )
+        if len(exact_matches) != 1:
+            raise CandidateSelectionError(
+                "candidate selection predecessor does not have complete exact revocation custody"
+            )
+        matches.append(exact_matches[0])
+    unavailable = _seal_candidate_selection_unavailable_state(
+        predecessor_selection=selection,
+        revocation_registry=registry,
+        revocation_entries=tuple(matches),
+    )
+    return _seal_candidate_selection_plan(
+        source_bindings=canonical_predecessor.source_bindings,
+        entries=canonical_predecessor.entries,
+        authenticated_runner_selection=None,
+        authenticated_runner_unavailability=unavailable,
+        endpoint_inventory_refresh=None,
+        unresolved_requirements=tuple(
+            sorted(
+                {
+                    *canonical_predecessor.unresolved_requirements,
+                    NO_ACTIVE_CANDIDATE_REQUIREMENT,
+                }
+            )
+        ),
+        predecessor_plan_sha256=canonical_predecessor.plan_sha256,
+    )
+
+
 _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS: _CandidateSelectionSuccessorDerivationCallRoots = (
     _derive_candidate_selection_plan_successor_unchecked,
     _derive_candidate_selection_plan_successor_unchecked.__code__,
+    _derive_candidate_selection_plan_unavailable_successor_unchecked,
+    _derive_candidate_selection_plan_unavailable_successor_unchecked.__code__,
     _require_candidate_selection_plan_currently_eligible_checked,
     _require_candidate_selection_plan_currently_eligible_checked.__code__,
     _candidate_selection_successor_dependencies_are_pristine,
@@ -1258,6 +1925,8 @@ def _derive_candidate_selection_plan_successor_checked(
     candidate_model_id: str,
     provider_endpoint: str,
     refresh_endpoint_inventory: bool = False,
+    upgrade_price_cap_profile_v2: bool = False,
+    upgrade_price_cap_profile_v3: bool = False,
     _successor_call_roots: _CandidateSelectionSuccessorDerivationCallRoots = (
         _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS
     ),
@@ -1265,11 +1934,13 @@ def _derive_candidate_selection_plan_successor_checked(
     """Derive one currently eligible, nonauthorizing candidate-route successor."""
 
     function_defaults = _derive_candidate_selection_plan_successor_checked.__kwdefaults__
-    if type(_successor_call_roots) is not tuple or len(_successor_call_roots) != 8:
+    if type(_successor_call_roots) is not tuple or len(_successor_call_roots) != 10:
         raise CandidateSelectionError("candidate selection successor call boundary changed")
     (
         trusted_derivation,
         trusted_derivation_code,
+        trusted_unavailability_derivation,
+        trusted_unavailability_derivation_code,
         trusted_eligibility,
         trusted_eligibility_code,
         trusted_successor_pristine,
@@ -1279,10 +1950,18 @@ def _derive_candidate_selection_plan_successor_checked(
     ) = _successor_call_roots
     if (
         type(function_defaults) is not dict
+        or len(function_defaults) != 4
+        or function_defaults.get("refresh_endpoint_inventory") is not False
+        or function_defaults.get("upgrade_price_cap_profile_v2") is not False
+        or function_defaults.get("upgrade_price_cap_profile_v3") is not False
         or function_defaults.get("_successor_call_roots") is not _successor_call_roots
         or _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS is not _successor_call_roots
         or _derive_candidate_selection_plan_successor_unchecked is not trusted_derivation
         or getattr(trusted_derivation, "__code__", None) is not trusted_derivation_code
+        or _derive_candidate_selection_plan_unavailable_successor_unchecked
+        is not trusted_unavailability_derivation
+        or getattr(trusted_unavailability_derivation, "__code__", None)
+        is not trusted_unavailability_derivation_code
         or _require_candidate_selection_plan_currently_eligible_checked is not trusted_eligibility
         or getattr(trusted_eligibility, "__code__", None) is not trusted_eligibility_code
         or _candidate_selection_successor_dependencies_are_pristine
@@ -1302,7 +1981,67 @@ def _derive_candidate_selection_plan_successor_checked(
         candidate_model_id=candidate_model_id,
         provider_endpoint=provider_endpoint,
         refresh_endpoint_inventory=refresh_endpoint_inventory,
+        upgrade_price_cap_profile_v2=upgrade_price_cap_profile_v2,
+        upgrade_price_cap_profile_v3=upgrade_price_cap_profile_v3,
     )
+    eligible = trusted_eligibility(successor)
+    if type(eligible) is not CandidateSelectionPlan or eligible != successor:
+        raise CandidateSelectionError("candidate selection successor eligibility result changed")
+    return eligible
+
+
+def _derive_candidate_selection_plan_unavailable_successor_checked(
+    *,
+    predecessor: CandidateSelectionPlan,
+    _successor_call_roots: _CandidateSelectionSuccessorDerivationCallRoots = (
+        _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS
+    ),
+) -> CandidateSelectionPlan:
+    """Derive one currently eligible, nonauthorizing unavailable-candidate successor."""
+
+    function_defaults = (
+        _derive_candidate_selection_plan_unavailable_successor_checked.__kwdefaults__
+    )
+    if type(_successor_call_roots) is not tuple or len(_successor_call_roots) != 10:
+        raise CandidateSelectionError("candidate selection successor call boundary changed")
+    (
+        trusted_derivation,
+        trusted_derivation_code,
+        trusted_unavailability_derivation,
+        trusted_unavailability_derivation_code,
+        trusted_eligibility,
+        trusted_eligibility_code,
+        trusted_successor_pristine,
+        trusted_successor_pristine_code,
+        trusted_route_pristine,
+        trusted_route_pristine_code,
+    ) = _successor_call_roots
+    if (
+        type(function_defaults) is not dict
+        or len(function_defaults) != 1
+        or function_defaults.get("_successor_call_roots") is not _successor_call_roots
+        or _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS is not _successor_call_roots
+        or _derive_candidate_selection_plan_successor_unchecked is not trusted_derivation
+        or getattr(trusted_derivation, "__code__", None) is not trusted_derivation_code
+        or _derive_candidate_selection_plan_unavailable_successor_unchecked
+        is not trusted_unavailability_derivation
+        or getattr(trusted_unavailability_derivation, "__code__", None)
+        is not trusted_unavailability_derivation_code
+        or _require_candidate_selection_plan_currently_eligible_checked is not trusted_eligibility
+        or getattr(trusted_eligibility, "__code__", None) is not trusted_eligibility_code
+        or _candidate_selection_successor_dependencies_are_pristine
+        is not trusted_successor_pristine
+        or getattr(trusted_successor_pristine, "__code__", None)
+        is not trusted_successor_pristine_code
+        or route_constraint_callables_are_pristine is not trusted_route_pristine
+        or getattr(trusted_route_pristine, "__code__", None) is not trusted_route_pristine_code
+        or route_constraints_module.route_constraint_callables_are_pristine
+        is not trusted_route_pristine
+        or not trusted_successor_pristine()
+        or not trusted_route_pristine()
+    ):
+        raise CandidateSelectionError("candidate selection successor call boundary changed")
+    successor = trusted_unavailability_derivation(predecessor=predecessor)
     eligible = trusted_eligibility(successor)
     if type(eligible) is not CandidateSelectionPlan or eligible != successor:
         raise CandidateSelectionError("candidate selection successor eligibility result changed")
@@ -1320,11 +2059,13 @@ def _validate_candidate_selection_plan_successor_checked(
     """Reproduce and validate one exact immediate successor against its predecessor."""
 
     function_defaults = _validate_candidate_selection_plan_successor_checked.__kwdefaults__
-    if type(_successor_call_roots) is not tuple or len(_successor_call_roots) != 8:
+    if type(_successor_call_roots) is not tuple or len(_successor_call_roots) != 10:
         raise CandidateSelectionError("candidate selection successor call boundary changed")
     (
         trusted_derivation,
         trusted_derivation_code,
+        trusted_unavailability_derivation,
+        trusted_unavailability_derivation_code,
         trusted_eligibility,
         trusted_eligibility_code,
         trusted_successor_pristine,
@@ -1338,6 +2079,10 @@ def _validate_candidate_selection_plan_successor_checked(
         or _CANDIDATE_SELECTION_SUCCESSOR_DERIVATION_CALL_ROOTS is not _successor_call_roots
         or _derive_candidate_selection_plan_successor_unchecked is not trusted_derivation
         or getattr(trusted_derivation, "__code__", None) is not trusted_derivation_code
+        or _derive_candidate_selection_plan_unavailable_successor_unchecked
+        is not trusted_unavailability_derivation
+        or getattr(trusted_unavailability_derivation, "__code__", None)
+        is not trusted_unavailability_derivation_code
         or _require_candidate_selection_plan_currently_eligible_checked is not trusted_eligibility
         or getattr(trusted_eligibility, "__code__", None) is not trusted_eligibility_code
         or _candidate_selection_successor_dependencies_are_pristine
@@ -1354,14 +2099,23 @@ def _validate_candidate_selection_plan_successor_checked(
         raise CandidateSelectionError("candidate selection successor call boundary changed")
     if type(successor) is not CandidateSelectionPlan:
         raise CandidateSelectionError("candidate selection successor has the wrong exact type")
+    if type(predecessor) is not CandidateSelectionPlan:
+        raise CandidateSelectionError("candidate selection predecessor has the wrong exact type")
     try:
         canonical_successor = CandidateSelectionPlan.model_validate_json(
-            successor.model_dump_json(),
+            CandidateSelectionPlan.model_dump_json(successor),
             strict=True,
         )
     except ValueError as exc:
         raise CandidateSelectionError("candidate selection successor is invalid") from exc
     selection = canonical_successor.authenticated_runner_selection
+    if canonical_successor.authenticated_runner_unavailability is not None:
+        expected_unavailable = trusted_unavailability_derivation(predecessor=predecessor)
+        if canonical_successor != expected_unavailable:
+            raise CandidateSelectionError(
+                "candidate selection unavailable successor differs from its derivation"
+            )
+        return canonical_successor
     if selection is None:
         raise CandidateSelectionError(
             "candidate selection successor has no authenticated runner assignment"
@@ -1376,11 +2130,54 @@ def _validate_candidate_selection_plan_successor_checked(
             "candidate selection successor must bind one exact candidate route"
         )
     candidate_constraint = candidate_constraints[0]
+    try:
+        canonical_predecessor = CandidateSelectionPlan.model_validate_json(
+            CandidateSelectionPlan.model_dump_json(predecessor),
+            strict=True,
+        )
+    except ValueError as exc:
+        raise CandidateSelectionError("candidate selection predecessor is invalid") from exc
+    predecessor_selection = canonical_predecessor.authenticated_runner_selection
+    predecessor_unavailability = canonical_predecessor.authenticated_runner_unavailability
+    if predecessor_unavailability is not None:
+        raise CandidateSelectionError(
+            "unavailable candidate predecessor requires a separately authenticated "
+            "ancestry transition"
+        )
+    if predecessor_selection is None:
+        raise CandidateSelectionError(
+            "candidate selection predecessor has no authenticated runner assignment"
+        )
+    predecessor_profile = predecessor_selection.route_predicate_profile
+    predecessor_algorithm = predecessor_profile.price_cap_algorithm
+    successor_algorithm = selection.route_predicate_profile.price_cap_algorithm
+    if predecessor_algorithm is successor_algorithm:
+        upgrade_price_cap_profile_v2 = False
+        upgrade_price_cap_profile_v3 = False
+    elif (
+        predecessor_algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+        and successor_algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    ):
+        upgrade_price_cap_profile_v2 = True
+        upgrade_price_cap_profile_v3 = False
+    elif (
+        predecessor_algorithm is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+        and successor_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+    ):
+        upgrade_price_cap_profile_v2 = False
+        upgrade_price_cap_profile_v3 = True
+    else:
+        raise CandidateSelectionError(
+            "candidate selection successor price-cap profile transition is invalid"
+        )
     expected = trusted_derivation(
-        predecessor=predecessor,
+        predecessor=canonical_predecessor,
         candidate_model_id=candidate_constraint.exact_model_id,
         provider_endpoint=candidate_constraint.provider_endpoint,
         refresh_endpoint_inventory=canonical_successor.endpoint_inventory_refresh is not None,
+        upgrade_price_cap_profile_v2=upgrade_price_cap_profile_v2,
+        upgrade_price_cap_profile_v3=upgrade_price_cap_profile_v3,
     )
     if canonical_successor != expected:
         raise CandidateSelectionError("candidate selection successor differs from its derivation")
@@ -1452,6 +2249,16 @@ class _CandidateSelectionSuccessorDeriver(Protocol):
         candidate_model_id: str,
         provider_endpoint: str,
         refresh_endpoint_inventory: bool = False,
+        upgrade_price_cap_profile_v2: bool = False,
+        upgrade_price_cap_profile_v3: bool = False,
+    ) -> CandidateSelectionPlan: ...
+
+
+class _CandidateSelectionUnavailableSuccessorDeriver(Protocol):
+    def __call__(
+        self,
+        *,
+        predecessor: CandidateSelectionPlan,
     ) -> CandidateSelectionPlan: ...
 
 
@@ -1482,6 +2289,7 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
     Callable[[], bool],
     _CandidateSelectionEligibility,
     _CandidateSelectionSuccessorDeriver,
+    _CandidateSelectionUnavailableSuccessorDeriver,
     _CandidateSelectionSuccessorValidator,
     _CandidateSelectionSuccessorPreflight,
     _CandidateSelectionSuccessorWriter,
@@ -1494,6 +2302,9 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
     plan_type = CandidateSelectionPlan
     eligibility_implementation = _require_candidate_selection_plan_currently_eligible_checked
     derivation_implementation = _derive_candidate_selection_plan_successor_checked
+    unavailability_derivation_implementation = (
+        _derive_candidate_selection_plan_unavailable_successor_checked
+    )
     validation_implementation = _validate_candidate_selection_plan_successor_checked
     preflight_implementation = _preflight_candidate_selection_plan_successor_output_checked
     reject_links_implementation = _reject_candidate_selection_output_links
@@ -1584,6 +2395,11 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
             candidate_revocation_module,
             "require_selection_plan_routes_eligible",
             require_selection_plan_routes_eligible,
+        ),
+        (
+            candidate_revocation_module,
+            "load_candidate_selection_revocation_registry",
+            load_candidate_selection_revocation_registry,
         ),
         (
             route_constraints_module,
@@ -1912,6 +2728,8 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
         candidate_model_id: str,
         provider_endpoint: str,
         refresh_endpoint_inventory: bool = False,
+        upgrade_price_cap_profile_v2: bool = False,
+        upgrade_price_cap_profile_v3: bool = False,
     ) -> CandidateSelectionPlan:
         """Derive one currently eligible, nonauthorizing candidate-route successor."""
 
@@ -1922,7 +2740,19 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
             candidate_model_id=candidate_model_id,
             provider_endpoint=provider_endpoint,
             refresh_endpoint_inventory=refresh_endpoint_inventory,
+            upgrade_price_cap_profile_v2=upgrade_price_cap_profile_v2,
+            upgrade_price_cap_profile_v3=upgrade_price_cap_profile_v3,
         )
+
+    def derive_candidate_selection_plan_unavailable_successor(
+        *,
+        predecessor: CandidateSelectionPlan,
+    ) -> CandidateSelectionPlan:
+        """Derive one inactive successor after complete exact candidate revocation."""
+
+        if pristine.__code__ is not pristine_code or not pristine():
+            raise error_type("candidate selection successor call boundary changed")
+        return unavailability_derivation_implementation(predecessor=predecessor)
 
     def validate_candidate_selection_plan_successor(
         *,
@@ -2207,6 +3037,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
             eligibility_implementation,
         ),
         ("_derive_candidate_selection_plan_successor_checked", derivation_implementation),
+        (
+            "_derive_candidate_selection_plan_unavailable_successor_checked",
+            unavailability_derivation_implementation,
+        ),
         ("_validate_candidate_selection_plan_successor_checked", validation_implementation),
         (
             "_preflight_candidate_selection_plan_successor_output_checked",
@@ -2224,6 +3058,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
             require_candidate_selection_plan_currently_eligible,
         ),
         ("derive_candidate_selection_plan_successor", derive_candidate_selection_plan_successor),
+        (
+            "derive_candidate_selection_plan_unavailable_successor",
+            derive_candidate_selection_plan_unavailable_successor,
+        ),
         (
             "validate_candidate_selection_plan_successor",
             validate_candidate_selection_plan_successor,
@@ -2251,6 +3089,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
             "require_selection_plan_routes_eligible",
             require_selection_plan_routes_eligible,
         ),
+        (
+            "load_candidate_selection_revocation_registry",
+            load_candidate_selection_revocation_registry,
+        ),
         ("route_constraints_module", route_constraints_module),
         ("route_constraint_callables_are_pristine", route_pristine),
         (
@@ -2260,6 +3102,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
         (
             "_derive_candidate_selection_plan_successor_unchecked",
             _derive_candidate_selection_plan_successor_unchecked,
+        ),
+        (
+            "_derive_candidate_selection_plan_unavailable_successor_unchecked",
+            _derive_candidate_selection_plan_unavailable_successor_unchecked,
         ),
         ("stable_json", stable_json_implementation),
         ("os", os),
@@ -2282,7 +3128,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
         dict.fromkeys(
             (
                 eligibility_implementation,
+                _derive_candidate_selection_plan_successor_unchecked,
+                _derive_candidate_selection_plan_unavailable_successor_unchecked,
                 derivation_implementation,
+                unavailability_derivation_implementation,
                 validation_implementation,
                 preflight_implementation,
                 reject_links_implementation,
@@ -2294,8 +3143,10 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
                 revocation_pristine,
                 require_candidate_assignment_eligible,
                 require_selection_plan_routes_eligible,
+                load_candidate_selection_revocation_registry,
                 require_candidate_selection_plan_currently_eligible,
                 derive_candidate_selection_plan_successor,
+                derive_candidate_selection_plan_unavailable_successor,
                 validate_candidate_selection_plan_successor,
                 preflight_candidate_selection_plan_successor_output,
                 write_candidate_selection_plan_successor,
@@ -2325,6 +3176,7 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
         pristine,
         require_candidate_selection_plan_currently_eligible,
         derive_candidate_selection_plan_successor,
+        derive_candidate_selection_plan_unavailable_successor,
         validate_candidate_selection_plan_successor,
         preflight_candidate_selection_plan_successor_output,
         write_candidate_selection_plan_successor,
@@ -2335,6 +3187,7 @@ def _build_candidate_selection_successor_callable_boundary() -> tuple[
     _candidate_selection_successor_callables_are_pristine,
     require_candidate_selection_plan_currently_eligible,
     derive_candidate_selection_plan_successor,
+    derive_candidate_selection_plan_unavailable_successor,
     validate_candidate_selection_plan_successor,
     preflight_candidate_selection_plan_successor_output,
     write_candidate_selection_plan_successor,
@@ -2393,6 +3246,10 @@ def validate_candidate_selection_routes(
     """Require an explicit exact nonempty subset; never select an endpoint automatically."""
 
     canonical = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    if canonical.authenticated_runner_unavailability is not None:
+        raise CandidateSelectionError(
+            "candidate selection has no active candidate: NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+        )
     validated_routes = tuple(
         DiscoveryCandidateRoute.model_validate(route.model_dump(mode="python")) for route in routes
     )
@@ -2437,6 +3294,10 @@ def authenticated_runner_route_constraint(
     canonical = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
     selection = canonical.authenticated_runner_selection
     if selection is None:
+        if canonical.authenticated_runner_unavailability is not None:
+            raise CandidateSelectionError(
+                "candidate selection has no active candidate: NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+            )
         raise CandidateSelectionError("candidate selection has no authenticated runner profile")
     matching = tuple(
         item
@@ -2560,6 +3421,10 @@ def validate_candidate_selection_discovery_capability(
     )
     selection = canonical.authenticated_runner_selection
     if selection is None:
+        if canonical.authenticated_runner_unavailability is not None:
+            raise CandidateSelectionError(
+                "candidate selection has no active candidate: NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+            )
         if any(item is not None for item in route_custody):
             raise CandidateSelectionError(
                 "unselected candidate discovery carries unexpected route custody"
@@ -2625,6 +3490,10 @@ def derive_pending_candidate_registry_from_selection_plan(
     ):
         raise CandidateSelectionError("candidate selection revocation boundary changed")
     canonical_plan = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    if canonical_plan.authenticated_runner_unavailability is not None:
+        raise CandidateSelectionError(
+            "candidate selection has no active candidate: NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+        )
     manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
         run_manifest.model_dump(mode="python")
     )

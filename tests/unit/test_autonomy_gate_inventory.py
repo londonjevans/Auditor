@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import os
 import subprocess
 import sys
@@ -43,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3895
-    assert inventory.source_occurrence_count == 3898
+    assert inventory.source_count == 4179
+    assert inventory.source_occurrence_count == 4182
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -52,27 +54,27 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert inventory.audit_override_path_count == 51
     assert inventory.environment_override_count == 28
     assert inventory.cli_run_parameter_count == 53
-    assert inventory.pipeline_init_parameter_count == 26
+    assert inventory.pipeline_init_parameter_count == 29
     assert inventory.pipeline_run_parameter_count == 16
-    assert inventory.completion_entrypoint_parameter_count == 336
+    assert inventory.completion_entrypoint_parameter_count == 355
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
         "AUDIT_CONFIG_LEAF": 513,
         "AUDIT_RUN_OPTION_LEAF": 16,
         "AUDIT_OVERRIDE_PATH": 51,
         "ENVIRONMENT_OVERRIDE": 28,
         "CLI_RUN_PARAMETER": 53,
-        "PIPELINE_INIT_PARAMETER": 26,
+        "PIPELINE_INIT_PARAMETER": 29,
         "PIPELINE_RUN_PARAMETER": 16,
-        "COMPLETION_ENTRYPOINT_PARAMETER": 336,
-        "DIRECT_ENVIRONMENT_INPUT": 499,
+        "COMPLETION_ENTRYPOINT_PARAMETER": 355,
+        "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 253,
-        "EXPLICIT_NON_FIELD_GATE": 2071,
+        "AUDITED_MODULE_UNIVERSE": 286,
+        "EXPLICIT_NON_FIELD_GATE": 2250,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3846,
-        SourceCoverageClassification.NON_GATING_CONTROL: 49,
+        SourceCoverageClassification.GATE: 4127,
+        SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
         "GATE",
@@ -81,10 +83,11 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 106
     assert (
         sum(":working-directory:" in source.source_path for source in inventory.source_coverage)
-        == 111
+        == 115
     )
     assert (
-        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 88
+        sum(":process-identity" in source.source_path for source in inventory.source_coverage)
+        == 108
     )
     assert (
         sum(
@@ -94,15 +97,15 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 19
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 292
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 312
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
-        == 81
+        == 84
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1683
+        == 1813
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -121,6 +124,904 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
             CompletionInputSourceKind.REQUIRED_MISSING_GATE,
         }
     )
+
+
+def test_development_routing_observation_confers_no_transport_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id, gate_id in {
+        "explicit:development-routing-observation": "gate-provider-secret-transport",
+        "audited-module:models.development_routing": "gate-runtime-package-integrity",
+    }.items():
+        assert by_id[source_id].logical_gate_id == gate_id
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_development_measurement_preserves_unverified_benchmark_and_scope_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id, gate_id in {
+        "audited-module:benchmark.development": "gate-runtime-package-integrity",
+        "explicit:development-benchmark-truth": "gate-benchmark-evidence-authority",
+        "explicit:development-benchmark-plan-binding": "gate-client-audit-scope",
+        "explicit:development-benchmark-score": "gate-benchmark-evidence-authority",
+    }.items():
+        assert by_id[source_id].logical_gate_id == gate_id
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_development_shard_boundaries_are_gated_not_a_qualified_audit(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    expected = {
+        "explicit:development-audit-frozen-plan": "gate-client-audit-scope",
+        "explicit:development-audit-shard-transport": "gate-provider-secret-transport",
+        "explicit:development-audit-sequential-run": "gate-full-quality-analysis",
+        "audited-module:models.development_audit": "gate-runtime-package-integrity",
+        "audited-module:orchestration.development_audit": "gate-runtime-package-integrity",
+    }
+    for source_id, gate_id in expected.items():
+        assert by_id[source_id].logical_gate_id == gate_id
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_executable_observation_inputs_join_the_unverified_toolchain_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:scanners.base:_observe_scanner_executable:"
+        )
+    ]
+    assert len(sources) == 7
+    assert sum(":content-read:" in source.source_path for source in sources) == 1
+    assert sum(":metadata-observation:" in source.source_path for source in sources) == 6
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_offline_image_metadata_chain_does_not_promote_layer_or_execution_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    anchor = by_id["explicit:managed-image-metadata-chain"]
+    module = by_id["audited-module:orchestration.managed_image_metadata"]
+    assert anchor.logical_gate_id == "gate-managed-toolchain-bundle"
+    assert module.logical_gate_id == "gate-runtime-package-integrity"
+    assert anchor.classification is module.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_local_layer_identity_and_stream_custody_do_not_promote_image_admission(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        by_id["explicit:managed-image-layer-bytes"].logical_gate_id
+        == "gate-managed-toolchain-bundle"
+    )
+    assert (
+        by_id["explicit:bound-read-only-evidence-stream"].logical_gate_id
+        == "gate-release-evidence-pipeline"
+    )
+    assert (
+        by_id["audited-module:orchestration.managed_image_layers"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    stream_inputs = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            (
+                "filesystem-input:release_io:stream_file_evidence:",
+                "filesystem-input:release_io:_require_stream_custody:",
+            )
+        )
+    ]
+    assert len(stream_inputs) == 8
+    assert sum(":metadata-observation:" in item.source_path for item in stream_inputs) == 7
+    assert sum(":content-read:" in item.source_path for item in stream_inputs) == 1
+    assert all(item.logical_gate_id == "gate-release-evidence-pipeline" for item in stream_inputs)
+    assert all(item.classification is SourceCoverageClassification.GATE for item in stream_inputs)
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_static_image_membership_keeps_lookup_and_parser_gated_without_runtime_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert by_id["explicit:managed-image-file-membership"].logical_gate_id == (
+        "gate-managed-toolchain-bundle"
+    )
+    for module in ("isolation.oci_layer", "orchestration.managed_image_files"):
+        assert by_id["audited-module:" + module].logical_gate_id == "gate-runtime-package-integrity"
+    # The conservative AST visitor records resolve() even for this in-memory view.
+    lookup = by_id[
+        "filesystem-input:orchestration.managed_image_files:verify_managed_image_files:1"
+    ]
+    assert lookup.logical_gate_id == "gate-managed-toolchain-bundle"
+    assert lookup.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_prepared_pipeline_inputs_are_classified_without_promoting_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert by_id["pipeline-init:host_tools"].logical_gate_id == "gate-managed-toolchain-bundle"
+    assert (
+        by_id["pipeline-init:managed_backend"].logical_gate_id
+        == "gate-reproduction-capability-policy"
+    )
+    roots = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:orchestration.managed_pipeline:")
+    ]
+    assert len(roots) == 4
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in roots)
+    assert all(":metadata-observation:" in source.source_path for source in roots)
+    assert "audited-module:orchestration.managed_pipeline" in by_id
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_prepared_matrix_roots_and_module_are_classified_without_promoting_readiness(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        by_id["audited-module:orchestration.managed_fork_matrix"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    roots = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:orchestration.managed_fork_matrix:")
+    ]
+    assert len(roots) == 1
+    assert roots[0].logical_gate_id == "gate-managed-toolchain-bundle"
+    assert ":metadata-observation:" in roots[0].source_path
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_prepared_matrix_uses_existing_observations_without_ambient_tool_selection() -> None:
+    from mmaudit.orchestration import managed_fork_matrix
+
+    tree = ast.parse(inspect.getsource(managed_fork_matrix))
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_observe_scanner_executable"
+        for node in ast.walk(tree)
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"open", "read_bytes", "which", "getenv"}
+        for node in ast.walk(tree)
+    )
+
+
+def test_offline_fork_archive_input_is_classified_without_promoting_a_running_fork(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    source = by_id["explicit:offline-fork-read-archive"]
+    assert source.logical_gate_id == "gate-fork-environment"
+    assert source.classification is SourceCoverageClassification.GATE
+    assert (
+        by_id["audited-module:scanners.offline_fork_rpc"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_offline_read_lease_remains_a_fork_prerequisite_not_runtime_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    source = by_id["explicit:offline-fork-read-lease"]
+    assert source.logical_gate_id == "gate-fork-environment"
+    assert source.classification is SourceCoverageClassification.GATE
+    assert (
+        by_id["audited-module:scanners.offline_fork_service"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_managed_archive_handoff_inputs_are_explicit_without_promoting_fork_readiness(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "pipeline-init:offline_forks",
+        "explicit:managed-offline-fork-archive-preparation",
+        "explicit:managed-offline-fork-archive-consumption",
+        "filesystem-input:orchestration.managed_fork_archives:_verify_archive_roots:1",
+        "filesystem-input:orchestration.managed_fork_archives:_verify_archive_roots:2",
+    ):
+        assert by_id[source_id].logical_gate_id == "gate-fork-environment"
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert (
+        by_id["audited-module:orchestration.managed_fork_archives"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_primary_archive_selection_and_foundry_consumer_are_explicit_nonauthorizing_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "explicit:managed-offline-primary-archive-selection",
+        "explicit:managed-primary-foundry-consumption",
+    ):
+        assert by_id[source_id].logical_gate_id == "gate-fork-environment"
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_reproduction_archive_selection_and_existing_consumer_remain_nonauthorizing_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "explicit:managed-reproduction-archive-selection",
+        "explicit:fork-reproduction-runner",
+    ):
+        assert by_id[source_id].logical_gate_id == "gate-fork-environment"
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_invariant_archive_selection_and_existing_consumer_remain_nonauthorizing_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id, gate_id in (
+        ("explicit:managed-invariant-archive-selection", "gate-fork-environment"),
+        ("explicit:typed-invariant-runner", "gate-invariant-template-library"),
+    ):
+        assert by_id[source_id].logical_gate_id == gate_id
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_hardhat_parent_capture_inputs_do_not_promote_execution_or_runtime_authority(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        by_id["audited-module:scanners.hardhat_supervision"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert (
+        by_id["explicit:hardhat-phase-output-supervision"].logical_gate_id
+        == "gate-full-quality-analysis"
+    )
+    filesystem = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:scanners.hardhat_supervision:")
+    ]
+    assert len(filesystem) == 10
+    assert all(":metadata-observation:" in source.source_path for source in filesystem)
+    assert all(source.logical_gate_id == "gate-full-quality-analysis" for source in filesystem)
+    environment = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("direct-env-ast:scanners.hardhat_supervision:")
+    ]
+    assert {source.source_id for source in environment} == {
+        "direct-env-ast:scanners.hardhat_supervision:_root_identity:host-identity:1",
+        "direct-env-ast:scanners.hardhat_supervision:"
+        "supervise_hardhat_phase_process:host-platform:1",
+    }
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in environment)
+    assert all(
+        source.classification is SourceCoverageClassification.GATE
+        for source in filesystem + environment
+    )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_hardhat_capture_protocol_join_inputs_preserve_unverified_readiness(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "explicit:hardhat-captured-inventory-preparation",
+        "explicit:hardhat-captured-test-consumption",
+    ):
+        assert by_id[source_id].logical_gate_id == "gate-full-quality-analysis"
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    assert (
+        by_id["audited-module:scanners.hardhat_protocol"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_hardhat_phase_layout_inputs_preserve_unverified_fork_boundary(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    roots = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:isolation.container:_hardhat_phase_workspace_identity:"
+        )
+    ]
+    assert len(roots) == 2
+    for source in [*roots, by_id["explicit:hardhat-phase-container-layout"]]:
+        assert source.logical_gate_id == "gate-fork-environment"
+        assert source.classification is SourceCoverageClassification.GATE
+    relocated = "filesystem-input:isolation.container:singleloopbackhardhatbackend."
+    assert relocated + "wrap_hardhat_fork_suite:1" not in by_id
+    assert (
+        by_id[relocated + "_wrap_hardhat_with_layout:1"].logical_gate_id == "gate-fork-environment"
+    )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_exact_rootless_cleanup_inputs_never_promote_runtime_admission(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        by_id["explicit:rootless-exact-container-cleanup"].logical_gate_id
+        == "gate-managed-output-provisioning"
+    )
+    assert (
+        by_id["audited-module:isolation.container_cleanup"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    filesystem = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:isolation.container_cleanup:")
+    ]
+    environment = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("direct-env-ast:isolation.container_cleanup:")
+    ]
+    assert len(filesystem) == 7 and len(environment) == 6
+    for source in filesystem + environment:
+        expected = (
+            "gate-managed-toolchain-bundle"
+            if any(
+                token in source.source_id
+                for token in (
+                    ":_runtime_identity:",
+                    ":_control_environment:",
+                    ":_run_control_command:",
+                    ":host-platform:",
+                )
+            )
+            else "gate-managed-output-provisioning"
+        )
+        assert source.logical_gate_id == expected
+        assert source.classification is SourceCoverageClassification.GATE
+    assert not any(
+        ":RootlessContainerBackend.cleanup:" in s.source_path for s in inventory.source_coverage
+    )
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_owned_hardhat_lifecycle_is_classified_without_promoting_admission(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    anchor = by_id["explicit:hardhat-owned-two-phase-execution"]
+    module = by_id["audited-module:scanners.hardhat_execution"]
+    assert anchor.logical_gate_id == "gate-full-quality-analysis"
+    assert module.logical_gate_id == "gate-runtime-package-integrity"
+    assert anchor.classification is module.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_phase_finalizer_and_retained_cleanup_handoff_do_not_supply_admission(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    assert (
+        by_id["explicit:hardhat-phase-finalization"].logical_gate_id == "gate-full-quality-analysis"
+    )
+    assert (
+        by_id["audited-module:scanners.hardhat_finalization"].logical_gate_id
+        == "gate-runtime-package-integrity"
+    )
+    filesystem = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:scanners.hardhat_finalization:")
+    ]
+    assert len(filesystem) == 3
+    assert all(source.logical_gate_id == "gate-full-quality-analysis" for source in filesystem)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in filesystem)
+    assert (
+        by_id["explicit:rootless-exact-container-cleanup"].logical_gate_id
+        == "gate-managed-output-provisioning"
+    )
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize("field", ["source_count", "source_occurrence_count", "gate_source_count"])
+def test_expanded_inventory_ceiling_remains_bounded(inventory: AutonomyGateInventory, field: str):
+    schema = AutonomyGateInventory.model_json_schema()
+    assert schema["properties"][field]["maximum"] == 8192
+    assert schema["properties"]["source_coverage"]["maxItems"] == 8192
+    values = inventory.model_dump(mode="json")
+    values[field] = 8193
+    with pytest.raises(ValidationError) as error:
+        AutonomyGateInventory.model_validate(values)
+    assert any(item["loc"] == (field,) for item in error.value.errors())
+
+
+def test_host_material_inputs_remain_an_unverified_toolchain_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            (
+                "filesystem-input:orchestration.managed_host_tools:",
+                "direct-env-ast:orchestration.managed_host_tools:",
+            )
+        )
+    ]
+    assert len(sources) == 17
+    assert sum(":content-read:" in source.source_path for source in sources) == 2
+    assert sum(":metadata-observation:" in source.source_path for source in sources) == 12
+    assert sum(":directory-enumeration:" in source.source_path for source in sources) == 1
+    assert sum(":host-identity:" in source.source_path for source in sources) == 2
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_isolation_admission_reuses_existing_bounded_filesystem_observations(
+    inventory: AutonomyGateInventory,
+) -> None:
+    from mmaudit.isolation import provenance
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(provenance._admit_isolation_executable)))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    assert (
+        sum(
+            isinstance(node.func, ast.Name) and node.func.id == "_observe_scanner_executable"
+            for node in calls
+        )
+        == 1
+    )
+    assert not any(
+        isinstance(node.func, ast.Attribute) and node.func.attr in {"open", "resolve", "is_file"}
+        for node in calls
+    )
+    assert not hasattr(provenance, "_file_sha256")
+    removed = {
+        "filesystem-input:isolation.provenance:_file_sha256:1",
+        "filesystem-input:isolation.provenance:_seal_builtin_isolation_backend:1",
+        "filesystem-input:isolation.provenance:_seal_builtin_isolation_backend:2",
+        "filesystem-input:isolation.provenance:_attestation_still_valid:1",
+    }
+    assert removed.isdisjoint(source.source_id for source in inventory.source_coverage)
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_isolation_sealing_lookup_and_each_probe_preserve_launcher_admission() -> None:
+    from mmaudit.isolation import provenance
+
+    expected = {
+        provenance._seal_builtin_isolation_backend: (1, 4),
+        provenance._attestation_still_valid: (1, 1),
+        provenance._execute_probe: (0, 3),
+        provenance._run_builtin_preflight: (1, 2),
+        provenance._network_probe_denied: (1, 1),
+    }
+    for consumer, (admit_count, recheck_count) in expected.items():
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        named = Counter(node.func.id for node in calls if isinstance(node.func, ast.Name))
+        assert named["_admit_isolation_executable"] == admit_count
+        assert named["_require_isolation_executable_unchanged"] == recheck_count
+        for node in calls:
+            if isinstance(node.func, ast.Name) and node.func.id in {
+                "_execute_probe",
+                "_run_builtin_preflight",
+                "_network_probe_denied",
+            }:
+                assert any(
+                    keyword.arg == "admission"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id == "admission"
+                    for keyword in node.keywords
+                )
+
+
+def test_absolute_executable_availability_inputs_share_the_unverified_toolchain_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            (
+                "filesystem-input:scanners.base:scanner_executable_candidate:",
+                "direct-env-ast:scanners.base:scanner_executable_candidate:",
+            )
+        )
+    ]
+    assert len(sources) == 3
+    assert sum(":metadata-observation:" in source.source_path for source in sources) == 2
+    assert sum(":path-resolution:" in source.source_path for source in sources) == 1
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_shared_path_resolver_preserves_all_four_previous_lookup_consumers() -> None:
+    from mmaudit.scanners.base import ScannerAdapter
+    from mmaudit.scanners.foundry import FoundryForkScanner
+    from mmaudit.scanners.runner import preflight_configured_scanner_tools
+
+    for consumer in (
+        ScannerAdapter.available,
+        ScannerAdapter._run,
+        FoundryForkScanner._run_repository_suite,
+        preflight_configured_scanner_tools,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        assert (
+            sum(
+                isinstance(node.func, ast.Name) and node.func.id == "scanner_executable_candidate"
+                for node in calls
+            )
+            == 1
+        )
+        assert not any(
+            isinstance(node.func, ast.Attribute) and node.func.attr == "which" for node in calls
+        )
+
+
+def test_managed_isolation_cpu_and_os_inputs_retain_unverified_toolchain_gate(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        item
+        for item in inventory.source_coverage
+        if item.source_id.startswith("direct-env-ast:isolation.managed:")
+    ]
+    assert len(sources) == 2
+    assert all(":host-platform:" in item.source_path for item in sources)
+    assert all(item.logical_gate_id == "gate-managed-toolchain-bundle" for item in sources)
+    assert all(item.classification is SourceCoverageClassification.GATE for item in sources)
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_managed_compiler_path_checks_remain_unverified_toolchain_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:solidity.compile:_managed_compilation_selection:"
+        )
+    ]
+    assert len(sources) == 2
+    assert all(":metadata-observation:" in source.source_path for source in sources)
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_managed_formal_root_checks_remain_unverified_toolchain_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:solidity.formal:_managedformalselection.verify_roots:"
+        )
+    ]
+    assert len(sources) == 2
+    assert all(":metadata-observation:" in source.source_path for source in sources)
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_prepared_clean_anvil_root_check_is_classified_without_promoting_readiness(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:scanners.clean_chain:_managedcleananviltool.verify:"
+        )
+    ]
+    assert len(sources) == 1
+    assert ":metadata-observation:" in sources[0].source_path
+    assert sources[0].logical_gate_id == "gate-managed-toolchain-bundle"
+    assert sources[0].classification is SourceCoverageClassification.GATE
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_prepared_clean_anvil_reuses_bounded_identity_observation_without_new_path_lookup() -> None:
+    from mmaudit.scanners import clean_chain
+
+    parameter = inspect.signature(clean_chain.TrustedCleanAnvilLauncher).parameters["host_tools"]
+    assert parameter.default is None
+    for consumer in (
+        clean_chain._managed_clean_anvil_tool,
+        clean_chain._ManagedCleanAnvilTool.verify,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_observe_scanner_executable"
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "read_bytes", "which", "getenv"}
+            for node in ast.walk(tree)
+        )
+
+
+def test_managed_reproduction_root_checks_remain_unverified_toolchain_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:solidity.reproduction:_managedreproductionselection.verify_roots:"
+        )
+    ]
+    assert len(sources) == 2
+    assert all(":metadata-observation:" in source.source_path for source in sources)
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_managed_reproduction_retains_shared_bounded_identity_and_probe_admission() -> None:
+    from mmaudit.solidity import reproduction
+
+    for consumer in (
+        reproduction._managed_reproduction_selection,
+        reproduction._ManagedReproductionSelection.verify,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_observe_scanner_executable"
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "read_bytes", "which"}
+            for node in ast.walk(tree)
+        )
+    tree = ast.parse(
+        textwrap.dedent(
+            inspect.getsource(reproduction.ForkReproductionRunner._preflight_managed_tools)
+        )
+    )
+    probes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isolated_executable_version_probe"
+    ]
+    assert len(probes) == 1
+    assert "expected_host_observation" in {keyword.arg for keyword in probes[0].keywords}
+
+
+def test_managed_invariant_root_checks_remain_unverified_toolchain_inputs(
+    inventory: AutonomyGateInventory,
+) -> None:
+    sources = [
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith(
+            "filesystem-input:solidity.invariant_execution:_managedinvariantselection.verify_roots:"
+        )
+    ]
+    assert len(sources) == 2
+    assert all(":metadata-observation:" in source.source_path for source in sources)
+    assert all(source.logical_gate_id == "gate-managed-toolchain-bundle" for source in sources)
+    assert all(source.classification is SourceCoverageClassification.GATE for source in sources)
+    assert inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+def test_managed_invariant_retains_shared_bounded_identity_and_probe_admission() -> None:
+    from mmaudit.solidity import invariant_execution as invariant
+
+    for consumer in (
+        invariant._managed_invariant_selection,
+        invariant._ManagedInvariantSelection.verify,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_observe_scanner_executable"
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "read_bytes", "which"}
+            for node in ast.walk(tree)
+        )
+    tree = ast.parse(textwrap.dedent(inspect.getsource(invariant._external_executable_version)))
+    probes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isolated_executable_version_probe"
+    ]
+    assert len(probes) == 1
+    assert "expected_host_observation" in {keyword.arg for keyword in probes[0].keywords}
+
+
+def test_managed_formal_retains_shared_bounded_identity_and_probe_admission() -> None:
+    from mmaudit.solidity import formal
+
+    for consumer in (formal._managed_formal_selection, formal._ManagedFormalSelection.verify):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_observe_scanner_executable"
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "read_bytes", "which"}
+            for node in ast.walk(tree)
+        )
+    tree = ast.parse(textwrap.dedent(inspect.getsource(formal._isolated_tool_version)))
+    probes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isolated_executable_version_probe"
+    ]
+    assert len(probes) == 1
+    assert "expected_host_observation" in {keyword.arg for keyword in probes[0].keywords}
+
+
+def test_managed_compilation_retains_shared_bounded_identity_and_probe_admission() -> None:
+    from mmaudit.solidity import compile as compiler
+
+    for consumer in (
+        compiler._managed_compilation_selection,
+        compiler._ManagedCompilationSelection.verify,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(consumer)))
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_observe_scanner_executable"
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"open", "read_bytes", "which"}
+            for node in ast.walk(tree)
+        )
+    tree = ast.parse(textwrap.dedent(inspect.getsource(compiler._isolated_tool_versions)))
+    probes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isolated_executable_version_probe"
+    ]
+    assert len(probes) == 1
+    assert any(keyword.arg == "expected_host_observation" for keyword in probes[0].keywords)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import platform as host\ndef selected_cpu():\n    return host.machine()\n",
+        "from platform import machine as cpu\nselected = cpu\ndef selected_cpu():\n    return selected()\n",
+    ],
+)
+def test_new_direct_or_aliased_cpu_platform_input_fails_closed(tmp_path: Path, source: str) -> None:
+    root = tmp_path / "mmaudit"
+    root.mkdir()
+    (root / "new_platform.py").write_text(source)
+    observed = inventory_module._direct_environment_occurrences(root)
+    assert len(observed) == 1
+    assert observed[0][:3] == ("new_platform.py", "selected_cpu", "host-platform")
+    with pytest.raises(AutonomyInventoryError, match="direct environment"):
+        _discover_direct_environment_sources(root)
 
 
 def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state(
@@ -159,6 +1060,18 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         managed_toolchain.implementation_detail
     )
     sources = {source.source_id: source for source in inventory.source_coverage}
+    retained_writer_inputs = tuple(
+        source
+        for source in inventory.source_coverage
+        if source.source_id.startswith("filesystem-input:release_io:_write_file_content:")
+        or source.source_id == "direct-env-ast:release_io:_write_file_content:host-identity:1"
+    )
+    assert len(retained_writer_inputs) == 13
+    assert all(
+        source.logical_gate_id == "gate-release-evidence-pipeline"
+        and source.classification is SourceCoverageClassification.GATE
+        for source in retained_writer_inputs
+    )
     for source_id in (
         "direct-env-ast:orchestration.budgets:_accounting_portfolio_scope_material:"
         "process-identity:1",
@@ -205,6 +1118,7 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         "completion-entrypoint:models_emit_selection_plan_successor:candidate",
         "completion-entrypoint:models_emit_selection_plan_successor:predecessor_plan",
         "completion-entrypoint:models_emit_selection_plan_successor:refresh_endpoint_inventory",
+        "completion-entrypoint:models_emit_selection_plan_successor:upgrade_price_cap_profile_v2",
         "completion-entrypoint:models_list_endpoints:model_id",
     ):
         assert sources[source_id].logical_gate_id == "gate-autonomous-model-authority"
@@ -342,6 +1256,22 @@ def test_equivalent_config_and_cli_boundaries_use_consistent_primary_gates() -> 
     assert inventory_module._command_parameter_classification(
         "models_authenticated_runner_smoke", "smoke_corpus"
     ) == (SourceCoverageClassification.GATE, "gate-authenticated-real-campaign")
+    assert inventory_module._command_parameter_classification(
+        "managed_provision", "verify_only"
+    ) == (SourceCoverageClassification.GATE, "gate-managed-provisioning")
+
+
+def test_managed_provisioning_mechanism_is_partial_and_nonauthorizing(
+    inventory: AutonomyGateInventory,
+) -> None:
+    gate = next(
+        item for item in inventory.logical_gates if item.gate_id == "gate-managed-provisioning"
+    )
+    assert gate.implementation_state is GateImplementationState.PARTIAL
+    assert "portfolio holds" in gate.implementation_detail
+    assert "authority stay false" in gate.implementation_detail
+    assert inventory.runtime_authority is False
+    assert inventory.managed_run_ready is False
 
 
 def test_committed_inventory_is_canonical_self_hashed_and_current(
@@ -649,6 +1579,16 @@ def test_filesystem_privacy_provenance_has_exact_nonfallback_gate() -> None:
         (
             "orchestration/managed_toolchain.py",
             "_load_managed_toolchain_bundle_path",
+            "gate-managed-toolchain-bundle",
+        ),
+        (
+            "scanners/base.py",
+            "_observe_scanner_executable",
+            "gate-managed-toolchain-bundle",
+        ),
+        (
+            "orchestration/managed_host_tools.py",
+            "materialize_managed_host_tools",
             "gate-managed-toolchain-bundle",
         ),
         (

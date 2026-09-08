@@ -1,0 +1,18 @@
+{
+  "schema_version": "2.0",
+  "summary": "Synthetic claim-format regression for the local abstract development corpus.",
+  "findings": [
+    {
+      "title": "Gateway configuration lacks its administrator guard",
+      "severity": "high",
+      "line_start": 40,
+      "line_end": 46,
+      "kind": "invariant_violation",
+      "vulnerability_class": "access_control",
+      "violated_invariant": "Only the administrator may change the configured gateway.",
+      "root_cause_ref": {"filename": "RoutePolicy.sol", "line_start": 40, "line_end": 46},
+      "explanation": "The intentionally unguarded local variant omits its declared administrator check.",
+      "recommendation": "Restore the administrator guard as in the paired local control."
+    }
+  ]
+}

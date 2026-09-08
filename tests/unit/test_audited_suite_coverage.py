@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,7 +81,8 @@ from mmaudit.orchestration.model_coverage import build_model_surface_requests
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.scanners.base import ScannerIsolationBackend, scanner_workspace_sha256
-from mmaudit.scanners.foundry import FoundryForkScanner
+from mmaudit.scanners.foundry import FoundryForkScanner, _write_repository_suite_manifest
+from mmaudit.scanners.foundry_inventory_runner import FoundryInventoryOverflowError
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.coverage import (
     build_solidity_coverage,
@@ -211,7 +215,7 @@ def _install_synthetic_runtime_authority(
             raise AssertionError("synthetic runtime authority has no configured result")
         return result
 
-    invoke, contains, validated_copy, _annotate = (
+    invoke, contains, validated_copy, _annotate, _lease = (
         runtime_evidence_module._build_foundry_runtime_authority(
             adapter_type=FoundryForkScanner,
             producer_body=synthetic_foundry_repository_suite,
@@ -294,7 +298,7 @@ def _self_authored_repository_suite_run(
         per_test_timeout_seconds=30,
         total_timeout_seconds=60,
         max_output_bytes_per_test=1_024,
-        max_total_output_bytes=2_048,
+        max_total_output_bytes=1_000_000,
     )
     execution = RepositoryTestExecution.sealed(
         selection_sha256=selection.selection_sha256,
@@ -396,12 +400,18 @@ async def _runner_authorized_repository_suite_run(
     monkeypatch: pytest.MonkeyPatch,
     config: AuditConfig,
     execution_status: RepositoryTestExecutionStatus = RepositoryTestExecutionStatus.PASSED,
+    result_override: ScannerRun | None = None,
 ) -> tuple[ScannerRun, ScannerRunner, str]:
     """Issue a synthetic receipt only through the exact built-in runner invocation."""
 
-    result, execution_sha256 = _self_authored_repository_suite_run(
-        execution_status=execution_status
-    )
+    if result_override is None:
+        result, execution_sha256 = _self_authored_repository_suite_run(
+            execution_status=execution_status
+        )
+    else:
+        result = result_override
+        assert len(result.repository_test_executions) == 1
+        execution_sha256 = result.repository_test_executions[0].execution_sha256
     authority = _install_synthetic_runtime_authority(monkeypatch)
     authority.result = result
     configured = config.model_copy(
@@ -472,8 +482,18 @@ def _forged_repository_suite_run() -> tuple[ScannerRun, str]:
 
 def _covered_statement_evidence(
     entity: SolidityEntity,
-    execution_sha256: str,
+    run: ScannerRun,
+    *,
+    covered: bool = True,
+    covered_spans: Mapping[tuple[int, int], bool] | None = None,
 ) -> AuditedSuiteStatementCoverageEvidence:
+    selection = run.repository_suite_selection
+    policy = run.repository_suite_execution_policy
+    assert selection is not None
+    assert policy is not None
+    assert run.version is not None
+    assert run.executable_sha256 is not None
+    assert run.isolation_attestation_sha256 is not None
     location = Location(
         path=entity.path,
         start_line=entity.start_line,
@@ -481,43 +501,220 @@ def _covered_statement_evidence(
         symbol=entity.signature or entity.name,
         content_hash=entity.source_hash,
     )
-    statements = [
-        AuditedSuiteStatementObservation(
-            statement_id=f"statement:{position:064x}",
-            location=Location(
+    source = (FIXTURE / entity.path).read_text(encoding="utf-8")
+    source_lines = source.splitlines(keepends=True)
+    statements: list[AuditedSuiteStatementObservation] = []
+    byte_cursor = 0
+    for line_number, line in enumerate(source_lines, start=1):
+        encoded = line.encode("utf-8")
+        if entity.start_line <= line_number <= entity.end_line and line.strip():
+            leading = len(line) - len(line.lstrip())
+            trailing_text = line.rstrip()
+            start_byte_offset = byte_cursor + len(line[:leading].encode("utf-8"))
+            end_byte_offset = byte_cursor + len(trailing_text.encode("utf-8"))
+            statement_covered = (
+                covered_spans.get((start_byte_offset, end_byte_offset), covered)
+                if covered_spans is not None
+                else covered
+            )
+            statement_location = Location(
                 path=entity.path,
-                start_line=line,
-                end_line=line,
+                start_line=line_number,
+                end_line=line_number,
                 symbol=entity.signature or entity.name,
                 content_hash=entity.source_hash,
-            ),
-            covered=True,
-        )
-        for position, line in enumerate(
-            range(entity.start_line, min(entity.end_line, entity.start_line + 2) + 1),
-            start=1,
-        )
-    ]
+            )
+            statements.append(
+                AuditedSuiteStatementObservation(
+                    statement_id=AuditedSuiteStatementObservation.calculate_statement_id(
+                        location=statement_location,
+                        start_byte_offset=start_byte_offset,
+                        end_byte_offset=end_byte_offset,
+                    ),
+                    location=statement_location,
+                    start_byte_offset=start_byte_offset,
+                    end_byte_offset=end_byte_offset,
+                    covered=statement_covered,
+                )
+            )
+        byte_cursor += len(encoded)
+    assert statements
+    execution_sha256s = sorted(
+        execution.execution_sha256 for execution in run.repository_test_executions
+    )
+    covered_count = sum(statement.covered for statement in statements)
     return AuditedSuiteStatementCoverageEvidence.sealed(
         entity_id=entity.id,
         entity_kind=entity.kind,
         contract_name=entity.contract_name or entity.name,
         location=location,
-        statement_status=AuditedSuiteStatementStatus.COVERED,
+        statement_status=(
+            AuditedSuiteStatementStatus.COVERED
+            if covered_count == len(statements)
+            else AuditedSuiteStatementStatus.UNCOVERED
+        ),
         statement_count=len(statements),
-        covered_statement_count=len(statements),
+        covered_statement_count=covered_count,
         statements=statements,
-        repository_test_execution_sha256s=[execution_sha256],
-        source_repository_sha256="b" * 64,
+        repository_test_execution_sha256s=execution_sha256s,
+        source_repository_sha256=selection.repository_sha256,
+        repository_suite_selection_sha256=selection.selection_sha256,
+        repository_suite_execution_policy_sha256=policy.policy_sha256,
+        coverage_command_sha256s=["8" * 64],
+        statement_inventory_sha256="9" * 64,
         coverage_artifact_sha256="5" * 64,
+        coverage_artifact_bytes=128,
         producer_version="synthetic-normalizer 1.0",
         producer_sha256="7" * 64,
+        normalizer_policy_sha256="a" * 64,
         tool_name="forge",
-        tool_version="synthetic 1.0",
-        tool_sha256="6" * 64,
+        tool_version=run.version,
+        tool_sha256=run.executable_sha256,
+        compiler_version=policy.compiler_version,
+        compiler_sha256=policy.compiler_sha256,
         execution_evidence=ExecutionEvidenceKind.REAL,
         machine_output_validated=True,
-        isolation_attestation_sha256="3" * 64,
+        isolation_attestation_sha256=run.isolation_attestation_sha256,
+    )
+
+
+def _run_with_statement_evidence(
+    run: ScannerRun,
+    evidence: list[AuditedSuiteStatementCoverageEvidence],
+) -> ScannerRun:
+    provisional = run.model_copy(
+        update={
+            "repository_statement_coverage_evidence": sorted(
+                evidence,
+                key=lambda item: (item.entity_id, item.evidence_sha256),
+            ),
+            "execution_observation_sha256": None,
+        }
+    )
+    return ScannerRun.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "execution_observation_sha256": (provisional.expected_execution_observation_sha256()),
+        }
+    )
+
+
+def test_statement_observation_identity_distinguishes_two_statements_on_one_line() -> None:
+    source = "contract C { function f() external { uint256 a = 1; uint256 b = 2; } }\n"
+    location = Location(
+        path="src/C.sol",
+        start_line=1,
+        end_line=1,
+        symbol="f()",
+        content_hash=hashlib.sha256(source.encode("utf-8")).hexdigest(),
+    )
+    spans = [
+        (source.index("uint256 a"), source.index("uint256 a") + len("uint256 a = 1;")),
+        (source.index("uint256 b"), source.index("uint256 b") + len("uint256 b = 2;")),
+    ]
+    observations = [
+        AuditedSuiteStatementObservation(
+            statement_id=AuditedSuiteStatementObservation.calculate_statement_id(
+                location=location,
+                start_byte_offset=start,
+                end_byte_offset=end,
+            ),
+            location=location,
+            start_byte_offset=start,
+            end_byte_offset=end,
+            covered=index == 0,
+        )
+        for index, (start, end) in enumerate(spans)
+    ]
+
+    assert observations[0].statement_id != observations[1].statement_id
+    assert observations[0].location.start_line == observations[1].location.start_line == 1
+
+
+def test_statement_span_validation_uses_exact_utf8_boundaries_and_multiline_locations() -> None:
+    source = (
+        "contract Café {\n"
+        "    function label() external pure returns (string memory) {\n"
+        '        return "café";\n'
+        "    }\n"
+        "}\n"
+    )
+    content_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    entity_location = Location(
+        path="src/Café.sol",
+        start_line=1,
+        end_line=5,
+        symbol="label()",
+        content_hash=content_hash,
+    )
+    statement_location = Location(
+        path=entity_location.path,
+        start_line=2,
+        end_line=3,
+        symbol=entity_location.symbol,
+        content_hash=content_hash,
+    )
+    start = len(source[: source.index("function")].encode("utf-8"))
+    end = len(source[: source.index(";\n") + 1].encode("utf-8"))
+    source_index = coverage_module._utf8_source_span_index(source)
+    entity_end = len(source.encode("utf-8"))
+
+    assert coverage_module._statement_observation_matches_source(
+        source_index=source_index,
+        entity_location=entity_location,
+        entity_start_byte_offset=0,
+        entity_end_byte_offset=entity_end,
+        statement_location=statement_location,
+        start_byte_offset=start,
+        end_byte_offset=end,
+    )
+    multibyte_offset = source.encode("utf-8").index("é".encode())
+    assert not coverage_module._statement_observation_matches_source(
+        source_index=source_index,
+        entity_location=entity_location,
+        entity_start_byte_offset=0,
+        entity_end_byte_offset=entity_end,
+        statement_location=statement_location,
+        start_byte_offset=multibyte_offset + 1,
+        end_byte_offset=end,
+    )
+
+
+def test_statement_span_cannot_cross_between_two_functions_on_one_line() -> None:
+    source = (
+        "contract C { function a() external { uint256 x = 1; } "
+        "function b() external { uint256 y = 2; } }\n"
+    )
+    source_bytes = source.encode()
+    content_hash = hashlib.sha256(source_bytes).hexdigest()
+    entity_location = Location(
+        path="src/C.sol",
+        start_line=1,
+        end_line=1,
+        symbol="a()",
+        content_hash=content_hash,
+    )
+    statement_location = entity_location
+    function_a_start = source.index("function a")
+    function_a_end = source.index("function b")
+    function_b_statement_start = source.index("uint256 y")
+    function_b_statement_end = function_b_statement_start + len("uint256 y = 2;")
+    source_index = coverage_module._utf8_source_span_index(source)
+
+    assert coverage_module._entity_span_matches_source(
+        source_index=source_index,
+        entity_location=entity_location,
+        start_byte_offset=function_a_start,
+        end_byte_offset=function_a_end,
+    )
+    assert not coverage_module._statement_observation_matches_source(
+        source_index=source_index,
+        entity_location=entity_location,
+        entity_start_byte_offset=function_a_start,
+        entity_end_byte_offset=function_a_end,
+        statement_location=statement_location,
+        start_byte_offset=function_b_statement_start,
+        end_byte_offset=function_b_statement_end,
     )
 
 
@@ -569,6 +766,7 @@ def test_audited_suite_denominators_exclude_test_harnesses_and_emit_exact_gaps(
     )
     audited = coverage.audited_suite_coverage
     assert audited is not None
+    assert audited.schema_version == "1.1"
 
     contract_metric = audited.contract_statement_coverage
     function_metric = audited.function_statement_coverage
@@ -660,6 +858,29 @@ def test_audited_suite_denominators_exclude_test_harnesses_and_emit_exact_gaps(
     assert not withdraw_gap.is_finding
     assert all(not gap.location.path.startswith("test/") for gap in audited.gaps)
     assert AuditedSuiteCoverage.model_validate_json(audited.model_dump_json()) == audited
+    legacy_payload = audited.model_dump(mode="json")
+    legacy_payload["schema_version"] = "1.0"
+    legacy_payload.pop("statement_coverage_authority")
+    legacy_bytes = json.dumps(
+        legacy_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    restored_legacy = AuditedSuiteCoverage.model_validate_json(legacy_bytes)
+    assert restored_legacy.schema_version == "1.0"
+    assert restored_legacy.statement_coverage_authority is None
+    assert (
+        json.dumps(
+            restored_legacy.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        == legacy_bytes
+    )
 
 
 def test_auxiliary_graph_nodes_do_not_invalidate_critical_source_classification(
@@ -1221,7 +1442,8 @@ def test_self_authored_statement_artifacts_never_earn_runtime_credit(
         for entity in build.index.entities
         if entity.contract_name == "Vault" and entity.name == "withdraw"
     )
-    forged = _covered_statement_evidence(withdraw, "a" * 64)
+    standalone_run, _ = _self_authored_repository_suite_run()
+    forged = _covered_statement_evidence(withdraw, standalone_run)
     without_runtime = build_solidity_coverage(
         discovery=discovery,
         projects=projects,
@@ -1252,22 +1474,12 @@ def test_self_authored_statement_artifacts_never_earn_runtime_credit(
             "repository_test_execution_sha256s": ["2" * 64],
         }
     )
-    with pytest.raises(ValidationError, match="trusted normalizer boundary"):
-        AuditedSuiteSurfaceCoverage.model_validate(forged_surface_values)
-    forged_surface = AuditedSuiteSurfaceCoverage.model_construct(**forged_surface_values)
-    forged_coverage_values = audited_without_runtime.model_dump(mode="python")
-    forged_coverage_values["surfaces"] = [
-        forged_surface if item.entity_id == withdraw.id else item
-        for item in audited_without_runtime.surfaces
-    ]
-    with pytest.raises(ValidationError, match="trusted normalizer boundary"):
-        AuditedSuiteCoverage.model_validate(forged_coverage_values)
+    forged_surface = AuditedSuiteSurfaceCoverage.model_validate(forged_surface_values)
+    assert forged_surface.statement_status is AuditedSuiteStatementStatus.COVERED
+    assert forged_surface.statement_evidence_sha256s == ["1" * 64]
 
-    forged_run, forged_execution_sha256 = _forged_repository_suite_run()
-    forged_from_construct = _covered_statement_evidence(
-        withdraw,
-        forged_execution_sha256,
-    )
+    forged_run, _ = _forged_repository_suite_run()
+    forged_from_construct = _covered_statement_evidence(withdraw, standalone_run)
     with pytest.raises(ValidationError):
         build_solidity_coverage(
             discovery=discovery,
@@ -1279,8 +1491,8 @@ def test_self_authored_statement_artifacts_never_earn_runtime_credit(
             audited_suite_statement_evidence=[forged_from_construct],
         )
 
-    run, execution_sha256 = _self_authored_repository_suite_run()
-    evidence = _covered_statement_evidence(withdraw, execution_sha256)
+    run, _ = _self_authored_repository_suite_run()
+    evidence = _covered_statement_evidence(withdraw, run)
     serialized_run = ScannerRun.model_validate_json(run.model_dump_json())
     serialized_coverage = build_solidity_coverage(
         discovery=discovery,
@@ -1350,7 +1562,443 @@ def test_self_authored_statement_artifacts_never_earn_runtime_credit(
         )
 
 
-def test_statement_evidence_rejects_vacuous_or_inconsistent_denominators(
+@pytest.mark.asyncio
+async def test_synthetic_process_sealed_complete_statement_population_projects_exact_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory,
+) -> None:
+    root = tmp_path / "foundry"
+    shutil.copytree(FIXTURE, root)
+    config = config_factory(language_profile="solidity-evm")
+    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    build = build_solidity_index(discovery, projects, [root / "out"])
+    graphs = build_solidity_graphs(discovery, build)
+    partition = partition_audited_source_entities(index=build.index, projects=projects)
+    source_entity_ids = {
+        *partition.contract_entity_ids,
+        *partition.function_entity_ids,
+    }
+    base_run, _ = _self_authored_repository_suite_run()
+    source_entities = sorted(
+        (item for item in build.index.entities if item.id in source_entity_ids),
+        key=lambda item: item.id,
+    )
+    function_evidence = [
+        _covered_statement_evidence(
+            entity,
+            base_run,
+            covered=not (entity.contract_name == "Vault" and entity.name == "withdraw"),
+        )
+        for entity in source_entities
+        if entity.kind in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}
+    ]
+    contract_evidence: list[AuditedSuiteStatementCoverageEvidence] = []
+    for contract in (
+        entity
+        for entity in source_entities
+        if entity.kind
+        in {
+            SolidityEntityKind.CONTRACT,
+            SolidityEntityKind.INTERFACE,
+            SolidityEntityKind.LIBRARY,
+        }
+    ):
+        covered_spans = {
+            (statement.start_byte_offset, statement.end_byte_offset): statement.covered
+            for function in function_evidence
+            if function.location.path == contract.path and function.contract_name == contract.name
+            for statement in function.statements
+        }
+        contract_evidence.append(
+            _covered_statement_evidence(
+                contract,
+                base_run,
+                covered=True,
+                covered_spans=covered_spans,
+            )
+        )
+    evidence = sorted(
+        [*contract_evidence, *function_evidence],
+        key=lambda item: (item.entity_id, item.evidence_sha256),
+    )
+
+    def reseal_with_statements(
+        item: AuditedSuiteStatementCoverageEvidence,
+        statements: list[AuditedSuiteStatementObservation],
+    ) -> AuditedSuiteStatementCoverageEvidence:
+        values = item.model_dump(
+            mode="python",
+            exclude={
+                "evidence_sha256",
+                "statement_status",
+                "statement_count",
+                "covered_statement_count",
+            },
+        )
+        covered_count = sum(statement.covered for statement in statements)
+        values.update(
+            {
+                "location": item.location,
+                "statement_status": (
+                    AuditedSuiteStatementStatus.COVERED
+                    if covered_count == len(statements)
+                    else AuditedSuiteStatementStatus.UNCOVERED
+                ),
+                "statement_count": len(statements),
+                "covered_statement_count": covered_count,
+                "statements": statements,
+            }
+        )
+        return AuditedSuiteStatementCoverageEvidence.sealed(**values)
+
+    target_function = next(
+        item
+        for item in function_evidence
+        if item.contract_name == "Vault" and item.location.symbol == "withdraw(uint256)"
+    )
+    target_contract = next(item for item in contract_evidence if item.contract_name == "Vault")
+    target_span = (
+        target_function.statements[0].start_byte_offset,
+        target_function.statements[0].end_byte_offset,
+    )
+    target_contract_statement = next(
+        statement
+        for statement in target_contract.statements
+        if (statement.start_byte_offset, statement.end_byte_offset) == target_span
+    )
+    conflicting_contract = reseal_with_statements(
+        target_contract,
+        [
+            (
+                statement.model_copy(update={"covered": not statement.covered})
+                if statement is target_contract_statement
+                else statement
+            )
+            for statement in target_contract.statements
+        ],
+    )
+    incomplete_contract = reseal_with_statements(
+        target_contract,
+        [
+            statement
+            for statement in target_contract.statements
+            if statement is not target_contract_statement
+        ],
+    )
+    partial_overlap_location = target_contract_statement.location
+    partial_overlap_statement = AuditedSuiteStatementObservation(
+        statement_id=AuditedSuiteStatementObservation.calculate_statement_id(
+            location=partial_overlap_location,
+            start_byte_offset=target_contract_statement.start_byte_offset - 1,
+            end_byte_offset=target_contract_statement.end_byte_offset,
+        ),
+        location=partial_overlap_location,
+        start_byte_offset=target_contract_statement.start_byte_offset - 1,
+        end_byte_offset=target_contract_statement.end_byte_offset,
+        covered=target_contract_statement.covered,
+    )
+    partial_overlap_contract = reseal_with_statements(
+        target_contract,
+        [
+            partial_overlap_statement if statement is target_contract_statement else statement
+            for statement in target_contract.statements
+        ],
+    )
+    sealed_result = _run_with_statement_evidence(base_run, evidence)
+    selection = sealed_result.repository_suite_selection
+    policy = sealed_result.repository_suite_execution_policy
+    assert selection is not None
+    assert policy is not None
+    manifest_dir = tmp_path / "manifest"
+    manifest_dir.mkdir()
+    manifest_path = _write_repository_suite_manifest(
+        manifest_dir,
+        selection,
+        None,
+        None,
+        policy,
+        sealed_result.repository_test_executions,
+        statement_coverage_evidence=evidence,
+        deadline=time.monotonic() + 5,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "1.1"
+    assert manifest["repository_statement_coverage_evidence"] == [
+        item.model_dump(mode="json") for item in evidence
+    ]
+    constrained_policy_values = policy.model_dump(mode="python", exclude={"policy_sha256"})
+    constrained_policy_values.update(
+        {
+            "max_output_bytes_per_test": 1_024,
+            "max_total_output_bytes": 1_024,
+        }
+    )
+    constrained_policy = RepositorySuiteExecutionPolicy.sealed(**constrained_policy_values)
+    overflow_dir = tmp_path / "manifest-overflow"
+    overflow_dir.mkdir()
+    with pytest.raises(FoundryInventoryOverflowError, match="complete artifact byte budget"):
+        _write_repository_suite_manifest(
+            overflow_dir,
+            selection,
+            None,
+            None,
+            constrained_policy,
+            sealed_result.repository_test_executions,
+            statement_coverage_evidence=evidence,
+            deadline=time.monotonic() + 5,
+        )
+    assert not (overflow_dir / "repository-suite-execution.json").exists()
+    aggregate_overflow_dir = tmp_path / "manifest-aggregate-overflow"
+    aggregate_overflow_dir.mkdir()
+    with pytest.raises(FoundryInventoryOverflowError, match="complete artifact byte budget"):
+        _write_repository_suite_manifest(
+            aggregate_overflow_dir,
+            selection,
+            None,
+            None,
+            policy,
+            sealed_result.repository_test_executions,
+            statement_coverage_evidence=evidence,
+            previously_charged_artifact_bytes=policy.max_total_output_bytes,
+            deadline=time.monotonic() + 5,
+        )
+    assert not (aggregate_overflow_dir / "repository-suite-execution.json").exists()
+    run, runner, _ = await _runner_authorized_repository_suite_run(
+        tmp_path=tmp_path / "runtime",
+        monkeypatch=monkeypatch,
+        config=config,
+        result_override=sealed_result,
+    )
+
+    coverage = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[run],
+        expected_repository_sha256="b" * 64,
+    )
+    audited = coverage.audited_suite_coverage
+    assert audited is not None
+    assert audited.statement_coverage_authority == "comparison_only"
+    assert any("comparison-only durable projection" in item for item in audited.limitations)
+    forged_authority = audited.model_dump(mode="json")
+    forged_authority["statement_coverage_authority"] = "runtime_authoritative"
+    with pytest.raises(ValidationError):
+        AuditedSuiteCoverage.model_validate(forged_authority)
+    assert audited.repository_tests_selected == 1
+    assert audited.repository_tests_executed == 1
+    assert audited.repository_tests_failed == 0
+    assert audited.contract_statement_coverage.state is AnalysisState.DETERMINISTIC
+    assert audited.function_statement_coverage.state is AnalysisState.DETERMINISTIC
+    assert (
+        audited.contract_statement_coverage.numerator,
+        audited.contract_statement_coverage.denominator,
+    ) == (1, 2)
+    assert (
+        audited.function_statement_coverage.numerator,
+        audited.function_statement_coverage.denominator,
+    ) == (2, 3)
+    assert CoverageProvenance.RUNTIME in audited.contract_statement_coverage.provenance
+    assert CoverageProvenance.RUNTIME in audited.function_statement_coverage.provenance
+    assert all(
+        surface.statement_status
+        in {
+            AuditedSuiteStatementStatus.COVERED,
+            AuditedSuiteStatementStatus.UNCOVERED,
+        }
+        and len(surface.statement_evidence_sha256s) == 1
+        and surface.repository_test_execution_sha256s
+        for surface in audited.surfaces
+    )
+    withdraw = next(
+        surface
+        for surface in audited.surfaces
+        if surface.contract_name == "Vault"
+        and surface.entity_kind is SolidityEntityKind.FUNCTION
+        and surface.location.symbol == "withdraw(uint256)"
+    )
+    assert withdraw.statement_status is AuditedSuiteStatementStatus.UNCOVERED
+    assert SolidityCoverage.model_validate_json(coverage.model_dump_json()) == coverage
+    legacy_analyzed = audited.model_dump(mode="json")
+    legacy_analyzed["schema_version"] = "1.0"
+    legacy_analyzed.pop("statement_coverage_authority")
+    with pytest.raises(ValidationError, match=r"1\.0 cannot carry analyzed statement evidence"):
+        AuditedSuiteCoverage.model_validate(legacy_analyzed)
+
+    for label, inconsistent_contract in (
+        ("conflicting-contract-hit", conflicting_contract),
+        ("incomplete-contract-inventory", incomplete_contract),
+        ("partial-contract-function-overlap", partial_overlap_contract),
+    ):
+        inconsistent_evidence = [
+            inconsistent_contract if item.entity_id == target_contract.entity_id else item
+            for item in evidence
+        ]
+        inconsistent_result = _run_with_statement_evidence(base_run, inconsistent_evidence)
+        inconsistent_run, _inconsistent_runner, _ = await _runner_authorized_repository_suite_run(
+            tmp_path=tmp_path / label,
+            monkeypatch=monkeypatch,
+            config=config,
+            result_override=inconsistent_result,
+        )
+        inconsistent = build_solidity_coverage(
+            discovery=discovery,
+            projects=projects,
+            compilations=[],
+            index=build.index,
+            graphs=graphs,
+            scanner_runs=[inconsistent_run],
+            expected_repository_sha256="b" * 64,
+        )
+        assert inconsistent.audited_suite_coverage is not None
+        assert all(
+            surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+            for surface in inconsistent.audited_suite_coverage.surfaces
+        )
+        assert any(
+            "contract/function population hierarchy" in limitation
+            for limitation in inconsistent.audited_suite_coverage.limitations
+        )
+
+    compiler_entity_id = next(iter(sorted(source_entity_ids)))
+    fallback_index = build.index.model_copy(
+        update={
+            "entities": [
+                (
+                    entity.model_copy(
+                        update={
+                            "provenance": SolidityProvenance.FALLBACK,
+                            "confidence": 0.7,
+                            "transformation": "synthetic.fallback",
+                        }
+                    )
+                    if entity.id == compiler_entity_id
+                    else entity
+                )
+                for entity in build.index.entities
+            ]
+        }
+    )
+    fallback_projection = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=fallback_index,
+        graphs=graphs,
+        scanner_runs=[run],
+        expected_repository_sha256="b" * 64,
+    )
+    assert fallback_projection.audited_suite_coverage is not None
+    assert all(
+        surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+        for surface in fallback_projection.audited_suite_coverage.surfaces
+    )
+    assert any(
+        "compiler-derived audited-source entity byte ranges" in limitation
+        for limitation in fallback_projection.audited_suite_coverage.limitations
+    )
+
+    serialized_run = ScannerRun.model_validate_json(run.model_dump_json())
+    untrusted = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[serialized_run],
+        expected_repository_sha256="b" * 64,
+    )
+    assert untrusted.audited_suite_coverage is not None
+    assert all(
+        surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+        for surface in untrusted.audited_suite_coverage.surfaces
+    )
+    authority = _install_synthetic_runtime_authority(monkeypatch)
+    preserved = authority.validated_copy(run)
+    assert authority.contains(preserved)
+    tampered_evidence: list[AuditedSuiteStatementCoverageEvidence] = []
+    for item in evidence:
+        tampered_values = item.model_dump(mode="python", exclude={"evidence_sha256"})
+        tampered_values.update(
+            {
+                "location": item.location,
+                "statements": item.statements,
+                "coverage_artifact_sha256": "f" * 64,
+            }
+        )
+        tampered_evidence.append(AuditedSuiteStatementCoverageEvidence.sealed(**tampered_values))
+    publicly_resealed = _run_with_statement_evidence(run, tampered_evidence)
+    assert not authority.contains(publicly_resealed)
+    resealed_coverage = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[publicly_resealed],
+        expected_repository_sha256="b" * 64,
+    )
+    assert resealed_coverage.audited_suite_coverage is not None
+    assert all(
+        surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+        for surface in resealed_coverage.audited_suite_coverage.surfaces
+    )
+    incomplete_result = _run_with_statement_evidence(base_run, evidence[:-1])
+    incomplete_run, incomplete_runner, _ = await _runner_authorized_repository_suite_run(
+        tmp_path=tmp_path / "incomplete-runtime",
+        monkeypatch=monkeypatch,
+        config=config,
+        result_override=incomplete_result,
+    )
+    incomplete = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[incomplete_run],
+        expected_repository_sha256="b" * 64,
+    )
+    assert incomplete.audited_suite_coverage is not None
+    assert all(
+        surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+        for surface in incomplete.audited_suite_coverage.surfaces
+    )
+    assert any(
+        "complete exact audited-source entity population" in limitation
+        for limitation in incomplete.audited_suite_coverage.limitations
+    )
+    mixed_projections: list[dict[str, object]] = []
+    for scanner_runs in ([run, incomplete_run], [incomplete_run, run]):
+        mixed = build_solidity_coverage(
+            discovery=discovery,
+            projects=projects,
+            compilations=[],
+            index=build.index,
+            graphs=graphs,
+            scanner_runs=scanner_runs,
+            expected_repository_sha256="b" * 64,
+        )
+        assert mixed.audited_suite_coverage is not None
+        assert all(
+            surface.statement_status is AuditedSuiteStatementStatus.NOT_ANALYZED
+            for surface in mixed.audited_suite_coverage.surfaces
+        )
+        assert any(
+            "complete exact audited-source entity population" in limitation
+            for limitation in mixed.audited_suite_coverage.limitations
+        )
+        mixed_projections.append(mixed.audited_suite_coverage.model_dump(mode="json"))
+    assert mixed_projections[0] == mixed_projections[1]
+    assert incomplete_runner.backend is not None
+    assert runner.backend is not None
+
+
+def test_statement_evidence_rejects_inconsistent_denominators(
     tmp_path: Path,
     config_factory,
 ) -> None:
@@ -1365,8 +2013,8 @@ def test_statement_evidence_rejects_vacuous_or_inconsistent_denominators(
         for entity in build.index.entities
         if entity.contract_name == "Vault" and entity.name == "withdraw"
     )
-    _, execution_sha256 = _self_authored_repository_suite_run()
-    evidence = _covered_statement_evidence(withdraw, execution_sha256)
+    run, _ = _self_authored_repository_suite_run()
+    evidence = _covered_statement_evidence(withdraw, run)
     common = evidence.model_dump(
         mode="python",
         exclude={"evidence_sha256"},
@@ -1390,6 +2038,76 @@ def test_statement_evidence_rejects_vacuous_or_inconsistent_denominators(
                 "covered_statement_count": 2,
             }
         )
+
+
+def test_statement_evidence_explicitly_marks_an_exact_empty_inventory_vacuously_covered(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = tmp_path / "foundry"
+    shutil.copytree(FIXTURE, root)
+    config = config_factory(language_profile="solidity-evm")
+    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    build = build_solidity_index(discovery, projects, [root / "out"])
+    entity = next(
+        item
+        for item in build.index.entities
+        if item.contract_name == "Vault" and item.name == "withdraw"
+    )
+    run, _ = _self_authored_repository_suite_run()
+    evidence = _covered_statement_evidence(entity, run)
+    values = evidence.model_dump(mode="python", exclude={"evidence_sha256"})
+    values.update(
+        {
+            "location": evidence.location,
+            "statement_status": AuditedSuiteStatementStatus.COVERED,
+            "statement_count": 0,
+            "covered_statement_count": 0,
+            "statements": [],
+        }
+    )
+
+    empty = AuditedSuiteStatementCoverageEvidence.sealed(**values)
+
+    assert empty.statement_status is AuditedSuiteStatementStatus.COVERED
+    assert empty.statement_count == empty.covered_statement_count == 0
+    assert empty.empty_statement_inventory_policy == ("vacuously_covered_exact_empty_inventory")
+    with pytest.raises(ValidationError, match="statement status differs"):
+        AuditedSuiteStatementCoverageEvidence.sealed(
+            **{
+                **values,
+                "statement_status": AuditedSuiteStatementStatus.UNCOVERED,
+            }
+        )
+
+
+@pytest.mark.parametrize("bad_sha256", ["0" * 63, "0" * 65, "g" * 64])
+def test_statement_evidence_rejects_noncanonical_coverage_command_hashes(
+    tmp_path: Path,
+    config_factory,
+    bad_sha256: str,
+) -> None:
+    root = tmp_path / "foundry"
+    shutil.copytree(FIXTURE, root)
+    config = config_factory(language_profile="solidity-evm")
+    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    build = build_solidity_index(discovery, projects, [root / "out"])
+    entity = next(
+        item
+        for item in build.index.entities
+        if item.contract_name == "Vault" and item.name == "withdraw"
+    )
+    run, _ = _self_authored_repository_suite_run()
+    evidence = _covered_statement_evidence(entity, run)
+    values = evidence.model_dump(mode="python", exclude={"evidence_sha256"})
+    values["location"] = evidence.location
+    values["statements"] = evidence.statements
+    values["coverage_command_sha256s"] = [bad_sha256]
+
+    with pytest.raises(ValidationError):
+        AuditedSuiteStatementCoverageEvidence.sealed(**values)
 
 
 @pytest.mark.parametrize(

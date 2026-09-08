@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import gc
+import os
 import sys
 import time
+import weakref
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,6 +71,7 @@ class _SyntheticRuntimeAuthority:
     contains: Callable[[ScannerRun], bool]
     validated_copy: Callable[[ScannerRun], ScannerRun]
     annotate: Callable[[Path, ScannerRun], ScannerRun]
+    lease: Callable[[ScannerRun], AbstractContextManager[None]]
 
     @property
     def result(self) -> ScannerRun | None:
@@ -113,7 +117,7 @@ def _install_synthetic_runtime_authority(
             raise AssertionError("synthetic runtime authority has no configured result")
         return result
 
-    invoke, contains, validated_copy, annotate = (
+    invoke, contains, validated_copy, annotate, lease = (
         runtime_evidence_module._build_foundry_runtime_authority(
             adapter_type=FoundryForkScanner,
             producer_body=synthetic_foundry_repository_suite,
@@ -127,6 +131,7 @@ def _install_synthetic_runtime_authority(
         contains=contains,
         validated_copy=validated_copy,
         annotate=annotate,
+        lease=lease,
     )
     monkeypatch.setattr(
         monkeypatch,
@@ -635,6 +640,380 @@ async def test_authority_is_bound_to_exact_run_content(
 
     assert runner.backend is not None
     assert not has_host_repository_suite_runtime_authority(trusted)
+
+
+@pytest.mark.asyncio
+async def test_run_lease_exit_revokes_mutation_monotonically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    trusted, runner = await _synthetic_runner_authority(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        config_factory=config_factory,
+        run=_repository_suite_run(),
+    )
+    authority = _install_synthetic_runtime_authority(monkeypatch)
+    original_duration = trusted.duration_seconds
+
+    with (
+        pytest.raises(
+            runtime_evidence_module._RevocationLeaseUnavailable,
+            match="expired during its lease",
+        ),
+        authority.lease(trusted),
+    ):
+        trusted.duration_seconds += 1
+
+    trusted.duration_seconds = original_duration
+    assert runner.backend is not None
+    assert not authority.contains(trusted)
+
+
+@pytest.mark.asyncio
+async def test_run_lease_preserves_primary_base_exception_and_releases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    trusted, runner = await _synthetic_runner_authority(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        config_factory=config_factory,
+        run=_repository_suite_run(),
+    )
+    authority = _install_synthetic_runtime_authority(monkeypatch)
+
+    with (
+        pytest.raises(
+            KeyboardInterrupt,
+            match="synthetic lease interruption",
+        ),
+        authority.lease(trusted),
+    ):
+        raise KeyboardInterrupt("synthetic lease interruption")
+
+    with authority.lease(trusted):
+        assert runner.backend is not None
+    assert authority.contains(trusted)
+
+
+def test_run_registration_interrupt_cannot_leave_partial_authority(tmp_path: Path) -> None:
+    run = _repository_suite_run()
+    backend = _NoopIsolation()
+    armed = False
+    evidence_checks = 0
+
+    def execution_evidence(_backend: object | None) -> ExecutionEvidenceKind:
+        nonlocal evidence_checks
+        if armed:
+            evidence_checks += 1
+            if evidence_checks == 3:
+                raise KeyboardInterrupt("synthetic interrupt after run seal insertion")
+        return ExecutionEvidenceKind.REAL
+
+    def producer(
+        adapter: object,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: object | None,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[object],
+    ) -> ScannerRun:
+        nonlocal armed
+        del (
+            adapter,
+            root,
+            private_dir,
+            timeout_seconds,
+            backend,
+            expected_version,
+            expected_sha256,
+            workspace_custody_guard,
+        )
+        armed = True
+        return run
+
+    invoke, contains, _copy, _annotate, _lease = (
+        runtime_evidence_module._build_foundry_runtime_authority(
+            adapter_type=object,
+            producer_body=producer,
+            execution_evidence_resolver=execution_evidence,
+            attestation_resolver=lambda _backend: _HASH_C,
+        )
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="after run seal insertion"):
+        invoke(
+            object(),
+            tmp_path,
+            tmp_path,
+            1,
+            backend=backend,
+            expected_version=None,
+            expected_sha256=None,
+        )
+
+    assert evidence_checks == 3
+    assert not contains(run)
+
+
+def test_run_lease_validation_interrupt_revokes_exact_seal(tmp_path: Path) -> None:
+    run = _repository_suite_run()
+    backend = _NoopIsolation()
+    armed = False
+    evidence_checks = 0
+
+    def execution_evidence(_backend: object | None) -> ExecutionEvidenceKind:
+        nonlocal evidence_checks
+        if armed:
+            evidence_checks += 1
+            if evidence_checks == 2:
+                raise KeyboardInterrupt("synthetic interrupt during run lease exit")
+        return ExecutionEvidenceKind.REAL
+
+    def producer(
+        adapter: object,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: object | None,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[object],
+    ) -> ScannerRun:
+        del (
+            adapter,
+            root,
+            private_dir,
+            timeout_seconds,
+            backend,
+            expected_version,
+            expected_sha256,
+            workspace_custody_guard,
+        )
+        return run
+
+    invoke, contains, _copy, _annotate, lease = (
+        runtime_evidence_module._build_foundry_runtime_authority(
+            adapter_type=object,
+            producer_body=producer,
+            execution_evidence_resolver=execution_evidence,
+            attestation_resolver=lambda _backend: _HASH_C,
+        )
+    )
+    trusted = invoke(
+        object(),
+        tmp_path,
+        tmp_path,
+        1,
+        backend=backend,
+        expected_version=None,
+        expected_sha256=None,
+    )
+    assert contains(trusted)
+    armed = True
+    evidence_checks = 0
+
+    with (
+        pytest.raises(KeyboardInterrupt, match="during run lease exit"),
+        lease(trusted),
+    ):
+        pass
+
+    armed = False
+    assert not contains(trusted)
+
+
+def test_run_copy_interrupt_revokes_derived_and_source_seals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _repository_suite_run()
+    backend = _NoopIsolation()
+    armed = False
+    evidence_checks = 0
+
+    def execution_evidence(_backend: object | None) -> ExecutionEvidenceKind:
+        nonlocal evidence_checks
+        if armed:
+            evidence_checks += 1
+            if evidence_checks == 4:
+                raise KeyboardInterrupt("synthetic interrupt during source lease exit")
+        return ExecutionEvidenceKind.REAL
+
+    def producer(
+        adapter: object,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: object | None,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[object],
+    ) -> ScannerRun:
+        del (
+            adapter,
+            root,
+            private_dir,
+            timeout_seconds,
+            backend,
+            expected_version,
+            expected_sha256,
+            workspace_custody_guard,
+        )
+        return run
+
+    invoke, contains, validated_copy, _annotate, _lease = (
+        runtime_evidence_module._build_foundry_runtime_authority(
+            adapter_type=object,
+            producer_body=producer,
+            execution_evidence_resolver=execution_evidence,
+            attestation_resolver=lambda _backend: _HASH_C,
+        )
+    )
+    trusted = invoke(
+        object(),
+        tmp_path,
+        tmp_path,
+        1,
+        backend=backend,
+        expected_version=None,
+        expected_sha256=None,
+    )
+    original_model_validate = ScannerRun.model_validate
+    normalized_runs: list[ScannerRun] = []
+
+    def capture_normalized(value: object) -> ScannerRun:
+        normalized = original_model_validate(value)
+        normalized_runs.append(normalized)
+        return normalized
+
+    monkeypatch.setattr(ScannerRun, "model_validate", capture_normalized)
+    armed = True
+    evidence_checks = 0
+
+    with pytest.raises(KeyboardInterrupt, match="during source lease exit"):
+        validated_copy(trusted)
+
+    armed = False
+    assert evidence_checks == 4
+    assert len(normalized_runs) == 1
+    assert not contains(trusted)
+    assert not contains(normalized_runs[0])
+
+
+def test_run_weakref_cleanup_refuses_process_mismatch_before_registry_lock(
+    tmp_path: Path,
+) -> None:
+    process_id = [100]
+    revocation_lease = runtime_evidence_module._ProcessLocalRevocationLease(lambda: process_id[0])
+    run = _repository_suite_run()
+    backend = _NoopIsolation()
+
+    def producer(
+        adapter: object,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: object | None,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[object],
+    ) -> ScannerRun:
+        del (
+            adapter,
+            root,
+            private_dir,
+            timeout_seconds,
+            backend,
+            expected_version,
+            expected_sha256,
+            workspace_custody_guard,
+        )
+        return run
+
+    invoke, contains, _copy, _annotate, _lease = (
+        runtime_evidence_module._build_foundry_runtime_authority(
+            adapter_type=object,
+            producer_body=producer,
+            execution_evidence_resolver=lambda _backend: ExecutionEvidenceKind.REAL,
+            attestation_resolver=lambda _backend: _HASH_C,
+            revocation_lease=revocation_lease,
+        )
+    )
+    trusted = invoke(
+        object(),
+        tmp_path,
+        tmp_path,
+        1,
+        backend=backend,
+        expected_version=None,
+        expected_sha256=None,
+    )
+    references = [
+        reference
+        for reference in weakref.getweakrefs(trusted)
+        if getattr(reference, "__callback__", None) is not None
+    ]
+    assert len(references) == 1
+    callback = references[0].__callback__
+    assert callback is not None
+
+    process_id[0] = 101
+    callback(references[0])
+    process_id[0] = 100
+
+    assert contains(trusted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks.*"
+)
+async def test_run_authority_is_pid_bound_even_after_getpid_alias_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("fork is unavailable")
+    trusted, runner = await _synthetic_runner_authority(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        config_factory=config_factory,
+        run=_repository_suite_run(),
+    )
+    authority = _install_synthetic_runtime_authority(monkeypatch)
+    read_fd, write_fd = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:  # pragma: no cover - asserted through the parent-side pipe
+        os.close(read_fd)
+        try:
+            runtime_evidence_module.os.getpid = lambda: os.getppid()
+            os.write(write_fd, b"1" if authority.contains(trusted) else b"0")
+        finally:
+            os.close(write_fd)
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        fork_result = os.read(read_fd, 1)
+    finally:
+        os.close(read_fd)
+    waited_pid, status = os.waitpid(child_pid, 0)
+
+    assert runner.backend is not None
+    assert waited_pid == child_pid
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert fork_result == b"0"
+    assert authority.contains(trusted)
 
 
 @pytest.mark.asyncio

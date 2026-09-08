@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -267,7 +267,7 @@ def test_rootless_container_cleanup_force_removes_and_verifies(
     private = tmp_path / "private"
     workspace = private / "workspace"
     workspace.mkdir(parents=True)
-    backend = _backend()
+    backend = _backend(executable=str(Path(sys.executable).resolve(strict=True)))
     backend.wrap(
         ["/usr/bin/tool"],
         workspace=workspace,
@@ -276,19 +276,28 @@ def test_rootless_container_cleanup_force_removes_and_verifies(
     )
     cidfile = private / "container-runtime" / "container.cid"
     cidfile.write_text("a" * 64, encoding="utf-8")
-    calls: list[list[str]] = []
-    results = iter((0, 0, 1))
+    calls: list[tuple[str, ...]] = []
+    results = iter((b"a" * 64 + b"\n", b"a" * 64 + b"\n", b""))
 
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> bytes:
         calls.append(command)
-        assert kwargs["shell"] is False
-        return subprocess.CompletedProcess(command, next(results), "", "")
+        assert kwargs["runtime_dir"] == private / "container-runtime"
+        return next(results)
 
-    monkeypatch.setattr("mmaudit.isolation.container.subprocess.run", fake_run)
+    monkeypatch.setattr("mmaudit.isolation.container_cleanup._run_control_command", fake_run)
+    monkeypatch.setattr("mmaudit.isolation.container_cleanup._runtime_identity", lambda *_: "mock")
     backend.cleanup(private)
 
-    assert calls[0][-2:] == ["inspect", "a" * 64]
-    assert calls[1][-3:] == ["rm", "--force", "a" * 64]
+    assert calls[0][1:] == (
+        "container",
+        "ls",
+        "--all",
+        "--no-trunc",
+        "--quiet",
+        "--filter",
+        "id=" + "a" * 64,
+    )
+    assert calls[1][-3:] == ("rm", "--force", "a" * 64)
     assert calls[2] == calls[0]
     assert not cidfile.exists()
 
@@ -310,6 +319,25 @@ def test_rootless_runtime_environment_omits_credentials(
     assert "MMAUDIT_SECRETS_ENV_FILE" not in environment
     assert "DOCKER_CONFIG" not in environment
     assert "REGISTRY_AUTH_FILE" not in environment
+
+
+def test_rootless_cleanup_runtime_failure_is_not_verified_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private = tmp_path / "private"
+    runtime = private / "container-runtime"
+    runtime.mkdir(mode=0o700, parents=True)
+    cidfile = runtime / "container.cid"
+    cidfile.write_text("a" * 64, encoding="ascii")
+
+    def failed_query(command: tuple[str, ...], **kwargs: object) -> bytes:
+        raise RuntimeError("synthetic runtime unavailable")
+
+    monkeypatch.setattr("mmaudit.isolation.container_cleanup._run_control_command", failed_query)
+    monkeypatch.setattr("mmaudit.isolation.container_cleanup._runtime_identity", lambda *_: "mock")
+    with pytest.raises(RuntimeError):
+        _backend(executable=str(Path(sys.executable).resolve(strict=True))).cleanup(private)
+    assert cidfile.read_text(encoding="ascii") == "a" * 64
 
 
 def test_backend_host_environment_cannot_reintroduce_control_plane_secrets(

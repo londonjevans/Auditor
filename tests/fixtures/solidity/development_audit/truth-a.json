@@ -1,0 +1,64 @@
+{
+  "findings_validated": false,
+  "audit_complete": false,
+  "qualification_eligible": false,
+  "release_eligible": false,
+  "schema_version": "1.0",
+  "artifact_kind": "development_constructed_truth",
+  "provenance": "AGENT_CONSTRUCTED_PUBLIC_LABELLED_DEVELOPMENT_CONTROL",
+  "truth_scope": "RESPONSE_INDEPENDENT_NOT_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+  "corpus_id": "unit-ledger-a-v1",
+  "corpus_sha256": "9590a7237e1ba90da8b601288ae67153bf670347ef391fcd2fe91b3d71e89eba",
+  "sources": [
+    {
+      "filename": "RoutePolicy.sol",
+      "sha256": "57f446e0f2639430cd8dcbf71601b9634add7a6ab0a7eaa545568d762a4ac5c3",
+      "size": 2254,
+      "line_count": 65
+    },
+    {
+      "filename": "UnitRouter.sol",
+      "sha256": "7e0ffe37e7029fb5d7935252aa90ec668b34210c7182c94f7a12c5dd9aba16ad",
+      "size": 1763,
+      "line_count": 48
+    },
+    {
+      "filename": "UnitStore.sol",
+      "sha256": "337a3dbfb7616e1e8d1bd667fba546ebb40e636c896c0a82b33b9d7d71339ddf",
+      "size": 2754,
+      "line_count": 65
+    }
+  ],
+  "controls": [
+    {
+      "control_id": "gateway-selection-authorization",
+      "expected": "PLANTED",
+      "vulnerability_class": "access_control",
+      "severity": "high",
+      "invariant": "Only the administrator may change the gateway trusted by public unit mutations.",
+      "origin": {
+        "filename": "RoutePolicy.sol",
+        "line_start": 40,
+        "line_end": 46
+      },
+      "required_origin_line": 40,
+      "claim_sites": [
+        {
+          "filename": "RoutePolicy.sol",
+          "line_start": 40,
+          "line_end": 46
+        },
+        {
+          "filename": "UnitRouter.sol",
+          "line_start": 8,
+          "line_end": 32
+        },
+        {
+          "filename": "UnitStore.sol",
+          "line_start": 26,
+          "line_end": 64
+        }
+      ]
+    }
+  ]
+}

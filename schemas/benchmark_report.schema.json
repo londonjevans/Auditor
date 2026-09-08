@@ -1013,6 +1013,19 @@
           "default": null,
           "title": "Overall Kill Score"
         },
+        "projection_authority": {
+          "anyOf": [
+            {
+              "const": "comparison_only",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projection Authority"
+        },
         "property_corpus_hash": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Property Corpus Hash",
@@ -1037,8 +1050,11 @@
           "type": "array"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         }
@@ -1056,10 +1072,11 @@
       "type": "object"
     },
     "MutationScorecardEvidenceOrigin": {
-      "description": "Trust origin of mutation outcomes; neither member is runtime attestation.",
+      "description": "Trust origin of mutation outcomes; process origin still needs a live opaque seal.",
       "enum": [
         "declarative",
-        "planned_unattested"
+        "planned_unattested",
+        "process_local_comparison"
       ],
       "title": "MutationScorecardEvidenceOrigin",
       "type": "string"

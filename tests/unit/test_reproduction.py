@@ -760,7 +760,7 @@ def test_builtin_isolation_is_real_only_after_discovery_preflight(
     )
     monkeypatch.setattr(
         "mmaudit.isolation.provenance._run_builtin_preflight",
-        lambda _backend: _IsolationProbeResults(
+        lambda _backend, **_kwargs: _IsolationProbeResults(
             benign_execution=True,
             workspace_write_allowed=True,
             network_denied=True,

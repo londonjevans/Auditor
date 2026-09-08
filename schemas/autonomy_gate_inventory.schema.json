@@ -54,7 +54,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 4096,
+          "maxItems": 8192,
           "minItems": 1,
           "title": "Source Ids",
           "type": "array"
@@ -214,7 +214,7 @@
       "type": "integer"
     },
     "completion_entrypoint_parameter_count": {
-      "const": 336,
+      "const": 355,
       "title": "Completion Entrypoint Parameter Count",
       "type": "integer"
     },
@@ -240,7 +240,7 @@
       "type": "integer"
     },
     "gate_source_count": {
-      "maximum": 4096,
+      "maximum": 8192,
       "minimum": 1,
       "title": "Gate Source Count",
       "type": "integer"
@@ -286,7 +286,7 @@
       "type": "string"
     },
     "pipeline_init_parameter_count": {
-      "const": 26,
+      "const": 29,
       "title": "Pipeline Init Parameter Count",
       "type": "integer"
     },
@@ -321,7 +321,7 @@
       "type": "boolean"
     },
     "source_count": {
-      "maximum": 4096,
+      "maximum": 8192,
       "minimum": 1,
       "title": "Source Count",
       "type": "integer"
@@ -330,7 +330,7 @@
       "items": {
         "$ref": "#/$defs/CompletionInputSourceCoverage"
       },
-      "maxItems": 4096,
+      "maxItems": 8192,
       "minItems": 1,
       "title": "Source Coverage",
       "type": "array"
@@ -353,7 +353,7 @@
       "type": "object"
     },
     "source_occurrence_count": {
-      "maximum": 4096,
+      "maximum": 8192,
       "minimum": 1,
       "title": "Source Occurrence Count",
       "type": "integer"

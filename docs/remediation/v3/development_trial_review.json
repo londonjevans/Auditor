@@ -1,0 +1,180 @@
+{
+  "schema_version": "1.0",
+  "artifact_kind": "documentation_only_development_trial_review",
+  "ticket_id": "V3-DEVTRIAL-001",
+  "review_status": "PARTIAL",
+  "evidence_class": "OPERATOR_REPORTED_NOT_INDEPENDENTLY_AUTHENTICATED",
+  "operator_report": {
+    "path": "docs/remediation/v3/operator_results.md",
+    "raw_sha256_at_review": "5c03c47b4da9fe3fe1b98db78ea3bca52812ff48d4e0536b12ab17721f63c52e",
+    "bytes_at_review": 217354,
+    "lines_at_review": 3798,
+    "sections": [
+      {
+        "timestamp": "2026-09-08T09:22Z",
+        "sha256": "1da03eb2a911584b76986f4f24705518f5f7ce921477a1ab06748ffe437e3c20",
+        "bytes": 5250
+      },
+      {
+        "timestamp": "2026-09-08T09:15Z",
+        "sha256": "7ace5570fc2a6a9d5ed44f44384464385856bba68b4e498adde9830f6763487e",
+        "bytes": 4277
+      },
+      {
+        "timestamp": "2026-09-08T06:23Z",
+        "sha256": "b468d9d2771151751b1496775bddd47327d2eafb53457358568368711a682bb6",
+        "bytes": 4191
+      },
+      {
+        "timestamp": "2026-09-08T05:24Z",
+        "sha256": "6098d72782fd868b54ac52d2617a961c1620f50ad3ac16dad2a249a3c84c5319",
+        "bytes": 5699
+      }
+    ]
+  },
+  "local_fixture_pins": [
+    {
+      "path": "tests/fixtures/solidity/development_review/ControlA.sol",
+      "sha256": "d6d5c89fb4acadb3d83c4a67cd71bdaafc3b0d033847988ac110c95e07ae9a16",
+      "bytes": 494,
+      "lines": 17
+    },
+    {
+      "path": "tests/fixtures/solidity/development_review/ControlB.sol",
+      "sha256": "3597509dafe3d2b9d7229f050a42f7515eb33612e285d1d52750c9a2183eaaa4",
+      "bytes": 566,
+      "lines": 18
+    }
+  ],
+  "remote_request_bytes_inspected": false,
+  "private_response_bytes_inspected": false,
+  "private_ledger_bytes_inspected": false,
+  "schema_characterization": {
+    "source_path": "src/mmaudit/models/development_review.py",
+    "source_sha256_at_review": "39477f1a27d3544b47ea3d9702eb5e9681d2824e9ad817c9a9854ac509c09a30",
+    "fixture": "tests/fixtures/model_responses/development_advisory_characterization.json",
+    "finding_requires_nonempty_violated_invariant": true,
+    "separate_advisory_kind_available": false,
+    "root_cause_reference_available": false,
+    "fixture_elapsed_seconds_recorded": false,
+    "corpus_elapsed_seconds_recorded": true,
+    "characterization_is_quality_evidence": false
+  },
+  "fixture_attempts": [
+    {
+      "request_id": "devtrial-20260908-controlA-1",
+      "fixture": "ControlA.sol",
+      "reported_status": "INCOMPLETE",
+      "reported_diagnostic": "IDENTITY_MISMATCH",
+      "reported_cost_usd": "0.0110142",
+      "reported_findings": null,
+      "elapsed_seconds": null,
+      "runtime_status": "INCONCLUSIVE"
+    },
+    {
+      "request_id": "devtrial-20260908-controlA-2",
+      "fixture": "ControlA.sol",
+      "reported_status": "OBSERVED",
+      "reported_diagnostic": null,
+      "reported_cost_usd": "0.009957",
+      "reported_findings": 1,
+      "elapsed_seconds": null,
+      "runtime_status": "INCONCLUSIVE"
+    },
+    {
+      "request_id": "devtrial-20260908-controlB-1",
+      "fixture": "ControlB.sol",
+      "reported_status": "OBSERVED",
+      "reported_diagnostic": null,
+      "reported_cost_usd": "0.0130962",
+      "reported_findings": 2,
+      "elapsed_seconds": null,
+      "runtime_status": "INCONCLUSIVE"
+    }
+  ],
+  "reported_fixture_scoring": {
+    "planted_finding": {
+      "fixture": "ControlA.sol",
+      "severity": "high",
+      "line_start": 14,
+      "line_end": 16
+    },
+    "guarded_fixture": "ControlB.sol",
+    "guarded_advisories": 2,
+    "strict_invariant_false_positives": 2,
+    "guarded_medium_or_higher": 0,
+    "severity_filter_is_not_a_replacement_score": true,
+    "independently_validated_findings": 0
+  },
+  "reported_corpus_observations": [
+    {
+      "run_id": "devaudit-20260908-a-1",
+      "corpus_id": "unit-ledger-a-v1",
+      "reported_status": "OBSERVED_ALL_SHARDS",
+      "reported_shards": 3,
+      "reported_cost_usd": "0.1147896",
+      "reported_elapsed_seconds": "86.5",
+      "reported_high_findings": 3,
+      "aggregate_unique_root_causes": null,
+      "quality_score": null
+    },
+    {
+      "run_id": "devaudit-20260908-b-1",
+      "corpus_id": "unit-ledger-b-v1",
+      "reported_status": "OBSERVED_ALL_SHARDS",
+      "reported_shards": 3,
+      "reported_cost_usd": "0.1117830",
+      "reported_elapsed_seconds": "102.7",
+      "reported_high_findings": 0,
+      "aggregate_unique_root_causes": null,
+      "quality_score": null
+    }
+  ],
+  "reported_accounting": {
+    "fixture_entries": 3,
+    "fixture_used_usd": "0.0340674",
+    "development_entries": 9,
+    "development_used_usd": "0.2606400",
+    "development_terminal_status": "reconciled",
+    "cumulative_entries": 57,
+    "cumulative_used_usd": "0.68118684",
+    "private_ledger_authenticated": false,
+    "arithmetic_is_execution_or_spend_authority": false
+  },
+  "acceptance": {
+    "operator_execution_and_approved_metadata": "REPORTED_NOT_INDEPENDENTLY_AUTHENTICATED",
+    "exact_local_fixture_bytes": "VERIFIED_LOCAL_ONLY",
+    "actual_request_scope_and_freshness": "INCONCLUSIVE_PRIVATE_INPUTS_NOT_INSPECTED",
+    "response_validity_and_terminal_accounting": "REPORTED_NOT_INDEPENDENTLY_AUTHENTICATED",
+    "planted_finding_location": "REPORTED_LOCATION_MATCHES_LOCAL_SOURCE",
+    "guarded_invariant_discrimination": "NOT_ESTABLISHED_TWO_STRICT_FALSE_POSITIVES",
+    "cost_arithmetic": "CONSISTENT_REPORTED_TOTALS_NOT_LEDGER_AUTHENTICATION",
+    "fixture_runtime": "INCONCLUSIVE_ABSENT",
+    "quality_baseline": "NOT_ESTABLISHED_PUBLIC_LABELLED_CONTROLS_NO_VALIDATED_AGGREGATE_SCORE"
+  },
+  "limitations": [
+    "The report describes a 17-line pair; the exact local guarded file has 18 lines. The cited finding spans still fit the local source.",
+    "Later reported routing identities support the canonical-model explanation, but the original rejected response bytes were not inspected.",
+    "The rejected paid attempt remains in the cost and completion history; two later observations are not a first-attempt-only pass.",
+    "Corpus runtimes do not supply missing fixture runtimes. Generation identifiers are not elapsed-time measurements.",
+    "Three reported cross-file highs may describe one originating defect; no authenticated or computed aggregate deduplication score exists here.",
+    "Public source comments reveal the intended controls. This is not blind or held-out model-quality measurement.",
+    "An unavailable fixture runtime is not a pass and does not require a paid rerun for this review.",
+    "This projection and its tests verify local consistency only; they cannot authorize, qualify, validate or certify an audit."
+  ],
+  "next_ticket_id": "V3-DEVBENCH-001",
+  "completed_real_audits": 0,
+  "findings_validated": false,
+  "audit_complete": false,
+  "qualification_eligible": false,
+  "release_eligible": false,
+  "provider_call_authorized": false,
+  "source_egress_authorized": false,
+  "production_selection_authorized": false,
+  "qualification_authorized": false,
+  "runner_authority_authorized": false,
+  "audit_authorized": false,
+  "benchmark_authorized": false,
+  "release_authorized": false,
+  "serialized_authority": false
+}

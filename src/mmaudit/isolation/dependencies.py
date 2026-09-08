@@ -685,10 +685,15 @@ def _inventory_dependency_tree(
 
 
 def _reject_unsafe_dependency_file(path: Path, data: bytes) -> None:
-    mode = path.stat().st_mode
+    validate_inert_dependency_file(path.name, path.stat().st_mode, data)
+
+
+def validate_inert_dependency_file(name: str, mode: int, data: bytes) -> None:
+    """Apply the same inert-file policy before archive material touches disk."""
+
     if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
         raise _PreparationRejected("offline dependency contains an executable file")
-    lower_name = path.name.lower()
+    lower_name = name.lower()
     if (
         any(lower_name.endswith(suffix) for suffix in _UNSAFE_BINARY_SUFFIXES)
         or data.startswith((b"\x7fELF", b"MZ"))

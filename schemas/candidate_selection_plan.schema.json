@@ -241,6 +241,211 @@
       "title": "CandidateSelectionEntry",
       "type": "object"
     },
+    "CandidateSelectionPlanAncestryTransitionBinding": {
+      "additionalProperties": false,
+      "description": "Nonauthorizing durable binding for one capability-verified reactivation.",
+      "properties": {
+        "ancestry_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ancestry Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_kind": {
+          "const": "REPOSITORY_PINNED_SELECTION_PLAN_ANCESTRY_TRANSITION",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "endpoint_inventory_refresh_authorized": {
+          "const": false,
+          "title": "Endpoint Inventory Refresh Authorized",
+          "type": "boolean"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "opaque_ancestry_capability_required": {
+          "const": true,
+          "title": "Opaque Ancestry Capability Required",
+          "type": "boolean"
+        },
+        "price_cap_profile_upgrade_authorized": {
+          "const": false,
+          "title": "Price Cap Profile Upgrade Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "replacement_candidate_constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Replacement Candidate Constraint Sha256",
+          "type": "string"
+        },
+        "replacement_candidate_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replacement Candidate Model Id",
+          "type": "string"
+        },
+        "replacement_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Replacement Provider Endpoint",
+          "type": "string"
+        },
+        "retained_judge_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Retained Judge Constraint Sha256S",
+          "type": "array"
+        },
+        "retained_route_predicate_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Retained Route Predicate Profile Sha256",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "selected_ancestor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Plan Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Raw Sha256",
+          "type": "string"
+        },
+        "selected_ancestor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ancestor Role Assignment Sha256",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "unavailable_predecessor_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Plan Sha256",
+          "type": "string"
+        },
+        "unavailable_predecessor_raw_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable Predecessor Raw Sha256",
+          "type": "string"
+        },
+        "unavailable_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unavailable State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "selected_ancestor_raw_sha256",
+        "selected_ancestor_plan_sha256",
+        "unavailable_predecessor_raw_sha256",
+        "unavailable_predecessor_plan_sha256",
+        "unavailable_state_sha256",
+        "matched_revocation_set_sha256",
+        "ancestry_evidence_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "selected_ancestor_role_assignment_sha256",
+        "retained_route_predicate_profile_sha256",
+        "retained_judge_constraint_sha256s",
+        "replacement_candidate_model_id",
+        "replacement_provider_endpoint",
+        "replacement_candidate_constraint_sha256",
+        "opaque_ancestry_capability_required",
+        "endpoint_inventory_refresh_authorized",
+        "price_cap_profile_upgrade_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+        "binding_sha256"
+      ],
+      "title": "CandidateSelectionPlanAncestryTransitionBinding",
+      "type": "object"
+    },
     "CandidateSelectionSourceBinding": {
       "additionalProperties": false,
       "description": "Exact bytes for one operator-staged, explicitly unverified input.",
@@ -289,6 +494,106 @@
         "source_binding_sha256"
       ],
       "title": "CandidateSelectionSourceBinding",
+      "type": "object"
+    },
+    "CandidateSelectionUnavailableState": {
+      "additionalProperties": false,
+      "description": "Inactive judge custody after every predecessor candidate route was revoked.",
+      "properties": {
+        "candidate_selection_authorized": {
+          "const": false,
+          "title": "Candidate Selection Authorized",
+          "type": "boolean"
+        },
+        "disposition": {
+          "const": "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "judge_route_constraints": {
+          "items": {
+            "$ref": "#/$defs/ExactRouteConstraint"
+          },
+          "maxItems": 17,
+          "minItems": 2,
+          "title": "Judge Route Constraints",
+          "type": "array"
+        },
+        "matched_revocation_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Matched Revocation Set Sha256",
+          "type": "string"
+        },
+        "predecessor_role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Predecessor Role Assignment Sha256",
+          "type": "string"
+        },
+        "price_cap_profile_decision": {
+          "const": "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION",
+          "title": "Price Cap Profile Decision",
+          "type": "string"
+        },
+        "primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Primary Judge Model Id",
+          "type": "string"
+        },
+        "replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replay Judge Model Id",
+          "type": "string"
+        },
+        "revocation_entry_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Revocation Entry Sha256S",
+          "type": "array"
+        },
+        "route_predicate_profile": {
+          "$ref": "#/$defs/RoutePredicateProfile"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "State Sha256",
+          "type": "string"
+        },
+        "withdrawn_candidate_constraint_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Withdrawn Candidate Constraint Sha256S",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "disposition",
+        "price_cap_profile_decision",
+        "predecessor_role_assignment_sha256",
+        "matched_revocation_set_sha256",
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+        "primary_judge_model_id",
+        "replay_judge_model_id",
+        "route_predicate_profile",
+        "judge_route_constraints",
+        "candidate_selection_authorized",
+        "state_sha256"
+      ],
+      "title": "CandidateSelectionUnavailableState",
       "type": "object"
     },
     "ExactRouteConstraint": {
@@ -345,7 +650,9 @@
     },
     "ProviderPriceCapAlgorithm": {
       "enum": [
-        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3"
       ],
       "title": "ProviderPriceCapAlgorithm",
       "type": "string"
@@ -449,6 +756,23 @@
         },
         "price_cap_algorithm": {
           "$ref": "#/$defs/ProviderPriceCapAlgorithm"
+        },
+        "price_component_unit_envelopes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Component Unit Envelopes"
         },
         "profile_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -562,8 +886,12 @@
           "type": "integer"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1",
+            "1.2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -599,6 +927,72 @@
         "profile_sha256"
       ],
       "title": "RoutePredicateProfile",
+      "type": "object"
+    },
+    "RoutePriceComponentUnitEnvelope": {
+      "additionalProperties": false,
+      "description": "Self-hashed proof that one unsupported price component has zero reachable units.",
+      "properties": {
+        "component": {
+          "const": "web_search",
+          "title": "Component",
+          "type": "string"
+        },
+        "emitted_request_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Emitted Request Parameters",
+          "type": "array"
+        },
+        "enforcement_method": {
+          "const": "MMAUDIT_EXACT_REQUEST_FIELD_ABSENCE_V1",
+          "title": "Enforcement Method",
+          "type": "string"
+        },
+        "envelope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Envelope Sha256",
+          "type": "string"
+        },
+        "maximum_cost_usd_exact": {
+          "const": "0",
+          "title": "Maximum Cost Usd Exact",
+          "type": "string"
+        },
+        "maximum_units": {
+          "const": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "prohibited_request_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "title": "Prohibited Request Fields",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "maximum_units",
+        "maximum_cost_usd_exact",
+        "enforcement_method",
+        "emitted_request_parameters",
+        "prohibited_request_fields",
+        "envelope_sha256"
+      ],
+      "title": "RoutePriceComponentUnitEnvelope",
       "type": "object"
     }
   },
@@ -666,10 +1060,113 @@
           "endpoint_inventory_refresh"
         ]
       }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "authenticated_runner_unavailability"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.7"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "authenticated_runner_selection": {
+            "type": "null"
+          },
+          "authenticated_runner_unavailability": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "authenticated_runner_unavailability"
+        ]
+      }
+    },
+    {
+      "else": {
+        "not": {
+          "required": [
+            "ancestry_transition_binding"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.8"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "ancestry_transition_binding": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "authenticated_runner_selection": {
+            "properties": {
+              "route_predicate_profile": {
+                "properties": {
+                  "price_cap_algorithm": {
+                    "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+                  },
+                  "price_component_unit_envelopes": {
+                    "type": "null"
+                  },
+                  "schema_version": {
+                    "const": "1.0"
+                  }
+                },
+                "required": [
+                  "schema_version",
+                  "price_cap_algorithm"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "route_predicate_profile"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "authenticated_runner_selection",
+          "ancestry_transition_binding"
+        ]
+      }
     }
   ],
   "description": "Self-hashed operator-staged seed with only literal-false authority flags.",
   "properties": {
+    "ancestry_transition_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionPlanAncestryTransitionBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "artifact_kind": {
       "const": "OPERATOR_STAGED_MODEL_SELECTION",
       "title": "Artifact Kind",
@@ -679,6 +1176,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/AuthenticatedRunnerSelection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "authenticated_runner_unavailability": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CandidateSelectionUnavailableState"
         },
         {
           "type": "null"
@@ -788,7 +1296,9 @@
       "enum": [
         "1.4",
         "1.5",
-        "1.6"
+        "1.6",
+        "1.7",
+        "1.8"
       ],
       "title": "Schema Version",
       "type": "string"

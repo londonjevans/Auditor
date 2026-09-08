@@ -15,7 +15,7 @@ import math
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Self
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -32,6 +32,32 @@ _ARRAY_PART = re.compile(r"\[[0-9]*\]")
 _LOCATION_SUFFIX = re.compile(r"\s+(?:memory|calldata|storage)(?:\s+(?:pointer|ref))?$")
 _INTEGER_TYPE = re.compile(r"^(?P<signed>u?int)(?P<bits>[0-9]*)$")
 _FIXED_BYTES_TYPE = re.compile(r"^bytes(?P<size>[0-9]+)$")
+_AST_NODE_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+_SOLIDITY_ATOMIC_STATEMENT_TYPES = frozenset(
+    {
+        "Break",
+        "Continue",
+        "EmitStatement",
+        "ExpressionStatement",
+        "PlaceholderStatement",
+        "Return",
+        "RevertStatement",
+        "Throw",
+        "VariableDeclarationStatement",
+    }
+)
+_YUL_ATOMIC_STATEMENT_TYPES = frozenset(
+    {
+        "YulAssignment",
+        "YulBreak",
+        "YulContinue",
+        "YulExpressionStatement",
+        "YulLeave",
+        "YulVariableDeclaration",
+    }
+)
+_CONTRACT_KINDS = frozenset({"contract", "interface", "library"})
+_FUNCTION_KINDS = frozenset({"constructor", "fallback", "freeFunction", "function", "receive"})
 
 
 class FoundryInventoryError(ValueError):
@@ -72,6 +98,77 @@ class FoundrySourceInput:
     path: str
     content: bytes
     source_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoundryCompilerSource:
+    """Exact source bytes and compiler source ID for one normalized build unit."""
+
+    source_id: int
+    path: str
+    content: bytes
+    source_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoundryCompilerEntity:
+    """Compiler AST identity and exact source span for a contract or function."""
+
+    compiler_ast_id: int
+    node_type: Literal["ContractDefinition", "FunctionDefinition"]
+    kind: str
+    name: str
+    enclosing_contract_ast_id: int | None
+    enclosing_contract_name: str | None
+    source_id: int
+    path: str
+    source_sha256: str
+    start_byte: int
+    end_byte_exclusive: int
+    start_line: int
+    end_line_exclusive: int
+
+
+@dataclass(frozen=True, slots=True)
+class FoundryCompilerStatement:
+    """One non-overlapping atomic Solidity or Yul statement leaf."""
+
+    compiler_ast_id: int | None
+    enclosing_inline_assembly_ast_id: int | None
+    node_type: str
+    enclosing_contract_ast_id: int | None
+    enclosing_function_ast_id: int | None
+    source_id: int
+    path: str
+    source_sha256: str
+    start_byte: int
+    end_byte_exclusive: int
+    start_line: int
+    end_line_exclusive: int
+
+
+@dataclass(frozen=True, slots=True)
+class FoundryCompilerBuildUnit:
+    """Canonical compiler statement inventory for one normalized build-info unit."""
+
+    project_root: str
+    normalized_build_info_sha256: str
+    compiler_version: str
+    compiler_sha256: str
+    source_id_to_path: tuple[tuple[int, str], ...]
+    sources: tuple[FoundryCompilerSource, ...]
+    entities: tuple[FoundryCompilerEntity, ...]
+    statements: tuple[FoundryCompilerStatement, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FoundryCompilerStatementCatalog:
+    """All normalized compiler statement units for one Foundry project."""
+
+    project_root: str
+    compiler_version: str
+    compiler_sha256: str
+    units: tuple[FoundryCompilerBuildUnit, ...]
 
 
 class FoundryInventorySourceBinding(StrictModel):
@@ -345,6 +442,634 @@ def parse_foundry_test_inventory(
         test_count=len(declarations),
         tests=tuple(sorted(declarations, key=lambda item: item.canonical_key)),
     )
+
+
+def parse_foundry_compiler_statement_catalog(
+    *,
+    build_info_jsons: Sequence[bytes],
+    sources: Sequence[FoundrySourceInput],
+    project_root: str = ".",
+    compiler_version: str,
+    compiler_sha256: str,
+    limits: FoundryInventoryLimits | None = None,
+) -> FoundryCompilerStatementCatalog:
+    """Extract exact atomic statement leaves from validated normalized build-info.
+
+    Callers must pass the same normalized build-info bytes and independently read
+    source bytes used for test-inventory reconciliation.  Solidity nodes carry
+    compiler-issued AST IDs.  Solc does not issue IDs for Yul nodes, so those
+    leaves are instead bound to the enclosing ``InlineAssembly`` AST ID and their
+    exact source span; no synthetic compiler identity is invented.
+    """
+
+    bounds = limits or FoundryInventoryLimits()
+    normalized_project_root = _normalized_project_root(project_root)
+    _validate_compiler_identity(compiler_version, compiler_sha256)
+    source_map = _validated_sources(sources, bounds)
+    if not build_info_jsons:
+        raise FoundryInventoryError("compiler build-info inventory is empty")
+    if len(build_info_jsons) > bounds.max_build_info_files:
+        raise FoundryInventoryError("compiler build-info inventory exceeds its file ceiling")
+
+    units: list[FoundryCompilerBuildUnit] = []
+    build_hashes: set[str] = set()
+    observed_source_paths: set[str] = set()
+    semantic_sources: dict[str, tuple[Any, ...]] = {}
+    total_nodes = 0
+    total_contracts = 0
+    total_functions = 0
+    for index, raw in enumerate(build_info_jsons):
+        build_hash = hashlib.sha256(raw).hexdigest()
+        if build_hash in build_hashes:
+            raise FoundryInventoryError("compiler build-info inventory contains duplicate content")
+        build_hashes.add(build_hash)
+        payload = _decode_json_object(
+            raw,
+            label=f"compiler statement build info {index}",
+            maximum_bytes=bounds.max_build_info_json_bytes,
+        )
+        input_sources, output_sources = _validated_statement_build_envelope(
+            payload,
+            source_map,
+            compiler_version,
+        )
+        observed_source_paths.update(input_sources)
+        unit, node_count, contract_count, function_count = _parse_statement_build_unit(
+            project_root=normalized_project_root,
+            build_info_sha256=build_hash,
+            compiler_version=compiler_version,
+            compiler_sha256=compiler_sha256,
+            raw_sources=output_sources,
+            sources=source_map,
+            limits=bounds,
+        )
+        total_nodes += node_count
+        total_contracts += contract_count
+        total_functions += function_count
+        if total_nodes > bounds.max_ast_nodes:
+            raise FoundryInventoryError("compiler AST inventory exceeds its node ceiling")
+        if total_contracts > bounds.max_contracts:
+            raise FoundryInventoryError("compiler AST inventory exceeds its contract ceiling")
+        if total_functions > bounds.max_functions:
+            raise FoundryInventoryError("compiler AST inventory exceeds its function ceiling")
+        _reconcile_statement_unit_sources(unit, semantic_sources)
+        units.append(unit)
+
+    if observed_source_paths != set(source_map):
+        missing = sorted(set(source_map) - observed_source_paths)
+        extra = sorted(observed_source_paths - set(source_map))
+        raise FoundryInventoryError(
+            "caller/compiler statement source inventories differ "
+            f"(missing={missing!r}, extra={extra!r})"
+        )
+    return FoundryCompilerStatementCatalog(
+        project_root=normalized_project_root,
+        compiler_version=compiler_version,
+        compiler_sha256=compiler_sha256,
+        units=tuple(sorted(units, key=lambda item: item.normalized_build_info_sha256)),
+    )
+
+
+def _validated_statement_build_envelope(
+    payload: Mapping[str, Any],
+    sources: Mapping[str, FoundrySourceInput],
+    compiler_version: str,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any]]:
+    if payload.get("_format") != "ethers-rs-sol-build-info-1":
+        raise FoundryInventoryError("build-info format is not the pinned Foundry envelope")
+    if payload.get("language") != "Solidity":
+        raise FoundryInventoryError("build-info language is not Solidity")
+    recorded_version = payload.get("solcVersion")
+    if not isinstance(recorded_version, str) or recorded_version != compiler_version:
+        raise FoundryInventoryError("build-info compiler version differs from pinned compiler")
+    long_version = payload.get("solcLongVersion")
+    if not isinstance(long_version, str) or not long_version.startswith(recorded_version):
+        raise FoundryInventoryError("build-info long compiler version is malformed")
+    build_id = payload.get("id")
+    if build_id != "0" * 16:
+        raise FoundryInventoryError("statement build-info identifier is not normalized")
+    compiler_input = _expect_object(payload.get("input"), "build-info input")
+    if compiler_input.get("language") != "Solidity":
+        raise FoundryInventoryError("build-info input language is not Solidity")
+    if compiler_input.get("version") != recorded_version:
+        raise FoundryInventoryError("build-info input compiler version is inconsistent")
+    input_sources = _validate_build_input_sources(
+        _expect_object(compiler_input.get("sources"), "build-info input sources"),
+        sources,
+    )
+    compiler_output = _expect_object(payload.get("output"), "build-info output")
+    _reject_compiler_errors(compiler_output)
+    raw_output_sources = _expect_object(
+        compiler_output.get("sources"),
+        "build-info output sources",
+    )
+    normalized_output: dict[str, Any] = {}
+    for raw_path, raw_item in raw_output_sources.items():
+        path = _normalized_source_path(_expect_string(raw_path, "compiler output source path"))
+        if path in normalized_output:
+            raise FoundryInventoryError(
+                f"normalized compiler output source path is duplicated: {path}"
+            )
+        normalized_output[path] = raw_item
+    if set(input_sources) != set(normalized_output):
+        raise FoundryInventoryError("build-info input and output source paths differ")
+    _validate_source_id_mapping(payload.get("source_id_to_path"), normalized_output)
+    return input_sources, normalized_output
+
+
+def _parse_statement_build_unit(
+    *,
+    project_root: str,
+    build_info_sha256: str,
+    compiler_version: str,
+    compiler_sha256: str,
+    raw_sources: Mapping[str, Any],
+    sources: Mapping[str, FoundrySourceInput],
+    limits: FoundryInventoryLimits,
+) -> tuple[FoundryCompilerBuildUnit, int, int, int]:
+    source_ids: dict[int, str] = {}
+    source_asts: list[tuple[int, str, Mapping[str, Any]]] = []
+    compiler_sources: list[FoundryCompilerSource] = []
+    for path, raw_item in sorted(raw_sources.items()):
+        item = _expect_object(raw_item, f"compiler output source {path}")
+        source_id = _expect_nonnegative_int(item.get("id"), f"source ID for {path}")
+        if source_id in source_ids:
+            raise FoundryInventoryError("compiler source IDs are duplicated")
+        source_ids[source_id] = path
+        ast = _expect_object(item.get("ast"), f"source AST for {path}")
+        if ast.get("nodeType") != "SourceUnit":
+            raise FoundryInventoryError(f"compiler source AST is not a SourceUnit: {path}")
+        source_asts.append((source_id, path, ast))
+        source = sources[path]
+        compiler_sources.append(
+            FoundryCompilerSource(
+                source_id=source_id,
+                path=path,
+                content=source.content,
+                source_sha256=source.source_sha256,
+            )
+        )
+
+    ast_ids: set[int] = set()
+    entities: list[FoundryCompilerEntity] = []
+    statements: list[FoundryCompilerStatement] = []
+    node_count = 0
+    contract_count = 0
+    function_count = 0
+    for expected_source_id, expected_path, source_ast in source_asts:
+        stack: list[
+            tuple[
+                Mapping[str, Any],
+                int | None,
+                str | None,
+                int | None,
+                int | None,
+            ]
+        ] = [(source_ast, None, None, None, None)]
+        while stack:
+            (
+                node,
+                enclosing_contract_ast_id,
+                enclosing_contract_name,
+                enclosing_function_ast_id,
+                enclosing_inline_assembly_ast_id,
+            ) = stack.pop()
+            node_count += 1
+            if node_count > limits.max_ast_nodes:
+                raise FoundryInventoryError("compiler AST inventory exceeds its node ceiling")
+            node_type = _expect_string(node.get("nodeType"), "compiler AST node type")
+            if _AST_NODE_TYPE.fullmatch(node_type) is None:
+                raise FoundryInventoryError("compiler AST node type is malformed")
+            is_yul = node_type.startswith("Yul")
+            if is_yul:
+                if "id" in node:
+                    raise FoundryInventoryError("compiler Yul AST node unexpectedly carries an ID")
+                compiler_ast_id: int | None = None
+                if enclosing_inline_assembly_ast_id is None:
+                    raise FoundryInventoryError(
+                        "compiler Yul AST node lacks an enclosing InlineAssembly identity"
+                    )
+            else:
+                compiler_ast_id = _expect_nonnegative_int(
+                    node.get("id"),
+                    f"compiler AST ID for {node_type}",
+                )
+                _record_ast_id(compiler_ast_id, ast_ids)
+
+            source_id, start, end = _validated_utf8_node_span(
+                node.get("src"),
+                source_ids,
+                sources,
+                f"compiler AST node {node_type}",
+            )
+            path = source_ids[source_id]
+            if source_id != expected_source_id or path != expected_path:
+                raise FoundryInventoryError("source AST node source identity is inconsistent")
+            if is_yul:
+                native_source_id, native_start, native_end = _validated_utf8_node_span(
+                    node.get("nativeSrc"),
+                    source_ids,
+                    sources,
+                    f"compiler Yul AST node {node_type} native range",
+                )
+                if (native_source_id, native_start, native_end) != (source_id, start, end):
+                    raise FoundryInventoryError("compiler Yul src/nativeSrc ranges differ")
+
+            child_contract_ast_id = enclosing_contract_ast_id
+            child_contract_name = enclosing_contract_name
+            child_function_ast_id = enclosing_function_ast_id
+            child_inline_assembly_ast_id = enclosing_inline_assembly_ast_id
+            source = sources[path]
+            if node_type == "ContractDefinition":
+                if enclosing_contract_ast_id is not None or enclosing_function_ast_id is not None:
+                    raise FoundryInventoryError("compiler contract AST is unexpectedly nested")
+                assert compiler_ast_id is not None
+                name = _expect_identifier(node.get("name"), f"contract name in {path}")
+                kind = _expect_string(node.get("contractKind"), f"contract kind in {path}")
+                if kind not in _CONTRACT_KINDS:
+                    raise FoundryInventoryError(f"contract kind is malformed: {path}:{name}")
+                entities.append(
+                    FoundryCompilerEntity(
+                        compiler_ast_id=compiler_ast_id,
+                        node_type="ContractDefinition",
+                        kind=kind,
+                        name=name,
+                        enclosing_contract_ast_id=None,
+                        enclosing_contract_name=None,
+                        source_id=source_id,
+                        path=path,
+                        source_sha256=source.source_sha256,
+                        start_byte=start,
+                        end_byte_exclusive=end,
+                        start_line=0,
+                        end_line_exclusive=0,
+                    )
+                )
+                contract_count += 1
+                if contract_count > limits.max_contracts:
+                    raise FoundryInventoryError(
+                        "compiler AST inventory exceeds its contract ceiling"
+                    )
+                child_contract_ast_id = compiler_ast_id
+                child_contract_name = name
+                child_function_ast_id = None
+                child_inline_assembly_ast_id = None
+            elif node_type == "FunctionDefinition":
+                assert compiler_ast_id is not None
+                kind = _expect_string(node.get("kind"), f"function kind in {path}")
+                if kind not in _FUNCTION_KINDS:
+                    raise FoundryInventoryError("compiler function kind is malformed")
+                raw_name = _expect_string(node.get("name"), f"function name in {path}")
+                if kind in {"function", "freeFunction"}:
+                    name = _expect_identifier(raw_name, f"function name in {path}")
+                elif raw_name:
+                    raise FoundryInventoryError("special compiler function name is not empty")
+                else:
+                    name = raw_name
+                if kind == "freeFunction":
+                    if enclosing_contract_ast_id is not None:
+                        raise FoundryInventoryError(
+                            "free compiler function is nested in a contract"
+                        )
+                elif enclosing_contract_ast_id is None or enclosing_contract_name is None:
+                    raise FoundryInventoryError("contract compiler function lacks its contract")
+                scope = _expect_nonnegative_int(node.get("scope"), f"function scope in {path}")
+                if kind != "freeFunction" and scope != enclosing_contract_ast_id:
+                    raise FoundryInventoryError(
+                        "compiler function scope differs from its enclosing contract"
+                    )
+                entities.append(
+                    FoundryCompilerEntity(
+                        compiler_ast_id=compiler_ast_id,
+                        node_type="FunctionDefinition",
+                        kind=kind,
+                        name=name,
+                        enclosing_contract_ast_id=enclosing_contract_ast_id,
+                        enclosing_contract_name=enclosing_contract_name,
+                        source_id=source_id,
+                        path=path,
+                        source_sha256=source.source_sha256,
+                        start_byte=start,
+                        end_byte_exclusive=end,
+                        start_line=0,
+                        end_line_exclusive=0,
+                    )
+                )
+                function_count += 1
+                if function_count > limits.max_functions:
+                    raise FoundryInventoryError(
+                        "compiler AST inventory exceeds its function ceiling"
+                    )
+                child_function_ast_id = compiler_ast_id
+                child_inline_assembly_ast_id = None
+            elif node_type == "InlineAssembly":
+                assert compiler_ast_id is not None
+                child_inline_assembly_ast_id = compiler_ast_id
+
+            if node_type in _SOLIDITY_ATOMIC_STATEMENT_TYPES | _YUL_ATOMIC_STATEMENT_TYPES:
+                _validate_nonwhitespace_statement(source.content, start, end, node_type)
+                if node_type in _YUL_ATOMIC_STATEMENT_TYPES:
+                    if compiler_ast_id is not None or enclosing_inline_assembly_ast_id is None:
+                        raise FoundryInventoryError("compiler Yul statement identity is malformed")
+                    statement_inline_id = enclosing_inline_assembly_ast_id
+                else:
+                    if compiler_ast_id is None or enclosing_inline_assembly_ast_id is not None:
+                        raise FoundryInventoryError(
+                            "compiler Solidity statement identity is malformed"
+                        )
+                    statement_inline_id = None
+                statements.append(
+                    FoundryCompilerStatement(
+                        compiler_ast_id=compiler_ast_id,
+                        enclosing_inline_assembly_ast_id=statement_inline_id,
+                        node_type=node_type,
+                        enclosing_contract_ast_id=enclosing_contract_ast_id,
+                        enclosing_function_ast_id=enclosing_function_ast_id,
+                        source_id=source_id,
+                        path=path,
+                        source_sha256=source.source_sha256,
+                        start_byte=start,
+                        end_byte_exclusive=end,
+                        start_line=0,
+                        end_line_exclusive=0,
+                    )
+                )
+
+            children = _ast_child_nodes(node)
+            for child in reversed(children):
+                stack.append(
+                    (
+                        child,
+                        child_contract_ast_id,
+                        child_contract_name,
+                        child_function_ast_id,
+                        child_inline_assembly_ast_id,
+                    )
+                )
+
+    ranged_entities, ranged_statements = _attach_statement_line_ranges(
+        entities,
+        statements,
+        sources,
+    )
+    ordered_entities = tuple(
+        sorted(
+            ranged_entities,
+            key=lambda item: (
+                item.path,
+                item.start_byte,
+                item.end_byte_exclusive,
+                item.node_type,
+                item.compiler_ast_id,
+            ),
+        )
+    )
+    ordered_statements = tuple(
+        sorted(
+            ranged_statements,
+            key=lambda item: (
+                item.path,
+                item.start_byte,
+                item.end_byte_exclusive,
+                item.node_type,
+                -1 if item.compiler_ast_id is None else item.compiler_ast_id,
+            ),
+        )
+    )
+    _reject_overlapping_atomic_statements(ordered_statements)
+    return (
+        FoundryCompilerBuildUnit(
+            project_root=project_root,
+            normalized_build_info_sha256=build_info_sha256,
+            compiler_version=compiler_version,
+            compiler_sha256=compiler_sha256,
+            source_id_to_path=tuple(sorted(source_ids.items())),
+            sources=tuple(sorted(compiler_sources, key=lambda item: item.source_id)),
+            entities=ordered_entities,
+            statements=ordered_statements,
+        ),
+        node_count,
+        contract_count,
+        function_count,
+    )
+
+
+def _ast_child_nodes(node: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    children: list[Mapping[str, Any]] = []
+    for field_name in sorted(node):
+        if field_name in {"id", "nodeType", "src", "nativeSrc"}:
+            continue
+        value = node[field_name]
+        if isinstance(value, dict):
+            if "nodeType" in value:
+                children.append(value)
+            else:
+                children.extend(_nested_ast_nodes(value))
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    if "nodeType" in item:
+                        children.append(item)
+                    else:
+                        children.extend(_nested_ast_nodes(item))
+    return children
+
+
+def _nested_ast_nodes(value: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    result: list[Mapping[str, Any]] = []
+    pending: list[Mapping[str, Any]] = [value]
+    while pending:
+        item = pending.pop()
+        for field_name in sorted(item, reverse=True):
+            child = item[field_name]
+            if isinstance(child, dict):
+                if "nodeType" in child:
+                    result.append(child)
+                else:
+                    pending.append(child)
+            elif isinstance(child, list):
+                for member in reversed(child):
+                    if isinstance(member, dict):
+                        if "nodeType" in member:
+                            result.append(member)
+                        else:
+                            pending.append(member)
+    return result
+
+
+def _validated_utf8_node_span(
+    raw: Any,
+    source_ids: Mapping[int, str],
+    sources: Mapping[str, FoundrySourceInput],
+    label: str,
+) -> tuple[int, int, int]:
+    source_id, start, end = _parse_span(raw, label)
+    path = source_ids.get(source_id)
+    if path is None:
+        raise FoundryInventoryError(f"{label} references an unknown source ID")
+    content = sources[path].content
+    _check_span_bounds(start, end, content, label)
+    for offset in (start, end):
+        if offset < len(content) and content[offset] & 0b1100_0000 == 0b1000_0000:
+            raise FoundryInventoryError(f"{label} does not use UTF-8 boundaries")
+    return source_id, start, end
+
+
+def _attach_statement_line_ranges(
+    entities: Sequence[FoundryCompilerEntity],
+    statements: Sequence[FoundryCompilerStatement],
+    sources: Mapping[str, FoundrySourceInput],
+) -> tuple[list[FoundryCompilerEntity], list[FoundryCompilerStatement]]:
+    offsets_by_path: dict[str, set[int]] = {}
+    for items in (entities, statements):
+        for item in items:
+            offsets = offsets_by_path.setdefault(item.path, set())
+            offsets.add(item.start_byte)
+            if item.end_byte_exclusive > item.start_byte:
+                offsets.add(item.end_byte_exclusive - 1)
+    prefix_counts: dict[str, dict[int, int]] = {}
+    for path, offsets in offsets_by_path.items():
+        content = sources[path].content
+        counts: dict[int, int] = {}
+        cursor = 0
+        newline_count = 0
+        for offset in sorted(offsets):
+            newline_count += content.count(b"\n", cursor, offset)
+            counts[offset] = newline_count
+            cursor = offset
+        prefix_counts[path] = counts
+
+    def line_range(path: str, start: int, end: int) -> tuple[int, int]:
+        counts = prefix_counts[path]
+        start_line = counts[start] + 1
+        if end == start:
+            return start_line, start_line
+        return start_line, counts[end - 1] + 2
+
+    ranged_entities: list[FoundryCompilerEntity] = []
+    for entity in entities:
+        start_line, end_line_exclusive = line_range(
+            entity.path,
+            entity.start_byte,
+            entity.end_byte_exclusive,
+        )
+        ranged_entities.append(
+            replace(
+                entity,
+                start_line=start_line,
+                end_line_exclusive=end_line_exclusive,
+            )
+        )
+    ranged_statements: list[FoundryCompilerStatement] = []
+    for statement in statements:
+        start_line, end_line_exclusive = line_range(
+            statement.path,
+            statement.start_byte,
+            statement.end_byte_exclusive,
+        )
+        ranged_statements.append(
+            replace(
+                statement,
+                start_line=start_line,
+                end_line_exclusive=end_line_exclusive,
+            )
+        )
+    return ranged_entities, ranged_statements
+
+
+def _validate_nonwhitespace_statement(
+    content: bytes,
+    start: int,
+    end: int,
+    node_type: str,
+) -> None:
+    if start == end:
+        raise FoundryInventoryError(f"compiler atomic statement is empty: {node_type}")
+    try:
+        text = content[start:end].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FoundryInventoryError(
+            f"compiler atomic statement is not exact UTF-8: {node_type}"
+        ) from exc
+    if not text.strip():
+        raise FoundryInventoryError(f"compiler atomic statement is whitespace-only: {node_type}")
+
+
+def _reject_overlapping_atomic_statements(
+    statements: Sequence[FoundryCompilerStatement],
+) -> None:
+    previous_by_path: dict[str, FoundryCompilerStatement] = {}
+    for statement in statements:
+        previous = previous_by_path.get(statement.path)
+        if previous is not None and statement.start_byte < previous.end_byte_exclusive:
+            raise FoundryInventoryError(
+                "compiler atomic statements overlap: "
+                f"{statement.path}:{previous.node_type}:{statement.node_type}"
+            )
+        previous_by_path[statement.path] = statement
+
+
+def _reconcile_statement_unit_sources(
+    unit: FoundryCompilerBuildUnit,
+    observed: dict[str, tuple[Any, ...]],
+) -> None:
+    entities_by_id = {entity.compiler_ast_id: entity for entity in unit.entities}
+    sources_by_path = {source.path: source for source in unit.sources}
+    for path, source in sorted(sources_by_path.items()):
+        entity_projection = tuple(
+            (
+                entity.node_type,
+                entity.kind,
+                entity.name,
+                entity.enclosing_contract_name,
+                entity.start_byte,
+                entity.end_byte_exclusive,
+            )
+            for entity in unit.entities
+            if entity.path == path
+        )
+        statement_projection: list[tuple[Any, ...]] = []
+        for statement in unit.statements:
+            if statement.path != path:
+                continue
+            contract = (
+                entities_by_id.get(statement.enclosing_contract_ast_id)
+                if statement.enclosing_contract_ast_id is not None
+                else None
+            )
+            function = (
+                entities_by_id.get(statement.enclosing_function_ast_id)
+                if statement.enclosing_function_ast_id is not None
+                else None
+            )
+            if statement.enclosing_contract_ast_id is not None and contract is None:
+                raise FoundryInventoryError("compiler statement contract identity is unresolved")
+            if statement.enclosing_function_ast_id is not None and function is None:
+                raise FoundryInventoryError("compiler statement function identity is unresolved")
+            statement_projection.append(
+                (
+                    statement.node_type,
+                    statement.start_byte,
+                    statement.end_byte_exclusive,
+                    None if contract is None else contract.name,
+                    None if function is None else function.kind,
+                    None if function is None else function.name,
+                    None if function is None else function.start_byte,
+                    None if function is None else function.end_byte_exclusive,
+                )
+            )
+        projection: tuple[Any, ...] = (
+            source.source_sha256,
+            len(source.content),
+            entity_projection,
+            tuple(statement_projection),
+        )
+        prior = observed.get(path)
+        if prior is not None and prior != projection:
+            raise FoundryInventoryError(
+                f"semantically repeated compiler source conflicts across build units: {path}"
+            )
+        observed[path] = projection
 
 
 def _validate_compiler_identity(version: str, sha256: str) -> None:
@@ -1324,11 +2049,17 @@ def _canonical_sha256(value: Any) -> str:
 
 
 __all__ = [
+    "FoundryCompilerBuildUnit",
+    "FoundryCompilerEntity",
+    "FoundryCompilerSource",
+    "FoundryCompilerStatement",
+    "FoundryCompilerStatementCatalog",
     "FoundryInventoryError",
     "FoundryInventoryLimits",
     "FoundryInventorySourceBinding",
     "FoundrySourceInput",
     "FoundryTestDeclaration",
     "FoundryTestInventory",
+    "parse_foundry_compiler_statement_catalog",
     "parse_foundry_test_inventory",
 ]

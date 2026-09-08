@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "artifact_kind": "MMAUDIT_OFFLINE_FORK_RPC_ARCHIVE",
+  "source_kind": "SYNTHETIC_FIXTURE",
+  "chain_id": 31337,
+  "block_number": 7,
+  "block_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "complete_state": false,
+  "runtime_authority": false,
+  "reads": [
+    {
+      "method": "eth_getBlockByHash",
+      "params": ["0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", false],
+      "result": {
+        "number": "0x7",
+        "hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "method": "eth_getBalance",
+      "params": [
+        "0x1111111111111111111111111111111111111111",
+        {"blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "requireCanonical": true}
+      ],
+      "result": "0x5"
+    },
+    {
+      "method": "eth_getStorageAt",
+      "params": [
+        "0x1111111111111111111111111111111111111111",
+        "0x0",
+        {"blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "requireCanonical": true}
+      ],
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

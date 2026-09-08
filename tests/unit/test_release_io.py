@@ -45,6 +45,189 @@ def test_reader_returns_exact_json_and_manifest_binding(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("substitute_fifo", [False, True])
+def test_reader_uses_nonblocking_open_before_revalidating_file_type(
+    tmp_path, monkeypatch, substitute_fifo
+):
+    """A regular-file-to-FIFO swap must not block before the second identity check."""
+
+    path = tmp_path / "synthetic.bin"
+    path.write_bytes(b"bounded inert bytes")
+    original = os.open
+    observed_flags: list[int] = []
+
+    def checked_open(name, flags, *args, **kwargs):
+        if name == path.name:
+            observed_flags.append(flags)
+            assert flags & os.O_NONBLOCK, "file custody must not block on FIFO substitution"
+            if substitute_fifo:
+                path.unlink()
+                os.mkfifo(path)
+        return original(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(release_io_module.os, "open", checked_open)
+    if substitute_fifo:
+        with pytest.raises(ValueError, match="changed before it was read"):
+            read_file_evidence(evidence_root=tmp_path, relative_path=path.name)
+        assert len(observed_flags) == 1
+    else:
+        assert (
+            read_file_evidence(evidence_root=tmp_path, relative_path=path.name).content
+            == path.read_bytes()
+        )
+        assert len(observed_flags) == 2
+
+
+@pytest.mark.parametrize("mutation", ("parent_rename", "parent_mode", "file_mode", "content"))
+def test_writer_revalidates_after_observation_and_rolls_back_through_retained_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    destination = root / "result.json"
+    moved = tmp_path / "moved-private"
+    original_observer = release_io_module._observe_file_twice
+
+    def observe_then_change(**kwargs):
+        observed = original_observer(**kwargs)
+        if mutation == "parent_rename":
+            root.rename(moved)
+            root.mkdir(mode=0o700)
+        elif mutation == "parent_mode":
+            root.chmod(0o777)
+        elif mutation == "file_mode":
+            destination.chmod(0o644)
+        else:
+            destination.write_bytes(b"changed after final observation")
+        return observed
+
+    monkeypatch.setattr(release_io_module, "_observe_file_twice", observe_then_change)
+    with pytest.raises(ValueError):
+        write_json_evidence(
+            evidence_root=root, relative_path=destination.name, value={"safe": True}
+        )
+    assert not destination.exists()
+    assert not (moved / destination.name).exists()
+
+
+def test_writer_removes_the_created_file_if_initial_mode_setting_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+
+    def fail_mode(*_args: object) -> None:
+        raise OSError("synthetic chmod failure")
+
+    monkeypatch.setattr(release_io_module.os, "fchmod", fail_mode)
+    with pytest.raises(ValueError):
+        write_json_evidence(evidence_root=root, relative_path="result.json", value={"safe": True})
+    assert not (root / "result.json").exists()
+
+
+@pytest.mark.parametrize("failure_type", (ValueError, KeyboardInterrupt))
+def test_writer_rolls_back_if_trusted_content_validation_fails(
+    tmp_path: Path, failure_type: type[BaseException]
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    moved = tmp_path / "moved-private"
+    content = stable_json({"nonauthorizing": True}).encode()
+    calls: list[bytes] = []
+
+    def reject(value: bytes) -> None:
+        calls.append(value)
+        root.rename(moved)
+        root.mkdir(mode=0o700)
+        raise failure_type("synthetic host validation failure")
+
+    with pytest.raises(failure_type, match="synthetic host validation failure"):
+        write_json_evidence(
+            evidence_root=root,
+            relative_path="result.json",
+            value={"nonauthorizing": True},
+            validate_content=reject,
+            require_private_parent=True,
+        )
+    assert calls == [content]
+    assert not (root / "result.json").exists()
+    assert not (moved / "result.json").exists()
+
+
+@pytest.mark.parametrize("mutation", ("content", "mode", "parent", "replacement", "alias"))
+def test_writer_rechecks_filesystem_after_trusted_content_validation(
+    tmp_path: Path, mutation: str
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    destination = root / "result.json"
+    alias = root / "retained-alias.json"
+
+    def change(_value: bytes) -> None:
+        if mutation == "content":
+            destination.write_bytes(b"synthetic drift")
+        elif mutation == "mode":
+            destination.chmod(0o644)
+        elif mutation == "parent":
+            root.chmod(0o777)
+        elif mutation == "replacement":
+            destination.unlink()
+            destination.write_bytes(b"foreign replacement")
+        else:
+            os.link(destination, alias)
+
+    message = "cleanup is incomplete" if mutation == "alias" else "changed"
+    with pytest.raises(ValueError, match=message):
+        write_json_evidence(
+            evidence_root=root,
+            relative_path=destination.name,
+            value={"safe": True},
+            validate_content=change,
+            require_private_parent=True,
+        )
+    if mutation == "replacement":
+        assert destination.read_bytes() == b"foreign replacement"
+    else:
+        assert not destination.exists()
+    if mutation == "alias":
+        # Never search for or delete a name this writer did not create.
+        assert alias.read_bytes() == stable_json({"safe": True}).encode()
+
+
+def test_writer_private_parent_check_precedes_file_creation(tmp_path: Path) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    root.chmod(0o777)
+    with pytest.raises(ValueError, match="private and owned"):
+        write_json_evidence(
+            evidence_root=root,
+            relative_path="result.json",
+            value={"safe": True},
+            require_private_parent=True,
+        )
+    assert not (root / "result.json").exists()
+
+
+def test_writer_validates_exact_content_once_before_success(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    observations: list[bytes] = []
+    content = stable_json({"nonauthorizing": True}).encode()
+    binding = write_json_evidence(
+        evidence_root=root,
+        relative_path="result.json",
+        value={"nonauthorizing": True},
+        validate_content=observations.append,
+        require_private_parent=True,
+    )
+    assert observations == [content]
+    assert binding.sha256 == hashlib.sha256(content).hexdigest()
+    assert (root / "result.json").read_bytes() == content
+
+
 def test_file_reader_returns_exact_non_json_bytes_and_binding(tmp_path: Path) -> None:
     evidence_root = tmp_path / "evidence"
     evidence_root.mkdir()
@@ -141,6 +324,77 @@ def _streamed_copy_case(
             size=len(content),
         ),
     )
+
+
+def test_streamed_copy_source_fifo_swap_cannot_block_or_read_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs unavailable")
+    source_root, destination_root, source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    real_open = os.open
+    swapped = False
+
+    def swapping_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == source_path.name and dir_fd is not None and not swapped:
+            assert flags & os.O_NONBLOCK, "invariant: source open must not block on a FIFO swap"
+            swapped = True
+            source_path.unlink()
+            os.mkfifo(source_path, mode=0o600)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def forbidden_read(*args, **kwargs):
+        pytest.fail("invariant: swapped source must not be read")
+
+    monkeypatch.setattr(release_io_module.os, "open", swapping_open)
+    monkeypatch.setattr(release_io_module.os, "read", forbidden_read)
+    with pytest.raises(ValueError):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path=destination_path.relative_to(destination_root),
+            expected_binding=expected,
+        )
+    assert swapped
+    assert not destination_path.exists()
+
+
+def test_streamed_copy_growth_cannot_exceed_the_exact_binding_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root, destination_root, source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    original = source_path.read_bytes()
+    real_read = os.read
+    changed = False
+    observed_bytes = 0
+
+    def growing_read(descriptor, count):
+        nonlocal changed, observed_bytes
+        if not changed:
+            source_path.write_bytes(original * 30)
+            changed = True
+        content = real_read(descriptor, count)
+        observed_bytes += len(content)
+        return content
+
+    monkeypatch.setattr(release_io_module.os, "read", growing_read)
+    with pytest.raises(ValueError):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path=destination_path.relative_to(destination_root),
+            expected_binding=expected,
+        )
+    assert changed
+    assert observed_bytes <= len(original) + 1
+    assert not destination_path.exists()
 
 
 def test_streamed_copy_cleans_partial_output_through_renamed_parent(

@@ -20,6 +20,9 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.foundry_inventory import (
+    FoundryCompilerBuildUnit,
+    FoundryCompilerSource,
+    FoundryCompilerStatementCatalog,
     FoundryInventoryLimits,
     FoundryInventorySourceBinding,
     FoundrySourceInput,
@@ -272,6 +275,44 @@ def _parser_stub(
     )
 
 
+def _statement_catalog_stub(
+    *,
+    build_info_jsons: Sequence[bytes],
+    sources: Sequence[FoundrySourceInput],
+    project_root: str = ".",
+    compiler_version: str,
+    compiler_sha256: str,
+    limits: FoundryInventoryLimits | None = None,
+) -> FoundryCompilerStatementCatalog:
+    del limits
+    assert len(build_info_jsons) == 1
+    assert len(sources) == 1
+    source = sources[0]
+    unit = FoundryCompilerBuildUnit(
+        project_root=project_root,
+        normalized_build_info_sha256=_sha256(build_info_jsons[0]),
+        compiler_version=compiler_version,
+        compiler_sha256=compiler_sha256,
+        source_id_to_path=((0, source.path),),
+        sources=(
+            FoundryCompilerSource(
+                source_id=0,
+                path=source.path,
+                content=source.content,
+                source_sha256=source.source_sha256,
+            ),
+        ),
+        entities=(),
+        statements=(),
+    )
+    return FoundryCompilerStatementCatalog(
+        project_root=project_root,
+        compiler_version=compiler_version,
+        compiler_sha256=compiler_sha256,
+        units=(unit,),
+    )
+
+
 def _run(
     harness: _Harness,
     backend: _MockIsolationBackend,
@@ -286,6 +327,11 @@ def _run(
         lambda _backend: _ATTESTATION_SHA256,
     )
     monkeypatch.setattr(runner_module, "parse_foundry_test_inventory", _parser_stub)
+    monkeypatch.setattr(
+        runner_module,
+        "parse_foundry_compiler_statement_catalog",
+        _statement_catalog_stub,
+    )
     return run_foundry_test_inventory(
         workspace=harness.workspace,
         private_dir=harness.private_dir,
@@ -856,6 +902,10 @@ def test_inventory_runner_executes_sorted_projects_and_seals_evidence(
     result = _run(harness, backend, monkeypatch)
 
     assert tuple(item.project_root for item in result.inventories) == (
+        "packages/alpha",
+        "packages/zeta",
+    )
+    assert tuple(item.project_root for item in result.statement_catalogs) == (
         "packages/alpha",
         "packages/zeta",
     )

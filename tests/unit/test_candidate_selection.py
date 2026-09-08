@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import textwrap
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -13,12 +15,21 @@ import pytest
 
 import mmaudit.models.candidate_selection as candidate_selection_module
 from mmaudit.config import AuditConfig
+from mmaudit.models.candidate_revocation import (
+    CandidateSelectionRevocationReason,
+    load_candidate_selection_revocation_registry,
+    seal_candidate_selection_revocation_entry,
+    seal_candidate_selection_revocation_registry,
+)
 from mmaudit.models.candidate_selection import (
+    NO_ACTIVE_CANDIDATE_REQUIREMENT,
     OBJECTIVE_SHA256,
     CandidateSelectionError,
     CandidateSelectionPlan,
+    CandidateSelectionUnavailableState,
     authenticated_runner_route_constraint,
     derive_candidate_selection_plan_successor,
+    derive_candidate_selection_plan_unavailable_successor,
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
     require_candidate_selection_plan_currently_eligible,
@@ -60,7 +71,10 @@ from mmaudit.models.reasoning import (
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
+    ProviderPriceCapAlgorithm,
     RoutePredicateProfile,
+    RoutePriceComponent,
+    RoutePriceComponentUnitEnvelope,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import PrivacyProfile
@@ -79,6 +93,20 @@ ENDPOINT_C = "provider-gamma/global"
 ENDPOINT_D = "provider-delta"
 REFRESHED_ENDPOINT_A = "provider-alpha/new-fp8"
 ROOT = Path(__file__).parents[2]
+ACTIVE_SELECTION_PLAN_PATH = ROOT / "config" / "models.selection-plan.json"
+REVOKED_SELECTION_PLAN_PATH = (
+    ROOT / "tests" / "fixtures" / "model_selection" / "revoked-active-plan-v1.4.json"
+)
+REVOKED_SELECTION_PLAN_RAW_SHA256 = (
+    "0da03b75dd608efade4c41e87de38139fb735576049f824365889be9c9a3ff24"
+)
+REVOKED_SELECTION_PLAN_SHA256 = "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
+ACTIVE_SELECTION_PLAN_RAW_SHA256 = (
+    "4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695"
+)
+ACTIVE_SELECTION_PLAN_SHA256 = "14566de1f7da5e4a769502bdd6a7e1ec6c0f193ed126c8fc85236f0851586fd3"
+ACTIVE_UNAVAILABLE_STATE_SHA256 = "98941c3253ffe0f1aa88890b1c8b7fafb7d6575ee28ca31cb7724f14e784ceae"
+MATCHED_REVOCATION_SET_SHA256 = "7c0118f5c170d46e6d2478bf92cbd83d1be6b426bda36dd57a6fc93e2ffd18c5"
 HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "none",
     "minimal",
@@ -456,7 +484,13 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "serialized_authority",
     }.issubset(required)
     assert schema["properties"]["objective_sha256"]["const"] == OBJECTIVE_SHA256
-    assert schema["properties"]["schema_version"]["enum"] == ["1.4", "1.5", "1.6"]
+    assert schema["properties"]["schema_version"]["enum"] == [
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "1.8",
+    ]
     assert "predecessor_plan_sha256" not in required
     assert "endpoint_inventory_refresh" not in required
     assert schema["allOf"] == [
@@ -491,6 +525,57 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
             },
             "else": {"not": {"required": ["endpoint_inventory_refresh"]}},
         },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.7"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "authenticated_runner_selection": {"type": "null"},
+                    "authenticated_runner_unavailability": {
+                        "not": {"type": "null"},
+                    },
+                },
+                "required": ["authenticated_runner_unavailability"],
+            },
+            "else": {
+                "not": {"required": ["authenticated_runner_unavailability"]},
+            },
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.8"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    "authenticated_runner_selection": {
+                        "type": "object",
+                        "properties": {
+                            "route_predicate_profile": {
+                                "type": "object",
+                                "properties": {
+                                    "schema_version": {"const": "1.0"},
+                                    "price_cap_algorithm": {
+                                        "const": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1"
+                                    },
+                                    "price_component_unit_envelopes": {"type": "null"},
+                                },
+                                "required": ["schema_version", "price_cap_algorithm"],
+                            }
+                        },
+                        "required": ["route_predicate_profile"],
+                    },
+                    "ancestry_transition_binding": {"not": {"type": "null"}},
+                },
+                "required": [
+                    "authenticated_runner_selection",
+                    "ancestry_transition_binding",
+                ],
+            },
+            "else": {"not": {"required": ["ancestry_transition_binding"]}},
+        },
     ]
     assignment_schema = schema["$defs"]["AuthenticatedRunnerSelection"]
     assert assignment_schema["properties"]["required_output_mode"]["const"] == (
@@ -514,6 +599,30 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
     assert refresh_schema["properties"]["provider_metadata_embedded"]["const"] is False
     assert refresh_schema["properties"]["discovery_evidence_embedded"]["const"] is False
     assert refresh_schema["properties"]["endpoint_authority"]["const"] is False
+    unavailable_schema = schema["$defs"]["CandidateSelectionUnavailableState"]
+    assert unavailable_schema["properties"]["disposition"]["const"] == (
+        "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    )
+    assert unavailable_schema["properties"]["price_cap_profile_decision"]["const"] == (
+        "PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION"
+    )
+    assert unavailable_schema["properties"]["candidate_selection_authorized"]["const"] is False
+    assert unavailable_schema["properties"]["matched_revocation_set_sha256"]["pattern"] == (
+        "^[0-9a-f]{64}$"
+    )
+    for field_name in (
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+    ):
+        assert unavailable_schema["properties"][field_name]["items"]["pattern"] == (
+            "^[0-9a-f]{64}$"
+        )
+    ancestry_schema = schema["$defs"]["CandidateSelectionPlanAncestryTransitionBinding"]
+    assert ancestry_schema["properties"]["opaque_ancestry_capability_required"]["const"] is True
+    assert ancestry_schema["properties"]["endpoint_inventory_refresh_authorized"]["const"] is False
+    assert ancestry_schema["properties"]["price_cap_profile_upgrade_authorized"]["const"] is False
+    assert ancestry_schema["properties"]["production_selection_authorized"]["const"] is False
+    assert ancestry_schema["properties"]["serialized_authority"]["const"] is False
 
 
 def test_candidate_selection_schema_v16_requires_a_nonnull_endpoint_refresh() -> None:
@@ -553,6 +662,10 @@ def test_candidate_selection_successor_is_deterministic_predecessor_bound_and_no
     )
 
     assert first == second
+    assert first.plan_sha256 == "00708ad6cdfdf4aa8b7e0b6305a94da736a5b31ff4e40cd3b5967e43191e0eb5"
+    assert hashlib.sha256(stable_json(first).encode("utf-8")).hexdigest() == (
+        "e124c2af7608d8e1284d3b8fa069a9781af2cf49696b3e8538a24008e7febef4"
+    )
     assert stable_json(predecessor) == predecessor_bytes
     assert predecessor.schema_version == "1.4"
     assert predecessor.predecessor_plan_sha256 is None
@@ -652,6 +765,573 @@ def test_candidate_selection_successor_is_deterministic_predecessor_bound_and_no
         )
 
 
+def test_successor_explicit_v1_to_v2_rebuilds_profile_and_every_constraint() -> None:
+    predecessor = _plan()
+    predecessor_bytes = stable_json(predecessor)
+    predecessor_selection = predecessor.authenticated_runner_selection
+    assert predecessor_selection is not None
+    predecessor_profile = predecessor_selection.route_predicate_profile
+    predecessor_constraint_hashes = {
+        (constraint.role, constraint.exact_model_id, constraint.provider_endpoint): (
+            constraint.constraint_sha256
+        )
+        for constraint in predecessor_selection.route_constraints
+    }
+
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    repeated = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+
+    assert successor == repeated
+    assert stable_json(predecessor) == predecessor_bytes
+    assert successor.schema_version == "1.5"
+    assert successor.predecessor_plan_sha256 == predecessor.plan_sha256
+    assert (
+        successor.plan_sha256 == "77ed2dd32d89b231af5da1f417f96b162bfbae98d9b899047b275acdd95179db"
+    )
+    assert hashlib.sha256(stable_json(successor).encode("utf-8")).hexdigest() == (
+        "7e2a1d708d41460b81a87edfd2ff62092792b6afebeac89b615bc7f3e9d31920"
+    )
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=successor,
+        )
+        == successor
+    )
+    selection = successor.authenticated_runner_selection
+    assert selection is not None
+    profile = selection.route_predicate_profile
+    assert predecessor_profile.schema_version == "1.0"
+    assert (
+        predecessor_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    )
+    assert predecessor_profile.price_component_unit_envelopes is None
+    assert profile.schema_version == "1.1"
+    assert (
+        profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    assert profile.price_component_unit_envelopes == (
+        RoutePriceComponentUnitEnvelope.build_web_search_disabled(),
+    )
+    envelope = profile.price_component_unit_envelopes[0]
+    assert envelope.component is RoutePriceComponent.WEB_SEARCH
+    assert envelope.maximum_units == 0
+    assert envelope.maximum_cost_usd_exact == "0"
+    assert envelope.emitted_request_parameters == (
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "temperature",
+    )
+    assert envelope.prohibited_request_fields == (
+        "plugins",
+        "tool_choice",
+        "tools",
+        "web_search",
+        "web_search_options",
+    )
+    preserved_profile_fields = (
+        "reasoning_policy_sha256",
+        "reasoning_role_profile_sha256",
+        "reasoning_role_binding_sha256",
+        "reasoning_control_profile_sha256",
+        "reasoning_mode",
+        "reasoning_effort",
+        "reasoning_max_tokens",
+        "reasoning_exclude",
+        "reserved_reasoning_tokens",
+        "minimum_prompt_tokens",
+        "required_output_tokens",
+        "required_completion_tokens",
+        "minimum_context_tokens",
+        "required_completion_limit_source",
+    )
+    assert all(
+        getattr(profile, field) == getattr(predecessor_profile, field)
+        for field in preserved_profile_fields
+    )
+    assert all(
+        constraint.profile_sha256 == profile.profile_sha256
+        for constraint in selection.route_constraints
+    )
+    assert all(
+        constraint.constraint_sha256
+        != predecessor_constraint_hashes[
+            (constraint.role, constraint.exact_model_id, constraint.provider_endpoint)
+        ]
+        for constraint in selection.route_constraints
+    )
+    assert tuple(
+        (constraint.role, constraint.exact_model_id, constraint.provider_endpoint)
+        for constraint in selection.route_constraints
+    ) == (
+        (ExactRouteRole.CANDIDATE, MODEL_A, ENDPOINT_A),
+        (ExactRouteRole.PRIMARY_JUDGE, MODEL_B, ENDPOINT_B),
+        (ExactRouteRole.REPLAY_JUDGE, MODEL_C, ENDPOINT_C),
+    )
+
+
+def test_successor_v1_to_v2_rebuilds_every_multi_endpoint_judge_constraint() -> None:
+    base = _plan_with_revoked_pinned_candidate()
+    base_selection = base.authenticated_runner_selection
+    assert base_selection is not None
+    alternate_judge_endpoint = "provider-beta/alternate"
+    predecessor_entries = tuple(
+        seal_candidate_selection_entry(
+            exact_model_id=entry.exact_model_id,
+            priority_rank=entry.priority_rank,
+            advisory_lineage_group=entry.advisory_lineage_group,
+            allowed_provider_endpoints=(
+                (ENDPOINT_B, alternate_judge_endpoint)
+                if entry.exact_model_id == MODEL_B
+                else entry.allowed_provider_endpoints
+            ),
+        )
+        for entry in base.entries
+    )
+    predecessor_constraints = (
+        *base_selection.route_constraints,
+        ExactRouteConstraint.build(
+            role=ExactRouteRole.PRIMARY_JUDGE,
+            exact_model_id=MODEL_B,
+            provider_endpoint=alternate_judge_endpoint,
+            profile=base_selection.route_predicate_profile,
+        ),
+    )
+    predecessor = seal_candidate_selection_plan(
+        source_bindings=base.source_bindings,
+        entries=predecessor_entries,
+        authenticated_runner_selection=seal_authenticated_runner_selection(
+            candidate_model_id=base_selection.candidate_model_id,
+            primary_judge_model_id=base_selection.primary_judge_model_id,
+            replay_judge_model_id=base_selection.replay_judge_model_id,
+            route_predicate_profile=base_selection.route_predicate_profile,
+            route_constraints=predecessor_constraints,
+        ),
+        unresolved_requirements=base.unresolved_requirements,
+    )
+    predecessor_selection = predecessor.authenticated_runner_selection
+    assert predecessor_selection is not None
+    predecessor_constraints_by_route = {
+        (constraint.role, constraint.exact_model_id, constraint.provider_endpoint): constraint
+        for constraint in predecessor_selection.route_constraints
+    }
+
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+
+    selection = successor.authenticated_runner_selection
+    assert selection is not None
+    profile = selection.route_predicate_profile
+    primary_constraints = tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is ExactRouteRole.PRIMARY_JUDGE
+    )
+    assert tuple(item.provider_endpoint for item in primary_constraints) == tuple(
+        sorted((ENDPOINT_B, alternate_judge_endpoint))
+    )
+    assert len(selection.route_constraints) == 4
+    assert all(
+        item.profile_sha256 == profile.profile_sha256 for item in selection.route_constraints
+    )
+    for constraint in selection.route_constraints:
+        predecessor_constraint = predecessor_constraints_by_route.get(
+            (constraint.role, constraint.exact_model_id, constraint.provider_endpoint)
+        )
+        if predecessor_constraint is not None:
+            assert constraint.constraint_sha256 != predecessor_constraint.constraint_sha256
+
+
+def test_successor_explicit_v3_upgrade_fails_closed_without_mutating_v2_predecessor() -> None:
+    v1_predecessor = _plan()
+    v2_predecessor = derive_candidate_selection_plan_successor(
+        predecessor=v1_predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    predecessor_bytes = stable_json(v2_predecessor)
+    predecessor_selection = v2_predecessor.authenticated_runner_selection
+    assert predecessor_selection is not None
+    predecessor_profile = predecessor_selection.route_predicate_profile
+    assert predecessor_profile.schema_version == "1.1"
+    assert (
+        predecessor_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(
+            CandidateSelectionError,
+            match=(
+                "V3 price-cap upgrade is unavailable because provider max_price cannot bind "
+                "cache-write pricing"
+            ),
+        ):
+            derive_candidate_selection_plan_successor(
+                predecessor=v2_predecessor,
+                candidate_model_id=MODEL_A,
+                provider_endpoint=ENDPOINT_A,
+                upgrade_price_cap_profile_v3=True,
+            )
+
+    assert stable_json(v2_predecessor) == predecessor_bytes
+
+
+@pytest.mark.parametrize("invalid_flag", (0, 1, None, "true"))
+def test_successor_rejects_nonboolean_v2_upgrade_flag(invalid_flag: object) -> None:
+    predecessor = _plan_with_revoked_pinned_candidate()
+
+    with pytest.raises(CandidateSelectionError, match="wrong exact type"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=invalid_flag,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid_flag", (0, 1, None, "true"))
+def test_successor_rejects_nonboolean_v3_upgrade_flag(invalid_flag: object) -> None:
+    predecessor = _plan_with_revoked_pinned_candidate()
+
+    with pytest.raises(CandidateSelectionError, match="wrong exact type"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v3=invalid_flag,  # type: ignore[arg-type]
+        )
+
+
+def test_successor_rejects_mutually_exclusive_price_cap_upgrades() -> None:
+    predecessor = _plan_with_revoked_pinned_candidate()
+
+    with pytest.raises(CandidateSelectionError, match="mutually exclusive"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=True,
+            upgrade_price_cap_profile_v3=True,
+        )
+
+
+def test_successor_v3_derivation_and_validation_are_unconditionally_unavailable() -> None:
+    v1_predecessor = _plan_with_revoked_pinned_candidate()
+    unavailable = (
+        "V3 price-cap upgrade is unavailable because provider max_price cannot bind "
+        "cache-write pricing"
+    )
+    with pytest.raises(CandidateSelectionError, match=unavailable):
+        derive_candidate_selection_plan_successor(
+            predecessor=v1_predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v3=True,
+        )
+
+    v2_predecessor = derive_candidate_selection_plan_successor(
+        predecessor=v1_predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    v2_selection = v2_predecessor.authenticated_runner_selection
+    assert v2_selection is not None
+    with pytest.raises(CandidateSelectionError, match=unavailable):
+        derive_candidate_selection_plan_successor(
+            predecessor=v2_predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v3=True,
+        )
+    with pytest.raises(CandidateSelectionError, match=unavailable):
+        derive_candidate_selection_plan_successor(
+            predecessor=v2_predecessor,
+            candidate_model_id="deepseek/deepseek-v4-pro-0813",
+            provider_endpoint="parasail/fp8",
+            upgrade_price_cap_profile_v3=True,
+        )
+
+    predecessor_profile = v2_selection.route_predicate_profile
+    v3_profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=predecessor_profile.reasoning_policy_sha256,
+        reasoning_role_profile_sha256=predecessor_profile.reasoning_role_profile_sha256,
+        reasoning_role_binding_sha256=predecessor_profile.reasoning_role_binding_sha256,
+        reasoning_control_profile_sha256=predecessor_profile.reasoning_control_profile_sha256,
+        reserved_reasoning_tokens=predecessor_profile.reserved_reasoning_tokens,
+        minimum_prompt_tokens=predecessor_profile.minimum_prompt_tokens,
+        required_output_tokens=predecessor_profile.required_output_tokens,
+        minimum_context_tokens=predecessor_profile.minimum_context_tokens,
+        price_cap_algorithm=(
+            ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3
+        ),
+    )
+    v3_selection = seal_authenticated_runner_selection(
+        candidate_model_id=v2_selection.candidate_model_id,
+        primary_judge_model_id=v2_selection.primary_judge_model_id,
+        replay_judge_model_id=v2_selection.replay_judge_model_id,
+        route_predicate_profile=v3_profile,
+        route_constraints=tuple(
+            ExactRouteConstraint.build(
+                role=constraint.role,
+                exact_model_id=constraint.exact_model_id,
+                provider_endpoint=constraint.provider_endpoint,
+                profile=v3_profile,
+            )
+            for constraint in v2_selection.route_constraints
+        ),
+    )
+    externally_supplied_v3_successor = candidate_selection_module._seal_candidate_selection_plan(
+        source_bindings=v2_predecessor.source_bindings,
+        entries=v2_predecessor.entries,
+        authenticated_runner_selection=v3_selection,
+        authenticated_runner_unavailability=None,
+        endpoint_inventory_refresh=None,
+        unresolved_requirements=v2_predecessor.unresolved_requirements,
+        predecessor_plan_sha256=v2_predecessor.plan_sha256,
+    )
+    with pytest.raises(CandidateSelectionError, match=unavailable):
+        validate_candidate_selection_plan_successor(
+            predecessor=v2_predecessor,
+            successor=externally_supplied_v3_successor,
+        )
+
+
+def test_successor_rejects_repeat_v2_upgrade_tamper_and_downgrade() -> None:
+    predecessor = _plan_with_revoked_pinned_candidate()
+    v2_successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    v2_selection = v2_successor.authenticated_runner_selection
+    predecessor_selection = predecessor.authenticated_runner_selection
+    assert v2_selection is not None
+    assert predecessor_selection is not None
+
+    with pytest.raises(CandidateSelectionError, match="requires an exact V1 predecessor"):
+        derive_candidate_selection_plan_successor(
+            predecessor=v2_successor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=True,
+        )
+    with pytest.raises(CandidateSelectionError, match="candidate selection route is revoked"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id="deepseek/deepseek-v4-pro-0813",
+            provider_endpoint="parasail/fp8",
+            upgrade_price_cap_profile_v2=True,
+        )
+    predecessor_profile = predecessor_selection.route_predicate_profile
+    altered_v2_profile = RoutePredicateProfile.build(
+        reasoning_policy_sha256=predecessor_profile.reasoning_policy_sha256,
+        reasoning_role_profile_sha256=predecessor_profile.reasoning_role_profile_sha256,
+        reasoning_role_binding_sha256=predecessor_profile.reasoning_role_binding_sha256,
+        reasoning_control_profile_sha256=predecessor_profile.reasoning_control_profile_sha256,
+        reserved_reasoning_tokens=predecessor_profile.reserved_reasoning_tokens,
+        minimum_prompt_tokens=predecessor_profile.minimum_prompt_tokens,
+        required_output_tokens=predecessor_profile.required_output_tokens,
+        minimum_context_tokens=predecessor_profile.minimum_context_tokens + 1,
+        price_cap_algorithm=(ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2),
+    )
+
+    def rebuild_with_profile(
+        plan: CandidateSelectionPlan,
+        profile: RoutePredicateProfile,
+    ) -> CandidateSelectionPlan:
+        selection = plan.authenticated_runner_selection
+        assert selection is not None
+        rebuilt_selection = seal_authenticated_runner_selection(
+            candidate_model_id=selection.candidate_model_id,
+            primary_judge_model_id=selection.primary_judge_model_id,
+            replay_judge_model_id=selection.replay_judge_model_id,
+            route_predicate_profile=profile,
+            route_constraints=tuple(
+                ExactRouteConstraint.build(
+                    role=constraint.role,
+                    exact_model_id=constraint.exact_model_id,
+                    provider_endpoint=constraint.provider_endpoint,
+                    profile=profile,
+                )
+                for constraint in selection.route_constraints
+            ),
+        )
+        return candidate_selection_module._seal_candidate_selection_plan(
+            source_bindings=plan.source_bindings,
+            entries=plan.entries,
+            authenticated_runner_selection=rebuilt_selection,
+            authenticated_runner_unavailability=None,
+            endpoint_inventory_refresh=None,
+            unresolved_requirements=plan.unresolved_requirements,
+            predecessor_plan_sha256=plan.predecessor_plan_sha256,
+        )
+
+    altered_v2_successor = rebuild_with_profile(v2_successor, altered_v2_profile)
+    with pytest.raises(CandidateSelectionError, match="differs from its derivation"):
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=altered_v2_successor,
+        )
+
+    downgraded_successor = rebuild_with_profile(
+        candidate_selection_module._seal_candidate_selection_plan(
+            source_bindings=v2_successor.source_bindings,
+            entries=v2_successor.entries,
+            authenticated_runner_selection=v2_selection,
+            authenticated_runner_unavailability=None,
+            endpoint_inventory_refresh=None,
+            unresolved_requirements=v2_successor.unresolved_requirements,
+            predecessor_plan_sha256=v2_successor.plan_sha256,
+        ),
+        predecessor_profile,
+    )
+    with pytest.raises(CandidateSelectionError, match="profile transition is invalid"):
+        validate_candidate_selection_plan_successor(
+            predecessor=v2_successor,
+            successor=downgraded_successor,
+        )
+
+
+def test_successor_preserves_v2_without_upgrade_during_later_route_change() -> None:
+    base = _plan()
+    safe_predecessor = seal_candidate_selection_plan(
+        source_bindings=base.source_bindings,
+        entries=(
+            *base.entries,
+            seal_candidate_selection_entry(
+                exact_model_id=MODEL_D,
+                priority_rank=4,
+                advisory_lineage_group="Delta advisory root",
+                allowed_provider_endpoints=(ENDPOINT_D,),
+            ),
+        ),
+        authenticated_runner_selection=base.authenticated_runner_selection,
+        unresolved_requirements=base.unresolved_requirements,
+    )
+    v2_predecessor = derive_candidate_selection_plan_successor(
+        predecessor=safe_predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    v2_selection = v2_predecessor.authenticated_runner_selection
+    assert v2_selection is not None
+
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=v2_predecessor,
+        candidate_model_id=MODEL_D,
+        provider_endpoint=ENDPOINT_D,
+    )
+
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=v2_predecessor,
+            successor=successor,
+        )
+        == successor
+    )
+    selection = successor.authenticated_runner_selection
+    assert selection is not None
+    assert selection.route_predicate_profile == v2_selection.route_predicate_profile
+    assert (
+        selection.route_predicate_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2
+    )
+    assert tuple(
+        constraint
+        for constraint in selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    ) == tuple(
+        constraint
+        for constraint in v2_selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    )
+
+
+def test_successor_validation_rejects_predecessor_lookalike_without_method_access() -> None:
+    predecessor = _plan_with_revoked_pinned_candidate()
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+
+    class PredecessorLookalike:
+        model_dump_json_called = False
+
+        def model_dump_json(self) -> str:
+            self.model_dump_json_called = True
+            raise AssertionError("predecessor lookalike method must not run")
+
+    lookalike = PredecessorLookalike()
+    with pytest.raises(CandidateSelectionError, match="predecessor has the wrong exact type"):
+        validate_candidate_selection_plan_successor(
+            predecessor=lookalike,  # type: ignore[arg-type]
+            successor=successor,
+        )
+    assert lookalike.model_dump_json_called is False
+
+
+def test_successor_validation_rejects_stateful_exact_predecessor_substitution() -> None:
+    supplied_predecessor = derive_candidate_selection_plan_successor(
+        predecessor=_plan_with_revoked_pinned_candidate(),
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    substituted_predecessor = derive_candidate_selection_plan_successor(
+        predecessor=_plan(),
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    substituted_successor = derive_candidate_selection_plan_successor(
+        predecessor=substituted_predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=REFRESHED_ENDPOINT_A,
+        refresh_endpoint_inventory=True,
+    )
+    supplied_json = CandidateSelectionPlan.model_dump_json(supplied_predecessor)
+    substituted_json = CandidateSelectionPlan.model_dump_json(substituted_predecessor)
+    serializer_calls = 0
+
+    def stateful_model_dump_json(*_args: object, **_kwargs: object) -> str:
+        nonlocal serializer_calls
+        serializer_calls += 1
+        return supplied_json if serializer_calls == 1 else substituted_json
+
+    object.__setattr__(supplied_predecessor, "model_dump_json", stateful_model_dump_json)
+
+    with pytest.raises(CandidateSelectionError, match="differs from its derivation"):
+        validate_candidate_selection_plan_successor(
+            predecessor=supplied_predecessor,
+            successor=substituted_successor,
+        )
+    assert serializer_calls == 0
+
+
 def test_candidate_selection_successor_explicitly_stages_unlisted_endpoint_inventory(
     tmp_path: Path,
 ) -> None:
@@ -683,8 +1363,28 @@ def test_candidate_selection_successor_explicitly_stages_unlisted_endpoint_inven
         provider_endpoint=REFRESHED_ENDPOINT_A,
         refresh_endpoint_inventory=True,
     )
+    v2_refreshed = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=REFRESHED_ENDPOINT_A,
+        refresh_endpoint_inventory=True,
+        upgrade_price_cap_profile_v2=True,
+    )
 
     assert first == second
+    assert v2_refreshed.schema_version == "1.6"
+    assert v2_refreshed.endpoint_inventory_refresh is not None
+    assert v2_refreshed.authenticated_runner_selection is not None
+    assert v2_refreshed.authenticated_runner_selection.route_predicate_profile.schema_version == (
+        "1.1"
+    )
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=v2_refreshed,
+        )
+        == v2_refreshed
+    )
     assert first.schema_version == "1.6"
     assert first.predecessor_plan_sha256 == predecessor.plan_sha256
     assert first.endpoint_inventory_refresh is not None
@@ -1596,6 +2296,121 @@ def test_successor_rejects_inherited_route_model_serialization_override(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("guarded_type", (RoutePredicateProfile, ExactRouteConstraint))
+def test_v2_successor_rejects_route_builder_replacement_before_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    guarded_type: type[RoutePredicateProfile] | type[ExactRouteConstraint],
+) -> None:
+    predecessor = _plan()
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    original_build = guarded_type.build
+
+    def replacement_build(*args: Any, **kwargs: Any) -> Any:
+        return original_build(*args, **kwargs)
+
+    monkeypatch.setattr(guarded_type, "build", replacement_build)
+
+    with pytest.raises(CandidateSelectionError, match="successor call boundary changed"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=True,
+        )
+    output = tmp_path / f"{guarded_type.__name__}-builder-replaced.json"
+    with pytest.raises(CandidateSelectionError, match="successor write boundary changed"):
+        write_candidate_selection_plan_successor(
+            path=output,
+            predecessor=predecessor,
+            successor=successor,
+        )
+    assert not output.exists()
+
+
+def test_v2_successor_rejects_price_algorithm_alias_replacement_before_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    predecessor = _plan()
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    monkeypatch.setattr(candidate_selection_module, "ProviderPriceCapAlgorithm", object())
+
+    with pytest.raises(CandidateSelectionError, match="successor call boundary changed"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=True,
+        )
+    output = tmp_path / "price-algorithm-alias-replaced.json"
+    with pytest.raises(CandidateSelectionError, match="successor write boundary changed"):
+        write_candidate_selection_plan_successor(
+            path=output,
+            predecessor=predecessor,
+            successor=successor,
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "derive_candidate_selection_plan_successor",
+        "_derive_candidate_selection_plan_successor_checked",
+        "_derive_candidate_selection_plan_successor_unchecked",
+    ),
+)
+@pytest.mark.parametrize(
+    "upgrade_flag",
+    ("upgrade_price_cap_profile_v2", "upgrade_price_cap_profile_v3"),
+)
+def test_successor_rejects_upgrade_default_mutation_before_output(
+    function_name: str,
+    upgrade_flag: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    predecessor = _plan()
+    successor = derive_candidate_selection_plan_successor(
+        predecessor=predecessor,
+        candidate_model_id=MODEL_A,
+        provider_endpoint=ENDPOINT_A,
+        upgrade_price_cap_profile_v2=True,
+    )
+    function = getattr(candidate_selection_module, function_name)
+    defaults = function.__kwdefaults__
+    assert defaults is not None
+    assert defaults[upgrade_flag] is False
+    monkeypatch.setitem(defaults, upgrade_flag, True)
+
+    with pytest.raises(CandidateSelectionError, match="successor call boundary changed"):
+        derive_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            candidate_model_id=MODEL_A,
+            provider_endpoint=ENDPOINT_A,
+            upgrade_price_cap_profile_v2=False,
+        )
+    output = tmp_path / f"{function_name}-default-mutated.json"
+    with pytest.raises(CandidateSelectionError, match="successor write boundary changed"):
+        write_candidate_selection_plan_successor(
+            path=output,
+            predecessor=predecessor,
+            successor=successor,
+        )
+    assert not output.exists()
+
+
 def test_candidate_selection_successor_rejects_raw_and_coherently_resealed_chain_tamper() -> None:
     predecessor = _plan_with_revoked_pinned_candidate()
     successor = derive_candidate_selection_plan_successor(
@@ -1714,36 +2529,66 @@ def test_candidate_selection_schema_versions_require_exact_predecessor_custody()
 
 
 def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
-    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.schema_version == "1.4"
-    assert plan.plan_sha256 == "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f"
-    assert plan.plan_sha256 in guide
+    assert plan.schema_version == "1.7"
+    assert plan.predecessor_plan_sha256 == REVOKED_SELECTION_PLAN_SHA256
+    assert plan.plan_sha256 == ACTIVE_SELECTION_PLAN_SHA256
     assert len(plan.entries) == 12
-    assert plan.authenticated_runner_selection is not None
-    assert plan.authenticated_runner_selection.distinct_root_lineages_verified is False
-    assert plan.authenticated_runner_selection.required_output_mode.value == "NATIVE_JSON_SCHEMA"
-    assert plan.authenticated_runner_selection.required_supported_parameters == (
-        "structured_outputs",
-    )
-    assert plan.authenticated_runner_selection.required_reasoning_effort == "high"
-    assert plan.authenticated_runner_selection.required_completion_limit_source == "metadata"
-    assert plan.authenticated_runner_selection.candidate_model_id == (
-        "deepseek/deepseek-v4-pro-0813"
-    )
-    assert plan.authenticated_runner_selection.primary_judge_model_id == "z-ai/glm-5.2"
-    assert plan.authenticated_runner_selection.role_assignment_sha256 == (
+    assert plan.source_bindings == predecessor.source_bindings
+    assert plan.entries == predecessor.entries
+    assert plan.authenticated_runner_selection is None
+    unavailable = plan.authenticated_runner_unavailability
+    predecessor_selection = predecessor.authenticated_runner_selection
+    assert type(unavailable) is CandidateSelectionUnavailableState
+    assert predecessor_selection is not None
+    assert unavailable.disposition == "NO_ACTIVE_CANDIDATE_AFTER_REVOCATION"
+    assert unavailable.price_cap_profile_decision == ("PRESERVE_PREDECESSOR_V1_NO_V2_ADOPTION")
+    assert unavailable.predecessor_role_assignment_sha256 == (
         "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14"
     )
-    assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
-    assert plan.authenticated_runner_selection.route_predicate_profile.profile_sha256 == (
+    assert unavailable.matched_revocation_set_sha256 == MATCHED_REVOCATION_SET_SHA256
+    assert unavailable.revocation_entry_sha256s == (
+        "67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4",
+    )
+    assert unavailable.withdrawn_candidate_constraint_sha256s == (
+        "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
+    )
+    assert unavailable.primary_judge_model_id == "z-ai/glm-5.2"
+    assert unavailable.replay_judge_model_id == "moonshotai/kimi-k3"
+    assert unavailable.route_predicate_profile == predecessor_selection.route_predicate_profile
+    assert unavailable.route_predicate_profile.profile_sha256 == (
         "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82"
     )
-    assert len(plan.authenticated_runner_selection.route_predicate_profile.predicate_ids) == 29
-    assert len(plan.authenticated_runner_selection.route_constraints) == 4
-    assert plan.authenticated_runner_selection.route_predicate_profile.require_singleton_route
-    assert not plan.authenticated_runner_selection.route_predicate_profile.allow_automatic_fallbacks
+    assert unavailable.route_predicate_profile.schema_version == "1.0"
+    assert (
+        unavailable.route_predicate_profile.price_cap_algorithm
+        is ProviderPriceCapAlgorithm.OPENROUTER_MAX_PRICE_CEILING_V1
+    )
+    assert unavailable.route_predicate_profile.price_component_unit_envelopes is None
+    assert unavailable.judge_route_constraints == tuple(
+        constraint
+        for constraint in predecessor_selection.route_constraints
+        if constraint.role is not ExactRouteRole.CANDIDATE
+    )
+    assert tuple(
+        constraint.constraint_sha256 for constraint in unavailable.judge_route_constraints
+    ) == (
+        "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
+        "ffc54dc13eea0d92c06a1c6f29e0ae679eac5328d05ae8899e8cd7899b1eb199",
+        "2a820c3b85936bc24cc1b0d007415d39e8e8bfd3b4eacb072a321e904e8a5912",
+    )
+    assert len(unavailable.route_predicate_profile.predicate_ids) == 29
+    assert unavailable.route_predicate_profile.require_singleton_route
+    assert not unavailable.route_predicate_profile.allow_automatic_fallbacks
+    assert unavailable.candidate_selection_authorized is False
+    assert unavailable.state_sha256 == ACTIVE_UNAVAILABLE_STATE_SHA256
+    assert unavailable.state_sha256 == canonical_sha256(
+        unavailable.model_dump(mode="json", exclude={"state_sha256"})
+    )
+    assert NO_ACTIVE_CANDIDATE_REQUIREMENT in plan.unresolved_requirements
     entries = {entry.exact_model_id: entry for entry in plan.entries}
     assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("parasail/fp8",)
     assert entries["deepseek/deepseek-v4-pro-0813"].entry_sha256 == (
@@ -1779,6 +2624,359 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert any("5fb3d3091e339b84" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
+    assert plan.plan_sha256 == canonical_sha256(
+        plan.model_dump(mode="json", exclude={"plan_sha256"})
+    )
+    for field_name in (
+        "ranking_executed",
+        "cached_ranking_payload_present",
+        "provider_metadata_present",
+        "discovery_evidence_present",
+        "documentary_lineage_identity_authorized",
+        "provider_call_authorized",
+        "source_egress_authorized",
+        "qualification_authorized",
+        "production_selection_authorized",
+        "runner_authority_authorized",
+        "benchmark_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        "serialized_authority",
+    ):
+        assert getattr(plan, field_name) is False
+    assert plan.plan_sha256 in guide
+    assert predecessor.plan_sha256 in guide
+
+
+def test_unavailable_successor_is_deterministic_and_replays_the_committed_bytes() -> None:
+    predecessor_bytes = REVOKED_SELECTION_PLAN_PATH.read_bytes()
+    predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
+    committed_bytes = ACTIVE_SELECTION_PLAN_PATH.read_bytes()
+    committed = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+
+    first = derive_candidate_selection_plan_unavailable_successor(predecessor=predecessor)
+    second = derive_candidate_selection_plan_unavailable_successor(predecessor=predecessor)
+
+    assert first == second == committed
+    assert (
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=first,
+        )
+        == first
+    )
+    assert REVOKED_SELECTION_PLAN_PATH.stat().st_size == 14_918
+    assert hashlib.sha256(predecessor_bytes).hexdigest() == REVOKED_SELECTION_PLAN_RAW_SHA256
+    assert predecessor.plan_sha256 == REVOKED_SELECTION_PLAN_SHA256
+    assert stable_json(predecessor).encode("utf-8") == predecessor_bytes
+    assert stable_json(first).encode("utf-8") == committed_bytes
+    assert len(committed_bytes) == 15_163
+    assert hashlib.sha256(committed_bytes).hexdigest() == ACTIVE_SELECTION_PLAN_RAW_SHA256
+    assert committed.plan_sha256 == ACTIVE_SELECTION_PLAN_SHA256
+    assert predecessor_bytes == REVOKED_SELECTION_PLAN_PATH.read_bytes()
+
+
+def test_unavailable_successor_requires_complete_exact_revocation_custody() -> None:
+    unrevoked = _plan()
+    resealed_old_route = _plan_with_revoked_pinned_candidate()
+
+    for predecessor in (unrevoked, resealed_old_route):
+        with pytest.raises(
+            CandidateSelectionError,
+            match="complete exact revocation custody",
+        ):
+            derive_candidate_selection_plan_unavailable_successor(predecessor=predecessor)
+
+
+def test_unavailable_state_replay_ignores_unrelated_future_revocation_entries() -> None:
+    predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
+    selection = predecessor.authenticated_runner_selection
+    assert selection is not None
+    registry = load_candidate_selection_revocation_registry()
+    matching_entry = registry.entries[0]
+    unrelated_entry = seal_candidate_selection_revocation_entry(
+        selection_plan_sha256="a" * 64,
+        role=ExactRouteRole.CANDIDATE,
+        exact_model_id="synthetic/unrelated-candidate",
+        canonical_model_slug="synthetic/unrelated-candidate",
+        provider_endpoint="synthetic-provider",
+        exact_route_constraint_sha256="b" * 64,
+        effective_at=datetime(2026, 9, 4, tzinfo=UTC),
+        reason=CandidateSelectionRevocationReason.EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE,
+    )
+    expanded_registry = seal_candidate_selection_revocation_registry(
+        entries=(*registry.entries, unrelated_entry)
+    )
+
+    original = candidate_selection_module._seal_candidate_selection_unavailable_state(
+        predecessor_selection=selection,
+        revocation_registry=registry,
+        revocation_entries=(matching_entry,),
+    )
+    after_unrelated_append = candidate_selection_module._seal_candidate_selection_unavailable_state(
+        predecessor_selection=selection,
+        revocation_registry=expanded_registry,
+        revocation_entries=(matching_entry,),
+    )
+
+    assert expanded_registry.registry_sha256 != registry.registry_sha256
+    assert after_unrelated_append == original
+    assert original.matched_revocation_set_sha256 == MATCHED_REVOCATION_SET_SHA256
+
+
+def test_unavailable_successor_rejects_routes_and_cannot_be_used_as_a_profile() -> None:
+    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+
+    for model_id, provider_endpoint in (
+        ("deepseek/deepseek-v4-pro-0813", "parasail/fp8"),
+        ("tencent/hy3", "novita"),
+        ("z-ai/glm-5.2", "sail-research/fp8"),
+    ):
+        with pytest.raises(
+            CandidateSelectionError,
+            match="NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        ):
+            validate_candidate_selection_routes(
+                plan,
+                routes=(
+                    DiscoveryCandidateRoute(
+                        exact_model_id=model_id,
+                        approved_provider_endpoint=provider_endpoint,
+                    ),
+                ),
+            )
+        with pytest.raises(
+            CandidateSelectionError,
+            match="NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+        ):
+            authenticated_runner_route_constraint(
+                plan,
+                exact_model_id=model_id,
+                provider_endpoint=provider_endpoint,
+            )
+
+
+def test_unavailable_successor_blocks_discovery_and_registry_derivation(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    plan = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    manifest, evidence, _template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id="tencent/hy3",
+                provider_endpoint="novita",
+                provider_name="Synthetic Novita",
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        CandidateSelectionError,
+        match="NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+    ):
+        validate_candidate_selection_discovery_capability(plan, evidence=evidence[0])
+    with pytest.raises(
+        CandidateSelectionError,
+        match="NO_ACTIVE_CANDIDATE_AFTER_REVOCATION",
+    ):
+        derive_pending_candidate_registry_from_selection_plan(
+            plan=plan,
+            run_manifest=manifest,
+            evidence=evidence,
+        )
+
+
+def test_unavailable_successor_refuses_reactivation_without_authenticated_ancestry() -> None:
+    inactive = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    unavailable = inactive.authenticated_runner_unavailability
+    assert unavailable is not None
+    forged_payload = inactive.model_dump(mode="json")
+    forged_unavailable = forged_payload["authenticated_runner_unavailability"]
+    assert isinstance(forged_unavailable, dict)
+    forged_unavailable["predecessor_role_assignment_sha256"] = "f" * 64
+    forged_unavailable["state_sha256"] = canonical_sha256(
+        {key: value for key, value in forged_unavailable.items() if key != "state_sha256"}
+    )
+    forged_payload["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in forged_payload.items() if key != "plan_sha256"}
+    )
+    forged = CandidateSelectionPlan.model_validate_json(
+        json.dumps(forged_payload),
+        strict=True,
+    )
+
+    for predecessor in (inactive, forged):
+        for model_id, provider_endpoint in (
+            ("tencent/hy3", "novita"),
+            ("deepseek/deepseek-v4-pro-0813", "parasail/fp8"),
+        ):
+            with pytest.raises(
+                CandidateSelectionError,
+                match="separately authenticated ancestry transition",
+            ):
+                derive_candidate_selection_plan_successor(
+                    predecessor=predecessor,
+                    candidate_model_id=model_id,
+                    provider_endpoint=provider_endpoint,
+                )
+
+
+def test_selected_private_plan_cannot_claim_unavailable_plan_as_authenticated_predecessor() -> None:
+    archived = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
+    inactive = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+    selected = derive_candidate_selection_plan_successor(
+        predecessor=archived,
+        candidate_model_id="tencent/hy3",
+        provider_endpoint="novita",
+    )
+    claimed = selected.model_dump(mode="json")
+    claimed["predecessor_plan_sha256"] = inactive.plan_sha256
+    claimed["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in claimed.items() if key != "plan_sha256"}
+    )
+    structurally_valid = CandidateSelectionPlan.model_validate_json(
+        json.dumps(claimed),
+        strict=True,
+    )
+
+    assert require_candidate_selection_plan_currently_eligible(structurally_valid) == (
+        structurally_valid
+    )
+    assert (
+        validate_candidate_selection_routes(
+            structurally_valid,
+            routes=(
+                DiscoveryCandidateRoute(
+                    exact_model_id="tencent/hy3",
+                    approved_provider_endpoint="novita",
+                ),
+            ),
+        )
+        == structurally_valid
+    )
+    with pytest.raises(
+        CandidateSelectionError,
+        match="separately authenticated ancestry transition",
+    ):
+        validate_candidate_selection_plan_successor(
+            predecessor=inactive,
+            successor=structurally_valid,
+        )
+
+
+def test_unavailable_successor_rejects_state_tamper_and_candidate_resurrection() -> None:
+    predecessor = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
+    successor = load_candidate_selection_plan(ACTIVE_SELECTION_PLAN_PATH)
+
+    raw_hash_tamper = successor.model_dump(mode="json")
+    raw_unavailable = raw_hash_tamper["authenticated_runner_unavailability"]
+    assert isinstance(raw_unavailable, dict)
+    raw_unavailable["predecessor_role_assignment_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="state self-hash"):
+        CandidateSelectionPlan.model_validate_json(json.dumps(raw_hash_tamper), strict=True)
+
+    invalid_matched_set = successor.model_dump(mode="json")
+    invalid_matched_unavailable = invalid_matched_set["authenticated_runner_unavailability"]
+    assert isinstance(invalid_matched_unavailable, dict)
+    invalid_matched_unavailable["matched_revocation_set_sha256"] = "0" * 64
+    invalid_matched_unavailable["state_sha256"] = canonical_sha256(
+        {key: value for key, value in invalid_matched_unavailable.items() if key != "state_sha256"}
+    )
+    invalid_matched_set["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in invalid_matched_set.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="matched revocation set digest is inconsistent"):
+        CandidateSelectionPlan.model_validate_json(json.dumps(invalid_matched_set), strict=True)
+
+    for field_name in (
+        "revocation_entry_sha256s",
+        "withdrawn_candidate_constraint_sha256s",
+    ):
+        malformed_hash = successor.model_dump(mode="json")
+        malformed_unavailable = malformed_hash["authenticated_runner_unavailability"]
+        assert isinstance(malformed_unavailable, dict)
+        malformed_unavailable[field_name] = ["not-a-sha256"]
+        malformed_unavailable["state_sha256"] = canonical_sha256(
+            {key: value for key, value in malformed_unavailable.items() if key != "state_sha256"}
+        )
+        malformed_hash["plan_sha256"] = canonical_sha256(
+            {key: value for key, value in malformed_hash.items() if key != "plan_sha256"}
+        )
+        with pytest.raises(ValueError, match="String should match pattern"):
+            CandidateSelectionPlan.model_validate_json(json.dumps(malformed_hash), strict=True)
+
+    coherent_tamper = successor.model_dump(mode="json")
+    coherent_unavailable = coherent_tamper["authenticated_runner_unavailability"]
+    assert isinstance(coherent_unavailable, dict)
+    coherent_unavailable["predecessor_role_assignment_sha256"] = "f" * 64
+    coherent_unavailable["state_sha256"] = canonical_sha256(
+        {key: value for key, value in coherent_unavailable.items() if key != "state_sha256"}
+    )
+    coherent_tamper["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in coherent_tamper.items() if key != "plan_sha256"}
+    )
+    structurally_valid = CandidateSelectionPlan.model_validate_json(
+        json.dumps(coherent_tamper),
+        strict=True,
+    )
+    with pytest.raises(CandidateSelectionError, match="differs from its derivation"):
+        validate_candidate_selection_plan_successor(
+            predecessor=predecessor,
+            successor=structurally_valid,
+        )
+
+    resurrected_selection = predecessor.authenticated_runner_selection
+    assert resurrected_selection is not None
+    dual_state = successor.model_dump(mode="json")
+    dual_state["authenticated_runner_selection"] = resurrected_selection.model_dump(mode="json")
+    dual_state["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in dual_state.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="unavailability differs from its schema"):
+        CandidateSelectionPlan.model_validate_json(json.dumps(dual_state), strict=True)
+
+    missing_state = successor.model_dump(mode="json")
+    missing_state.pop("authenticated_runner_unavailability")
+    missing_state["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in missing_state.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="unavailability differs from its schema"):
+        CandidateSelectionPlan.model_validate_json(json.dumps(missing_state), strict=True)
+
+    relabelled_state = successor.model_dump(mode="json")
+    relabelled_state["schema_version"] = "1.5"
+    relabelled_state["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in relabelled_state.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="unavailability differs from its schema"):
+        CandidateSelectionPlan.model_validate_json(json.dumps(relabelled_state), strict=True)
+
+    candidate_in_judge_archive = successor.model_dump(mode="json")
+    candidate_archive = candidate_in_judge_archive["authenticated_runner_unavailability"]
+    assert isinstance(candidate_archive, dict)
+    predecessor_payload = predecessor.model_dump(mode="json")
+    predecessor_assignment = predecessor_payload["authenticated_runner_selection"]
+    assert isinstance(predecessor_assignment, dict)
+    predecessor_constraints = predecessor_assignment["route_constraints"]
+    assert isinstance(predecessor_constraints, list)
+    candidate_constraint = next(
+        constraint for constraint in predecessor_constraints if constraint["role"] == "candidate"
+    )
+    archived_constraints = candidate_archive["judge_route_constraints"]
+    assert isinstance(archived_constraints, list)
+    candidate_archive["judge_route_constraints"] = sorted(
+        (*archived_constraints, candidate_constraint),
+        key=lambda item: (item["role"], item["exact_model_id"], item["provider_endpoint"]),
+    )
+    with pytest.raises(ValueError, match="retain both judge roles only"):
+        CandidateSelectionPlan.model_validate_json(
+            json.dumps(candidate_in_judge_archive),
+            strict=True,
+        )
 
 
 def test_runner_route_constraints_exactly_cover_selected_endpoint_policy() -> None:
@@ -1860,8 +3058,8 @@ def test_selection_plan_replays_exact_staged_source_bytes() -> None:
         )
 
 
-def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> None:
-    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+def test_archived_selection_plan_accepts_only_its_historical_authrunner_routes() -> None:
+    plan = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     corrected = (
         DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
@@ -1925,8 +3123,8 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     )
 
 
-def test_committed_selection_plan_stays_historical_but_is_revoked_for_current_action() -> None:
-    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+def test_archived_selection_plan_stays_historical_but_is_revoked_for_current_action() -> None:
+    plan = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     historical_route = (
         DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
@@ -2050,8 +3248,8 @@ def test_pending_registry_derivation_preserves_exact_judge_role_isolation(
     )
 
 
-def test_committed_runner_selection_has_three_documented_independent_roots() -> None:
-    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+def test_archived_runner_selection_has_three_documented_independent_roots() -> None:
+    plan = load_candidate_selection_plan(REVOKED_SELECTION_PLAN_PATH)
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()

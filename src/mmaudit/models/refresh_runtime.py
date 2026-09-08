@@ -23,7 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
+    OpenRouterPricingOverrideTier,
     canonicalize_openrouter_pricing,
+    canonicalize_openrouter_pricing_schedule,
+    effective_openrouter_pricing,
+    openrouter_pricing_schedule_sha256,
+    project_openrouter_pricing_schedule,
 )
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
 from mmaudit.models.output_modes import StructuredOutputMode
@@ -69,6 +74,7 @@ from mmaudit.models.refresh_staging import (
     ModelRefreshWorkflowStatus,
     ValidatedModelRefreshHistory,
 )
+from mmaudit.models.route_constraints import ExactRoutePricingSchedule
 
 AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME = "audit-model-refresh-evidence.json"
 AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_FILENAME = "audit-model-refresh-pricing-evidence.json"
@@ -153,6 +159,129 @@ def _price_exceeds_tolerance(*, old: str, new: str, tolerance: Decimal) -> bool:
 
     with localcontext(_PRICING_COMPARISON_CONTEXT):
         return Decimal(new) > Decimal(old) * (Decimal(1) + tolerance)
+
+
+def _pricing_schedule_payload(
+    pricing: _PricingMap,
+    overrides: tuple[OpenRouterPricingOverrideTier, ...],
+) -> dict[str, Any]:
+    """Reconstruct the shared provider schedule shape for canonical replay."""
+
+    payload: dict[str, Any] = dict(pricing)
+    if overrides:
+        payload["overrides"] = [
+            {
+                "min_prompt_tokens": tier.min_prompt_tokens,
+                **tier.prices,
+            }
+            for tier in overrides
+        ]
+    return payload
+
+
+def _require_canonical_pricing_schedule(
+    *,
+    pricing: _PricingMap,
+    overrides: tuple[OpenRouterPricingOverrideTier, ...],
+    schedule: ExactRoutePricingSchedule | None,
+    label: str,
+) -> None:
+    """Require exact ordered tiers and their shared conservative projection."""
+
+    try:
+        canonical_pricing, canonical_overrides = canonicalize_openrouter_pricing_schedule(
+            _pricing_schedule_payload(pricing, overrides)
+        )
+    except EndpointSnapshotValidationError as exc:
+        raise ValueError(f"{label} is invalid") from exc
+    if canonical_pricing != pricing or canonical_overrides != overrides:
+        raise ValueError(f"{label} is not canonical")
+    expected_schedule = (
+        project_openrouter_pricing_schedule(pricing, overrides) if overrides else None
+    )
+    if expected_schedule == "unavailable":
+        raise ValueError(f"{label} cost projection is unavailable")
+    if schedule != expected_schedule:
+        raise ValueError(f"{label} cost projection is inconsistent")
+
+
+def _maximum_pricing(
+    pricing: _PricingMap,
+    schedule: ExactRoutePricingSchedule | None,
+) -> _PricingMap:
+    if schedule is None:
+        return pricing
+    return {item.component.value: item.unit_price for item in schedule.maximum_pricing}
+
+
+def _compare_pricing_schedules(
+    *,
+    baseline_pricing: _PricingMap,
+    baseline_overrides: tuple[OpenRouterPricingOverrideTier, ...],
+    baseline_schedule: ExactRoutePricingSchedule | None,
+    current_pricing: _PricingMap,
+    current_overrides: tuple[OpenRouterPricingOverrideTier, ...],
+    current_schedule: ExactRoutePricingSchedule | None,
+    tolerance: Decimal,
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """Compare every reachable strict-threshold state and each conservative maximum."""
+
+    checkpoints = tuple(
+        sorted(
+            {
+                0,
+                *(
+                    tier.min_prompt_tokens + 1
+                    for tier in (*baseline_overrides, *current_overrides)
+                    if tier.min_prompt_tokens < 2**31 - 1
+                ),
+            }
+        )
+    )
+    comparisons = [
+        (
+            effective_openrouter_pricing(
+                baseline_pricing,
+                baseline_overrides,
+                prompt_tokens=prompt_tokens,
+            ),
+            effective_openrouter_pricing(
+                current_pricing,
+                current_overrides,
+                prompt_tokens=prompt_tokens,
+            ),
+        )
+        for prompt_tokens in checkpoints
+    ]
+    if baseline_schedule is not None or current_schedule is not None:
+        comparisons.append(
+            (
+                _maximum_pricing(baseline_pricing, baseline_schedule),
+                _maximum_pricing(current_pricing, current_schedule),
+            )
+        )
+
+    baseline_fields = tuple(_maximum_pricing(baseline_pricing, baseline_schedule))
+    current_fields = tuple(_maximum_pricing(current_pricing, current_schedule))
+    if baseline_fields != current_fields:
+        raise ValueError(
+            "refresh pricing schedule has a new, missing, or unsupported price component"
+        )
+    fields = baseline_fields
+    changed: set[str] = set()
+    increased: set[str] = set()
+    exceeds_tolerance = False
+    for baseline_state, current_state in comparisons:
+        for field in fields:
+            old = baseline_state.get(field, "0")
+            new = current_state.get(field, "0")
+            if new != old:
+                changed.add(field)
+            if Decimal(new) > Decimal(old):
+                increased.add(field)
+            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
+                exceeds_tolerance = True
+    return tuple(sorted(changed)), tuple(sorted(increased)), exceeds_tolerance
 
 
 class AuditModelRefreshRouteEvidence(_FrozenModel):
@@ -359,7 +488,7 @@ class AuditModelRefreshEvidence(_FrozenModel):
 
 
 class AuditModelRefreshPricingRouteEvidence(_FrozenModel):
-    """Exact baseline/current price comparison for one selected technical route.
+    """Exact baseline/current pricing-schedule comparison for one selected technical route.
 
     This durable record proves only that a resolver observed a bounded comparison. It
     cannot authorize a request, select a model, or replace the qualification price hash.
@@ -382,6 +511,15 @@ class AuditModelRefreshPricingRouteEvidence(_FrozenModel):
             }
         },
     )
+    baseline_pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
+    baseline_pricing_schedule: ExactRoutePricingSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     baseline_pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
     current_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     current_pricing: _PricingMap = Field(
@@ -394,6 +532,15 @@ class AuditModelRefreshPricingRouteEvidence(_FrozenModel):
                 "pattern": _PRICING_FIELD_PATTERN,
             }
         },
+    )
+    current_pricing_overrides: tuple[OpenRouterPricingOverrideTier, ...] = Field(
+        default_factory=tuple,
+        max_length=64,
+        exclude_if=lambda value: not value,
+    )
+    current_pricing_schedule: ExactRoutePricingSchedule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     current_pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
     price_components: tuple[str, ...] = Field(
@@ -456,41 +603,61 @@ class AuditModelRefreshPricingRouteEvidence(_FrozenModel):
 
     @model_validator(mode="after")
     def comparison_is_exact_bounded_and_self_hashed(self) -> Self:
-        baseline_fields = tuple(self.baseline_pricing)
-        current_fields = tuple(self.current_pricing)
+        _require_canonical_pricing_schedule(
+            pricing=self.baseline_pricing,
+            overrides=self.baseline_pricing_overrides,
+            schedule=self.baseline_pricing_schedule,
+            label="refresh baseline pricing schedule",
+        )
+        _require_canonical_pricing_schedule(
+            pricing=self.current_pricing,
+            overrides=self.current_pricing_overrides,
+            schedule=self.current_pricing_schedule,
+            label="refresh current pricing schedule",
+        )
+        baseline_fields = tuple(
+            _maximum_pricing(self.baseline_pricing, self.baseline_pricing_schedule)
+        )
+        current_fields = tuple(
+            _maximum_pricing(self.current_pricing, self.current_pricing_schedule)
+        )
         if baseline_fields != current_fields or self.price_components != baseline_fields:
             raise ValueError(
                 "refresh pricing route has a new, missing, or unsupported price component"
             )
         if (
-            self.baseline_pricing_sha256 != _canonical_sha256(self.baseline_pricing)
-            or self.current_pricing_sha256 != _canonical_sha256(self.current_pricing)
+            self.baseline_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.baseline_pricing,
+                self.baseline_pricing_overrides,
+            )
+            or self.current_pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                self.current_pricing,
+                self.current_pricing_overrides,
+            )
             or self.qualified_pricing_snapshot_sha256 != self.baseline_pricing_sha256
         ):
             raise ValueError("refresh pricing route hash or qualified baseline differs")
-        changed = tuple(
-            field
-            for field in baseline_fields
-            if self.current_pricing[field] != self.baseline_pricing[field]
-        )
-        increased = tuple(
-            field
-            for field in baseline_fields
-            if Decimal(self.current_pricing[field]) > Decimal(self.baseline_pricing[field])
+        tolerance = parse_model_refresh_fraction(self.pricing_tolerance_fraction)
+        changed, increased, exceeds_tolerance = _compare_pricing_schedules(
+            baseline_pricing=self.baseline_pricing,
+            baseline_overrides=self.baseline_pricing_overrides,
+            baseline_schedule=self.baseline_pricing_schedule,
+            current_pricing=self.current_pricing,
+            current_overrides=self.current_pricing_overrides,
+            current_schedule=self.current_pricing_schedule,
+            tolerance=tolerance,
         )
         if self.changed_components != changed or self.increased_components != increased:
             raise ValueError("refresh pricing route component comparison is inconsistent")
-        tolerance = parse_model_refresh_fraction(self.pricing_tolerance_fraction)
-        if any(
-            _price_exceeds_tolerance(
-                old=self.baseline_pricing[field],
-                new=self.current_pricing[field],
-                tolerance=tolerance,
-            )
-            for field in baseline_fields
-        ):
+        if exceeds_tolerance:
             raise ValueError("refresh pricing route exceeds its configured tolerance")
-        expected_state = "EXACT" if not changed else "WITHIN_TOLERANCE"
+        expected_state = (
+            "EXACT"
+            if self.baseline_pricing_sha256 == self.current_pricing_sha256
+            else "WITHIN_TOLERANCE"
+        )
         if self.comparison_state != expected_state:
             raise ValueError("refresh pricing route comparison state is inconsistent")
         expected = _canonical_sha256(
@@ -502,7 +669,7 @@ class AuditModelRefreshPricingRouteEvidence(_FrozenModel):
 
 
 class AuditModelRefreshPricingEvidence(_FrozenModel):
-    """Pinned bounded price comparisons that remain permanently non-authorizing."""
+    """Pinned bounded pricing-schedule comparisons that remain non-authorizing."""
 
     schema_version: Literal["1.0"] = "1.0"
     authority_mode: Literal["NON_AUTHORIZING_BOUNDED_PRICE_COMPARISON"] = (
@@ -1732,38 +1899,63 @@ def _resolve_refresh_pricing_inputs(
             label="refresh current pricing",
         )
         if (
+            baseline_route.pricing_schedule == "unavailable"
+            or current_route.pricing_schedule == "unavailable"
+        ):
+            raise ValueError(
+                f"refresh pricing route schedule is unavailable: {model.exact_model_id}"
+            )
+        baseline_overrides = baseline_route.pricing_overrides
+        current_overrides = current_route.pricing_overrides
+        baseline_schedule = baseline_route.pricing_schedule
+        current_schedule = current_route.pricing_schedule
+        _require_canonical_pricing_schedule(
+            pricing=baseline_pricing,
+            overrides=baseline_overrides,
+            schedule=baseline_schedule,
+            label="refresh baseline pricing schedule",
+        )
+        _require_canonical_pricing_schedule(
+            pricing=current_pricing,
+            overrides=current_overrides,
+            schedule=current_schedule,
+            label="refresh current pricing schedule",
+        )
+        if (
             baseline_route.pricing_sha256 != model.pricing_snapshot_sha256
-            or baseline_route.pricing_sha256 != _canonical_sha256(baseline_pricing)
-            or current_route.pricing_sha256 != _canonical_sha256(current_pricing)
+            or baseline_route.pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                baseline_pricing,
+                baseline_overrides,
+            )
+            or current_route.pricing_sha256
+            != openrouter_pricing_schedule_sha256(
+                current_pricing,
+                current_overrides,
+            )
         ):
             raise ValueError(
                 f"refresh pricing baseline differs from qualification: {model.exact_model_id}"
             )
-        baseline_fields = tuple(baseline_pricing)
-        current_fields = tuple(current_pricing)
+        baseline_fields = tuple(_maximum_pricing(baseline_pricing, baseline_schedule))
+        current_fields = tuple(_maximum_pricing(current_pricing, current_schedule))
         if baseline_fields != current_fields:
             raise ValueError(
                 "refresh pricing route has a new, missing, or unsupported price component: "
                 f"{model.exact_model_id}"
             )
         tolerance = parse_model_refresh_fraction(expected_pricing_tolerance_fraction)
-        if any(
-            _price_exceeds_tolerance(
-                old=baseline_pricing[field],
-                new=current_pricing[field],
-                tolerance=tolerance,
-            )
-            for field in baseline_fields
-        ):
+        changed, increased, exceeds_tolerance = _compare_pricing_schedules(
+            baseline_pricing=baseline_pricing,
+            baseline_overrides=baseline_overrides,
+            baseline_schedule=baseline_schedule,
+            current_pricing=current_pricing,
+            current_overrides=current_overrides,
+            current_schedule=current_schedule,
+            tolerance=tolerance,
+        )
+        if exceeds_tolerance:
             raise ValueError(f"refresh pricing route exceeds tolerance: {model.exact_model_id}")
-        changed = tuple(
-            field for field in baseline_fields if current_pricing[field] != baseline_pricing[field]
-        )
-        increased = tuple(
-            field
-            for field in baseline_fields
-            if Decimal(current_pricing[field]) > Decimal(baseline_pricing[field])
-        )
         route_values: dict[str, Any] = {
             "schema_version": "1.0",
             "exact_model_id": model.exact_model_id,
@@ -1780,12 +1972,24 @@ def _resolve_refresh_pricing_inputs(
             "changed_components": changed,
             "increased_components": increased,
             "pricing_tolerance_fraction": expected_pricing_tolerance_fraction,
-            "comparison_state": "EXACT" if not changed else "WITHIN_TOLERANCE",
+            "comparison_state": (
+                "EXACT"
+                if baseline_route.pricing_sha256 == current_route.pricing_sha256
+                else "WITHIN_TOLERANCE"
+            ),
             "refresh_route_evidence_sha256": refresh_route.route_evidence_sha256,
             "pricing_use_authorized": False,
             "provider_access_authorized": False,
             "model_selection_authorized": False,
         }
+        if baseline_overrides:
+            route_values["baseline_pricing_overrides"] = baseline_overrides
+        if baseline_schedule is not None:
+            route_values["baseline_pricing_schedule"] = baseline_schedule
+        if current_overrides:
+            route_values["current_pricing_overrides"] = current_overrides
+        if current_schedule is not None:
+            route_values["current_pricing_schedule"] = current_schedule
         route_values["route_evidence_sha256"] = _canonical_sha256(route_values)
         pricing_routes.append(AuditModelRefreshPricingRouteEvidence.model_validate(route_values))
 

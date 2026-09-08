@@ -1,4 +1,4 @@
-.PHONY: install format lint type test check release-artifacts release-evidence release-generate release-local
+.PHONY: install format lint type governance test check release-artifacts release-evidence release-generate release-local
 
 PYTHON ?= python
 RELEASE_ID ?=
@@ -32,10 +32,13 @@ lint:
 type:
 	$(PYTHON) -m mypy src
 
-test:
+test: governance
 	$(PYTHON) -m pytest
 
-check: lint type test
+governance:
+	$(PYTHON) scripts/validate_governance_state.py
+
+check: lint type governance test
 
 release-artifacts:
 	@test -n "$(RELEASE_RUN_DIR)" || { echo "RELEASE_RUN_DIR is required" >&2; exit 2; }

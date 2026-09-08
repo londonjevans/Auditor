@@ -1,0 +1,243 @@
+{
+  "$defs": {
+    "DevelopmentCostComponent": {
+      "additionalProperties": false,
+      "description": "One observed rate and the deliberately conservative estimation allowance.",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/DevelopmentPriceField"
+        },
+        "estimated_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Unit Price Usd"
+        },
+        "estimated_units": {
+          "maximum": 4000000,
+          "minimum": 0,
+          "title": "Estimated Units",
+          "type": "integer"
+        },
+        "observed_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Observed Unit Price Usd"
+        }
+      },
+      "required": [
+        "component",
+        "observed_unit_price_usd",
+        "estimated_unit_price_usd",
+        "estimated_units"
+      ],
+      "title": "DevelopmentCostComponent",
+      "type": "object"
+    },
+    "DevelopmentCostPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit target budgets, not hard guarantees; defaults keep retries off.",
+      "properties": {
+        "maximum_attempts": {
+          "default": 1,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "overspend_risk_accepted": {
+          "const": true,
+          "title": "Overspend Risk Accepted",
+          "type": "boolean"
+        },
+        "per_attempt_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Per Attempt Budget Usd",
+          "type": "string"
+        },
+        "purpose": {
+          "const": "DEVELOPMENT_ONLY_ESTIMATED",
+          "default": "DEVELOPMENT_ONLY_ESTIMATED",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "safety_multiplier": {
+          "default": "2",
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Safety Multiplier",
+          "type": "string"
+        },
+        "total_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Total Budget Usd",
+          "type": "string"
+        }
+      },
+      "required": [
+        "overspend_risk_accepted",
+        "total_budget_usd",
+        "per_attempt_budget_usd"
+      ],
+      "title": "DevelopmentCostPolicy",
+      "type": "object"
+    },
+    "DevelopmentPriceField": {
+      "enum": [
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "request",
+        "image",
+        "web_search"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_cost_estimate.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-qualifying explanatory output, not an admission or execution capability.",
+  "properties": {
+    "artifact_kind": {
+      "const": "development_cost_estimate",
+      "default": "development_cost_estimate",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentCostComponent"
+      },
+      "maxItems": 7,
+      "minItems": 2,
+      "title": "Components",
+      "type": "array"
+    },
+    "endpoint_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Snapshot Sha256",
+      "type": "string"
+    },
+    "estimated_cost_all_attempts_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Estimated Cost All Attempts Usd"
+    },
+    "estimated_cost_per_attempt_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Estimated Cost Per Attempt Usd"
+    },
+    "exact_model_id": {
+      "title": "Exact Model Id",
+      "type": "string"
+    },
+    "maximum_completion_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 65536,
+      "title": "Maximum Completion Tokens",
+      "type": "integer"
+    },
+    "policy": {
+      "$ref": "#/$defs/DevelopmentCostPolicy"
+    },
+    "provider_endpoint": {
+      "title": "Provider Endpoint",
+      "type": "string"
+    },
+    "provider_enforced_ceiling": {
+      "const": false,
+      "default": false,
+      "title": "Provider Enforced Ceiling",
+      "type": "boolean"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "request_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 4000000,
+      "title": "Request Bytes",
+      "type": "integer"
+    },
+    "request_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "warning": {
+      "const": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+      "default": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+      "title": "Warning",
+      "type": "string"
+    },
+    "within_estimated_budget": {
+      "title": "Within Estimated Budget",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "policy",
+    "request_id",
+    "request_sha256",
+    "endpoint_snapshot_sha256",
+    "exact_model_id",
+    "provider_endpoint",
+    "request_bytes",
+    "maximum_completion_tokens",
+    "components",
+    "estimated_cost_per_attempt_usd",
+    "estimated_cost_all_attempts_usd",
+    "within_estimated_budget"
+  ],
+  "title": "DevelopmentCostEstimate",
+  "type": "object"
+}

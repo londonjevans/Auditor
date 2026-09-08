@@ -195,6 +195,15 @@
           "title": "Pricing",
           "type": "object"
         },
+        "pricing_overrides": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterPricingOverrideTier"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Pricing Overrides",
+          "type": "array"
+        },
         "provider_name": {
           "maxLength": 128,
           "minLength": 1,
@@ -236,6 +245,47 @@
         "pricing"
       ],
       "title": "ModelRefreshEndpointSource",
+      "type": "object"
+    },
+    "OpenRouterPricingOverrideTier": {
+      "additionalProperties": false,
+      "description": "One ordered, threshold-conditional partial endpoint price replacement.",
+      "properties": {
+        "min_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Min Prompt Tokens",
+          "type": "integer"
+        },
+        "prices": {
+          "additionalProperties": {
+            "maxLength": 49,
+            "minLength": 1,
+            "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "audio",
+              "completion",
+              "input_audio_cache",
+              "input_cache_read",
+              "input_cache_write",
+              "input_cache_write_1h",
+              "prompt"
+            ]
+          },
+          "title": "Prices",
+          "type": "object"
+        }
+      },
+      "required": [
+        "min_prompt_tokens",
+        "prices"
+      ],
+      "title": "OpenRouterPricingOverrideTier",
       "type": "object"
     }
   },

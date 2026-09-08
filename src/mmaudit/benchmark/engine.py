@@ -2004,8 +2004,8 @@ def evaluate_benchmark(
         }
         | (
             {
-                "mutation scorecard is declarative or planned-unattested component "
-                "evidence and received no runtime mutation credit"
+                "mutation scorecard is declarative, planned-unattested, or a process-local "
+                "comparison and received no benchmark runtime mutation credit"
             }
             if mutation_scorecard is not None
             and not _mutation_scorecard_has_runtime_credit(mutation_scorecard)
@@ -3589,8 +3589,8 @@ def _weak_maximum_assurance_mutation_properties(
 def _mutation_scorecard_has_runtime_credit(scorecard: MutationScorecard) -> bool:
     """Credit only explicitly supported runtime-attested origins.
 
-    No such origin exists until a production runner can bind execution custody
-    independently from caller-authored serialized evidence.
+    Process-local audited-suite comparisons are deliberately absent: they do not
+    authorize benchmark, qualification, completion, or release gates.
     """
 
     return scorecard.evidence_origin in _RUNTIME_CREDITING_MUTATION_SCORECARD_ORIGINS

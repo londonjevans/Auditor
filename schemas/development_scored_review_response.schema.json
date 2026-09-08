@@ -1,0 +1,237 @@
+{
+  "$defs": {
+    "DevelopmentRootCauseReference": {
+      "additionalProperties": false,
+      "description": "Model-proposed origin coordinates, never proof that a root cause is valid.",
+      "properties": {
+        "filename": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,95}\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentRootCauseReference",
+      "type": "object"
+    },
+    "DevelopmentScoredFinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "advisory"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "root_cause_ref": {
+                "type": "null"
+              },
+              "violated_invariant": {
+                "type": "null"
+              },
+              "vulnerability_class": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "invariant_violation"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "root_cause_ref": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "violated_invariant": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "vulnerability_class": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+      "properties": {
+        "explanation": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "invariant_violation",
+            "advisory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "recommendation": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "root_cause_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentRootCauseReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "violated_invariant": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Violated Invariant"
+        },
+        "vulnerability_class": {
+          "anyOf": [
+            {
+              "enum": [
+                "access_control",
+                "accounting",
+                "reservation",
+                "pause",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vulnerability Class"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "kind",
+        "vulnerability_class",
+        "violated_invariant",
+        "root_cause_ref",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentScoredFinding",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_scored_review_response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned development claims, disjoint from legacy or qualified audit findings.",
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentScoredFinding"
+      },
+      "maxItems": 16,
+      "title": "Findings",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "findings"
+  ],
+  "title": "DevelopmentScoredReviewResponse",
+  "type": "object"
+}

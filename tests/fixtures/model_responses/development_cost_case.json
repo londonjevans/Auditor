@@ -1,0 +1,33 @@
+{
+  "fixture_scope": "synthetic local development-cost regression; non-production, no credentials",
+  "endpoint": {
+    "tag": "synthetic-provider",
+    "provider_name": "Synthetic Development Provider",
+    "status": 0,
+    "context_length": 300000,
+    "max_prompt_tokens": 280000,
+    "max_completion_tokens": 20000,
+    "supported_parameters": ["max_tokens", "temperature", "response_format", "structured_outputs", "reasoning"],
+    "reasoning": {"supported_efforts": ["high"]},
+    "pricing": {
+      "prompt": "0.000002",
+      "completion": "0.000006",
+      "input_cache_read": "0.0000005",
+      "input_cache_write": "0",
+      "request": "0.0001",
+      "web_search": "0.01",
+      "image": "0.01",
+      "overrides": [{"min_prompt_tokens": 200000, "prompt": "0.000004", "completion": "0.000012", "input_cache_read": "0.000001", "input_cache_write": "0"}]
+    }
+  },
+  "request": {
+    "model": "synthetic/development-auditor",
+    "messages": [{"role": "user", "content": "Review this non-deployable synthetic authorization-invariant fixture."}],
+    "max_tokens": 4096,
+    "temperature": 0,
+    "response_format": {"type": "json_schema", "json_schema": {"name": "synthetic_findings", "strict": true, "schema": {"type": "object", "properties": {}, "additionalProperties": false}}},
+    "reasoning": {"effort": "high"},
+    "provider": {"only": ["synthetic-provider"], "allow_fallbacks": false, "require_parameters": true, "data_collection": "deny", "zdr": true},
+    "stream": false
+  }
+}

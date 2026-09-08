@@ -1,0 +1,348 @@
+{
+  "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
+  "authenticated_runner_selection": {
+    "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
+    "distinct_root_lineages_verified": false,
+    "primary_judge_model_id": "z-ai/glm-5.2",
+    "replay_judge_model_id": "moonshotai/kimi-k3",
+    "required_completion_limit_source": "metadata",
+    "required_output_mode": "NATIVE_JSON_SCHEMA",
+    "required_reasoning_effort": "high",
+    "required_supported_parameters": [
+      "structured_outputs"
+    ],
+    "role_assignment_sha256": "7d67d43f98484890bf9f184a5bb89fbba25d0408dee65a7174eef5fdf1a75b14",
+    "route_constraints": [
+      {
+        "constraint_sha256": "126a1553cb4fbc96c642d803edacadd4879f41dbfbd69e53b0e4d19d4674763a",
+        "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "parasail/fp8",
+        "role": "candidate",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "f0177706981e7cc78994b8fc6d1ed34e170b6ee637e88ad12d1d94976d0ed6ad",
+        "exact_model_id": "z-ai/glm-5.2",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "sail-research/fp8",
+        "role": "primary_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "ffc54dc13eea0d92c06a1c6f29e0ae679eac5328d05ae8899e8cd7899b1eb199",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "modal/mxfp4",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      },
+      {
+        "constraint_sha256": "2a820c3b85936bc24cc1b0d007415d39e8e8bfd3b4eacb072a321e904e8a5912",
+        "exact_model_id": "moonshotai/kimi-k3",
+        "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+        "provider_endpoint": "phala",
+        "role": "replay_judge",
+        "schema_version": "1.0"
+      }
+    ],
+    "route_predicate_profile": {
+      "accepted_operational_status": "0",
+      "allow_automatic_fallbacks": false,
+      "emitted_request_parameters": [
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "temperature"
+      ],
+      "empirical_schema_conformance_disposition": "UNAVAILABLE",
+      "minimum_context_tokens": 73728,
+      "minimum_prompt_tokens": 65536,
+      "native_capability_marker": "structured_outputs",
+      "predicate_ids": [
+        "EXACT_MODEL_IDENTITY",
+        "EXACT_PROVIDER_ENDPOINT",
+        "PROVIDER_DISPLAY_NAME_INJECTIVITY",
+        "OPERATIONAL_STATUS",
+        "ZDR_ELIGIBILITY",
+        "EMITS_MAX_TOKENS",
+        "EMITS_TEMPERATURE",
+        "EMITS_RESPONSE_FORMAT",
+        "EMITS_REASONING",
+        "MODEL_STRUCTURED_OUTPUT_MARKER",
+        "ENDPOINT_STRUCTURED_OUTPUT_MARKER",
+        "NATIVE_STRUCTURED_OUTPUT_MODE",
+        "SINGLETON_EXACT_ROUTE",
+        "AUTOMATIC_FALLBACK_DISABLED",
+        "REASONING_POLICY_BINDING",
+        "REASONING_CONTROL_BINDING",
+        "REASONING_CONTROL_VALUES",
+        "REASONING_EFFORT_SUPPORT",
+        "PROMPT_CAPACITY_ENVELOPE",
+        "OUTPUT_CAPACITY_ENVELOPE",
+        "CONTEXT_CAPACITY_ENVELOPE",
+        "METADATA_COMPLETION_CAPACITY",
+        "PRICE_CAP_EXPRESSIBILITY",
+        "PRICE_CAP_NO_WEAKER",
+        "FROZEN_LIVE_EQUIVALENCE",
+        "REGISTRY_SELECTION_HASH_CUSTODY",
+        "REGISTRY_CONSTRAINT_HASH_CUSTODY",
+        "EMPIRICAL_SCHEMA_CONFORMANCE",
+        "TOKEN_DETAIL_REPORTING_CONVENTION"
+      ],
+      "price_cap_algorithm": "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+      "profile_sha256": "00b33f3eff0ee7ac7710253c34786ce0a041ffe881baa4015dce0ed4f4b7ce82",
+      "reasoning_control_profile_sha256": "fb13e6ce2ae85e3868ff3fbb50c565dc19f6cb13bfa629b20d315d2c9f1078df",
+      "reasoning_effort": "high",
+      "reasoning_exclude": false,
+      "reasoning_max_tokens": null,
+      "reasoning_mode": "effort",
+      "reasoning_policy_sha256": "5becbe9c9ec4a5fd6397c6d25f0e7470444b3e02aec759ae6d95a79a08d672a2",
+      "reasoning_role_binding_sha256": "e99e53b0fe39f99ed444670f1799359f65136a95f8cbd8389df012b5d88767e7",
+      "reasoning_role_profile_sha256": "b78c3b88a119c54af44663f48b30b25868da82a819e7166504d41ee8d4f8e619",
+      "require_singleton_route": true,
+      "require_zdr": true,
+      "required_completion_limit_source": "metadata",
+      "required_completion_tokens": 8192,
+      "required_output_mode": "NATIVE_JSON_SCHEMA",
+      "required_output_tokens": 4096,
+      "reserved_reasoning_tokens": 4096,
+      "schema_version": "1.0",
+      "token_detail_convention_disposition": "UNAVAILABLE"
+    }
+  },
+  "benchmark_authorized": false,
+  "cached_ranking_payload_present": false,
+  "discovery_evidence_present": false,
+  "documentary_lineage_identity_authorized": false,
+  "entries": [
+    {
+      "advisory_lineage_group": "Anthropic",
+      "allowed_provider_endpoints": [
+        "amazon-bedrock"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "9deead51ec8df3b692708165eeaa89a781b2a042bd32eac559d1e18ee95135ad",
+      "exact_model_id": "anthropic/claude-opus-5",
+      "lineage_group_seed_sha256": "aaf0b1db9c08b1da0b637737ceeaf97923a2a22b84551a951599adb48fa17706",
+      "priority_rank": 1
+    },
+    {
+      "advisory_lineage_group": "DeepSeek",
+      "allowed_provider_endpoints": [
+        "parasail/fp8"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b",
+      "exact_model_id": "deepseek/deepseek-v4-pro-0813",
+      "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
+      "priority_rank": 5
+    },
+    {
+      "advisory_lineage_group": "Google",
+      "allowed_provider_endpoints": [
+        "deepinfra",
+        "google-vertex",
+        "novita",
+        "together"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "769e252fba56b0b6a9419bdfceb56267dbefebb5a283b47077781ac6f5499fc7",
+      "exact_model_id": "google/gemini-3.7-flash",
+      "lineage_group_seed_sha256": "5b75c31ccc07e8bffd25033908287caab7ce1b2a0805f12549f47927ab329df2",
+      "priority_rank": 3
+    },
+    {
+      "advisory_lineage_group": "Google",
+      "allowed_provider_endpoints": [
+        "deepinfra/fp8"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "3fd5dce9d53e043546e3b519a82f497f94cc2cd8d34c2d07413f6c0a25ee8a74",
+      "exact_model_id": "google/gemma-4-26b-a4b-it",
+      "lineage_group_seed_sha256": "5b75c31ccc07e8bffd25033908287caab7ce1b2a0805f12549f47927ab329df2",
+      "priority_rank": 12
+    },
+    {
+      "advisory_lineage_group": "Meta",
+      "allowed_provider_endpoints": [
+        "deepinfra",
+        "google-vertex",
+        "novita",
+        "together"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "a7070ead3f57975f2df08116d67967f0429b62acb83b8d3bae581f55aad7aee1",
+      "exact_model_id": "meta/muse-spark-1.2",
+      "lineage_group_seed_sha256": "73da2f148f9f8996d809e739c403536c3dbdb8d98f65a84aaea671a2c1b7e5f6",
+      "priority_rank": 8
+    },
+    {
+      "advisory_lineage_group": "MiniMax",
+      "allowed_provider_endpoints": [
+        "coreweave/fp4"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176",
+      "exact_model_id": "minimax/minimax-m3",
+      "lineage_group_seed_sha256": "3acd272a826261666ebcd47a0e0f71f268a5a4bde2350f2a28c902dd43591e47",
+      "priority_rank": 9
+    },
+    {
+      "advisory_lineage_group": "Moonshot-Kimi",
+      "allowed_provider_endpoints": [
+        "modal/mxfp4",
+        "phala"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11",
+      "exact_model_id": "moonshotai/kimi-k3",
+      "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
+      "priority_rank": 7
+    },
+    {
+      "advisory_lineage_group": "OpenAI",
+      "allowed_provider_endpoints": [
+        "deepinfra",
+        "google-vertex",
+        "novita",
+        "together"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "044731285c439540e6ee389856ac9dcc373817b6375127cc2d74a168531fd34d",
+      "exact_model_id": "openai/gpt-5.6-sol",
+      "lineage_group_seed_sha256": "6bfc0dfc5d64256908c88ffc7043d22aeeda03197e3ffe9e34304edb5e3c864c",
+      "priority_rank": 2
+    },
+    {
+      "advisory_lineage_group": "Alibaba-Qwen",
+      "allowed_provider_endpoints": [
+        "alibaba"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "27c973b590ba4d17660a9afdc39888394941e215bc4cf2d70362705a318165f7",
+      "exact_model_id": "qwen/qwen3.8-max",
+      "lineage_group_seed_sha256": "b71edf4b2ea76b2e948f80a6d04200d32b6d10e9d6571bfc13b75aae40ca897b",
+      "priority_rank": 6
+    },
+    {
+      "advisory_lineage_group": "Tencent-Hunyuan",
+      "allowed_provider_endpoints": [
+        "novita"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "5ca2c5e02454bf0fed2f25464a9ac5666bba684cb06291437a902b1ddfcb4652",
+      "exact_model_id": "tencent/hy3",
+      "lineage_group_seed_sha256": "94d9d5398632e20d982d35d15d5946f15fe07f29fcc2a3b557de3bf223c4dc68",
+      "priority_rank": 10
+    },
+    {
+      "advisory_lineage_group": "xAI",
+      "allowed_provider_endpoints": [
+        "deepinfra",
+        "google-vertex",
+        "novita",
+        "together"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "8faafeab4d866fec082fd6e5448f1918cd66bde63c42bca99bd292f9ab422341",
+      "exact_model_id": "x-ai/grok-4.6",
+      "lineage_group_seed_sha256": "e20cfe90d2d4bc877b02720f952c3c6b055de52409dc4a945483864f8f198726",
+      "priority_rank": 4
+    },
+    {
+      "advisory_lineage_group": "Zhipu-GLM",
+      "allowed_provider_endpoints": [
+        "sail-research/fp8"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef",
+      "exact_model_id": "z-ai/glm-5.2",
+      "lineage_group_seed_sha256": "cef0b2d24fdb86b06b77f7280355447f05fc4318502b97d660ab400c52e3e59a",
+      "priority_rank": 11
+    }
+  ],
+  "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+  "plan_sha256": "bb3d60c3ff75ed2062b1ee68fe7b2011cf37ce860461b7d37eb10cd5faf7650f",
+  "production_selection_authorized": false,
+  "provider_call_authorized": false,
+  "provider_metadata_present": false,
+  "qualification_authorized": false,
+  "ranking_executed": false,
+  "release_authorized": false,
+  "runner_authority_authorized": false,
+  "schema_version": "1.4",
+  "seal_publication_authorized": false,
+  "serialized_authority": false,
+  "source_bindings": [
+    {
+      "authenticity": "OPERATOR_STAGED_UNVERIFIED",
+      "byte_count": 6455,
+      "content_sha256": "09a367431891b01ceec7dba1ce69cb8bec87e3878f3c9faae8af0bfc714e00e8",
+      "filename": "model-ranking.py",
+      "kind": "MODEL_RANKING_IMPLEMENTATION",
+      "source_binding_sha256": "c42d9e3dc2595b3e5430d5ca57c02802ccb30432acca258ee535b8b6841a1612"
+    },
+    {
+      "authenticity": "OPERATOR_STAGED_UNVERIFIED",
+      "byte_count": 8184,
+      "content_sha256": "e967de356b0a34977bc3f8350ee944589b5e808bf17f950ed2c713702b612702",
+      "filename": "V3-LINEAGE-001-operator-review.md",
+      "kind": "OPERATOR_LINEAGE_REVIEW",
+      "source_binding_sha256": "754a758648b260c48f6cc9cfd7ca173c69d2ef151acd4bcdb897fd509d364945"
+    }
+  ],
+  "source_egress_authorized": false,
+  "status": "NONAUTHORIZING",
+  "unresolved_requirements": [
+    "Current OpenRouter catalogue and ranking payload were not supplied and must be frozen by the operator.",
+    "Endpoint allowlists are operator policy constraints, not observed per-model availability.",
+    "Every exact ID absent from the current confirmed public-lineage manifest requires fresh documentary capture before AUTHRUNNER.",
+    "Every exact route, ZDR state, output capability, price, and capacity remains unverified.",
+    "External ranking values are prioritization only and cannot grant qualification.",
+    "Frontier retention-consent routes remain unusable unless exact ZDR eligibility is freshly proven.",
+    "Meta Muse and Nemotron 3.5 ancestry remain unconfirmed.",
+    "Mistral is excluded because the staged review supplies no exact current model ID.",
+    "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
+    "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
+    "Operator results SHA-256 5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f records the metadata-only r7/r8/r7 completion-capacity rejection and the nonauthorizing DeepSeek/parasail-fp8 and Kimi/Wafer successor routes; fresh exact discovery remains required.",
+    "Operator results SHA-256 5fb3d3091e339b840e84468093c0f1f64c738673a40761fcf7d7b9d7ae4c41c6 records successful DeepSeek/parasail-fp8 metadata discovery and fail-closed Kimi/Wafer non-operational drift; modal/mxfp4 and phala remain nonauthorizing allowlist seeds requiring fresh exact discovery.",
+    "Zhipu GLM 5.2 is an unverified availability seed; the review names unroutable GLM 5.3."
+  ]
+}

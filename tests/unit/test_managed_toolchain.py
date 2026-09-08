@@ -31,6 +31,7 @@ from mmaudit.orchestration.managed_toolchain import (
     ManagedToolchainMemberKind,
     ManagedToolchainRole,
     default_managed_toolchain_bundle,
+    derive_managed_toolchain_config,
     load_packaged_managed_toolchain_bundle,
     required_managed_toolchain_roles,
     resolve_managed_toolchain_config,
@@ -38,68 +39,18 @@ from mmaudit.orchestration.managed_toolchain import (
     unresolved_managed_toolchain_members,
 )
 from mmaudit.scanners.hardhat import HARDHAT_REPORTER_SHA256, HARDHAT_REPORTER_VERSION
+from tests.managed_toolchain_support import (
+    synthetic_pinned_bundle as _pinned_bundle,
+)
+from tests.managed_toolchain_support import (
+    synthetic_pinned_members as _pinned_members,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _pinned_members() -> tuple[ManagedToolchainMember, ...]:
-    members: list[ManagedToolchainMember] = []
-    parent_image_sha256 = _digest(ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE.value)
-    parent_platform_manifest_sha256 = _digest(
-        f"platform:{ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE.value}"
-    )
-    for spec in MANAGED_TOOLCHAIN_ROLE_SPECS:
-        digest = _digest(spec.role.value)
-        locator = spec.allowed_locators[0]
-        if spec.kind is ManagedToolchainMemberKind.OCI_IMAGE:
-            locator = f"registry.example/mmaudit-toolchain@sha256:{digest}"
-        members.append(
-            ManagedToolchainMember(
-                role=spec.role,
-                kind=spec.kind,
-                disposition=ManagedToolchainDisposition.PINNED,
-                locator=locator,
-                version="1.2.3",
-                sha256=digest,
-                platform=(
-                    "linux-amd64" if spec.kind is ManagedToolchainMemberKind.OCI_IMAGE else None
-                ),
-                platform_manifest_sha256=(
-                    _digest(f"platform:{spec.role.value}")
-                    if spec.kind is ManagedToolchainMemberKind.OCI_IMAGE
-                    else None
-                ),
-                parent_image_role=(
-                    ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE
-                    if spec.kind is ManagedToolchainMemberKind.IMAGE_EXECUTABLE
-                    else None
-                ),
-                parent_image_sha256=(
-                    parent_image_sha256
-                    if spec.kind is ManagedToolchainMemberKind.IMAGE_EXECUTABLE
-                    else None
-                ),
-                parent_platform_manifest_sha256=(
-                    parent_platform_manifest_sha256
-                    if spec.kind is ManagedToolchainMemberKind.IMAGE_EXECUTABLE
-                    else None
-                ),
-                consumers=spec.consumers,
-                limitation=None,
-            )
-        )
-    return tuple(members)
-
-
-def _pinned_bundle() -> ManagedToolchainBundle:
-    return seal_managed_toolchain_bundle(
-        members=_pinned_members(),
-        target_platform="linux-amd64",
-    )
 
 
 def _member(
@@ -133,6 +84,203 @@ def _disabled_scanners() -> dict[str, dict[str, object]]:
             "hardhat_fork",
         )
     }
+
+
+_HOST_PIN_FIELDS = (
+    (ManagedToolchainRole.SOLC, ("smart_contracts",), "solc_version", "solc_sha256"),
+    (ManagedToolchainRole.SEMGREP, ("scanners", "semgrep"), "version", "sha256"),
+    (ManagedToolchainRole.GITLEAKS, ("scanners", "gitleaks"), "version", "sha256"),
+    (ManagedToolchainRole.TRIVY, ("scanners", "trivy"), "version", "sha256"),
+    (ManagedToolchainRole.OSV_SCANNER, ("scanners", "osv"), "version", "sha256"),
+    (ManagedToolchainRole.CODEQL, ("scanners", "codeql"), "version", "sha256"),
+    (ManagedToolchainRole.SLITHER, ("scanners", "slither"), "version", "sha256"),
+    (ManagedToolchainRole.FORGE, ("scanners", "foundry_fork"), "version", "sha256"),
+    (ManagedToolchainRole.ECHIDNA, ("formal",), "echidna_version", "echidna_sha256"),
+    (ManagedToolchainRole.MEDUSA, ("formal",), "medusa_version", "medusa_sha256"),
+    (ManagedToolchainRole.HALMOS, ("formal",), "halmos_version", "halmos_sha256"),
+    (ManagedToolchainRole.HALMOS_Z3, ("formal",), "halmos_solver_version", "halmos_solver_sha256"),
+    (ManagedToolchainRole.CERTORA_CLI, ("formal", "certora"), "cli_version", "cli_sha256"),
+    (ManagedToolchainRole.KONTROL, ("formal",), "kontrol_version", "kontrol_sha256"),
+)
+
+
+def _unpinned_host_config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
+    scanners = _disabled_scanners()
+    for name, scanner in scanners.items():
+        if name != "hardhat_fork":
+            scanner.update(enabled=True, required=True)
+    return config_factory(
+        language_profile="solidity-evm",
+        scanners=scanners,
+        smart_contracts={"compile": True, "framework": "foundry"},
+        formal={"enabled": True, "required_tools": ["certora"]},
+        reproduction={"isolation_backend": "bubblewrap", "enabled": False},
+    )
+
+
+def test_config_derivation_fills_every_selected_host_consumer_and_nothing_else(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    bundle = _pinned_bundle()
+    config = _unpinned_host_config(config_factory)
+    original = config.model_dump(mode="json")
+    expected = config.effective().model_dump(mode="json")
+    for role, path, version_field, hash_field in _HOST_PIN_FIELDS:
+        target = expected
+        for segment in path:
+            target = target[segment]
+        assert target[version_field] is target[hash_field] is None
+        member = _member(bundle.members, role)
+        target[version_field], target[hash_field] = member.version, member.sha256
+    derived = derive_managed_toolchain_config(bundle, config)
+    assert derived.model_dump(mode="json") == expected
+    assert required_managed_toolchain_roles(derived) == required_managed_toolchain_roles(config)
+    assert config.model_dump(mode="json") == original
+    assert derive_managed_toolchain_config(bundle, derived) == derived
+    assert derived.formal.certora.enabled is False
+    assert derived.scanners.hardhat_fork.sha256 is None
+    assert derived.profile == config.profile
+    derived.scanners.semgrep.sha256 = "c" * 64
+    assert config.scanners.semgrep.sha256 is None
+    assert derive_managed_toolchain_config(bundle, config).scanners.semgrep.sha256 != "c" * 64
+
+
+@pytest.mark.parametrize(("role", "path", "version_field", "hash_field"), _HOST_PIN_FIELDS)
+@pytest.mark.parametrize("conflict", ("version", "hash"))
+def test_config_derivation_never_overwrites_explicit_consumer_conflicts(
+    config_factory: Callable[..., AuditConfig],
+    role: ManagedToolchainRole,
+    path: tuple[str, ...],
+    version_field: str,
+    hash_field: str,
+    conflict: str,
+) -> None:
+    bundle = _pinned_bundle()
+    payload = _unpinned_host_config(config_factory).model_dump(mode="json")
+    target = payload
+    for segment in path:
+        target = target[segment]
+    member = _member(bundle.members, role)
+    target[version_field] = "9.9.9" if conflict == "version" else member.version
+    target[hash_field] = "c" * 64 if conflict == "hash" else member.sha256
+    config = AuditConfig.model_validate(payload)
+    with pytest.raises(ManagedToolchainError, match="trust pins conflict"):
+        derive_managed_toolchain_config(bundle, config)
+    assert config.model_dump(mode="json") == payload
+
+
+def test_config_derivation_selects_declared_hardhat_image_and_runtime_without_enabling_tools(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    scanners = _disabled_scanners()
+    scanners["hardhat_fork"] = {"enabled": True, "required": True}
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners=scanners,
+        smart_contracts={"compile": False},
+        reproduction={"isolation_backend": "auto", "enabled": False},
+    )
+    bundle = _pinned_bundle()
+    expected = config.effective().model_dump(mode="json")
+    hardhat = _member(bundle.members, ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT)
+    expected["scanners"]["hardhat_fork"].update(version=hardhat.version, sha256=hardhat.sha256)
+    expected["reproduction"]["rootless_container_runtime"] = "docker"
+    expected["reproduction"]["rootless_container_image"] = _member(
+        bundle.members, ManagedToolchainRole.ROOTLESS_TOOLCHAIN_IMAGE
+    ).locator
+    derived = derive_managed_toolchain_config(bundle, config)
+    assert derived.model_dump(mode="json") == expected
+    assert derived.smart_contracts.compile is False
+    assert derived.scanners.foundry_fork.enabled is False
+    assert required_managed_toolchain_roles(derived) == required_managed_toolchain_roles(config)
+    assert derive_managed_toolchain_config(bundle, derived) == derived
+    projection = resolve_managed_toolchain_config(bundle, derived)
+    assert projection.runtime_authority is projection.installed_members_verified is False
+
+
+@pytest.mark.parametrize("field", ("version", "hash", "image", "runtime"))
+def test_config_derivation_preserves_hardhat_and_container_conflict_refusals(
+    config_factory: Callable[..., AuditConfig], field: str
+) -> None:
+    bundle = _pinned_bundle()
+    hardhat = _member(bundle.members, ManagedToolchainRole.HARDHAT_IMAGE_HARDHAT)
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={
+            **_disabled_scanners(),
+            "hardhat_fork": {
+                "enabled": True,
+                "version": "9.9.9" if field == "version" else hardhat.version,
+                "sha256": "c" * 64 if field == "hash" else hardhat.sha256,
+            },
+        },
+        smart_contracts={"compile": False},
+        reproduction={
+            "isolation_backend": "auto",
+            "enabled": False,
+            "rootless_container_runtime": "podman" if field == "runtime" else "auto",
+            "rootless_container_image": (
+                "registry.example/conflicting@sha256:" + "c" * 64 if field == "image" else None
+            ),
+        },
+    )
+    with pytest.raises(ManagedToolchainError, match="conflict"):
+        derive_managed_toolchain_config(bundle, config)
+
+
+def test_config_derivation_remains_pure_and_does_not_use_unselected_bundle_members(
+    config_factory: Callable[..., AuditConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = config_factory()
+    expected = config.effective().model_dump(mode="json")
+    bundle = _pinned_bundle()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("pin derivation must not observe files, environment or executables")
+
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(os, "getenv", forbidden)
+    monkeypatch.setattr(shutil, "which", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    assert derive_managed_toolchain_config(bundle, config).model_dump(mode="json") == expected
+    with pytest.raises(ManagedToolchainError, match="UNRESOLVED"):
+        derive_managed_toolchain_config(default_managed_toolchain_bundle(), config)
+    assert (
+        derive_managed_toolchain_config(
+            default_managed_toolchain_bundle(), config, allow_unresolved=True
+        ).model_dump(mode="json")
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid", ("config_mutation", "config_subclass", "bundle_subclass", "flag")
+)
+def test_config_derivation_revalidates_all_inputs(
+    config_factory: Callable[..., AuditConfig], invalid: str
+) -> None:
+    config = config_factory()
+    bundle = _pinned_bundle()
+    allow_unresolved = False
+    if invalid == "config_mutation":
+        config.scanners.semgrep.sha256 = "c" * 64
+    elif invalid == "config_subclass":
+
+        class DerivedConfig(AuditConfig):
+            pass
+
+        config = DerivedConfig.model_validate(config.model_dump(mode="python"))
+    elif invalid == "bundle_subclass":
+
+        class DerivedBundle(ManagedToolchainBundle):
+            pass
+
+        bundle = DerivedBundle.model_validate(bundle.model_dump(mode="python"))
+    else:
+        allow_unresolved = 1  # type: ignore[assignment]
+    with pytest.raises((ManagedToolchainError, ValueError)):
+        derive_managed_toolchain_config(bundle, config, allow_unresolved=allow_unresolved)
 
 
 def _clean_fork_suite(

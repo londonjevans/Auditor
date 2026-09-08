@@ -1046,6 +1046,38 @@ def test_planned_unattested_mutation_scorecard_cannot_satisfy_maximum_assurance(
     assert BenchmarkReport.model_validate(result.model_dump(mode="python")) == result
 
 
+def test_process_local_mutation_comparison_remains_noncrediting_to_benchmark_gates() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = {
+        repository_id: _complete_maximum(report)
+        for repository_id, report in _reports_by_repository(vulnerable).items()
+    }
+    payload = _passing_mutation_scorecard().model_dump(mode="python")
+    payload.update(
+        schema_version="1.1",
+        evidence_origin=MutationScorecardEvidenceOrigin.PROCESS_LOCAL_COMPARISON,
+        projection_authority="comparison_only",
+        applicability_plan_sha256="e" * 64,
+    )
+    scorecard = MutationScorecard.model_validate(payload)
+    assert scorecard.gate_passed
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        mutation_scorecard=scorecard,
+    )
+
+    assert result.status is BenchmarkStatus.INCOMPLETE
+    assert result.metrics.invariant_mutation_score.state is BenchmarkMetricState.NOT_EVALUABLE
+    assert all(item.mutation_kill_score is None for item in result.repository_metrics)
+    assert all(item.mutation_gate_passed is False for item in result.repository_metrics)
+    assert result.mutation_scorecard is not None
+    assert result.mutation_scorecard.projection_authority == "comparison_only"
+
+
 def test_forged_runtime_mutation_origin_is_rejected_before_evaluation_or_write(
     tmp_path: Path,
 ) -> None:

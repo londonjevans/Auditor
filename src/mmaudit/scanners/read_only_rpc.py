@@ -1083,7 +1083,179 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
         return
 
 
-class ReadOnlyRpcBridge:
+class _PinnedRpcReadPolicy:
+    """Pure request normalization shared by the live bridge and offline replay."""
+
+    def __init__(
+        self,
+        *,
+        expected_chain_id: int,
+        pinned_block_number: int,
+        pinned_block_hash: str,
+        max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
+    ) -> None:
+        if (
+            type(expected_chain_id) is not int
+            or not 1 <= expected_chain_id < 2**64
+            or type(pinned_block_number) is not int
+            or not 0 <= pinned_block_number < 2**64
+            or not isinstance(pinned_block_hash, str)
+            or _BLOCK_HASH_PATTERN.fullmatch(pinned_block_hash) is None
+        ):
+            raise ValueError("pinned RPC read policy identity is invalid")
+        _require_bound("batch size", max_batch_size, minimum=1, maximum=_MAX_BATCH_SIZE)
+        self._expected_chain_id = expected_chain_id
+        self._pinned_block_number = pinned_block_number
+        self._pinned_block_hash = pinned_block_hash
+        self._pinned_block_tag = hex(pinned_block_number)
+        self._max_batch_size = max_batch_size
+
+    def _prepare_payload(self, payload: object) -> tuple[list[_PreparedCall], bool]:
+        if isinstance(payload, list):
+            if not payload or len(payload) > self._max_batch_size:
+                raise _BridgeRejection(_RejectionKind.LIMIT)
+            request_items = payload
+            is_batch = True
+        elif isinstance(payload, dict):
+            request_items = [payload]
+            is_batch = False
+        else:
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+
+        prepared = [self._prepare_call(item) for item in request_items]
+        request_ids = [_rpc_id_key(call.request_id) for call in prepared]
+        if len(request_ids) != len(set(request_ids)):
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        return prepared, is_batch
+
+    def _prepare_call(self, item: object) -> _PreparedCall:
+        if not isinstance(item, dict):
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        if not {"jsonrpc", "id", "method"} <= item.keys() or not set(item) <= {
+            "jsonrpc",
+            "id",
+            "method",
+            "params",
+        }:
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        request_id = item["id"]
+        if not _valid_rpc_id(request_id):
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        if item["jsonrpc"] != "2.0":
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        method = item["method"]
+        if not isinstance(method, str):
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        if method not in _ALLOWED_METHODS:
+            raise _BridgeRejection(_RejectionKind.DENIED)
+        params = item.get("params", [])
+        if not isinstance(params, list) or len(params) > _MAX_RPC_PARAMS:
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        minimum_arity, maximum_arity = _METHOD_ARITY[method]
+        if not minimum_arity <= len(params) <= maximum_arity:
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        normalized_params = copy.deepcopy(params)
+        self._pin_params(method, normalized_params)
+        origin_method = _NUMBER_TO_HASH_METHOD.get(method, method)
+        synthetic_result: object | None = None
+        if method == "eth_chainId":
+            synthetic_result = hex(self._expected_chain_id)
+        elif method == "eth_blockNumber":
+            synthetic_result = self._pinned_block_tag
+        elif method == "eth_gasPrice":
+            synthetic_result = hex(DETERMINISTIC_FORK_GAS_PRICE_WEI)
+        elif method == "net_version":
+            synthetic_result = str(self._expected_chain_id)
+        return _PreparedCall(
+            request_id=cast(int | str, request_id),
+            method=method,
+            origin_method=origin_method,
+            payload={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": origin_method,
+                "params": normalized_params,
+            },
+            synthetic_result=synthetic_result,
+            is_synthetic=method in _SYNTHETIC_METHODS,
+        )
+
+    def _pin_params(self, method: str, params: list[object]) -> None:
+        eip_1898_index = _EIP_1898_PARAM_INDEX.get(method)
+        if eip_1898_index is not None:
+            if eip_1898_index == len(params) and method == "eth_call":
+                params.append(self._canonical_block_reference())
+            else:
+                params[eip_1898_index] = self._normalize_block_reference(params[eip_1898_index])
+        if method in _NUMBER_TO_HASH_METHOD:
+            self._normalize_block_tag(params[0])
+            params[0] = self._pinned_block_hash
+        hash_index = _HASH_PARAM_INDEX.get(method)
+        if hash_index is not None:
+            params[hash_index] = self._normalize_block_hash(params[hash_index])
+        if method == "eth_getBlockReceipts":
+            value = params[0]
+            if isinstance(value, str) and _BLOCK_HASH_PATTERN.fullmatch(value):
+                self._normalize_block_hash(value)
+            else:
+                self._normalize_block_tag(value)
+            params[0] = self._pinned_block_hash
+        elif method == "eth_getLogs":
+            self._pin_log_filter(params)
+
+    def _normalize_block_tag(self, value: object) -> str:
+        if isinstance(value, str) and value in _PINNED_SYMBOLIC_TAGS:
+            return self._pinned_block_tag
+        if value == "earliest" and self._pinned_block_number == 0:
+            return self._pinned_block_tag
+        if (
+            isinstance(value, str)
+            and _BLOCK_TAG_PATTERN.fullmatch(value)
+            and value == self._pinned_block_tag
+        ):
+            return value
+        raise _BridgeRejection(_RejectionKind.DENIED)
+
+    def _normalize_block_reference(self, value: object) -> dict[str, object]:
+        if isinstance(value, dict):
+            if (
+                set(value) != {"blockHash", "requireCanonical"}
+                or value.get("blockHash") != self._pinned_block_hash
+                or value.get("requireCanonical") is not True
+            ):
+                raise _BridgeRejection(_RejectionKind.DENIED)
+        else:
+            self._normalize_block_tag(value)
+        return self._canonical_block_reference()
+
+    def _canonical_block_reference(self) -> dict[str, object]:
+        return {
+            "blockHash": self._pinned_block_hash,
+            "requireCanonical": True,
+        }
+
+    def _normalize_block_hash(self, value: object) -> str:
+        if value != self._pinned_block_hash:
+            raise _BridgeRejection(_RejectionKind.DENIED)
+        return self._pinned_block_hash
+
+    def _pin_log_filter(self, params: list[object]) -> None:
+        if len(params) != 1 or not isinstance(params[0], dict):
+            raise _BridgeRejection(_RejectionKind.MALFORMED)
+        filter_value = cast(dict[str, object], params[0])
+        if "blockHash" in filter_value:
+            if "fromBlock" in filter_value or "toBlock" in filter_value:
+                raise _BridgeRejection(_RejectionKind.MALFORMED)
+            filter_value["blockHash"] = self._normalize_block_hash(filter_value["blockHash"])
+            return
+        self._normalize_block_tag(filter_value.get("fromBlock", "latest"))
+        self._normalize_block_tag(filter_value.get("toBlock", "latest"))
+        filter_value.pop("fromBlock", None)
+        filter_value.pop("toBlock", None)
+        filter_value["blockHash"] = self._pinned_block_hash
+
+
+class ReadOnlyRpcBridge(_PinnedRpcReadPolicy):
     """Serve a bounded method allowlist on one exclusive, local-only listener.
 
     ``unix_listener_path`` is a control-plane input. Its parent must be a resolved,
@@ -2214,150 +2386,6 @@ class ReadOnlyRpcBridge:
         if len(body) != content_length:
             raise _BridgeRejection(_RejectionKind.MALFORMED)
         return body
-
-    def _prepare_payload(self, payload: object) -> tuple[list[_PreparedCall], bool]:
-        if isinstance(payload, list):
-            if not payload or len(payload) > self._max_batch_size:
-                raise _BridgeRejection(_RejectionKind.LIMIT)
-            request_items = payload
-            is_batch = True
-        elif isinstance(payload, dict):
-            request_items = [payload]
-            is_batch = False
-        else:
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-
-        prepared = [self._prepare_call(item) for item in request_items]
-        request_ids = [_rpc_id_key(call.request_id) for call in prepared]
-        if len(request_ids) != len(set(request_ids)):
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        return prepared, is_batch
-
-    def _prepare_call(self, item: object) -> _PreparedCall:
-        if not isinstance(item, dict):
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        if not {"jsonrpc", "id", "method"} <= item.keys() or not set(item) <= {
-            "jsonrpc",
-            "id",
-            "method",
-            "params",
-        }:
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        request_id = item["id"]
-        if not _valid_rpc_id(request_id):
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        if item["jsonrpc"] != "2.0":
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        method = item["method"]
-        if not isinstance(method, str):
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        if method not in _ALLOWED_METHODS:
-            raise _BridgeRejection(_RejectionKind.DENIED)
-        params = item.get("params", [])
-        if not isinstance(params, list) or len(params) > _MAX_RPC_PARAMS:
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        minimum_arity, maximum_arity = _METHOD_ARITY[method]
-        if not minimum_arity <= len(params) <= maximum_arity:
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        normalized_params = copy.deepcopy(params)
-        self._pin_params(method, normalized_params)
-        origin_method = _NUMBER_TO_HASH_METHOD.get(method, method)
-        synthetic_result: object | None = None
-        if method == "eth_chainId":
-            synthetic_result = hex(self._expected_chain_id)
-        elif method == "eth_blockNumber":
-            synthetic_result = self._pinned_block_tag
-        elif method == "eth_gasPrice":
-            synthetic_result = hex(DETERMINISTIC_FORK_GAS_PRICE_WEI)
-        elif method == "net_version":
-            synthetic_result = str(self._expected_chain_id)
-        return _PreparedCall(
-            request_id=cast(int | str, request_id),
-            method=method,
-            origin_method=origin_method,
-            payload={
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": origin_method,
-                "params": normalized_params,
-            },
-            synthetic_result=synthetic_result,
-            is_synthetic=method in _SYNTHETIC_METHODS,
-        )
-
-    def _pin_params(self, method: str, params: list[object]) -> None:
-        eip_1898_index = _EIP_1898_PARAM_INDEX.get(method)
-        if eip_1898_index is not None:
-            if eip_1898_index == len(params) and method == "eth_call":
-                params.append(self._canonical_block_reference())
-            else:
-                params[eip_1898_index] = self._normalize_block_reference(params[eip_1898_index])
-        if method in _NUMBER_TO_HASH_METHOD:
-            self._normalize_block_tag(params[0])
-            params[0] = self._pinned_block_hash
-        hash_index = _HASH_PARAM_INDEX.get(method)
-        if hash_index is not None:
-            params[hash_index] = self._normalize_block_hash(params[hash_index])
-        if method == "eth_getBlockReceipts":
-            value = params[0]
-            if isinstance(value, str) and _BLOCK_HASH_PATTERN.fullmatch(value):
-                self._normalize_block_hash(value)
-            else:
-                self._normalize_block_tag(value)
-            params[0] = self._pinned_block_hash
-        elif method == "eth_getLogs":
-            self._pin_log_filter(params)
-
-    def _normalize_block_tag(self, value: object) -> str:
-        if isinstance(value, str) and value in _PINNED_SYMBOLIC_TAGS:
-            return self._pinned_block_tag
-        if value == "earliest" and self._pinned_block_number == 0:
-            return self._pinned_block_tag
-        if (
-            isinstance(value, str)
-            and _BLOCK_TAG_PATTERN.fullmatch(value)
-            and value == self._pinned_block_tag
-        ):
-            return value
-        raise _BridgeRejection(_RejectionKind.DENIED)
-
-    def _normalize_block_reference(self, value: object) -> dict[str, object]:
-        if isinstance(value, dict):
-            if (
-                set(value) != {"blockHash", "requireCanonical"}
-                or value.get("blockHash") != self._pinned_block_hash
-                or value.get("requireCanonical") is not True
-            ):
-                raise _BridgeRejection(_RejectionKind.DENIED)
-        else:
-            self._normalize_block_tag(value)
-        return self._canonical_block_reference()
-
-    def _canonical_block_reference(self) -> dict[str, object]:
-        return {
-            "blockHash": self._pinned_block_hash,
-            "requireCanonical": True,
-        }
-
-    def _normalize_block_hash(self, value: object) -> str:
-        if value != self._pinned_block_hash:
-            raise _BridgeRejection(_RejectionKind.DENIED)
-        return self._pinned_block_hash
-
-    def _pin_log_filter(self, params: list[object]) -> None:
-        if len(params) != 1 or not isinstance(params[0], dict):
-            raise _BridgeRejection(_RejectionKind.MALFORMED)
-        filter_value = cast(dict[str, object], params[0])
-        if "blockHash" in filter_value:
-            if "fromBlock" in filter_value or "toBlock" in filter_value:
-                raise _BridgeRejection(_RejectionKind.MALFORMED)
-            filter_value["blockHash"] = self._normalize_block_hash(filter_value["blockHash"])
-            return
-        self._normalize_block_tag(filter_value.get("fromBlock", "latest"))
-        self._normalize_block_tag(filter_value.get("toBlock", "latest"))
-        filter_value.pop("fromBlock", None)
-        filter_value.pop("toBlock", None)
-        filter_value["blockHash"] = self._pinned_block_hash
 
     def _serialize_outbound(
         self,

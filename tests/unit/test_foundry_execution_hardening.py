@@ -15,8 +15,11 @@ import pytest
 import mmaudit.scanners.foundry as foundry_module
 from mmaudit.config import SmartContractsConfig
 from mmaudit.models.schemas import (
+    AuditedSuiteStatementCoverageEvidence,
+    AuditedSuiteStatementStatus,
     ExecutionEvidenceKind,
     FoundryTestExecutionSummary,
+    Location,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
     RepositorySuiteSelection,
@@ -24,6 +27,7 @@ from mmaudit.models.schemas import (
     RepositoryTestExecutionStatus,
     ScannerRun,
     ScannerStatus,
+    SolidityEntityKind,
 )
 from mmaudit.scanners.base import (
     ScannerWorkspaceCopyCustody,
@@ -420,8 +424,10 @@ def test_foundry_run_closes_workspace_custody_after_unexpected_base_exception(
         expected_version: str | None,
         expected_sha256: str | None,
         workspace_custody_guard: list[ScannerWorkspaceCopyCustody],
+        offline_lease_guard: list[object],
     ) -> ScannerRun:
         del timeout_seconds, backend, expected_version, expected_sha256
+        assert offline_lease_guard == []
         supplied_private_dir.mkdir()
         custody = copy_scanner_workspace_with_custody(
             root,
@@ -1454,27 +1460,18 @@ def test_manifest_write_cannot_outlive_total_deadline(
         tests=(_descriptor(),),
     )
     expired = False
-    real_write_text = Path.write_text
+    real_write_bytes = Path.write_bytes
 
-    def delayed_write_text(
+    def delayed_write_bytes(
         path: Path,
-        data: str,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
+        data: bytes,
     ) -> int:
         nonlocal expired
-        written = real_write_text(
-            path,
-            data,
-            encoding=encoding,
-            errors=errors,
-            newline=newline,
-        )
+        written = real_write_bytes(path, data)
         expired = True
         return written
 
-    monkeypatch.setattr(Path, "write_text", delayed_write_text)
+    monkeypatch.setattr(Path, "write_bytes", delayed_write_bytes)
     monkeypatch.setattr(
         foundry_module.time,
         "monotonic",
@@ -1541,6 +1538,31 @@ def test_manifest_serializes_bound_per_test_rpc_scope(tmp_path: Path) -> None:
     serialized_scopes = json.dumps(scopes, sort_keys=True)
     assert "http://" not in serialized_scopes
     assert "https://" not in serialized_scopes
+
+
+def test_manifest_writer_rejects_a_persisted_size_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _selection()
+    real_write_bytes = Path.write_bytes
+
+    def short_write_with_false_success(path: Path, data: bytes) -> int:
+        real_write_bytes(path, data[:-1])
+        return len(data)
+
+    monkeypatch.setattr(Path, "write_bytes", short_write_with_false_success)
+
+    with pytest.raises(OSError, match="write size differed"):
+        _write_repository_suite_manifest(
+            tmp_path,
+            selection,
+            None,
+            None,
+            None,
+            [],
+            deadline=time.monotonic() + 10.0,
+        )
 
 
 def test_finalizer_attaches_copy_evidence_only_to_successful_matrix_scoped_run(
@@ -1692,6 +1714,374 @@ def test_finalizer_attaches_copy_evidence_only_to_successful_matrix_scoped_run(
     assert legacy_run.repository_suite_workspace_copy is None
     assert "repository_suite_workspace_copy" not in legacy_run.model_dump(mode="json")
     assert legacy_run.execution_observation_sha256_is_valid()
+
+
+def test_finalizer_fails_closed_for_statement_carriers_and_stale_manifest_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _selection()
+    policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_337,
+        block_number=0,
+        block_hash="0x" + HASH_C,
+        tool_version="forge 1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256=HASH_C,
+        fuzz_seed=SEED,
+        fuzz_runs=256,
+        invariant_runs=64,
+        per_test_timeout_seconds=10.0,
+        total_timeout_seconds=60.0,
+        max_output_bytes_per_test=1_024,
+        max_total_output_bytes=100_000,
+    )
+    summary = FoundryTestExecutionSummary(
+        unit_tests=1,
+        fuzz_tests=0,
+        invariant_tests=0,
+        passed_tests=1,
+        failed_tests=0,
+        skipped_tests=0,
+        fuzz_cases=0,
+        invariant_runs=0,
+        invariant_calls=0,
+    )
+    observation = _FoundryTestObservation(
+        descriptor=selection.tests[0],
+        status=RepositoryTestExecutionStatus.PASSED,
+        terminal_detail=None,
+        duration_seconds=0.1,
+        command_sha256=HASH_A,
+        output_sha256=HASH_B,
+        output_bytes=1,
+        process_exit_code=0,
+        machine_output_validated=True,
+        machine_result_sha256=HASH_C,
+        summary=summary,
+        process_started=True,
+    )
+    backend = SimpleNamespace(name="synthetic-isolation")
+    monkeypatch.setattr(foundry_module, "_cleanup_error", lambda *_args: None)
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_attestation_sha256",
+        lambda _backend: HASH_C,
+    )
+
+    def finalize(
+        private_dir: Path,
+        *,
+        evidence: list[AuditedSuiteStatementCoverageEvidence] | None = None,
+        previously_charged_bytes: int = 0,
+    ) -> ScannerRun:
+        private_dir.mkdir(exist_ok=True)
+        return _finalize_foundry_repository_suite(
+            root=tmp_path,
+            private_dir=private_dir,
+            backend=backend,
+            start=datetime.now(UTC),
+            monotonic_start=time.monotonic(),
+            deadline=time.monotonic() + 10.0,
+            total_timeout_seconds=10.0,
+            status=ScannerStatus.SUCCESS,
+            error=None,
+            selection=selection,
+            observations=[observation],
+            fork=PinnedForkObservation(
+                chain_id=policy.chain_id,
+                block_number=policy.block_number,
+                block_hash=policy.block_hash,
+            ),
+            executable_sha256=policy.tool_sha256,
+            version=policy.tool_version,
+            compiler_version=policy.compiler_version,
+            compiler_sha256=policy.compiler_sha256,
+            execution_policy=policy,
+            inventory=None,
+            post_inventory=None,
+            fuzz_seed=policy.fuzz_seed,
+            repository_statement_coverage_evidence=evidence or [],
+            repository_suite_artifact_bytes=previously_charged_bytes,
+        )
+
+    baseline = finalize(tmp_path / "baseline")
+    assert baseline.status is ScannerStatus.SUCCESS
+    assert baseline.execution_evidence is ExecutionEvidenceKind.REAL
+    assert len(baseline.repository_test_executions) == 1
+    location = Location(
+        path="src/Example.sol",
+        start_line=1,
+        end_line=1,
+        symbol="Example",
+        content_hash=HASH_A,
+    )
+    evidence_values: dict[str, object] = {
+        "entity_id": "synthetic-example-contract",
+        "entity_kind": SolidityEntityKind.CONTRACT,
+        "contract_name": "Example",
+        "location": location,
+        "statement_status": AuditedSuiteStatementStatus.COVERED,
+        "statement_count": 0,
+        "covered_statement_count": 0,
+        "statements": [],
+        "repository_test_execution_sha256s": [
+            baseline.repository_test_executions[0].execution_sha256
+        ],
+        "source_repository_sha256": selection.repository_sha256,
+        "repository_suite_selection_sha256": selection.selection_sha256,
+        "repository_suite_execution_policy_sha256": policy.policy_sha256,
+        "coverage_command_sha256s": [HASH_A],
+        "statement_inventory_sha256": HASH_B,
+        "coverage_artifact_sha256": HASH_C,
+        "coverage_artifact_bytes": 1,
+        "producer_version": "normalizer 1.0",
+        "producer_sha256": HASH_A,
+        "normalizer_policy_sha256": HASH_B,
+        "tool_name": "forge",
+        "tool_version": policy.tool_version,
+        "tool_sha256": policy.tool_sha256,
+        "compiler_version": policy.compiler_version,
+        "compiler_sha256": policy.compiler_sha256,
+        "execution_evidence": ExecutionEvidenceKind.REAL,
+        "machine_output_validated": True,
+        "isolation_attestation_sha256": HASH_C,
+    }
+    valid_carrier = AuditedSuiteStatementCoverageEvidence.sealed(**evidence_values)
+    invalid_carrier = AuditedSuiteStatementCoverageEvidence.sealed(
+        **{
+            **evidence_values,
+            "source_repository_sha256": HASH_A,
+        }
+    )
+
+    cases = (
+        ("invalid", invalid_carrier, 0, "ValueError"),
+        (
+            "overbudget",
+            valid_carrier,
+            policy.max_total_output_bytes,
+            "FoundryInventoryOverflowError",
+        ),
+    )
+    for label, carrier, previously_charged_bytes, error_type in cases:
+        private_dir = tmp_path / label
+        private_dir.mkdir()
+        manifest_path = private_dir / "repository-suite-execution.json"
+        manifest_path.write_text('{"stale":true}\n', encoding="utf-8")
+        run = finalize(
+            private_dir,
+            evidence=[carrier],
+            previously_charged_bytes=previously_charged_bytes,
+        )
+
+        assert run.status is ScannerStatus.FAILED
+        assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+        assert run.repository_statement_coverage_evidence == []
+        assert run.raw_output_path is None
+        assert run.raw_output_sha256 is None
+        assert run.raw_output_bytes == 0
+        assert run.foundry_summary is None
+        assert run.machine_output_validated is False
+        assert run.error == f"repository fork-suite evidence finalization failed: {error_type}"
+        assert all(
+            execution.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+            for execution in run.repository_test_executions
+        )
+        assert not manifest_path.exists()
+        assert run.execution_observation_sha256_is_valid()
+
+    real_findings = foundry_module._repository_test_findings
+    findings_calls = 0
+
+    def fail_during_recovery(*args: object, **kwargs: object) -> object:
+        nonlocal findings_calls
+        findings_calls += 1
+        if findings_calls == 2:
+            raise RuntimeError("synthetic recovery failure")
+        return real_findings(*args, **kwargs)
+
+    monkeypatch.setattr(foundry_module, "_repository_test_findings", fail_during_recovery)
+    nested_failure_dir = tmp_path / "nested-recovery-failure"
+    nested_failure_dir.mkdir()
+    nested_manifest = nested_failure_dir / "repository-suite-execution.json"
+    nested_manifest.write_text('{"stale":true}\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="synthetic recovery failure"):
+        finalize(nested_failure_dir, evidence=[invalid_carrier])
+    assert findings_calls == 2
+    assert not nested_manifest.exists()
+
+    monkeypatch.setattr(foundry_module, "_repository_test_findings", real_findings)
+    unlink_failure_dir = tmp_path / "unlink-failure"
+    unlink_failure_dir.mkdir()
+    unlink_failure_manifest = unlink_failure_dir / "repository-suite-execution.json"
+    unlink_failure_manifest.write_text('{"stale":true}\n', encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def deny_manifest_unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == unlink_failure_manifest:
+            raise PermissionError("synthetic manifest unlink refusal")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", deny_manifest_unlink)
+    unlink_failure = finalize(unlink_failure_dir, evidence=[invalid_carrier])
+
+    assert unlink_failure.status is ScannerStatus.FAILED
+    assert unlink_failure.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert unlink_failure.repository_statement_coverage_evidence == []
+    assert unlink_failure.raw_output_path is None
+    assert unlink_failure.raw_output_sha256 is None
+    assert unlink_failure.raw_output_bytes == 0
+    assert unlink_failure.error is not None
+    assert "evidence finalization failed: ValueError" in unlink_failure.error
+    assert "manifest cleanup failed: PermissionError" in unlink_failure.error
+    assert unlink_failure_manifest.exists()
+    assert unlink_failure.execution_observation_sha256_is_valid()
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    unlink_failure_manifest.unlink()
+
+
+def test_finalizer_rebuilds_execution_after_deadline_and_manifest_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _selection()
+    policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_337,
+        block_number=0,
+        block_hash="0x" + HASH_C,
+        tool_version="forge 1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256=HASH_C,
+        fuzz_seed=SEED,
+        fuzz_runs=256,
+        invariant_runs=64,
+        per_test_timeout_seconds=10.0,
+        total_timeout_seconds=10.0,
+        max_output_bytes_per_test=1_024,
+        max_total_output_bytes=100_000,
+    )
+    observation = _FoundryTestObservation(
+        descriptor=selection.tests[0],
+        status=RepositoryTestExecutionStatus.PASSED,
+        terminal_detail=None,
+        duration_seconds=0.1,
+        command_sha256=HASH_A,
+        output_sha256=HASH_B,
+        output_bytes=1,
+        process_exit_code=0,
+        machine_output_validated=True,
+        machine_result_sha256=HASH_C,
+        summary=FoundryTestExecutionSummary(
+            unit_tests=1,
+            fuzz_tests=0,
+            invariant_tests=0,
+            passed_tests=1,
+            failed_tests=0,
+            skipped_tests=0,
+            fuzz_cases=0,
+            invariant_runs=0,
+            invariant_calls=0,
+        ),
+        process_started=True,
+    )
+    backend = SimpleNamespace(name="synthetic-isolation")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    manifest_path = private_dir / "repository-suite-execution.json"
+    expired = False
+    real_writer = foundry_module._write_repository_suite_manifest
+    real_unlink = Path.unlink
+
+    def write_then_expire(*args: object, **kwargs: object) -> Path:
+        nonlocal expired
+        written_path = real_writer(*args, **kwargs)
+        expired = True
+        return written_path
+
+    def deny_manifest_unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == manifest_path:
+            raise PermissionError("synthetic manifest unlink refusal")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(foundry_module, "_cleanup_error", lambda *_args: None)
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_attestation_sha256",
+        lambda _backend: HASH_C,
+    )
+    monkeypatch.setattr(foundry_module, "_write_repository_suite_manifest", write_then_expire)
+    monkeypatch.setattr(Path, "unlink", deny_manifest_unlink)
+    monkeypatch.setattr(
+        foundry_module.time,
+        "monotonic",
+        lambda: 21.0 if expired else 10.0,
+    )
+
+    run = _finalize_foundry_repository_suite(
+        root=tmp_path,
+        private_dir=private_dir,
+        backend=backend,
+        start=datetime.now(UTC),
+        monotonic_start=10.0,
+        deadline=20.0,
+        total_timeout_seconds=10.0,
+        status=ScannerStatus.SUCCESS,
+        error=None,
+        selection=selection,
+        observations=[observation],
+        fork=PinnedForkObservation(
+            chain_id=policy.chain_id,
+            block_number=policy.block_number,
+            block_hash=policy.block_hash,
+        ),
+        executable_sha256=policy.tool_sha256,
+        version=policy.tool_version,
+        compiler_version=policy.compiler_version,
+        compiler_sha256=policy.compiler_sha256,
+        execution_policy=policy,
+        inventory=None,
+        post_inventory=None,
+        fuzz_seed=policy.fuzz_seed,
+    )
+
+    assert run.status is ScannerStatus.TIMED_OUT
+    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert run.repository_statement_coverage_evidence == []
+    assert run.foundry_summary is None
+    assert run.machine_output_validated is False
+    assert run.raw_output_path is None
+    assert run.raw_output_sha256 is None
+    assert run.raw_output_bytes == 0
+    assert run.error is not None
+    assert "exceeded 10s total timeout" in run.error
+    assert "manifest cleanup failed: PermissionError" in run.error
+    assert all(
+        execution.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+        for execution in run.repository_test_executions
+    )
+    assert manifest_path.exists()
+    assert run.execution_observation_sha256_is_valid()
 
 
 @pytest.mark.parametrize(

@@ -49,6 +49,10 @@ from mmaudit.orchestration.autonomy_gate_inventory import (
     AutonomousGateDisposition,
     AutonomyGateInventory,
 )
+from mmaudit.orchestration.managed_provisioning import (
+    ManagedProvisioningReceipt,
+    ManagedProvisioningState,
+)
 from mmaudit.orchestration.managed_toolchain import (
     MANAGED_TOOLCHAIN_ROLE_SPECS,
     ManagedToolchainBundle,
@@ -156,6 +160,79 @@ def test_managed_toolchain_schema_is_closed_partial_and_nonauthorizing() -> None
     assert schema["properties"]["members"]["minItems"] == len(MANAGED_TOOLCHAIN_ROLE_SPECS)
 
 
+def test_managed_provisioning_schema_requires_bounded_nonauthorizing_state() -> None:
+    filename = "managed_provisioning_state.schema.json"
+    assert MODELS[filename] is ManagedProvisioningState
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    required = set(schema["required"])
+    false_flags = {
+        "independently_trusted",
+        "bundle_trusted",
+        "installed_members_verified",
+        "transitive_dependency_closure_verified",
+        "image_side_attestation_verified",
+        "provisioning_state_verified",
+        "execution_evidence_verified",
+        "spend_admission_evaluated",
+        "runtime_authority",
+        "managed_run_ready",
+        "provider_or_network_accessed",
+        "operator_secret_sources_accessed",
+    }
+    assert false_flags <= required
+    assert all(schema["properties"][name]["const"] is False for name in false_flags)
+    assert {"local_checks_recorded", "self_consistent"} <= required
+    assert schema["properties"]["local_checks_recorded"]["const"] is True
+    assert schema["properties"]["self_consistent"]["const"] is True
+    assert schema["properties"]["repository_content_hashed"]["const"] is True
+    assert schema["properties"]["status"]["const"] == "REFUSED_INCOMPLETE"
+    assert schema["properties"]["refusals"]["minItems"] == 1
+    assert schema["properties"]["refusals"]["maxItems"] == 41
+    assert schema["properties"]["verified_requirement_ids"]["maxItems"] == 12
+    assert schema["properties"]["verified_requirement_ids"]["items"]["pattern"] == (
+        "^[a-z][a-z0-9-]{0,127}$"
+    )
+    cost = schema["$defs"]["CostLedgerProvisioningObservation"]
+    assert {
+        "portfolio_hold_count",
+        "active_portfolio_hold_count",
+        "held_portfolio_usd_exact",
+    } <= set(cost["properties"])
+    assert set(cost["required"]) == set(cost["properties"])
+    assert cost["properties"]["entry_count"]["anyOf"][0]["maximum"] == 100_000
+    assert cost["properties"]["portfolio_hold_count"]["anyOf"][0]["maximum"] == 256
+    assert cost["properties"]["active_portfolio_hold_count"]["anyOf"][0]["maximum"] == 1
+    for name in (
+        "CodeQLProvisioningObservation",
+        "DependencySnapshotProvisioningObservation",
+        "ForkRpcProvisioningObservation",
+    ):
+        definition = schema["$defs"][name]
+        assert set(definition["required"]) == set(definition["properties"])
+
+
+def test_managed_provisioning_receipt_schema_is_self_contained_and_nonauthorizing() -> None:
+    filename = "managed_provisioning_receipt.schema.json"
+    assert MODELS[filename] is ManagedProvisioningReceipt
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    required = set(schema["required"])
+    assert {"plan", "state", "receipt_sha256", "self_consistent"} <= required
+    assert schema["properties"]["plan"]["$ref"] == "#/$defs/ManagedProvisioningPlan"
+    assert schema["properties"]["state"]["$ref"] == "#/$defs/ManagedProvisioningState"
+    assert schema["properties"]["self_consistent"]["const"] is True
+    false_flags = {
+        "spend_admission_evaluated",
+        "runtime_authority",
+        "managed_run_ready",
+        "provider_or_network_accessed",
+        "operator_secret_sources_accessed",
+    }
+    assert false_flags <= required
+    assert all(schema["properties"][name]["const"] is False for name in false_flags)
+    assert "ManagedProvisioningRequirement" in schema["$defs"]
+    assert "ManagedProvisioningObservations" in schema["$defs"]
+
+
 def test_release_schemas_are_exact_strict_generated_models() -> None:
     for filename, model in MODELS.items():
         path = ROOT / "schemas" / filename
@@ -165,6 +242,21 @@ def test_release_schemas_are_exact_strict_generated_models() -> None:
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["$id"] == f"https://mmaudit.local/schemas/{filename}"
         assert schema["additionalProperties"] is False
+
+
+def test_offline_fork_read_archive_schema_is_bounded_and_never_authorizing() -> None:
+    schema = json.loads((ROOT / "schemas/offline_fork_rpc_archive.schema.json").read_text())
+    assert schema["additionalProperties"] is False
+    for name in ("complete_state", "runtime_authority"):
+        assert schema["properties"][name]["const"] is False
+        assert name in schema["required"]
+    assert schema["properties"]["reads"]["minItems"] == 1
+    assert schema["properties"]["reads"]["maxItems"] == 4096
+    assert schema["$defs"]["OfflineForkRpcRead"]["additionalProperties"] is False
+    assert schema["$defs"]["OfflineForkRpcRead"]["properties"]["params"]["maxItems"] == 64
+    methods = schema["$defs"]["OfflineForkRpcRead"]["properties"]["method"]["enum"]
+    assert "eth_getBalance" in methods and "eth_getBlockByHash" in methods
+    assert "eth_sendRawTransaction" not in methods and "eth_chainId" not in methods
 
 
 def test_run_evidence_manifest_14_taxonomy_custody_contract_is_exact(
@@ -327,6 +419,28 @@ def test_authenticated_runner_cost_schemas_require_exact_nonauthorizing_boundari
     for field_name in authority_fields:
         assert preview["properties"][field_name]["const"] is False
         assert plan["properties"][field_name]["const"] is False
+    assert preview["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
+    assert preview["$defs"]["ProviderPriceCapAlgorithm"]["enum"] == [
+        "MMAUDIT_OPENROUTER_MAX_PRICE_CEILING_V1",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_REQUEST_UNITS_V2",
+        "MMAUDIT_OPENROUTER_MAX_PRICE_PROMPT_DOMINATED_CACHE_WRITE_V3",
+    ]
+    envelope = preview["$defs"]["RoutePriceComponentUnitEnvelope"]
+    assert set(envelope["required"]) == {
+        "component",
+        "maximum_units",
+        "maximum_cost_usd_exact",
+        "enforcement_method",
+        "emitted_request_parameters",
+        "prohibited_request_fields",
+        "envelope_sha256",
+    }
+    assert envelope["properties"]["component"]["const"] == "web_search"
+    assert envelope["properties"]["maximum_units"]["const"] == 0
+    assert envelope["properties"]["maximum_cost_usd_exact"]["const"] == "0"
+    assert preview["properties"]["price_component_unit_envelopes"]["anyOf"][0]["items"] == {
+        "$ref": "#/$defs/RoutePriceComponentUnitEnvelope"
+    }
     assert plan["properties"]["runner_custody_authorized"]["const"] is False
     assert plan["properties"]["release_authorized"]["const"] is False
     assert plan["properties"]["logical_request_count"]["const"] == 24

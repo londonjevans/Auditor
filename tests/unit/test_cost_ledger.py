@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -40,6 +42,715 @@ def test_ledger_identity_is_stable_for_exact_file_and_distinct_across_ledgers(
     assert first_path.read_bytes() == second_path.read_bytes()
     assert reopened.identity_sha256 == first.identity_sha256
     assert second.identity_sha256 != first.identity_sha256
+
+
+def test_provision_creates_once_then_reopens_without_resetting_state(tmp_path: Path) -> None:
+    path = tmp_path / "managed-costs.json"
+
+    created, was_created = AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+    reservation = created.reserve("retained-request", Decimal("0.50"))
+    created.reconcile(reservation, Decimal("0.25"))
+    retained_bytes = path.read_bytes()
+    retained_lock = created.lock_path.stat()
+    retained_identity = created.identity_sha256
+
+    reopened, was_reopened = AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+
+    assert was_created is True
+    assert was_reopened is False
+    assert path.read_bytes() == retained_bytes
+    assert (reopened.lock_path.stat().st_dev, reopened.lock_path.stat().st_ino) == (
+        retained_lock.st_dev,
+        retained_lock.st_ino,
+    )
+    assert reopened.identity_sha256 == retained_identity
+    assert reopened.snapshot().spent_usd == Decimal("0.25")
+
+
+def test_provision_preserves_an_active_reservation_exactly(tmp_path: Path) -> None:
+    path = tmp_path / "active-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("2.00"))
+    reservation = ledger.reserve("in-flight-request", Decimal("0.75"))
+    retained_bytes = path.read_bytes()
+
+    reopened, created = AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+
+    assert created is False
+    assert path.read_bytes() == retained_bytes
+    assert reopened.active_reservation(reservation.request_id) == reservation
+    assert reopened.snapshot().active_reserved_usd == Decimal("0.75")
+
+
+def test_provision_marker_prevents_deleted_ledger_from_restoring_budget(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "deleted-costs.json"
+    ledger, created = AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+    marker = tmp_path / ".deleted-costs.json.provision.lock"
+    marker_identity = marker.stat()
+    assert created is True
+
+    path.unlink()
+    ledger.lock_path.unlink()
+
+    with pytest.raises(CostLedgerConfigurationError, match="automatic repair is forbidden"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+    with pytest.raises(CostLedgerConfigurationError, match="initialization is one-time"):
+        AtomicCostLedger.initialize(path, cap_usd=Decimal("2.00"))
+
+    assert not path.exists()
+    assert not ledger.lock_path.exists()
+    assert (marker.stat().st_dev, marker.stat().st_ino) == (
+        marker_identity.st_dev,
+        marker_identity.st_ino,
+    )
+
+
+def test_concurrent_provision_has_one_creator_and_one_exact_reopener(tmp_path: Path) -> None:
+    path = tmp_path / "concurrent-costs.json"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _index: AtomicCostLedger.provision(
+                    path,
+                    cap_usd=Decimal("1.00"),
+                ),
+                range(2),
+            )
+        )
+
+    assert sorted(created for _ledger, created in results) == [False, True]
+    assert len({ledger.identity_sha256 for ledger, _created in results}) == 1
+    assert all(ledger.snapshot().entries == () for ledger, _created in results)
+
+
+def test_provision_waits_for_cross_process_initializer_before_opening_state(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "colliding-costs.json"
+    release_winner = tmp_path / "release-winner"
+    winner_ready = tmp_path / "winner-ready"
+    loser_waiting = tmp_path / "loser-waiting"
+    winner_result = tmp_path / "winner-result"
+    loser_result = tmp_path / "loser-result"
+    winner_script = """
+import sys
+import time
+from decimal import Decimal
+from pathlib import Path
+import mmaudit.orchestration.cost_ledger as cost_ledger_module
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+
+ledger_path = Path(sys.argv[1])
+release_path = Path(sys.argv[2])
+ready_path = Path(sys.argv[3])
+result_path = Path(sys.argv[4])
+original_open = cost_ledger_module._open_lock_file
+
+def open_then_pause(path: Path, *, create: bool) -> int:
+    descriptor = original_open(path, create=create)
+    if create:
+        ready_path.write_text("ready", encoding="utf-8")
+        deadline = time.monotonic() + 10
+        while not release_path.exists():
+            if time.monotonic() >= deadline:
+                raise SystemExit(97)
+            time.sleep(0.001)
+    return descriptor
+
+cost_ledger_module._open_lock_file = open_then_pause
+ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1.00"))
+result_path.write_text(ledger.identity_sha256, encoding="utf-8")
+"""
+    loser_script = """
+import fcntl
+import sys
+import time
+from decimal import Decimal
+from pathlib import Path
+import mmaudit.orchestration.cost_ledger as cost_ledger_module
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+
+ledger_path = Path(sys.argv[1])
+waiting_path = Path(sys.argv[2])
+result_path = Path(sys.argv[3])
+original_flock = cost_ledger_module.fcntl.flock
+observed_collision = False
+
+def observing_flock(descriptor: int, operation: int) -> None:
+    global observed_collision
+    try:
+        original_flock(descriptor, operation)
+    except BlockingIOError:
+        if operation & fcntl.LOCK_NB and not observed_collision:
+            observed_collision = True
+            waiting_path.write_text("waiting", encoding="utf-8")
+        raise
+
+cost_ledger_module.fcntl.flock = observing_flock
+ledger, created = AtomicCostLedger.provision(ledger_path, cap_usd=Decimal("1.00"))
+result_path.write_text(
+    f"{int(created)}:{int(observed_collision)}:{ledger.identity_sha256}",
+    encoding="utf-8",
+)
+"""
+    winner = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            winner_script,
+            str(path),
+            str(release_winner),
+            str(winner_ready),
+            str(winner_result),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not winner_ready.exists():
+        if winner.poll() is not None:
+            raise AssertionError(winner.communicate())
+        if time.monotonic() >= deadline:
+            winner.kill()
+            raise AssertionError("initializer did not expose the pre-flock collision window")
+        time.sleep(0.001)
+
+    loser = subprocess.Popen(
+        [sys.executable, "-c", loser_script, str(path), str(loser_waiting), str(loser_result)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not loser_waiting.exists():
+        if loser.poll() is not None:
+            raise AssertionError(loser.communicate())
+        if time.monotonic() >= deadline:
+            loser.kill()
+            winner.kill()
+            raise AssertionError("provisioner did not wait on the initialization guard")
+        time.sleep(0.001)
+
+    release_winner.touch()
+    winner_output = winner.communicate(timeout=15)
+    loser_output = loser.communicate(timeout=15)
+
+    assert winner.returncode == 0, winner_output
+    assert loser.returncode == 0, loser_output
+    created, observed_collision, loser_identity = loser_result.read_text(encoding="utf-8").split(
+        ":"
+    )
+    assert created == "0"
+    assert observed_collision == "1"
+    assert loser_identity == winner_result.read_text(encoding="utf-8")
+    assert AtomicCostLedger.open_existing(path, cap_usd=Decimal("1.00")).snapshot().entries == ()
+
+
+def test_provision_initialization_wait_is_bounded_without_creating_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bounded-costs.json"
+    guard = tmp_path / ".bounded-costs.json.provision.lock"
+    ready = tmp_path / "holder-ready"
+    release = tmp_path / "release-holder"
+    holder_script = """
+import fcntl
+import os
+import sys
+import time
+from pathlib import Path
+
+guard_path = Path(sys.argv[1])
+ready_path = Path(sys.argv[2])
+release_path = Path(sys.argv[3])
+descriptor = os.open(guard_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    ready_path.write_text("ready", encoding="utf-8")
+    deadline = time.monotonic() + 10
+    while not release_path.exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit(96)
+        time.sleep(0.001)
+finally:
+    fcntl.flock(descriptor, fcntl.LOCK_UN)
+    os.close(descriptor)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(guard), str(ready), str(release)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists():
+        if holder.poll() is not None:
+            raise AssertionError(holder.communicate())
+        if time.monotonic() >= deadline:
+            holder.kill()
+            raise AssertionError("lock holder did not become ready")
+        time.sleep(0.001)
+
+    monkeypatch.setattr(cost_ledger_module, "_INITIALIZATION_LOCK_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(cost_ledger_module, "_INITIALIZATION_LOCK_RETRY_SECONDS", 0.001)
+    try:
+        with pytest.raises(CostLedgerConfigurationError, match="timed out waiting"):
+            AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+    finally:
+        release.touch()
+        holder_output = holder.communicate(timeout=15)
+
+    assert holder.returncode == 0, holder_output
+    assert not path.exists()
+    assert not (tmp_path / ".bounded-costs.json.lock").exists()
+    assert guard.exists()
+
+
+def test_provision_guard_unlock_failure_does_not_misreport_completed_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unlock-costs.json"
+    guard_descriptors: set[int] = set()
+    original_open = cost_ledger_module._open_provision_lock_file
+    real_fcntl = cost_ledger_module.fcntl
+
+    def observe_open(guard_path: Path, *, create: bool) -> tuple[int, bool]:
+        descriptor, created = original_open(guard_path, create=create)
+        guard_descriptors.add(descriptor)
+        return descriptor, created
+
+    class FcntlProxy:
+        LOCK_EX = real_fcntl.LOCK_EX
+        LOCK_NB = real_fcntl.LOCK_NB
+        LOCK_UN = real_fcntl.LOCK_UN
+
+        @staticmethod
+        def flock(descriptor: int, operation: int) -> None:
+            if descriptor in guard_descriptors and operation == real_fcntl.LOCK_UN:
+                raise OSError("synthetic guard unlock failure")
+            real_fcntl.flock(descriptor, operation)
+
+    monkeypatch.setattr(cost_ledger_module, "_open_provision_lock_file", observe_open)
+    monkeypatch.setattr(cost_ledger_module, "fcntl", FcntlProxy)
+
+    ledger, created = AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert created is True
+    assert ledger.path == path
+    assert path.exists()
+
+
+@pytest.mark.parametrize("failed_fsync_call", [1, 2])
+def test_provision_marker_fsync_failure_never_creates_budget_state(
+    failed_fsync_call: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "marker-fsync-failure-costs.json"
+    marker = tmp_path / ".marker-fsync-failure-costs.json.provision.lock"
+    ordinary_lock = tmp_path / ".marker-fsync-failure-costs.json.lock"
+    original_fsync = cost_ledger_module.os.fsync
+    fsync_calls = 0
+
+    def fail_marker_persistence(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == failed_fsync_call:
+            raise OSError("synthetic provisioning marker fsync failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(cost_ledger_module.os, "fsync", fail_marker_persistence)
+
+    with pytest.raises(CostLedgerConfigurationError, match="marker could not be persisted"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert fsync_calls == failed_fsync_call
+    assert not path.exists()
+    assert not ordinary_lock.exists()
+    # The durable marker is intentionally never removed as part of failure cleanup. If its
+    # persistence is uncertain, retaining it prevents a later call from restoring the budget.
+    assert marker.exists()
+    with pytest.raises(CostLedgerConfigurationError, match="automatic repair is forbidden"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+
+def test_provision_never_launders_a_post_write_custody_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "custody-failure-costs.json"
+    original_require = cost_ledger_module._require_exact_lock_path
+    calls = 0
+
+    def fail_on_locked_context_exit(lock_path: Path, descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        original_require(lock_path, descriptor)
+        if calls == 2:
+            raise CostLedgerConfigurationError("injected final custody failure")
+
+    monkeypatch.setattr(
+        cost_ledger_module,
+        "_require_exact_lock_path",
+        fail_on_locked_context_exit,
+    )
+
+    with pytest.raises(CostLedgerConfigurationError, match="injected final custody failure"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert path.exists()
+    assert (tmp_path / ".custody-failure-costs.json.lock").exists()
+
+
+def test_provision_never_launders_a_prewrite_configuration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "prewrite-failure-costs.json"
+
+    def fail_open(_path: Path, *, create: bool) -> int:
+        assert create is True
+        raise CostLedgerConfigurationError("injected prewrite failure")
+
+    monkeypatch.setattr(cost_ledger_module, "_open_lock_file", fail_open)
+
+    with pytest.raises(CostLedgerConfigurationError, match="injected prewrite failure"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert not path.exists()
+    assert not (tmp_path / ".prewrite-failure-costs.json.lock").exists()
+    assert (tmp_path / ".prewrite-failure-costs.json.provision.lock").exists()
+
+
+def test_provision_is_process_safe_for_one_creator_and_one_reopener(tmp_path: Path) -> None:
+    path = tmp_path / "process-costs.json"
+    gate = tmp_path / "start"
+    script = """
+import sys
+import time
+from decimal import Decimal
+from pathlib import Path
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+
+ledger_path = Path(sys.argv[1])
+gate_path = Path(sys.argv[2])
+ready_path = Path(sys.argv[3])
+result_path = Path(sys.argv[4])
+ready_path.write_text("ready", encoding="utf-8")
+deadline = time.monotonic() + 10
+while not gate_path.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(99)
+    time.sleep(0.001)
+ledger, created = AtomicCostLedger.provision(ledger_path, cap_usd=Decimal("1.00"))
+result_path.write_text(
+    f"{int(created)}:{ledger.identity_sha256}",
+    encoding="utf-8",
+)
+"""
+    ready_paths = (tmp_path / "ready-1", tmp_path / "ready-2")
+    result_paths = (tmp_path / "result-1", tmp_path / "result-2")
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(path),
+                str(gate),
+                str(ready),
+                str(result),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for ready, result in zip(ready_paths, result_paths, strict=True)
+    ]
+    deadline = time.monotonic() + 10
+    while not all(ready.exists() for ready in ready_paths):
+        if time.monotonic() >= deadline:
+            raise AssertionError("provision subprocesses did not reach the local barrier")
+        time.sleep(0.001)
+    gate.touch()
+    completed = [process.communicate(timeout=15) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0], completed
+    results = [result.read_text(encoding="utf-8") for result in result_paths]
+    created = sorted(item.split(":", maxsplit=1)[0] for item in results)
+    identities = {item.split(":", maxsplit=1)[1] for item in results}
+    assert created == ["0", "1"]
+    assert len(identities) == 1
+    assert AtomicCostLedger.open_existing(path, cap_usd=Decimal("1.00")).snapshot().entries == ()
+
+
+def test_provision_refuses_existing_mismatch_or_orphan_without_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "existing-costs.json"
+    AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    retained_bytes = path.read_bytes()
+
+    with pytest.raises(CostLedgerConfigurationError, match="configured cost cap"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+    assert path.read_bytes() == retained_bytes
+
+    orphan = tmp_path / "orphan-costs.json"
+    orphan_lock = tmp_path / ".orphan-costs.json.lock"
+    orphan_lock.touch(mode=0o600)
+    orphan_lock.chmod(0o600)
+    retained_lock = orphan_lock.read_bytes()
+
+    with pytest.raises(CostLedgerConfigurationError, match="existing cost ledger is missing"):
+        AtomicCostLedger.provision(orphan, cap_usd=Decimal("1.00"))
+    assert not orphan.exists()
+    assert orphan_lock.read_bytes() == retained_lock
+    assert (tmp_path / ".orphan-costs.json.provision.lock").exists()
+
+
+def test_provision_validates_legacy_state_before_adding_no_reset_marker(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-unmarked-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    marker = tmp_path / ".legacy-unmarked-costs.json.provision.lock"
+    marker.unlink()
+    retained_state = path.read_bytes()
+    retained_lock = ledger.lock_path.read_bytes()
+
+    with pytest.raises(CostLedgerConfigurationError, match="configured cost cap"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("2.00"))
+
+    assert path.read_bytes() == retained_state
+    assert ledger.lock_path.read_bytes() == retained_lock
+    assert marker.exists()
+
+    reopened, created = AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+    assert created is False
+    assert reopened.snapshot().entries == ()
+    assert marker.exists()
+
+
+def test_observed_legacy_pair_cannot_become_a_fresh_budget_during_marker_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-race-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    marker = tmp_path / ".legacy-race-costs.json.provision.lock"
+    marker.unlink()
+    original_open = cost_ledger_module._open_provision_lock_file
+    mutated = False
+
+    def delete_pair_then_open(guard_path: Path, *, create: bool) -> tuple[int, bool]:
+        nonlocal mutated
+        if not mutated:
+            mutated = True
+            path.unlink()
+            ledger.lock_path.unlink()
+        return original_open(guard_path, create=create)
+
+    monkeypatch.setattr(
+        cost_ledger_module,
+        "_open_provision_lock_file",
+        delete_pair_then_open,
+    )
+
+    with pytest.raises(CostLedgerConfigurationError, match="automatic repair is forbidden"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+    with pytest.raises(CostLedgerConfigurationError, match="automatic repair is forbidden"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert mutated is True
+    assert marker.exists()
+    assert not path.exists()
+    assert not ledger.lock_path.exists()
+
+
+def test_incomplete_legacy_pair_completed_during_marker_acquisition_is_typed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-completion-costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    marker = tmp_path / ".legacy-completion-costs.json.provision.lock"
+    marker.unlink()
+    ledger.lock_path.unlink()
+    original_open = cost_ledger_module._open_provision_lock_file
+
+    def complete_pair_then_open(guard_path: Path, *, create: bool) -> tuple[int, bool]:
+        ledger.lock_path.write_bytes(b"")
+        ledger.lock_path.chmod(0o600)
+        return original_open(guard_path, create=create)
+
+    monkeypatch.setattr(
+        cost_ledger_module,
+        "_open_provision_lock_file",
+        complete_pair_then_open,
+    )
+
+    reopened, created = AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert created is False
+    assert reopened.snapshot().entries == ()
+    assert marker.exists()
+
+
+def test_provision_refuses_corrupt_or_linked_state_without_mutation(tmp_path: Path) -> None:
+    corrupt = tmp_path / "corrupt-costs.json"
+    AtomicCostLedger.initialize(corrupt, cap_usd=Decimal("1.00"))
+    corrupt.write_bytes(b"{invalid-json\n")
+    corrupt.chmod(0o600)
+    retained_corrupt = corrupt.read_bytes()
+
+    with pytest.raises(CostLedgerCorruptError, match="valid UTF-8 JSON"):
+        AtomicCostLedger.provision(corrupt, cap_usd=Decimal("1.00"))
+    assert corrupt.read_bytes() == retained_corrupt
+
+    target = tmp_path / "linked-target.json"
+    target_ledger = AtomicCostLedger.initialize(target, cap_usd=Decimal("1.00"))
+    retained_target = target.read_bytes()
+    linked = tmp_path / "linked-costs.json"
+    linked.symlink_to(target)
+    linked_lock = tmp_path / ".linked-costs.json.lock"
+    linked_lock.write_bytes(b"retained-lock")
+    linked_lock.chmod(0o600)
+    retained_lock = linked_lock.read_bytes()
+
+    with pytest.raises(CostLedgerConfigurationError):
+        AtomicCostLedger.provision(linked, cap_usd=Decimal("1.00"))
+    assert linked.is_symlink()
+    assert linked.readlink() == target
+    assert target.read_bytes() == retained_target
+    assert target_ledger.lock_path.exists()
+    assert linked_lock.read_bytes() == retained_lock
+
+
+def test_fifo_ledger_state_is_rejected_without_blocking_or_mutation(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs unavailable")
+    path = tmp_path / "fifo-costs.json"
+    lock = tmp_path / ".fifo-costs.json.lock"
+    marker = tmp_path / ".fifo-costs.json.provision.lock"
+    os.mkfifo(path, mode=0o600)
+    lock.write_bytes(b"")
+    lock.chmod(0o600)
+
+    with pytest.raises(CostLedgerConfigurationError, match="single-link operator-owned"):
+        AtomicCostLedger.open_existing(path, cap_usd=Decimal("1.00"))
+    with pytest.raises(CostLedgerConfigurationError, match="single-link operator-owned"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert stat.S_ISFIFO(path.stat().st_mode)
+    assert lock.read_bytes() == b""
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("invalid_kind", ["symlink", "hardlink", "mode"])
+def test_provision_refuses_invalid_coordination_lock_without_creating_state(
+    invalid_kind: str,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "guarded-costs.json"
+    provision_lock = tmp_path / ".guarded-costs.json.provision.lock"
+    retained = tmp_path / "retained-guard"
+    retained.write_bytes(b"retained")
+    retained.chmod(0o600)
+    if invalid_kind == "symlink":
+        provision_lock.symlink_to(retained)
+    elif invalid_kind == "hardlink":
+        os.link(retained, provision_lock)
+    else:
+        provision_lock.write_bytes(b"invalid-mode")
+        provision_lock.chmod(0o640)
+    retained_bytes = retained.read_bytes()
+    retained_provision_bytes = provision_lock.read_bytes()
+    retained_provision_entry = provision_lock.lstat()
+
+    with pytest.raises(CostLedgerConfigurationError, match="provisioning lock"):
+        AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+
+    assert not path.exists()
+    assert not (tmp_path / ".guarded-costs.json.lock").exists()
+    assert retained.read_bytes() == retained_bytes
+    current_provision_entry = provision_lock.lstat()
+    assert provision_lock.read_bytes() == retained_provision_bytes
+    assert (current_provision_entry.st_dev, current_provision_entry.st_ino) == (
+        retained_provision_entry.st_dev,
+        retained_provision_entry.st_ino,
+    )
+
+
+@pytest.mark.parametrize("invalid_kind", ["missing", "symlink", "hardlink", "mode"])
+def test_verify_only_provisioning_lease_refuses_invalid_marker_without_repair(
+    invalid_kind: str,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "verify-only-costs.json"
+    ledger, created = AtomicCostLedger.provision(path, cap_usd=Decimal("1.00"))
+    marker = tmp_path / ".verify-only-costs.json.provision.lock"
+    retained = tmp_path / "retained-verify-only-marker"
+    retained_state = path.read_bytes()
+    retained_lock = ledger.lock_path.read_bytes()
+    state_entry = path.stat()
+    lock_entry = ledger.lock_path.stat()
+    marker.unlink()
+    if invalid_kind == "symlink":
+        retained.write_bytes(b"retained")
+        retained.chmod(0o600)
+        marker.symlink_to(retained)
+    elif invalid_kind == "hardlink":
+        retained.write_bytes(b"retained")
+        retained.chmod(0o600)
+        os.link(retained, marker)
+    elif invalid_kind == "mode":
+        marker.write_bytes(b"invalid-mode")
+        marker.chmod(0o640)
+
+    assert created is True
+    marker_entry = marker.lstat() if invalid_kind != "missing" else None
+    marker_bytes = marker.read_bytes() if invalid_kind != "missing" else None
+
+    with (
+        pytest.raises(
+            CostLedgerConfigurationError,
+            match=r"provisioning (?:marker is missing|lock)",
+        ),
+        AtomicCostLedger.provisioning_lease(
+            path,
+            cap_usd=Decimal("1.00"),
+            create_missing=False,
+        ),
+    ):
+        pass
+
+    assert path.read_bytes() == retained_state
+    assert ledger.lock_path.read_bytes() == retained_lock
+    current_state_entry = path.stat()
+    current_lock_entry = ledger.lock_path.stat()
+    assert (current_state_entry.st_dev, current_state_entry.st_ino) == (
+        state_entry.st_dev,
+        state_entry.st_ino,
+    )
+    assert (current_lock_entry.st_dev, current_lock_entry.st_ino) == (
+        lock_entry.st_dev,
+        lock_entry.st_ino,
+    )
+    if invalid_kind == "missing":
+        assert not marker.exists()
+    else:
+        assert marker_entry is not None
+        current_marker_entry = marker.lstat()
+        assert marker.read_bytes() == marker_bytes
+        assert (current_marker_entry.st_dev, current_marker_entry.st_ino) == (
+            marker_entry.st_dev,
+            marker_entry.st_ino,
+        )
+        if invalid_kind in {"symlink", "hardlink"}:
+            assert retained.read_bytes() == b"retained"
 
 
 def test_legacy_state_bytes_and_snapshot_hash_are_unchanged_without_portfolios(
@@ -547,14 +1258,17 @@ def test_initialization_is_explicit_one_time_and_creates_private_files(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "costs.json"
+    provision_lock = tmp_path / ".costs.json.provision.lock"
 
     ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
 
     assert ledger.path == path
     assert path.stat().st_mode & 0o777 == 0o600
     assert ledger.lock_path.stat().st_mode & 0o777 == 0o600
+    assert provision_lock.stat().st_mode & 0o777 == 0o600
     assert path.stat().st_nlink == 1
     assert ledger.lock_path.stat().st_nlink == 1
+    assert provision_lock.stat().st_nlink == 1
     with pytest.raises(CostLedgerConfigurationError, match="initialization is one-time"):
         AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
 

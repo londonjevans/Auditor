@@ -45,11 +45,13 @@ from mmaudit.scanners.base import (
     scanner_workspace_sha256,
 )
 from mmaudit.scanners.foundry_inventory import (
+    FoundryCompilerStatementCatalog,
     FoundryInventoryError,
     FoundryInventoryLimits,
     FoundrySourceInput,
     FoundryTestDeclaration,
     FoundryTestInventory,
+    parse_foundry_compiler_statement_catalog,
     parse_foundry_test_inventory,
 )
 
@@ -164,13 +166,28 @@ class FoundryInventoryRunResult:
     """Typed compiler inventories and their isolated runtime evidence."""
 
     inventories: tuple[FoundryTestInventory, ...]
+    statement_catalogs: tuple[FoundryCompilerStatementCatalog, ...]
     evidence: RepositorySuiteInventoryEvidence
     accounted_output_bytes: int
     generated_artifact_bytes: int
 
     def __post_init__(self) -> None:
-        if len(self.inventories) != len(self.evidence.projects):
+        if not (
+            len(self.inventories) == len(self.statement_catalogs) == len(self.evidence.projects)
+        ):
             raise ValueError("Foundry inventory result project counts differ")
+        for inventory, catalog, project in zip(
+            self.inventories,
+            self.statement_catalogs,
+            self.evidence.projects,
+            strict=True,
+        ):
+            if not (
+                inventory.project_root == catalog.project_root == project.project_root
+                and inventory.compiler_version == catalog.compiler_version
+                and inventory.compiler_sha256 == catalog.compiler_sha256
+            ):
+                raise ValueError("Foundry inventory result project identities differ")
         if self.accounted_output_bytes < 0 or self.generated_artifact_bytes < 0:
             raise ValueError("Foundry inventory byte accounting cannot be negative")
 
@@ -380,6 +397,7 @@ def run_foundry_test_inventory(
             )
 
     inventories: list[FoundryTestInventory] = []
+    statement_catalogs: list[FoundryCompilerStatementCatalog] = []
     project_evidence: list[RepositorySuiteProjectInventoryEvidence] = []
     try:
         for execution in project_executions:
@@ -416,11 +434,20 @@ def run_foundry_test_inventory(
                 compiler_sha256=compiler_sha256,
                 limits=parse_bounds,
             )
+            statement_catalog = parse_foundry_compiler_statement_catalog(
+                build_info_jsons=build_info_payloads,
+                sources=source_inputs,
+                project_root=execution.project_root,
+                compiler_version=compiler_version,
+                compiler_sha256=compiler_sha256,
+                limits=parse_bounds,
+            )
             if time.monotonic() >= deadline:
                 raise FoundryInventoryTimeoutError(
                     "Foundry inventory total deadline expired during validation"
                 )
             inventories.append(inventory)
+            statement_catalogs.append(statement_catalog)
             records = tuple(
                 sorted(
                     (
@@ -496,6 +523,7 @@ def run_foundry_test_inventory(
     )
     return FoundryInventoryRunResult(
         inventories=tuple(inventories),
+        statement_catalogs=tuple(statement_catalogs),
         evidence=evidence,
         accounted_output_bytes=total_stream_bytes,
         generated_artifact_bytes=total_generated_bytes,

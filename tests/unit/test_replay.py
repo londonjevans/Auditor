@@ -30,6 +30,9 @@ from mmaudit.constants import ANALYSIS_ROLES, ExitCode
 from mmaudit.models.schemas import (
     AnalysisState,
     AttackerCapabilityPolicy,
+    AuditedSuiteEntityCatalog,
+    AuditedSuiteStatementCoverageEvidence,
+    AuditedSuiteStatementStatus,
     AuditProfile,
     AuditReport,
     CandidateReproductionResolution,
@@ -56,6 +59,7 @@ from mmaudit.models.schemas import (
     InvariantSpec,
     InvariantSuite,
     LanguageCapabilityFileEvidence,
+    Location,
     LocationValidation,
     RepositoryCodeExecutionState,
     RepositoryDifferentialRunStatus,
@@ -86,9 +90,12 @@ from mmaudit.models.schemas import (
     ScannerRun,
     ScannerStatus,
     Severity,
+    SolidityEntity,
+    SolidityEntityKind,
     SolidityProjectMetadata,
     SolidityProjectType,
     SolidityProvenance,
+    SoliditySymbolIndex,
     StatefulActionSpec,
 )
 from mmaudit.models.sharding import SolidityShardReportBinding
@@ -198,6 +205,7 @@ class _LocalScannerRunner:
         self.runs = runs
         self.calls = 0
         self.audited_relative_paths: list[tuple[str, ...]] = []
+        self.audited_suite_entity_catalogs: list[AuditedSuiteEntityCatalog | None] = []
 
     async def run_all(
         self,
@@ -211,6 +219,7 @@ class _LocalScannerRunner:
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]:
         del (
             root,
@@ -223,6 +232,7 @@ class _LocalScannerRunner:
         assert not skip_codeql
         assert not allow_fork_probing
         self.audited_relative_paths.append(tuple(audited_relative_paths))
+        self.audited_suite_entity_catalogs.append(audited_suite_entity_catalog)
         self.calls += 1
         return self.runs
 
@@ -243,6 +253,7 @@ class _ForkAwareScannerRunner:
         self.repository_exclusion_root: list[Path | None] = []
         self.audited_relative_paths: list[tuple[str, ...]] = []
         self.allow_custom_repository_exclusion: list[bool] = []
+        self.audited_suite_entity_catalogs: list[AuditedSuiteEntityCatalog | None] = []
 
     async def run_all(
         self,
@@ -256,6 +267,7 @@ class _ForkAwareScannerRunner:
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         allow_custom_repository_exclusion: bool = False,
+        audited_suite_entity_catalog: AuditedSuiteEntityCatalog | None = None,
     ) -> list[ScannerRun]:
         del root, private_dir, projects
         assert not skip_codeql
@@ -264,6 +276,7 @@ class _ForkAwareScannerRunner:
         self.allow_fork_probing.append(allow_fork_probing)
         self.expected_repository_sha256.append(expected_repository_sha256)
         self.repository_exclusion_root.append(repository_exclusion_root)
+        self.audited_suite_entity_catalogs.append(audited_suite_entity_catalog)
         if self.before_return is not None:
             self.before_return()
         return self.runs
@@ -570,6 +583,87 @@ def _repository_suite_scanner_run(
         repository_test_executions=[execution],
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
     )
+
+
+def _statement_coverage_replay_inputs(
+    *,
+    repository_sha256: str,
+    source_file_sha256: str,
+) -> tuple[ScannerRun, SoliditySymbolIndex, SolidityProjectMetadata]:
+    project = SolidityProjectMetadata(
+        project_type=SolidityProjectType.FOUNDRY,
+        project_root=".",
+        source_directories=["src"],
+        test_directories=["test"],
+    )
+    entity = SolidityEntity(
+        id="compiler:src/Vault.sol:Vault",
+        kind=SolidityEntityKind.CONTRACT,
+        name="Vault",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+        byte_start=0,
+        byte_end=len(b"contract Vault {}\n"),
+        source_hash=source_file_sha256,
+        provenance=SolidityProvenance.COMPILER,
+        confidence=1.0,
+        transformation="compiler AST source span",
+    )
+    index = SoliditySymbolIndex(
+        projects=[project],
+        entities=[entity],
+        ast_sources=[entity.path],
+    )
+    baseline = _repository_suite_scanner_run(
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        repository_sha256=repository_sha256,
+    )
+    selection = baseline.repository_suite_selection
+    policy = baseline.repository_suite_execution_policy
+    assert selection is not None
+    assert policy is not None
+    assert baseline.version is not None
+    assert baseline.executable_sha256 is not None
+    assert baseline.isolation_attestation_sha256 is not None
+    evidence = AuditedSuiteStatementCoverageEvidence.sealed(
+        entity_id=entity.id,
+        entity_kind=entity.kind,
+        contract_name=entity.name,
+        location=Location(
+            path=entity.path,
+            start_line=entity.start_line,
+            end_line=entity.end_line,
+            symbol=entity.name,
+            content_hash=entity.source_hash,
+        ),
+        statement_status=AuditedSuiteStatementStatus.COVERED,
+        statement_count=0,
+        covered_statement_count=0,
+        statements=[],
+        repository_test_execution_sha256s=[baseline.repository_test_executions[0].execution_sha256],
+        source_repository_sha256=selection.repository_sha256,
+        repository_suite_selection_sha256=selection.selection_sha256,
+        repository_suite_execution_policy_sha256=policy.policy_sha256,
+        coverage_command_sha256s=["6" * 64],
+        statement_inventory_sha256="7" * 64,
+        coverage_artifact_sha256="8" * 64,
+        coverage_artifact_bytes=1,
+        producer_version="synthetic-replay-normalizer 1.0",
+        producer_sha256="b" * 64,
+        normalizer_policy_sha256="c" * 64,
+        tool_name="forge",
+        tool_version=baseline.version,
+        tool_sha256=baseline.executable_sha256,
+        compiler_version=policy.compiler_version,
+        compiler_sha256=policy.compiler_sha256,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        machine_output_validated=True,
+        isolation_attestation_sha256=baseline.isolation_attestation_sha256,
+    )
+    payload = baseline.model_dump(mode="python")
+    payload["repository_statement_coverage_evidence"] = [evidence]
+    return ScannerRun.model_validate(payload), index, project
 
 
 def _config_with_repository_differential(config: AuditConfig) -> AuditConfig:
@@ -1589,9 +1683,83 @@ async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
     assert scanner.allow_fork_probing == [True]
     assert scanner.expected_repository_sha256 == [repository_sha256]
     assert scanner.repository_exclusion_root == [tmp_path / ".mmaudit"]
+    assert scanner.audited_suite_entity_catalogs == [None]
     assert len(components) == 1
     assert components[0].identifier == "foundry_fork"
     assert components[0].status is ReplayComponentStatus.MATCHED
+
+
+@pytest.mark.asyncio
+async def test_statement_coverage_replay_rebuilds_exact_entity_catalog(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src" / "Vault.sol"
+    source.parent.mkdir()
+    source_bytes = b"contract Vault {}\n"
+    source.write_bytes(source_bytes)
+    source_file_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
+    baseline, index, project = _statement_coverage_replay_inputs(
+        repository_sha256=repository_sha256,
+        source_file_sha256=source_file_sha256,
+    )
+    scanner = _ForkAwareScannerRunner([baseline])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[project],
+        expected=[baseline],
+        audited_relative_paths=("src/Vault.sol",),
+        solidity_index=index,
+        source_file_sha256s={"src/Vault.sol": source_file_sha256},
+    )
+
+    assert components[0].status is ReplayComponentStatus.MATCHED
+    assert len(scanner.audited_suite_entity_catalogs) == 1
+    catalog = scanner.audited_suite_entity_catalogs[0]
+    assert catalog is not None
+    assert catalog.repository_sha256 == repository_sha256
+    assert catalog.classification_complete is True
+    assert [binding.entity_id for binding in catalog.bindings] == ["compiler:src/Vault.sol:Vault"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_input", ["index", "projects", "source_hash"])
+async def test_statement_coverage_replay_blocks_without_consistent_catalog(
+    tmp_path: Path,
+    missing_input: str,
+) -> None:
+    source = tmp_path / "src" / "Vault.sol"
+    source.parent.mkdir()
+    source_bytes = b"contract Vault {}\n"
+    source.write_bytes(source_bytes)
+    source_file_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
+    baseline, index, project = _statement_coverage_replay_inputs(
+        repository_sha256=repository_sha256,
+        source_file_sha256=source_file_sha256,
+    )
+    scanner = _ForkAwareScannerRunner([baseline])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[] if missing_input == "projects" else [project],
+        expected=[baseline],
+        audited_relative_paths=("src/Vault.sol",),
+        solidity_index=None if missing_input == "index" else index,
+        source_file_sha256s=(
+            {} if missing_input == "source_hash" else {"src/Vault.sol": source_file_sha256}
+        ),
+    )
+
+    assert len(components) == 1
+    assert components[0].status is ReplayComponentStatus.BLOCKED
+    assert components[0].executed is False
+    assert scanner.audited_suite_entity_catalogs == []
 
 
 @pytest.mark.asyncio
@@ -3080,6 +3248,9 @@ def test_replay_loads_pipeline_candidate_resolution_as_typed_evidence(
 
     artifacts = _load_replay_artifacts(run_dir, config=config)
 
+    assert artifacts.solidity_index is not None
+    assert artifacts.solidity_index.index is not None
+    assert artifacts.solidity_index.index.projects == artifacts.projects.projects
     assert artifacts.reproductions.candidate_resolutions == [
         CandidateReproductionResolution(
             candidate_id="candidate-replay",
@@ -3315,6 +3486,7 @@ async def test_local_fixture_replays_scanner_saved_test_and_counterexample_offli
     }
     assert all(item.status is ReplayComponentStatus.MATCHED for item in first.components)
     assert (scanner.calls, invariant.calls, reproduction.calls) == (2, 2, 2)
+    assert scanner.audited_suite_entity_catalogs == [None, None]
     assert OfflineReplay.model_validate_json(first.model_dump_json()) == first
 
 
