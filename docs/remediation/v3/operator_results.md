@@ -3,6 +3,299 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T09:22Z — **FIRST REAL SHARDED DEVELOPMENT AUDITS: both corpus variants `OBSERVED_ALL_SHARDS`. Planted defect found at the exact function; guarded variant carries no high. Three requests on scoring.**
+
+Timestamp from the clock. Development ledger: 9 entries, total `0.2606400` USD, all `reconciled`.
+Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`. These are non-qualifying development observations.
+
+### 1. Runs (monitoring session's shell; route `moonshotai/kimi-k3=modal/mxfp4`, frozen `…-20260908-d2`)
+
+| run id | corpus | status | shards | cost | wall clock | output |
+|---|---|---|---|---|---|---|
+| `devaudit-20260908-a-1` | `unit-ledger-a-v1` (unguarded) | `OBSERVED_ALL_SHARDS` | 3/3 | 0.1147896 | 86.5 s | `~/.mmaudit/private/development-audits/unit-ledger-a-v1-run1/` |
+| `devaudit-20260908-b-1` | `unit-ledger-b-v1` (guarded) | `OBSERVED_ALL_SHARDS` | 3/3 | 0.1117830 | 102.7 s | `…/unit-ledger-b-v1-run1/` |
+
+Each output directory holds `plan.json`, `file-01..03.json`, `result.json`. Per-shard reservations
+were ~0.193 USD each; actual per-shard charges 0.023–0.051 USD. No shard was unobserved, no retry,
+no uncertain cost.
+
+A first attempt at variant `a` was refused before any reservation because the output directory's
+**parent** (`~/.mmaudit/private/development-audits/`) did not exist; the runner observes the parent
+as an unlinked private directory before `mkdir(0o700)` of the output. Creating the parent with mode
+0700 resolved it. Request 4 below.
+
+### 2. Findings, checked against the fixtures
+
+The only difference between the variants is `RoutePolicy.sol:40`: `a` lacks `onlyAdministrator` on
+`setGateway`; `b` has it (`diff -r` confirms, other two files byte-identical).
+
+**Variant `a` (unguarded):**
+- `file-01` RoutePolicy: **high** "setGateway lacks administrator authorization" lines **40–46**
+  → the planted defect, exact function span. Plus one low (pause does not restrict reconfiguration).
+- `file-02` UnitRouter: **high** "gateway-only authorization undermined by permissionless setGateway
+  in RoutePolicy" lines 8–32; one low; one informational.
+- `file-03` UnitStore: **high** "gateway trust assumption undermined by unrestricted gateway
+  selection in the inherited policy" lines 26–64; one low; two informational.
+
+**Variant `b` (guarded):**
+- `file-01` RoutePolicy: summary states the invariant is enforced. **No high.** One **medium**
+  "lowering credit limits below outstanding state can silently freeze all future issuance"
+  (`setCreditLimits`, lines 49–58); one low (immediate gateway rotation, no timelock); two
+  informational.
+- `file-02` UnitRouter: no high/medium; one low; one informational.
+- `file-03` UnitStore: no high/medium; one low; two informational.
+
+**Assessment (operator's reading, not validation):**
+- Detection: the planted defect is found on its primary file at the exact lines. Good.
+- Cross-file propagation: shards 2 and 3 of `a` each re-report the *same* root cause as a separate
+  high anchored to their own primary file. The corpus README says findings must anchor to the
+  primary file, so this is the schema working as designed, but an aggregate scorer will count
+  **three highs for one defect**. This is the "variant-spam" failure mode the best-in-class
+  protocol (§4, class coverage + dedup) explicitly penalizes.
+- Guarded-variant precision: zero invariant false positives; one medium that is a design
+  observation about `setCreditLimits` semantics (the fixture's own comment says limits restrict new
+  credits only, which is what the model describes). Severity-weighted it is a soft false positive.
+
+### 3. Requests
+
+1. Record the first real `development audit-corpus` runs against `V3-DEVAUDIT-001` with the table
+   above; `V3-DEVTRIAL-001` evidence is in the 09:15Z entry.
+2. **Root-cause dedup for aggregate scoring (bounded):** give a development finding an optional
+   `root_cause_ref` (file + line span of the originating defect) or an explicit
+   `kind: primary | consequence`, so `result.json` can report unique root causes separately from
+   per-file consequences. Without it the sharded path over-counts by the shard count.
+3. The 09:15Z advisory/invariant-kind request stands; the medium on guarded `b` is the concrete
+   case it would classify.
+4. Output custody: either document that the output parent must pre-exist as a 0700 directory, or
+   create it (0700) when the grandparent is the private root. Operator has no preference.
+5. **Next capability toward the frozen objective**, for Codex to bound as a ticket: a development
+   run over a *committed* synthetic corpus with a planted-truth manifest (file, line span, class)
+   and an aggregate scorer producing severity-weighted recall / precision / unique-root-cause
+   counts per run. That is requirement L (`SYNTHETIC_BENCHMARK` campaign) on the development
+   policy, and the first thing that could make a measured baseline for the ensemble comparison.
+   The operator will run whatever lands there next, unattended.
+
+Durability: operator snapshot refreshed (`46a137d`, 308 uncommitted paths, ~120k inserted lines).
+Codex's checkpoint commits remain pending the operator's direct confirmation.
+
+## 2026-09-08T09:15Z — **`V3-DEVTRIAL-001` DONE: both fixtures `OBSERVED`. Planted violation found at the exact lines; guarded fixture not flagged as violated. Cause of the earlier mismatch now verified from retained routing evidence.**
+
+Timestamp from the clock. Development ledger: 3 entries, total `0.0340674` USD, all `reconciled`.
+Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`. Fixture observations are non-qualifying by construction.
+
+### 1. Results (operator's shell, route `moonshotai/kimi-k3=modal/mxfp4`, frozen `…-20260908-d2` candidate)
+
+| request id | fixture | status | reported cost | generation id | findings |
+|---|---|---|---|---|---|
+| `devtrial-20260908-controlA-1` | ControlA | `INCOMPLETE` / `IDENTITY_MISMATCH` (pre-DEVROUTE) | 0.0110142 | null | discarded |
+| `devtrial-20260908-controlA-2` | ControlA | **`OBSERVED`** | 0.009957 | `gen-1788858821-…` | 1 |
+| `devtrial-20260908-controlB-1` | ControlB | **`OBSERVED`** | 0.0130962 | `gen-1788858872-…` | 2 |
+
+**ControlA (violation planted):** one finding, `high`, "setLimit lacks administrator authorization",
+`line_start 14 / line_end 16`. The fixture's `setLimit` body is exactly lines 14–16. Explanation and
+recommendation are correct. This is the planted defect, located precisely.
+
+**ControlB (guarded counterpart, differs only by the `require(msg.sender == administrator)` line):**
+summary states the invariant is enforced. Two findings: `low` "administrator can be configured as
+zero address" (lines 10–12, constructor) and `informational` "limit changes are not observable
+on-chain" (lines 14–17). Neither claims the invariant is broken; both are legitimate advisory notes
+on a 17-line abstract fixture. No `medium`+ finding on the guarded fixture.
+
+**Discrimination:** severity-weighted, the pair discriminates cleanly (high on A; nothing above low
+on B). Strict invariant-scored, B carries 2 false positives, because the response schema forces every
+finding to populate `violated_invariant`, so advisory notes are labelled as violations of an
+invariant the model itself says is enforced. See request 2.
+
+### 2. Cause of the 06:10Z mismatch — verified, no longer a hypothesis
+
+Retained routing evidence on both `OBSERVED` runs: `returned_model` = requested `moonshotai/kimi-k3`;
+`selected_endpoints[0].model` = **`CANONICAL` `moonshotai/kimi-k3-20260715`**; provider `Modal`;
+strategy `DIRECT`; `router_byok` and `usage_byok` both `FALSE`; `pipeline_count 0`;
+`endpoint_total 18`. The pre-DEVROUTE validator compared the selected model against the exact id
+only, which is precisely what the 06:23Z entry inferred from the August bundle. `is_byok` was
+present in both locations, so the secondary risk did not materialize.
+
+### 3. What this does and does not establish
+
+Established: the development transport, reservation, dispatch, routing-identity binding, strict
+decoding, cost capture and reconciliation work against a live provider, and the model can locate a
+planted access-control defect at exact lines. Not established: audit quality on anything larger than
+a 17-line fixture, any qualification, any completed audit. `V3-DEVTRIAL-001` acceptance is met on
+the operator's reading; Codex to record it.
+
+### 4. Requests
+
+1. Record `V3-DEVTRIAL-001` with the table above as its evidence.
+2. **Schema observation, bounded:** let a development finding carry `violated_invariant: null` (or a
+   separate `kind: advisory | invariant_violation`) so a guarded fixture can be scored without
+   counting advisories as invariant false positives. Not urgent; matters for the sharded audit scoring.
+3. (Answered by `tests/fixtures/solidity/development_audit/README.md`: corpus ids
+   `unit-ledger-a-v1` unguarded / `unit-ledger-b-v1` guarded, three files each.) The operator will
+   run `development audit-corpus` on both variants next, under the development ledger at the same
+   per-attempt target, and report per-shard results here. No confirmation needed unless the corpus
+   root or output layout differs from the obvious reading.
+
+Durability reminder stands: HEAD `4405ed3`, ~270 uncommitted paths; the operator's direct
+confirmation for checkpoint commits is still pending on the operator's side, not Codex's.
+
+## 2026-09-08T06:23Z — **FIRST REAL CALL THROUGH THE DEVELOPMENT PATH: HTTP 200, cost reconciled, observation `INCOMPLETE` / `IDENTITY_MISMATCH`. Strong evidence the router's selected-endpoint model is the canonical slug.**
+
+Timestamp from the clock. Cumulative ledger untouched. Development ledger now 1 entry /
+`0.0110142` USD, `reconciled`. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. What ran
+
+Operator's own shell, 2026-09-08 ~06:10Z, request id `devtrial-20260908-controlA-1`, fixture
+`ControlA.sol` (`d6d5c89f…`), route `moonshotai/kimi-k3=modal/mxfp4` from the fresh
+`devtrial-kimi-k3-modal-20260908-d2` candidate file, development ledger, per-attempt target 0.50.
+
+```
+transport: HTTP_OBSERVATION   http_status: 200   status: INCOMPLETE
+diagnostics: [IDENTITY_MISMATCH]   generation_id: null   response: null
+reported_cost_usd: 0.0110142   accounted_cost_usd: 0.0110142   accounting_status: reconciled
+estimated_cost_per_attempt_usd: 0.1425414
+```
+
+Positive results: the transport, reservation, dispatch, cost capture, reconciliation and the
+non-qualifying markers all behaved. The actual charge was 13x below the conservative estimate.
+Negative result: the response was rejected before decoding, and because the observation retains
+only `response_sha256`, the operator cannot see why.
+
+### 2. Evidence for the cause ($0, from the 2026-08-24 sealed bundle for this exact route)
+
+`authenticated-runner-smoke-evidence-20260824-s19.json`, run 1, replay-judge usage record for
+`moonshotai/kimi-k3=modal/mxfp4`:
+
+```
+requested_model:            moonshotai/kimi-k3
+returned_model:             moonshotai/kimi-k3        (top-level "model")
+selected_model:             moonshotai/kimi-k3-20260715   (router endpoints.available[selected].model)
+canonical_model:            moonshotai/kimi-k3-20260715
+response_provider_identity: Modal
+router_strategy: direct   router_attempt: 1   router_pipeline: []
+```
+
+`_validate_routing` (`development_transport.py`) requires
+`selected[0].get("model") == prepared.estimate.exact_model_id` and the same for `attempts[0]`. For
+this route the real API returns the **canonical slug** there, so the comparison fails and raises
+`IDENTITY_MISMATCH`. The production path accepts `{exact_model_id, observed_id, canonical_slug}`
+(`openrouter.py:11544`, `accepted_response_models`) and bound this exact response as
+`CANONICAL_MODEL_AND_ENDPOINT_BOUND` in August. The top-level `provider` = `Modal` is in the
+accepted set, so the first check passes; the failure is at the selected-endpoint/attempts model.
+
+Secondary risk, unverified: `router.get("is_byok") is not False` rejects an **absent** field. The
+production path does not check `is_byok` at all, and the sealed bundle records no such field. If
+OpenRouter omits it for some routes this check also raises `IDENTITY_MISMATCH`.
+
+This is offered as strongly evidenced, not as a verified reproduction of today's bytes, because the
+bytes were not retained.
+
+### 3. Requests
+
+1. **Fix:** in the development router validation, compare `endpoints.available[selected].model` and
+   `attempts[].model` against the same accepted model set the production path uses (exact id or
+   canonical slug from the bound discovery metadata), not the exact id alone. Treat absent `is_byok`
+   as not-BYOK, or drop the check as production does. Regression: a router payload whose selected
+   model is the canonical slug must be `OBSERVED`.
+2. **Diagnosability (the lever that has resolved every prior blocker in one run):** on any
+   `IDENTITY_MISMATCH`, retain the redacted routing evidence in the observation — top-level `model`
+   and `provider`, and `openrouter_metadata` minus nothing secret (it contains no source, no key,
+   no prompt) — plus which of the seven conditions failed, as a named sub-code. A rejected $0.01
+   response that cannot be inspected costs more in operator time than any risk it carries.
+
+### 4. Next operator step
+
+After the fix lands: rerun `ControlA` with request id `devtrial-20260908-controlA-2` and then
+`ControlB`, both against the development ledger, and report findings, false positives on the
+guarded fixture, cost and runtime here.
+
+## 2026-09-08T05:24Z — **OPERATOR DECISION AND REDIRECT: development policy is the basis for the first real single-model audit. Stop AUTONOMY/HARDHAT slices. Commit and push.**
+
+Timestamp taken from the clock at write time (the 10:40Z label yesterday was rounded ahead; noted for
+the record). Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+The operator (Jos Evans) reviewed the state on 2026-09-08 and delegated the unblocking decisions to
+the monitoring session. These are operator decisions, not Codex inferences.
+
+### 1. Decision — cache-write price cap
+
+The production admission constraint is **kept unchanged**. No route may be admitted to qualification,
+benchmark, or release while its charge contract is not provider-enforceable; the `input_cache_write`
+refusal stands and Codex was right to refuse to filter metadata to manufacture admission.
+
+Instead, the **development-only estimated-cost policy approved on 2026-09-06 is the authorized basis
+for the empirical single-model audit baseline** (`V3-SINGLE-AUDIT-001`'s first real run). That run is
+explicitly non-qualifying, non-releasable, and carries the accepted overspend risk. Its purpose is to
+produce the first real audit observations so the ensemble can later be measured against a baseline,
+per the 2026-09-06 priority. Certification-grade admission remains gated on a provider that offers a
+request-bound cache-write or total-cost cap, exactly as Codex recorded.
+
+### 2. Redirect — what to build next
+
+- **Stop selecting further `V3-AUTONOMY-001` and `V3-HARDHAT-001` slices** until a real audit exists.
+  The ~40 provider-free slices since 2026-09-07 are tested and honest, but on this host (no podman /
+  docker, macOS) they close gates locally without real execution and do not move the
+  completed real-audit count off zero. Leave both tickets PARTIAL with their current evidence.
+- **Next implementation target:** extend the development transport from the two pinned fixtures to a
+  bounded real sharded single-model audit path over a frozen synthetic/public corpus, under the same
+  development policy, exact-byte reservation, no-fallback, ZDR, and non-qualifying markers. Select the
+  smallest slice that lets the operator run one real multi-shard audit on one committed fixture set.
+  Name it as a bounded ticket (e.g. `V3-DEVAUDIT-001`) with its acceptance criteria before coding.
+- **Do not** relax qualification, release, or strict cost-proof types to do this.
+
+### 3. Durability — checkpoint the work
+
+HEAD `4405ed3` is on the remote. The working tree carries **267 uncommitted paths (~104k inserted
+lines) since 2026-09-04**, snapshotted by the operator to `refs/heads/wip/durability-latest`
+(`060013e`) as a safety net only. Operator instruction: **make cohesive checkpoint commits of the
+tested work and publish `agent/v3-wip-checkpoint`** before selecting the next implementation.
+`AGENTS.md` commit guidelines apply; nothing in them bars this. Continue to exclude private artifacts
+and credentials.
+
+### 4. Fixture trial: refused by cumulative accounting; root cause verified; separate development ledger created
+
+The operator ran `development review-fixture` for `ControlA.sol` on the fresh
+`devtrial-kimi-k3-modal-20260908-d2` candidate file (route unchanged at 05:19Z, content hash
+`9e460c49…`) against the cumulative ledger. Result: the redacted refusal. The cumulative ledger was
+not modified (mtime unchanged, 57 entries).
+
+Replaying the pre-dispatch steps individually, $0, no credential values printed: snapshot parses,
+`prepare_development_review` succeeds, `AtomicCostLedger.open_existing` succeeds, operator secrets
+load. `DevelopmentBudgetSession.reserve(...)` on a **copy** of the cumulative ledger raises:
+
+```
+CostBudgetExceededError: development reservation requires all prior provider costs to be settled
+```
+
+The cumulative ledger holds two `uncertain_accounted` entries with `actual_cost_usd: null`:
+`authrunner.smoke.r2.candidate.primary` (2026-08-23, $0.05225616 accounted, pre-fix token-detail
+defect) and `authrunner.smoke.r17.judge.replay` (2026-08-24, $0.18105 accounted, operator's
+2-minute timeout killed the run). Both were reported at the time; the 2026-08-22 entry asked what
+resolves them and no supported reconcile surface exists (`quote reconcile` is the quote workflow;
+`AtomicCostLedger.reconcile` needs the live reservation). The development policy therefore refuses
+every development reservation against this ledger by design.
+
+**Operator action:** initialized a **separate development ledger** with the supported command
+`models init-cost-ledger --cost-ledger ~/.mmaudit/private/development-cost-ledger.json --config
+config/openrouter-qualification.toml` (cap 250, 0 entries). The cumulative ledger is untouched and
+remains the production record. Development spend will accrue in the development ledger and be
+reported here per run. On a copy of the new ledger the same reservation succeeds and releases
+cleanly. This is an operator accounting decision under the approved development policy, not a
+change to any product invariant.
+
+**Request (bounded, low priority):** a supported operator command that settles a historical
+`uncertain_accounted` entry by recording an operator-attested actual cost or explicitly marking it
+closed-at-accounted-maximum, with the attestation retained. Without it the cumulative ledger can
+never accept a development reservation again.
+
+The paid trial now runs from the operator's own shell (the monitoring session's command boundary
+refuses the paid command). Results follow in a separate entry.
+
+No other question for Codex. Acknowledge the redirect in the queue's operator-priority section.
+
 ## 2026-09-07T10:40Z — `V3-DEVREASON-001` verified: both input shapes now prepare. Trial input frozen fresh. Awaiting operator route/spend decision.
 
 Provider-free verification of the repair, plus one metadata-only discovery. Ledger unchanged at
