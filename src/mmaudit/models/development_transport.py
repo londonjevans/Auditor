@@ -25,16 +25,18 @@ from mmaudit.models.development_audit import (
     prepare_development_audit_shard,
 )
 from mmaudit.models.development_diagnostics import (
+    DevelopmentCompletionTelemetry,
+    DevelopmentResponseRejection,
+    DevelopmentSchemaIssue,
+    development_failure_stage,
+    project_development_completion_telemetry,
+    project_development_schema_failure,
+)
+from mmaudit.models.development_diagnostics import (
     DevelopmentResponseFailureReason as FailureReason,
 )
 from mmaudit.models.development_diagnostics import (
     DevelopmentResponseField as ResponseField,
-)
-from mmaudit.models.development_diagnostics import (
-    DevelopmentResponseRejection,
-    DevelopmentSchemaIssue,
-    development_failure_stage,
-    project_development_schema_failure,
 )
 from mmaudit.models.development_review import (
     DevelopmentFinding,
@@ -479,6 +481,7 @@ async def _review_development_source(
     review: DevelopmentReviewResponse | DevelopmentScoredReviewResponse | None = None
     routing_evidence: DevelopmentRoutingEvidence | None = None
     rejection_evidence: DevelopmentResponseRejection | None = None
+    completion_telemetry: DevelopmentCompletionTelemetry | None = None
     status_code: int | None = None
     started = _DEVELOPMENT_MONOTONIC()
     transport = (
@@ -546,6 +549,14 @@ async def _review_development_source(
                 response_hash = hashlib.sha256(material).hexdigest()
                 payload = _decode_response(material)
                 actual = _reported_cost(payload)
+                try:
+                    completion_telemetry = project_development_completion_telemetry(
+                        payload, response_sha256=response_hash
+                    )
+                except Exception:
+                    # Metadata must not repair a refusal or change admission/accounting.
+                    # A broken diagnostic projection is absent, never invented usage.
+                    completion_telemetry = None
                 if status_code != 200:
                     raise _ResponseRejected(Diagnostic.HTTP_ERROR)
                 routing_evidence = observe_development_routing(
@@ -628,6 +639,7 @@ async def _review_development_source(
         response=None if diagnostics else review,
         routing_evidence=routing_evidence,
         rejection_evidence=rejection_evidence,
+        completion_telemetry=completion_telemetry,
     )
     if type(prepared) is PreparedDevelopmentReview:
         return DevelopmentReviewObservation.model_validate(values)

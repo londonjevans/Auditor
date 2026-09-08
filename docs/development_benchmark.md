@@ -86,6 +86,41 @@ not independently authenticated provider acceptance or a qualified audit. These 
 controls do not reconstruct private response bytes. HTTP error messages/Retry-After handling and
 accounting recovery are separate work; no charge is inferred from an absent generation identifier.
 
+## Completion-envelope telemetry without another request
+
+New fixture and audit-shard observations retain optional `completion_telemetry` after the whole
+bounded response body has passed strict JSON decoding. It is also embedded in the aggregate,
+score and any subsequent comparison. This covers successful responses as well as incomplete
+output, identity/structured/secret-output refusals and parsed HTTP-error bodies. A timeout,
+unread/oversized body, duplicate-key/nonfinite JSON or non-object response cannot supply it.
+
+Each prompt, completion, total and reasoning count has a `state` and nullable `value`. Only exact
+integers from 0 through 4,000,000 are `REPORTED`; absent/null fields are `NOT_REPORTED`, while
+invalid fields or containers are `INVALID`. Booleans, numeric strings, decimals and out-of-range
+values are never coerced. Reasoning counts come only from `usage.completion_tokens_details`.
+Individually reported inconsistent counts remain exact; `token_sum_consistency` and
+`reasoning_subset_consistency` are recomputed as `CONSISTENT`, `INCONSISTENT` or `NOT_OBSERVED`.
+They describe relationships, not correct usage, billing settlement or accepted request limits.
+
+The normalized `finish_reason` retains only `stop`, `length`, `tool_calls`, `content_filter` or
+`error`. Native reasons retain a finite allowlist of known completion/limit/tool/error spellings,
+case-folded as in the existing admission check. Unknown strings become `UNRECOGNIZED` with no
+retained value. Missing/null and invalid values stay distinct. Zero/multiple choices produce
+`AMBIGUOUS`, and a malformed or nonzero-index singleton produces `INVALID`; the projection never
+silently picks a choice. Arbitrary native reasons, provider errors, model prose and credentials
+are not retained. The field paths and normalized finish vocabulary follow the
+[OpenRouter response reference](https://openrouter.ai/docs/api_reference/overview); metadata may
+still be missing or invalid on an actual failure.
+
+Telemetry must match the parent's exact response hash and observed HTTP status. Its fixed
+`REPORTED_METADATA_NOT_VERIFIED_USAGE` interpretation grants no identity, accounting, finding or
+audit authority. Hash consistency is not private-provider authentication. Existing admission,
+source scope, strict decoder, reported-cost reconciliation, unknown/overrun liabilities and
+one-attempt behavior are unchanged. A diagnostic projection failure leaves metadata absent; it
+cannot repair a refusal or override admission. Old observations omit this optional field and
+remain parseable. No telemetry is backfilled, no counts are inferred from prices, and no request,
+retry, effort/budget change or generation lookup is selected by retaining these fields.
+
 ## Comparing retained runs without another provider call
 
 `mmaudit development compare-scores` accepts two through eight explicit absolute

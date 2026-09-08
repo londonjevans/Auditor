@@ -21,6 +21,88 @@
       "title": "CostEntryStatus",
       "type": "string"
     },
+    "DevelopmentCompletionTelemetry": {
+      "additionalProperties": false,
+      "description": "Parsed metadata only: the body hash does not authenticate provider usage or identity.",
+      "properties": {
+        "completion_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_FinishReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finish_reason_state": {
+          "$ref": "#/$defs/_TelemetryState"
+        },
+        "interpretation": {
+          "const": "REPORTED_METADATA_NOT_VERIFIED_USAGE",
+          "default": "REPORTED_METADATA_NOT_VERIFIED_USAGE",
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "native_finish_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_NativeFinishReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_finish_reason_state": {
+          "$ref": "#/$defs/_TelemetryState"
+        },
+        "prompt_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "reasoning_subset_consistency": {
+          "$ref": "#/$defs/_Consistency"
+        },
+        "reasoning_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_sum_consistency": {
+          "$ref": "#/$defs/_Consistency"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        }
+      },
+      "required": [
+        "response_sha256",
+        "finish_reason",
+        "finish_reason_state",
+        "native_finish_reason",
+        "native_finish_reason_state",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "token_sum_consistency",
+        "reasoning_subset_consistency"
+      ],
+      "title": "DevelopmentCompletionTelemetry",
+      "type": "object"
+    },
     "DevelopmentCorpusId": {
       "enum": [
         "unit-ledger-a-v1",
@@ -908,6 +990,40 @@
       "title": "DevelopmentSchemaIssue",
       "type": "object"
     },
+    "DevelopmentTelemetryCount": {
+      "additionalProperties": false,
+      "description": "One reported bounded integer; missing and invalid values are not zero.",
+      "properties": {
+        "state": {
+          "enum": [
+            "REPORTED",
+            "NOT_REPORTED",
+            "INVALID"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 4000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "state",
+        "value"
+      ],
+      "title": "DevelopmentTelemetryCount",
+      "type": "object"
+    },
     "Severity": {
       "enum": [
         "informational",
@@ -929,6 +1045,51 @@
         "SCHEMA_VALIDATION_FAILED"
       ],
       "title": "StructuredOutputFailureCode",
+      "type": "string"
+    },
+    "_Consistency": {
+      "enum": [
+        "CONSISTENT",
+        "INCONSISTENT",
+        "NOT_OBSERVED"
+      ],
+      "type": "string"
+    },
+    "_FinishReason": {
+      "enum": [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "error"
+      ],
+      "type": "string"
+    },
+    "_NativeFinishReason": {
+      "enum": [
+        "stop",
+        "stop_sequence",
+        "end_turn",
+        "eos_token",
+        "completed",
+        "length",
+        "max_tokens",
+        "model_length",
+        "tool_calls",
+        "function_call",
+        "content_filter",
+        "error"
+      ],
+      "type": "string"
+    },
+    "_TelemetryState": {
+      "enum": [
+        "REPORTED",
+        "NOT_REPORTED",
+        "INVALID",
+        "UNRECOGNIZED",
+        "AMBIGUOUS"
+      ],
       "type": "string"
     }
   },
@@ -971,6 +1132,17 @@
       "default": false,
       "title": "Audit Complete",
       "type": "boolean"
+    },
+    "completion_telemetry": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentCompletionTelemetry"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "corpus_id": {
       "$ref": "#/$defs/DevelopmentCorpusId"

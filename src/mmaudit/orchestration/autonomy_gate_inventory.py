@@ -3378,6 +3378,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.isolation.container_cleanup import cleanup_rootless_container
     from mmaudit.isolation.dependencies import prepare_dependencies
     from mmaudit.models.development_audit import prepare_development_audit
+    from mmaudit.models.development_diagnostics import project_development_completion_telemetry
     from mmaudit.models.development_routing import observe_development_routing
     from mmaudit.models.development_transport import review_development_audit_shard
     from mmaudit.models.schemas import AuditReport
@@ -3453,6 +3454,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-routing-observation",
             observe_development_routing,
+            "gate-provider-secret-transport",
+        ),
+        _explicit_anchor(
+            "development-completion-telemetry",
+            project_development_completion_telemetry,
             "gate-provider-secret-transport",
         ),
         _explicit_anchor(

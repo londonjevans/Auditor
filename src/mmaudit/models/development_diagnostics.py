@@ -1,9 +1,9 @@
-"""Bounded diagnostic projections; never retain rejected values or grant admission."""
+"""Bounded diagnostic projections; never retain model prose or grant admission."""
 
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -100,6 +100,156 @@ _SOURCE_REASONS = {
 class _DiagnosticModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid", frozen=True, strict=True, revalidate_instances="always"
+    )
+
+
+type _TelemetryState = Literal["REPORTED", "NOT_REPORTED", "INVALID", "UNRECOGNIZED", "AMBIGUOUS"]
+type _Consistency = Literal["CONSISTENT", "INCONSISTENT", "NOT_OBSERVED"]
+type _FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "error"]
+type _NativeFinishReason = Literal[
+    "stop",
+    "stop_sequence",
+    "end_turn",
+    "eos_token",
+    "completed",
+    "length",
+    "max_tokens",
+    "model_length",
+    "tool_calls",
+    "function_call",
+    "content_filter",
+    "error",
+]
+MAX_DEVELOPMENT_TELEMETRY_TOKENS = 4_000_000
+
+
+class DevelopmentTelemetryCount(_DiagnosticModel):
+    """One reported bounded integer; missing and invalid values are not zero."""
+
+    state: Literal["REPORTED", "NOT_REPORTED", "INVALID"]
+    value: int | None = Field(ge=0, le=MAX_DEVELOPMENT_TELEMETRY_TOKENS)
+
+    @model_validator(mode="after")
+    def count_is_coherent(self) -> Self:
+        if (self.state == "REPORTED") != (self.value is not None):
+            raise ValueError("development telemetry count differs from its observation state")
+        return self
+
+
+def _count_consistency(
+    prompt: DevelopmentTelemetryCount,
+    completion: DevelopmentTelemetryCount,
+    total: DevelopmentTelemetryCount,
+    reasoning: DevelopmentTelemetryCount,
+) -> tuple[_Consistency, _Consistency]:
+    summed: _Consistency = "NOT_OBSERVED"
+    subset: _Consistency = "NOT_OBSERVED"
+    if prompt.value is not None and completion.value is not None and total.value is not None:
+        summed = "CONSISTENT" if prompt.value + completion.value == total.value else "INCONSISTENT"
+    if reasoning.value is not None and completion.value is not None:
+        subset = "CONSISTENT" if reasoning.value <= completion.value else "INCONSISTENT"
+    return summed, subset
+
+
+class DevelopmentCompletionTelemetry(_DiagnosticModel):
+    """Parsed metadata only: the body hash does not authenticate provider usage or identity."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    interpretation: Literal["REPORTED_METADATA_NOT_VERIFIED_USAGE"] = (
+        "REPORTED_METADATA_NOT_VERIFIED_USAGE"
+    )
+    response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    finish_reason: _FinishReason | None
+    finish_reason_state: _TelemetryState
+    native_finish_reason: _NativeFinishReason | None
+    native_finish_reason_state: _TelemetryState
+    prompt_tokens: DevelopmentTelemetryCount
+    completion_tokens: DevelopmentTelemetryCount
+    total_tokens: DevelopmentTelemetryCount
+    reasoning_tokens: DevelopmentTelemetryCount
+    token_sum_consistency: _Consistency
+    reasoning_subset_consistency: _Consistency
+
+    @model_validator(mode="after")
+    def telemetry_is_coherent(self) -> Self:
+        for value, state in (
+            (self.finish_reason, self.finish_reason_state),
+            (self.native_finish_reason, self.native_finish_reason_state),
+        ):
+            if (state == "REPORTED") != (value is not None):
+                raise ValueError("development finish metadata differs from its observation state")
+        expected = _count_consistency(
+            self.prompt_tokens, self.completion_tokens, self.total_tokens, self.reasoning_tokens
+        )
+        if expected != (self.token_sum_consistency, self.reasoning_subset_consistency):
+            raise ValueError("development telemetry consistency does not recompute")
+        return self
+
+
+def _telemetry_count(container: object, name: str) -> DevelopmentTelemetryCount:
+    if container is None:
+        return DevelopmentTelemetryCount(state="NOT_REPORTED", value=None)
+    if type(container) is not dict:
+        return DevelopmentTelemetryCount(state="INVALID", value=None)
+    value = container.get(name)
+    if value is None:
+        return DevelopmentTelemetryCount(state="NOT_REPORTED", value=None)
+    if type(value) is not int or not 0 <= value <= MAX_DEVELOPMENT_TELEMETRY_TOKENS:
+        return DevelopmentTelemetryCount(state="INVALID", value=None)
+    return DevelopmentTelemetryCount(state="REPORTED", value=value)
+
+
+def _telemetry_finish(choices: object, *, native: bool) -> tuple[_TelemetryState, str | None]:
+    if choices is None:
+        return "NOT_REPORTED", None
+    if type(choices) is not list:
+        return "INVALID", None
+    if len(choices) != 1:
+        return "AMBIGUOUS", None
+    choice = choices[0]
+    if type(choice) is not dict or type(choice.get("index")) is not int or choice["index"] != 0:
+        return "INVALID", None
+    value = choice.get("native_finish_reason" if native else "finish_reason")
+    if value is None:
+        return "NOT_REPORTED", None
+    if type(value) is not str:
+        return "INVALID", None
+    # Native completion spelling is normalized exactly as in the existing admission predicate.
+    normalized = value.casefold() if native else value
+    allowed = get_args(_NativeFinishReason.__value__ if native else _FinishReason.__value__)
+    if normalized not in allowed:
+        return "UNRECOGNIZED", None
+    return "REPORTED", normalized
+
+
+def project_development_completion_telemetry(
+    payload: dict[str, Any], *, response_sha256: str
+) -> DevelopmentCompletionTelemetry:
+    """Project an already bounded, strictly decoded body; never infer usage or retain text."""
+
+    if type(payload) is not dict:
+        raise ValueError("development completion telemetry requires a parsed response object")
+    usage = payload.get("usage")
+    prompt = _telemetry_count(usage, "prompt_tokens")
+    completion = _telemetry_count(usage, "completion_tokens")
+    total = _telemetry_count(usage, "total_tokens")
+    details = usage.get("completion_tokens_details") if type(usage) is dict else usage
+    reasoning = _telemetry_count(details, "reasoning_tokens")
+    finish_state, finish = _telemetry_finish(payload.get("choices"), native=False)
+    native_state, native_finish = _telemetry_finish(payload.get("choices"), native=True)
+    summed, subset = _count_consistency(prompt, completion, total, reasoning)
+    return DevelopmentCompletionTelemetry(
+        response_sha256=response_sha256,
+        finish_reason=cast(_FinishReason | None, finish),
+        finish_reason_state=finish_state,
+        native_finish_reason=cast(_NativeFinishReason | None, native_finish),
+        native_finish_reason_state=native_state,
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+        reasoning_tokens=reasoning,
+        token_sum_consistency=summed,
+        reasoning_subset_consistency=subset,
     )
 
 

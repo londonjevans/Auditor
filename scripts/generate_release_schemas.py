@@ -52,7 +52,10 @@ from mmaudit.models.development_audit import (
     DevelopmentScoredAuditShardObservation,
 )
 from mmaudit.models.development_costs import DevelopmentCostEstimate, DevelopmentCostPolicy
-from mmaudit.models.development_diagnostics import DevelopmentResponseRejection
+from mmaudit.models.development_diagnostics import (
+    DevelopmentCompletionTelemetry,
+    DevelopmentResponseRejection,
+)
 from mmaudit.models.development_review import (
     DevelopmentReviewObservation,
     DevelopmentReviewResponse,
@@ -225,6 +228,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_audit_observation.schema.json": DevelopmentAuditObservation,
     "development_routing_observation.schema.json": DevelopmentRoutingEvidence,
     "development_response_rejection.schema.json": DevelopmentResponseRejection,
+    "development_completion_telemetry.schema.json": DevelopmentCompletionTelemetry,
     "development_scored_review_response.schema.json": DevelopmentScoredReviewResponse,
     "development_scored_shard_observation.schema.json": DevelopmentScoredAuditShardObservation,
     "development_benchmark_truth.schema.json": DevelopmentBenchmarkTruth,

@@ -2118,7 +2118,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 91
+    assert len(ticket_id_list) == len(ticket_ids) == 92
     assert len(historical_id_list) == len(historical_ids) == 46
     assert ticket_ids - historical_ids == {
         "V3-AUTHLINEAGE-001",
@@ -2134,6 +2134,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-DEVBENCH-001",
         "V3-DEVCOMPARE-001",
         "V3-DEVDECODE-001",
+        "V3-DEVTELEMETRY-001",
         "V3-DEVREASON-001",
         "V3-DEVROUTE-001",
         "V3-DEVSCHALIGN-001",

@@ -29,6 +29,7 @@ from mmaudit.models.development_costs import (
     estimate_development_request,
 )
 from mmaudit.models.development_diagnostics import (
+    DevelopmentCompletionTelemetry,
     DevelopmentResponseFailureReason,
     DevelopmentResponseRejection,
 )
@@ -253,20 +254,23 @@ class _DevelopmentAccountedObservation[
     response: ReviewT | None
     routing_evidence: DevelopmentRoutingEvidence | None = None
     rejection_evidence: DevelopmentResponseRejection | None = None
+    completion_telemetry: DevelopmentCompletionTelemetry | None = None
     findings_validated: Literal[False] = False
     audit_complete: Literal[False] = False
     qualification_eligible: Literal[False] = False
     release_eligible: Literal[False] = False
 
     @model_serializer(mode="wrap")
-    def omit_absent_rejection_evidence(
+    def omit_absent_diagnostic_evidence(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, Any]:
-        """Keep legacy and successful observation bytes unchanged when no detail was observed."""
+        """Keep older observation bytes unchanged when optional metadata was not observed."""
 
         result: dict[str, Any] = handler(self)
         if self.rejection_evidence is None:
             result.pop("rejection_evidence", None)
+        if self.completion_telemetry is None:
+            result.pop("completion_telemetry", None)
         return result
 
     @field_validator(
@@ -284,6 +288,15 @@ class _DevelopmentAccountedObservation[
 
     @model_validator(mode="after")
     def observation_is_consistent(self) -> Self:
+        if self.completion_telemetry is not None and (
+            self.http_status is None
+            or self.response_sha256 is None
+            or self.completion_telemetry.response_sha256 != self.response_sha256
+            or (
+                self.rejection_evidence is not None and self.rejection_evidence.stage == "HTTP_BODY"
+            )
+        ):
+            raise ValueError("development telemetry lacks exact parsed response custody")
         if self.rejection_evidence is not None:
             rejection = self.rejection_evidence
             if (
