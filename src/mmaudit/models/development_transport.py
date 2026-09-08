@@ -38,8 +38,16 @@ from mmaudit.models.development_diagnostics import (
 from mmaudit.models.development_diagnostics import (
     DevelopmentResponseField as ResponseField,
 )
+from mmaudit.models.development_judgment import (
+    DevelopmentJudgmentShardObservation,
+    PreparedDevelopmentJudgmentShard,
+    prepare_development_judgment_shard,
+    validate_development_candidate_accounting,
+    validate_development_judgment_response,
+)
 from mmaudit.models.development_review import (
     DevelopmentFinding,
+    DevelopmentJudgmentResponse,
     DevelopmentReviewObservation,
     DevelopmentReviewResponse,
     DevelopmentScoredFinding,
@@ -54,6 +62,7 @@ from mmaudit.models.development_routing import (
     DEVELOPMENT_GENERATION_ID,
     DevelopmentRoutingContext,
     DevelopmentRoutingEvidence,
+    DevelopmentRoutingFailure,
     observe_development_routing,
 )
 from mmaudit.models.structured_output import (
@@ -73,7 +82,9 @@ DEVELOPMENT_COMPLETION_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_DEVELOPMENT_RESPONSE_BYTES = 1_000_000
 DEVELOPMENT_ATTEMPT_TIMEOUT_SECONDS = 180
 _GENERATION_ID = DEVELOPMENT_GENERATION_ID
-type _PreparedSource = PreparedDevelopmentReview | PreparedDevelopmentAuditShard
+type _PreparedSource = (
+    PreparedDevelopmentReview | PreparedDevelopmentAuditShard | PreparedDevelopmentJudgmentShard
+)
 
 
 class DevelopmentTransportError(ValueError):
@@ -215,7 +226,9 @@ def _validated_review(
     prepared: _PreparedSource,
     api_key: str,
     routing_evidence: DevelopmentRoutingEvidence,
-) -> tuple[str, DevelopmentReviewResponse | DevelopmentScoredReviewResponse]:
+) -> tuple[
+    str, DevelopmentReviewResponse | DevelopmentScoredReviewResponse | DevelopmentJudgmentResponse
+]:
     _validate_routing(routing_evidence)
     generation_id = payload.get("id")
     if type(generation_id) is not str or _GENERATION_ID.fullmatch(generation_id) is None:
@@ -273,6 +286,15 @@ def _validated_review(
         or detect_secrets(generation_id)
     ):
         raise _ResponseRejected(Diagnostic.SECRET_OUTPUT)
+    if type(prepared) is PreparedDevelopmentJudgmentShard:
+        judgment = _decode_development_review(content, DevelopmentJudgmentResponse)
+        try:
+            validate_development_judgment_response(
+                judgment, corpus_id=prepared.corpus_id, claims=prepared.claims
+            )
+        except ValueError:
+            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE) from None
+        return generation_id, judgment
     response: DevelopmentReviewResponse | DevelopmentScoredReviewResponse
     if type(prepared) is PreparedDevelopmentAuditShard and prepared.schema_version == "2.0":
         response = _decode_development_review(content, DevelopmentScoredReviewResponse)
@@ -383,6 +405,30 @@ async def review_development_audit_shard(
     return result
 
 
+async def review_development_judgment_shard(
+    *,
+    prepared: PreparedDevelopmentJudgmentShard,
+    ledger: AtomicCostLedger,
+    operator_secrets: OperatorSecrets,
+    allow_code_egress: bool = False,
+    mock_transport: httpx.MockTransport | None = None,
+) -> DevelopmentJudgmentShardObservation:
+    """Review one exact candidate shard once through the shared accounted transport."""
+
+    if type(prepared) is not PreparedDevelopmentJudgmentShard:
+        raise DevelopmentTransportError("judgment transport requires its exact prepared type")
+    result = await _review_development_source(
+        prepared=prepared,
+        ledger=ledger,
+        operator_secrets=operator_secrets,
+        allow_code_egress=allow_code_egress,
+        attempt=1,
+        mock_transport=mock_transport,
+    )
+    assert type(result) is DevelopmentJudgmentShardObservation
+    return result
+
+
 async def _review_development_source(
     *,
     prepared: _PreparedSource,
@@ -391,7 +437,11 @@ async def _review_development_source(
     allow_code_egress: bool,
     attempt: int,
     mock_transport: httpx.MockTransport | None,
-) -> DevelopmentReviewObservation | DevelopmentAnyAuditShardObservation:
+) -> (
+    DevelopmentReviewObservation
+    | DevelopmentAnyAuditShardObservation
+    | DevelopmentJudgmentShardObservation
+):
     """Execute one explicit attempt; never automatically retry an ambiguous paid call.
 
     Normal callers use an owned TLS transport with no redirects, proxies, ambient
@@ -403,7 +453,12 @@ async def _review_development_source(
     if allow_code_egress is not True:
         raise DevelopmentTransportError("development fixture egress requires explicit consent")
     if (
-        type(prepared) not in {PreparedDevelopmentReview, PreparedDevelopmentAuditShard}
+        type(prepared)
+        not in {
+            PreparedDevelopmentReview,
+            PreparedDevelopmentAuditShard,
+            PreparedDevelopmentJudgmentShard,
+        }
         or type(ledger) is not AtomicCostLedger
     ):
         raise DevelopmentTransportError(
@@ -423,8 +478,7 @@ async def _review_development_source(
             request_id=prepared.estimate.request_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
         )
-    else:
-        assert type(prepared) is PreparedDevelopmentAuditShard
+    elif type(prepared) is PreparedDevelopmentAuditShard:
         if attempt != 1:
             raise DevelopmentTransportError("audit shards do not automatically retry")
         rebuilt = prepare_development_audit_shard(
@@ -439,6 +493,26 @@ async def _review_development_source(
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
             schema_version=prepared.schema_version,
         )
+    else:
+        assert type(prepared) is PreparedDevelopmentJudgmentShard
+        if attempt != 1:
+            raise DevelopmentTransportError("development judgments do not automatically retry")
+        rebuilt = prepare_development_judgment_shard(
+            candidate=prepared.candidate,
+            policy=prepared.estimate.policy,
+            endpoint_snapshot=prepared.discovery
+            if prepared.discovery is not None
+            else prepared.endpoint_snapshot,
+            source_files=prepared.source_files,
+            shard_id=prepared.shard_id,
+            run_id=prepared.run_id,
+            maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
+        )
+        validate_development_candidate_accounting(rebuilt.candidate, ledger.snapshot())
+        if rebuilt.candidate.transport != (
+            "MOCK_HTTP" if mock_transport is not None else "HTTP_OBSERVATION"
+        ):
+            raise DevelopmentTransportError("candidate and judgment transport observations differ")
     if rebuilt != prepared or not rebuilt.estimate.within_estimated_budget:
         raise DevelopmentTransportError(
             "development request or estimate changed or exceeds its targets"
@@ -478,7 +552,12 @@ async def _review_development_source(
     actual: Decimal | None = None
     response_hash: str | None = None
     generation_id: str | None = None
-    review: DevelopmentReviewResponse | DevelopmentScoredReviewResponse | None = None
+    review: (
+        DevelopmentReviewResponse
+        | DevelopmentScoredReviewResponse
+        | DevelopmentJudgmentResponse
+        | None
+    ) = None
     routing_evidence: DevelopmentRoutingEvidence | None = None
     rejection_evidence: DevelopmentResponseRejection | None = None
     completion_telemetry: DevelopmentCompletionTelemetry | None = None
@@ -565,6 +644,23 @@ async def _review_development_source(
                     api_key=api_key,
                     generation_header_ids=tuple(response.headers.get_list("x-generation-id")),
                 )
+                if type(prepared) is PreparedDevelopmentJudgmentShard and any(
+                    item.generation_id == payload.get("id")
+                    for item in prepared.candidate.observations
+                ):
+                    routing_evidence = DevelopmentRoutingEvidence.model_validate(
+                        {
+                            **routing_evidence.model_dump(),
+                            "failure_codes": tuple(
+                                dict.fromkeys(
+                                    (
+                                        *routing_evidence.failure_codes,
+                                        DevelopmentRoutingFailure.GENERATION_REUSE,
+                                    )
+                                )
+                            ),
+                        }
+                    )
                 generation_id, review = _validated_review(
                     payload,
                     headers=response.headers,
@@ -643,6 +739,16 @@ async def _review_development_source(
     )
     if type(prepared) is PreparedDevelopmentReview:
         return DevelopmentReviewObservation.model_validate(values)
+    if type(prepared) is PreparedDevelopmentJudgmentShard:
+        values.update(
+            candidate_sha256=prepared.candidate_sha256,
+            corpus_id=prepared.corpus_id,
+            run_id=prepared.run_id,
+            shard_id=prepared.shard_id,
+            claims=prepared.claims,
+            elapsed_seconds=_DEVELOPMENT_MONOTONIC() - started,
+        )
+        return DevelopmentJudgmentShardObservation.model_validate(values)
     assert type(prepared) is PreparedDevelopmentAuditShard
     values.update(
         corpus_id=prepared.corpus_id,

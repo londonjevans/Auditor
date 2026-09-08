@@ -159,6 +159,92 @@ Local synthetic CLI/mock-HTTP tests exercise both corpora and schema versions ac
 missing-cost, malformed-JSON and timeout failures followed by a separately selected run. These
 controls do not authenticate private billing or demonstrate an actual provider recovery.
 
+## Executed development candidate review
+
+`development judge-audit` executes a second-model review of one retained, complete v2
+`audit-corpus` result. This supplies a candidate-to-judge stage, not a complete specialist
+ensemble, qualified cross-lineage adjudication or an autonomous real audit. It is paid-capable;
+this documentation and the local regression results do not select a provider run.
+
+Supply `--candidate-audit-file`, `--endpoint-snapshot`, `--corpus-root`, the original
+`--cost-ledger`, `--secrets-env-file`, a fresh `--output-dir` and `--run-id`, plus the existing
+`--budget-usd`, `--per-attempt-usd`, `--accept-estimate-risk` and `--allow-code-egress` controls.
+Paths must be absolute, distinct and normalized. Optional `--truth-manifest` selects the same
+exact local truth used for the candidate audit and writes a review-impact score. The corpus ID
+comes from the candidate plan; an incomplete or v1 audit is refused, not silently reinterpreted.
+`--maximum-completion-tokens`, `--maximum-run-seconds`, `--safety-multiplier` and the explicit
+`--carry-uncertain-estimates` policy retain their existing limits and risk meaning.
+
+The runner binds the original candidate audit, every unchanged finding, reviewer metadata,
+full frozen source and exact byte-estimated requests in `plan.json` before dispatch. It sends
+one request for each nonempty primary-file candidate shard, up to three requests and 48
+candidates. Source, comments and candidate prose are untrusted data. Truth, score, candidate
+summary and producer identity metadata are not inserted into the judge prompt; model-written
+finding prose is retained unchanged, so this is not a guarantee of semantic blinding or the
+removal of identity hints that a candidate itself contains. No model-generated code or command
+is executed. Identical requested IDs and metadata-known canonical aliases are refused.
+Distinct IDs are only an exclusion check: `lineage_independence` stays `NOT_ESTABLISHED`.
+
+Each supplied claim ID must receive exactly one ordered `SUPPORTED`, `REFUTED` or
+`INCONCLUSIVE` opinion. The judge cannot introduce, edit or merge findings. Supported and
+refuted decisions require at least one bounded source reference; wire and public JSON schemas
+export that requirement, while typed validation also enforces exact candidate coverage,
+unique references and actual corpus line bounds. A citation is not proof of semantic validity.
+Missing, duplicate, reordered, invented or out-of-scope decisions refuse the whole response;
+they are neither repaired nor counted as a completed review. Inconclusive decisions count as
+observed responses, never as support or refutation.
+
+The existing ledger must contain the exact original candidate request/reservation identities,
+states and costs, and its cumulative target cannot be reset. This checks retained accounting
+consistency; it does not independently authenticate billing, ledger-file provenance or prevent
+an operator from making filesystem copies. Existing holds, overruns, budget exhaustion and
+unlisted uncertainty still block. Each failed current review stops with no automatic retry.
+The separately selected carry policy may permit a later run while retaining old unknown
+estimates in full. The candidate's original files and all its costs stay unchanged.
+
+The new private output directory uses the existing mode 0700/0600 and owned-file protections:
+`plan.json`, optional `benchmark-plan.json`, one `file-0N.json` per observed or failed request,
+then `result.json` and optional `score.json`. Each prior output binding is rechecked before
+another request and finalization. Interrupted requests retain ledger accounting, including an
+unobserved uncertain or still-reserved entry where appropriate. Cancellation is re-raised after
+best-effort finalization. Failed output custody can prevent a result file, never erase a charge
+or turn a missing result into success. Existing output directories and paid request IDs cannot
+be replayed under a new output path.
+
+If every candidate list is empty, the result is `NO_CANDIDATES`: no judgment request, zero
+judgment completions and no new ledger entry. A successful CLI return for that local operation
+is not evidence of a completed judgment or safety. Its observation-rate denominator is empty
+and its value is null. On a planted corpus, no candidates means zero root recall; an empty
+expected-root denominator does not mean perfect recall.
+
+The `development_judgment_impact_score` embeds both the original candidate score and the exact
+review observation. It does not fabricate a filtered audit or change original dispositions.
+Every original claim retains its structural classification and an opinion or `UNREVIEWED`.
+Supported planted roots are deduplicated even if the originally designated first match was
+refuted but another same-root candidate was supported. Supported guarded, unmatched and
+advisory claims remain visible; refuted planted candidates, inconclusive and missing reviews
+are counted separately. All complete-quality ratios become `INCOMPLETE_SCOPE` with null values
+when the review stage fails, while the actual first-attempt observation fraction stays visible.
+
+`supported_severity_weighted_structural_precision` uses only supported claims in its
+denominator. `all_candidate_severity_weighted_structural_precision` preserves every original
+candidate, including refuted, inconclusive and unreviewed ones. Both count each supported
+planted root only once and are structural measurements, not validated precision. Reporting both
+prevents a filtered support set from concealing the initial candidate noise. The original
+candidate score remains available unchanged.
+
+`judgment_accounted_cost_usd` covers this review stage; `combined_accounted_cost_usd` adds this
+one candidate audit exactly once. Neither is the entire historical ledger total, which can also
+include other attempts and uncertain liabilities. Multiple reviews sharing a candidate must
+not sum their combined totals and charge the same candidate repeatedly. `elapsed_seconds` is
+the owned review-stage duration; `summed_stage_elapsed_seconds` adds the retained candidate
+duration and is not end-to-end ensemble latency or a controlled parallel experiment.
+
+All artifacts remain non-qualifying: model opinions, requested-ID diversity, synthetic scores
+and recomputable hashes cannot establish independent roots, external ground-truth provenance,
+an evidence-anchored seal, guaranteed budget enforcement, validated findings or superiority.
+The existing strict qualified runner and frozen objective are unchanged.
+
 ## Comparing retained runs without another provider call
 
 `mmaudit development compare-scores` accepts two through eight explicit absolute

@@ -221,6 +221,60 @@ class DevelopmentScoredReviewResponse(_DevelopmentModel):
     findings: tuple[DevelopmentScoredFinding, ...] = Field(max_length=16)
 
 
+def _judgment_decision_schema(schema: dict[str, Any]) -> None:
+    """Export the conclusive-reference requirement as complete closed wire alternatives."""
+
+    properties = schema.get("properties")
+    if (
+        type(properties) is not dict
+        or schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or set(properties) != {"claim_id", "verdict", "explanation", "source_refs"}
+        or set(schema.get("required", ())) != set(properties)
+        or any(key in schema for key in ("anyOf", "oneOf", "allOf"))
+    ):
+        raise ValueError("development judgment schema has an unexpected object shape")
+    original = deepcopy(schema)
+    branches = []
+    for verdicts, minimum in ((["SUPPORTED", "REFUTED"], 1), (["INCONCLUSIVE"], 0)):
+        branch = deepcopy(original)
+        branch["properties"]["verdict"]["enum"] = verdicts
+        branch["properties"]["source_refs"]["minItems"] = minimum
+        branches.append(branch)
+    schema.clear()
+    schema.update({"anyOf": branches})
+    for annotation in ("title", "description"):
+        if annotation in original:
+            schema[annotation] = original[annotation]
+
+
+class DevelopmentJudgmentDecision(_DevelopmentModel):
+    """Source-grounded review of one immutable hypothesis, not a validated finding."""
+
+    model_config = ConfigDict(json_schema_extra=_judgment_decision_schema)
+
+    claim_id: str = Field(pattern=r"^file-0[123]:(?:0[1-9]|1[0-6])$")
+    verdict: Literal["SUPPORTED", "REFUTED", "INCONCLUSIVE"]
+    explanation: str = Field(min_length=1, max_length=2_000)
+    source_refs: tuple[DevelopmentRootCauseReference, ...] = Field(max_length=6)
+
+    @model_validator(mode="after")
+    def conclusive_review_requires_source_references(self) -> Self:
+        if self.verdict != "INCONCLUSIVE" and not self.source_refs:
+            raise ValueError("conclusive development judgment requires source references")
+        if len(set(self.source_refs)) != len(self.source_refs):
+            raise ValueError("development judgment source references are repeated")
+        return self
+
+
+class DevelopmentJudgmentResponse(_DevelopmentModel):
+    """Bounded candidate decisions; neither support nor a citation grants assurance."""
+
+    schema_version: Literal["1.0"]
+    summary: str = Field(min_length=1, max_length=2_000)
+    decisions: tuple[DevelopmentJudgmentDecision, ...] = Field(min_length=1, max_length=16)
+
+
 class DevelopmentReviewDiagnostic(StrEnum):
     HTTP_ERROR = "HTTP_ERROR"
     TRANSPORT_ERROR = "TRANSPORT_ERROR"
@@ -234,7 +288,11 @@ class DevelopmentReviewDiagnostic(StrEnum):
 
 
 class _DevelopmentAccountedObservation[
-    ReviewT: (DevelopmentReviewResponse, DevelopmentScoredReviewResponse)
+    ReviewT: (
+        DevelopmentReviewResponse,
+        DevelopmentScoredReviewResponse,
+        DevelopmentJudgmentResponse,
+    )
 ](_DevelopmentModel):
     """Shared accounting/refusal contract; subclasses must bind their exact source scope."""
 
@@ -502,13 +560,20 @@ def _development_request_body(
     schema_name: str,
     maximum_completion_tokens: int,
     response_version: DevelopmentResponseVersion = "1.0",
+    judgment: bool = False,
 ) -> dict[str, Any]:
     """One compiled text-only envelope shared by independently pinned source builders."""
 
     if type(response_version) is not str or response_version not in {"1.0", "2.0"}:
         raise DevelopmentCostError("development response schema version is unsupported")
+    if type(judgment) is not bool or (judgment and response_version != "2.0"):
+        raise DevelopmentCostError("development judgment requires the explicit v2 candidate path")
     response_model = (
-        DevelopmentReviewResponse if response_version == "1.0" else DevelopmentScoredReviewResponse
+        DevelopmentJudgmentResponse
+        if judgment
+        else DevelopmentReviewResponse
+        if response_version == "1.0"
+        else DevelopmentScoredReviewResponse
     )
     return {
         "model": snapshot.exact_model_id,

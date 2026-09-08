@@ -257,18 +257,10 @@ class PreparedDevelopmentAudit:
     shards: tuple[PreparedDevelopmentAuditShard, ...] = field(repr=False)
 
 
-def prepare_development_audit_shard(
-    *,
-    policy: DevelopmentCostPolicy,
-    endpoint_snapshot: DevelopmentReviewMetadata,
-    corpus_id: DevelopmentCorpusId,
-    source_files: DevelopmentSourceBytes,
-    primary_filename: str,
-    run_id: str,
-    maximum_completion_tokens: int = 4096,
-    schema_version: DevelopmentResponseVersion = "1.0",
-) -> PreparedDevelopmentAuditShard:
-    """Rebuild only exact frozen corpus bytes; no arbitrary source or prompt surface."""
+def validate_development_audit_sources(
+    corpus_id: DevelopmentCorpusId, source_files: DevelopmentSourceBytes
+) -> None:
+    """Require the complete ordered frozen corpus before any review-stage request."""
 
     expected = _sources(corpus_id)
     if type(source_files) is not tuple or len(source_files) != len(expected):
@@ -285,6 +277,44 @@ def prepare_development_audit_shard(
             or len(pair[1].splitlines()) != source.line_count
         ):
             raise DevelopmentCostError("development corpus bytes, order or completeness differ")
+
+
+def render_development_audit_sources(
+    corpus_id: DevelopmentCorpusId,
+    source_files: DevelopmentSourceBytes,
+    primary_filename: str,
+) -> str:
+    """Render validated source bytes only; no truth, candidate or provider metadata."""
+
+    validate_development_audit_sources(corpus_id, source_files)
+    corpus_sha = development_corpus_sha256(corpus_id)
+    user_prompt = f"Primary file: {primary_filename}\nExact shared corpus SHA-256: {corpus_sha}\n"
+    for name, content in source_files:
+        user_prompt += (
+            f"\nSource file: {name}\nSource SHA-256: {hashlib.sha256(content).hexdigest()}\n"
+        )
+        user_prompt += "\n".join(
+            f"{index}: {line}" for index, line in enumerate(content.decode("utf-8").splitlines(), 1)
+        )
+        user_prompt += "\nEnd source file.\n"
+    return user_prompt
+
+
+def prepare_development_audit_shard(
+    *,
+    policy: DevelopmentCostPolicy,
+    endpoint_snapshot: DevelopmentReviewMetadata,
+    corpus_id: DevelopmentCorpusId,
+    source_files: DevelopmentSourceBytes,
+    primary_filename: str,
+    run_id: str,
+    maximum_completion_tokens: int = 4096,
+    schema_version: DevelopmentResponseVersion = "1.0",
+) -> PreparedDevelopmentAuditShard:
+    """Rebuild only exact frozen corpus bytes; no arbitrary source or prompt surface."""
+
+    expected = _sources(corpus_id)
+    validate_development_audit_sources(corpus_id, source_files)
     if type(policy) is not DevelopmentCostPolicy or policy.maximum_attempts != 1:
         raise DevelopmentCostError("development audit requires an exact single-attempt policy")
     if primary_filename not in {source.filename for source in expected}:
@@ -295,15 +325,7 @@ def prepare_development_audit_shard(
     ordinal = next(
         index for index, source in enumerate(expected, 1) if source.filename == primary_filename
     )
-    user_prompt = f"Primary file: {primary_filename}\nExact shared corpus SHA-256: {corpus_sha}\n"
-    for name, content in source_files:
-        user_prompt += (
-            f"\nSource file: {name}\nSource SHA-256: {hashlib.sha256(content).hexdigest()}\n"
-        )
-        user_prompt += "\n".join(
-            f"{index}: {line}" for index, line in enumerate(content.decode("utf-8").splitlines(), 1)
-        )
-        user_prompt += "\nEnd source file.\n"
+    user_prompt = render_development_audit_sources(corpus_id, source_files, primary_filename)
     body = _development_request_body(
         snapshot=snapshot,
         system_prompt=_SYSTEM_PROMPT if schema_version == "1.0" else _SCORED_SYSTEM_PROMPT,

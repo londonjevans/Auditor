@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "summary": "Synthetic local review opinion; not verified security evidence.",
+  "decisions": [
+    {
+      "claim_id": "file-01:01",
+      "verdict": "SUPPORTED",
+      "explanation": "The synthetic source is consistent with the retained authorization hypothesis.",
+      "source_refs": [{"filename": "RoutePolicy.sol", "line_start": 40, "line_end": 46}]
+    }
+  ]
+}

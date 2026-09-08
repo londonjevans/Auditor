@@ -22,6 +22,7 @@ from mmaudit.models.development_audit import (
     _sources,
     development_corpus_sha256,
 )
+from mmaudit.models.development_judgment import DevelopmentJudgmentObservation, _money_sum
 from mmaudit.models.development_review import (
     DevelopmentRootCauseReference,
     DevelopmentScoredFinding,
@@ -451,6 +452,171 @@ def score_development_audit(
     claims, summary = _measure(binding, observation)
     return DevelopmentBenchmarkScore(
         binding=binding,
+        observation=observation,
+        observation_sha256=canonical_sha256(observation.model_dump(mode="json")),
+        claims=claims,
+        summary=summary,
+    )
+
+
+class DevelopmentJudgmentImpactRow(_DevelopmentModel):
+    """Preserve the original scorer's disposition beside an unvalidated review opinion."""
+
+    candidate_claim: DevelopmentClaimMeasurement
+    judgment: Literal["SUPPORTED", "REFUTED", "INCONCLUSIVE", "UNREVIEWED"]
+
+
+class DevelopmentJudgmentImpactSummary(_DevelopmentModel):
+    quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS", "NO_CANDIDATES"]
+    candidate_claim_count: int = Field(ge=0, le=48)
+    supported_claim_count: int = Field(ge=0, le=48)
+    refuted_claim_count: int = Field(ge=0, le=48)
+    inconclusive_claim_count: int = Field(ge=0, le=48)
+    unreviewed_claim_count: int = Field(ge=0, le=48)
+    supported_planted_root_ids: tuple[str, ...] = Field(max_length=16)
+    refuted_planted_candidate_count: int = Field(ge=0, le=48)
+    supported_guarded_claim_count: int = Field(ge=0, le=48)
+    supported_unmatched_invariant_count: int = Field(ge=0, le=48)
+    supported_advisory_count: int = Field(ge=0, le=48)
+    first_attempt_claim_observation_rate: DevelopmentMeasurementRatio
+    supported_root_recall: DevelopmentMeasurementRatio
+    supported_severity_weighted_structural_precision: DevelopmentMeasurementRatio
+    all_candidate_severity_weighted_structural_precision: DevelopmentMeasurementRatio
+    combined_accounted_cost_usd: Decimal = Field(ge=0)
+    active_reserved_usd: Decimal = Field(ge=0)
+    summed_stage_elapsed_seconds: float = Field(ge=0, allow_inf_nan=False)
+
+
+def _judgment_impact_parts(
+    candidate_score: DevelopmentBenchmarkScore, observation: DevelopmentJudgmentObservation
+) -> tuple[tuple[DevelopmentJudgmentImpactRow, ...], DevelopmentJudgmentImpactSummary]:
+    if candidate_score.observation != observation.plan.candidate:
+        raise ValueError("development judgment score changed its retained candidate audit")
+    decisions = {
+        decision.claim_id: decision.verdict
+        for shard in observation.observations
+        if shard.status == "OBSERVED" and shard.response is not None
+        for decision in shard.response.decisions
+    }
+    rows = tuple(
+        DevelopmentJudgmentImpactRow(
+            candidate_claim=claim, judgment=decisions.get(claim.claim_id, "UNREVIEWED")
+        )
+        for claim in candidate_score.claims
+    )
+    supported = tuple(row.candidate_claim for row in rows if row.judgment == "SUPPORTED")
+    roots = tuple(
+        control
+        for control in candidate_score.binding.truth.controls
+        if control.expected == "PLANTED"
+    )
+    supported_roots = tuple(
+        sorted(
+            {
+                claim.control_id
+                for claim in supported
+                if claim.disposition in {"MATCHED_ROOT", "DUPLICATE_OR_CONSEQUENCE"}
+                and claim.control_id is not None
+            }
+        )
+    )
+    complete = observation.status != "INCOMPLETE"
+    matched_weight = sum(
+        _WEIGHTS[root.severity] for root in roots if root.control_id in supported_roots
+    )
+    summary = DevelopmentJudgmentImpactSummary(
+        quality_scope="NO_CANDIDATES"
+        if observation.status == "NO_CANDIDATES"
+        else ("COMPLETE_OBSERVATIONS" if complete else "INCOMPLETE_OBSERVATIONS"),
+        candidate_claim_count=len(rows),
+        supported_claim_count=len(supported),
+        refuted_claim_count=sum(row.judgment == "REFUTED" for row in rows),
+        inconclusive_claim_count=sum(row.judgment == "INCONCLUSIVE" for row in rows),
+        unreviewed_claim_count=sum(row.judgment == "UNREVIEWED" for row in rows),
+        supported_planted_root_ids=supported_roots,
+        refuted_planted_candidate_count=sum(
+            row.judgment == "REFUTED"
+            and row.candidate_claim.disposition in {"MATCHED_ROOT", "DUPLICATE_OR_CONSEQUENCE"}
+            for row in rows
+        ),
+        supported_guarded_claim_count=sum(
+            claim.disposition == "GUARDED_CONTROL_CLAIM" for claim in supported
+        ),
+        supported_unmatched_invariant_count=sum(
+            claim.disposition == "UNMATCHED_INVARIANT" for claim in supported
+        ),
+        supported_advisory_count=sum(
+            claim.disposition in {"ADVISORY", "ADVISORY_AT_PLANTED_SITE"} for claim in supported
+        ),
+        first_attempt_claim_observation_rate=_ratio(len(decisions), len(rows), complete=True),
+        supported_root_recall=_ratio(len(supported_roots), len(roots), complete=complete),
+        supported_severity_weighted_structural_precision=_ratio(
+            matched_weight, sum(claim.weight for claim in supported), complete=complete
+        ),
+        all_candidate_severity_weighted_structural_precision=_ratio(
+            matched_weight, sum(claim.weight for claim in candidate_score.claims), complete=complete
+        ),
+        combined_accounted_cost_usd=_money_sum(
+            (
+                candidate_score.observation.total_accounted_cost_usd,
+                observation.judgment_accounted_cost_usd,
+            )
+        ),
+        active_reserved_usd=observation.active_reserved_usd,
+        summed_stage_elapsed_seconds=observation.summed_stage_elapsed_seconds,
+    )
+    return rows, summary
+
+
+class DevelopmentJudgmentImpactScore(_AuditArtifact):
+    """Same frozen truth and original denominators; no manufactured filtered audit record."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    artifact_kind: Literal["development_judgment_impact_score"] = (
+        "development_judgment_impact_score"
+    )
+    interpretation: Literal[
+        "MODEL_REVIEW_OPINIONS_AND_STRUCTURAL_MATCHES_NOT_VALIDATED_FINDINGS"
+    ] = "MODEL_REVIEW_OPINIONS_AND_STRUCTURAL_MATCHES_NOT_VALIDATED_FINDINGS"
+    lineage_independence: Literal["NOT_ESTABLISHED"] = "NOT_ESTABLISHED"
+    candidate_score: DevelopmentBenchmarkScore
+    observation: DevelopmentJudgmentObservation
+    observation_sha256: str = Field(pattern=_SHA)
+    claims: tuple[DevelopmentJudgmentImpactRow, ...] = Field(max_length=48)
+    summary: DevelopmentJudgmentImpactSummary
+
+    @model_validator(mode="after")
+    def impact_recomputes_from_exact_inputs(self) -> Self:
+        if self.observation_sha256 != canonical_sha256(self.observation.model_dump(mode="json")):
+            raise ValueError("development judgment impact observation digest differs")
+        claims, summary = _judgment_impact_parts(self.candidate_score, self.observation)
+        if self.claims != claims or self.summary != summary:
+            raise ValueError("development judgment impact does not reproduce from its exact inputs")
+        return self
+
+
+def score_development_judgment(
+    *, binding: DevelopmentBenchmarkBinding, observation: DevelopmentJudgmentObservation
+) -> DevelopmentJudgmentImpactScore:
+    """Compare review opinions with original structural controls without new truth or credit."""
+
+    if (
+        type(binding) is not DevelopmentBenchmarkBinding
+        or type(observation) is not DevelopmentJudgmentObservation
+    ):
+        raise ValueError("development judgment scorer requires exact input types")
+    binding = DevelopmentBenchmarkBinding.model_validate_json(
+        binding.model_dump_json(), strict=True
+    )
+    observation = DevelopmentJudgmentObservation.model_validate_json(
+        observation.model_dump_json(), strict=True
+    )
+    candidate_score = score_development_audit(
+        binding=binding, observation=observation.plan.candidate
+    )
+    claims, summary = _judgment_impact_parts(candidate_score, observation)
+    return DevelopmentJudgmentImpactScore(
+        candidate_score=candidate_score,
         observation=observation,
         observation_sha256=canonical_sha256(observation.model_dump(mode="json")),
         claims=claims,

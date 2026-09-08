@@ -14,6 +14,7 @@ from mmaudit.benchmark.development import (
     DevelopmentBenchmarkBinding,
     DevelopmentBenchmarkScore,
     DevelopmentBenchmarkTruth,
+    DevelopmentJudgmentImpactScore,
 )
 from mmaudit.benchmark.development_comparison import DevelopmentBenchmarkComparison
 from mmaudit.benchmark.engine import BenchmarkReport
@@ -56,7 +57,13 @@ from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
     DevelopmentResponseRejection,
 )
+from mmaudit.models.development_judgment import (
+    DevelopmentJudgmentObservation,
+    DevelopmentJudgmentPlan,
+    DevelopmentJudgmentShardObservation,
+)
 from mmaudit.models.development_review import (
+    DevelopmentJudgmentResponse,
     DevelopmentReviewObservation,
     DevelopmentReviewResponse,
     DevelopmentScoredReviewResponse,
@@ -235,6 +242,11 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_benchmark_binding.schema.json": DevelopmentBenchmarkBinding,
     "development_benchmark_score.schema.json": DevelopmentBenchmarkScore,
     "development_benchmark_comparison.schema.json": DevelopmentBenchmarkComparison,
+    "development_judgment_response.schema.json": DevelopmentJudgmentResponse,
+    "development_judgment_plan.schema.json": DevelopmentJudgmentPlan,
+    "development_judgment_shard_observation.schema.json": DevelopmentJudgmentShardObservation,
+    "development_judgment_observation.schema.json": DevelopmentJudgmentObservation,
+    "development_judgment_impact_score.schema.json": DevelopmentJudgmentImpactScore,
     "openrouter_endpoint_inventory_diagnostic.schema.json": (OpenRouterEndpointInventoryDiagnostic),
     "findings_artifact.schema.json": FindingsArtifact,
     "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,

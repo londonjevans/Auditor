@@ -1,0 +1,2405 @@
+{
+  "$defs": {
+    "ByokObservation": {
+      "enum": [
+        "ABSENT",
+        "FALSE",
+        "TRUE",
+        "INVALID"
+      ],
+      "type": "string"
+    },
+    "CostEntryStatus": {
+      "description": "Persisted lifecycle state for one unique provider request.",
+      "enum": [
+        "reserved",
+        "reconciled",
+        "released",
+        "uncertain_accounted",
+        "reservation_overrun"
+      ],
+      "title": "CostEntryStatus",
+      "type": "string"
+    },
+    "DevelopmentAnyAuditShardObservation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentAuditShardObservation"
+        },
+        {
+          "$ref": "#/$defs/DevelopmentScoredAuditShardObservation"
+        }
+      ]
+    },
+    "DevelopmentAuditAccountingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "accounted_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Accounted Cost Usd"
+        },
+        "actual_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Actual Cost Usd"
+        },
+        "ledger_request_id": {
+          "pattern": "^dev-estimate-[0-9a-f]{64}:1$",
+          "title": "Ledger Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "maximum": 250.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Reserved Usd"
+        },
+        "shard_id": {
+          "pattern": "^file-0[123]$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CostEntryStatus"
+        }
+      },
+      "required": [
+        "shard_id",
+        "ledger_request_id",
+        "reservation_id",
+        "status",
+        "reserved_usd",
+        "actual_cost_usd",
+        "accounted_cost_usd"
+      ],
+      "title": "DevelopmentAuditAccountingEntry",
+      "type": "object"
+    },
+    "DevelopmentAuditObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "accounting": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentAuditAccountingEntry"
+          },
+          "maxItems": 3,
+          "title": "Accounting",
+          "type": "array"
+        },
+        "active_reserved_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Active Reserved Usd"
+        },
+        "artifact_kind": {
+          "const": "development_audit_observation",
+          "default": "development_audit_observation",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "completed_shard_count": {
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Completed Shard Count",
+          "type": "integer"
+        },
+        "elapsed_seconds": {
+          "minimum": 0,
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentAnyAuditShardObservation"
+          },
+          "maxItems": 3,
+          "title": "Observations",
+          "type": "array"
+        },
+        "plan": {
+          "$ref": "#/$defs/DevelopmentAuditPlan"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "OBSERVED_ALL_SHARDS",
+            "INCOMPLETE"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "SHARD_INCOMPLETE",
+                "LOCAL_FAILURE",
+                "INTERRUPTED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stop Reason"
+        },
+        "total_accounted_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Total Accounted Cost Usd"
+        },
+        "transport": {
+          "enum": [
+            "MOCK_HTTP",
+            "HTTP_OBSERVATION"
+          ],
+          "title": "Transport",
+          "type": "string"
+        },
+        "unobserved_shard_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Unobserved Shard Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan",
+        "transport",
+        "status",
+        "stop_reason",
+        "observations",
+        "accounting",
+        "unobserved_shard_ids",
+        "completed_shard_count",
+        "total_accounted_cost_usd",
+        "active_reserved_usd",
+        "elapsed_seconds"
+      ],
+      "title": "DevelopmentAuditObservation",
+      "type": "object"
+    },
+    "DevelopmentAuditPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_kind": {
+          "const": "development_audit_plan",
+          "default": "development_audit_plan",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "corpus_id": {
+          "$ref": "#/$defs/DevelopmentCorpusId"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "estimated_total_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "maximum": 250.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Total Cost Usd"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "partition": {
+          "const": "COMPLETE_PRIMARY_FILES_WITH_FULL_SHARED_CORPUS",
+          "default": "COMPLETE_PRIMARY_FILES_WITH_FULL_SHARED_CORPUS",
+          "title": "Partition",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/DevelopmentResponseVersion",
+          "default": "1.0"
+        },
+        "shards": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentAuditShardPlan"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Shards",
+          "type": "array"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentAuditSource"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "corpus_id",
+        "corpus_sha256",
+        "sources",
+        "shards",
+        "estimated_total_cost_usd",
+        "plan_sha256"
+      ],
+      "title": "DevelopmentAuditPlan",
+      "type": "object"
+    },
+    "DevelopmentAuditShardObservation": {
+      "additionalProperties": false,
+      "description": "Retained v1 observation, without inferred timing or reinterpreted finding kinds.",
+      "properties": {
+        "accounted_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Accounted Cost Usd"
+        },
+        "accounting_status": {
+          "$ref": "#/$defs/CostEntryStatus"
+        },
+        "artifact_kind": {
+          "const": "development_audit_shard_observation",
+          "default": "development_audit_shard_observation",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "completion_telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentCompletionTelemetry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "corpus_id": {
+          "$ref": "#/$defs/DevelopmentCorpusId"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentReviewDiagnostic"
+          },
+          "maxItems": 10,
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "estimate": {
+          "$ref": "#/$defs/DevelopmentCostEstimate"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "generation_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generation Id"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Http Status"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "rejection_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentResponseRejection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "reported_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reported Cost Usd"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentReviewResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Sha256"
+        },
+        "routing_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentRoutingEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^file-0[123]$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "source_filename": {
+          "title": "Source Filename",
+          "type": "string"
+        },
+        "source_scope": {
+          "const": "PINNED_SYNTHETIC_AUDIT_CORPUS",
+          "default": "PINNED_SYNTHETIC_AUDIT_CORPUS",
+          "title": "Source Scope",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OBSERVED",
+            "INCOMPLETE"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "transport": {
+          "enum": [
+            "MOCK_HTTP",
+            "HTTP_OBSERVATION"
+          ],
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_filename",
+        "source_sha256",
+        "estimate",
+        "attempt",
+        "transport",
+        "status",
+        "diagnostics",
+        "http_status",
+        "response_sha256",
+        "generation_id",
+        "accounting_status",
+        "reported_cost_usd",
+        "accounted_cost_usd",
+        "response",
+        "corpus_id",
+        "corpus_sha256",
+        "run_id",
+        "shard_id"
+      ],
+      "title": "DevelopmentAuditShardObservation",
+      "type": "object"
+    },
+    "DevelopmentAuditShardPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "context_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Context Corpus Sha256",
+          "type": "string"
+        },
+        "estimate": {
+          "$ref": "#/$defs/DevelopmentCostEstimate"
+        },
+        "primary_filename": {
+          "title": "Primary Filename",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^file-0[123]$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shard_id",
+        "primary_filename",
+        "source_sha256",
+        "context_corpus_sha256",
+        "estimate"
+      ],
+      "title": "DevelopmentAuditShardPlan",
+      "type": "object"
+    },
+    "DevelopmentAuditSource": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "title": "Line Count",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "exclusiveMinimum": 0,
+          "maximum": 16384,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size",
+        "line_count"
+      ],
+      "title": "DevelopmentAuditSource",
+      "type": "object"
+    },
+    "DevelopmentCompletionTelemetry": {
+      "additionalProperties": false,
+      "description": "Parsed metadata only: the body hash does not authenticate provider usage or identity.",
+      "properties": {
+        "completion_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_FinishReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finish_reason_state": {
+          "$ref": "#/$defs/_TelemetryState"
+        },
+        "interpretation": {
+          "const": "REPORTED_METADATA_NOT_VERIFIED_USAGE",
+          "default": "REPORTED_METADATA_NOT_VERIFIED_USAGE",
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "native_finish_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_NativeFinishReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_finish_reason_state": {
+          "$ref": "#/$defs/_TelemetryState"
+        },
+        "prompt_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "reasoning_subset_consistency": {
+          "$ref": "#/$defs/_Consistency"
+        },
+        "reasoning_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        },
+        "response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_sum_consistency": {
+          "$ref": "#/$defs/_Consistency"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/DevelopmentTelemetryCount"
+        }
+      },
+      "required": [
+        "response_sha256",
+        "finish_reason",
+        "finish_reason_state",
+        "native_finish_reason",
+        "native_finish_reason_state",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "token_sum_consistency",
+        "reasoning_subset_consistency"
+      ],
+      "title": "DevelopmentCompletionTelemetry",
+      "type": "object"
+    },
+    "DevelopmentCorpusId": {
+      "enum": [
+        "unit-ledger-a-v1",
+        "unit-ledger-b-v1"
+      ],
+      "type": "string"
+    },
+    "DevelopmentCostComponent": {
+      "additionalProperties": false,
+      "description": "One observed rate and the deliberately conservative estimation allowance.",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/DevelopmentPriceField"
+        },
+        "estimated_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Unit Price Usd"
+        },
+        "estimated_units": {
+          "maximum": 4000000,
+          "minimum": 0,
+          "title": "Estimated Units",
+          "type": "integer"
+        },
+        "observed_unit_price_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Observed Unit Price Usd"
+        }
+      },
+      "required": [
+        "component",
+        "observed_unit_price_usd",
+        "estimated_unit_price_usd",
+        "estimated_units"
+      ],
+      "title": "DevelopmentCostComponent",
+      "type": "object"
+    },
+    "DevelopmentCostEstimate": {
+      "additionalProperties": false,
+      "description": "Non-qualifying explanatory output, not an admission or execution capability.",
+      "properties": {
+        "artifact_kind": {
+          "const": "development_cost_estimate",
+          "default": "development_cost_estimate",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentCostComponent"
+          },
+          "maxItems": 7,
+          "minItems": 2,
+          "title": "Components",
+          "type": "array"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "estimated_cost_all_attempts_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Cost All Attempts Usd"
+        },
+        "estimated_cost_per_attempt_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Estimated Cost Per Attempt Usd"
+        },
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "maximum_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Maximum Completion Tokens",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/DevelopmentCostPolicy"
+        },
+        "provider_endpoint": {
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_enforced_ceiling": {
+          "const": false,
+          "default": false,
+          "title": "Provider Enforced Ceiling",
+          "type": "boolean"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "request_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 4000000,
+          "title": "Request Bytes",
+          "type": "integer"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "warning": {
+          "const": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+          "default": "DEVELOPMENT ONLY: estimated costs may exceed reservations and the budget target. This is not a provider-enforced ceiling or qualification/release evidence.",
+          "title": "Warning",
+          "type": "string"
+        },
+        "within_estimated_budget": {
+          "title": "Within Estimated Budget",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy",
+        "request_id",
+        "request_sha256",
+        "endpoint_snapshot_sha256",
+        "exact_model_id",
+        "provider_endpoint",
+        "request_bytes",
+        "maximum_completion_tokens",
+        "components",
+        "estimated_cost_per_attempt_usd",
+        "estimated_cost_all_attempts_usd",
+        "within_estimated_budget"
+      ],
+      "title": "DevelopmentCostEstimate",
+      "type": "object"
+    },
+    "DevelopmentCostPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit target budgets, not hard guarantees; defaults keep retries off.",
+      "properties": {
+        "maximum_attempts": {
+          "default": 1,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "overspend_risk_accepted": {
+          "const": true,
+          "title": "Overspend Risk Accepted",
+          "type": "boolean"
+        },
+        "per_attempt_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Per Attempt Budget Usd",
+          "type": "string"
+        },
+        "purpose": {
+          "const": "DEVELOPMENT_ONLY_ESTIMATED",
+          "default": "DEVELOPMENT_ONLY_ESTIMATED",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "safety_multiplier": {
+          "default": "2",
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Safety Multiplier",
+          "type": "string"
+        },
+        "total_budget_usd": {
+          "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",
+          "title": "Total Budget Usd",
+          "type": "string"
+        },
+        "uncertain_cost_policy": {
+          "default": "STOP",
+          "enum": [
+            "STOP",
+            "CARRY_RESERVED_ESTIMATE"
+          ],
+          "title": "Uncertain Cost Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "overspend_risk_accepted",
+        "total_budget_usd",
+        "per_attempt_budget_usd"
+      ],
+      "title": "DevelopmentCostPolicy",
+      "type": "object"
+    },
+    "DevelopmentFinding": {
+      "additionalProperties": false,
+      "description": "Unvalidated model hypothesis, deliberately separate from qualified findings.",
+      "properties": {
+        "explanation": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "recommendation": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "violated_invariant": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Violated Invariant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "violated_invariant",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentFinding",
+      "type": "object"
+    },
+    "DevelopmentJudgmentClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "pattern": "^file-0[123]:(?:0[1-9]|1[0-6])$",
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "finding": {
+          "$ref": "#/$defs/DevelopmentScoredFinding"
+        }
+      },
+      "required": [
+        "claim_id",
+        "finding"
+      ],
+      "title": "DevelopmentJudgmentClaim",
+      "type": "object"
+    },
+    "DevelopmentJudgmentShardPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentJudgmentClaim"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Claims",
+          "type": "array"
+        },
+        "estimate": {
+          "$ref": "#/$defs/DevelopmentCostEstimate"
+        },
+        "primary_filename": {
+          "title": "Primary Filename",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^file-0[123]$",
+          "title": "Shard Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shard_id",
+        "primary_filename",
+        "claims",
+        "estimate"
+      ],
+      "title": "DevelopmentJudgmentShardPlan",
+      "type": "object"
+    },
+    "DevelopmentPriceField": {
+      "enum": [
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "request",
+        "image",
+        "web_search"
+      ],
+      "type": "string"
+    },
+    "DevelopmentResponseFailureReason": {
+      "enum": [
+        "CONTENT_ENCODING",
+        "CONTENT_LENGTH",
+        "RESPONSE_SIZE",
+        "RESPONSE_JSON",
+        "GENERATION_ID",
+        "COMPLETION_OBJECT",
+        "USAGE",
+        "TOKEN_COUNTS",
+        "SERVER_TOOLS",
+        "CHOICES",
+        "CHOICE_INDEX",
+        "MESSAGE",
+        "STRUCTURED_OUTPUT",
+        "FINDING_LINE_BOUNDS",
+        "ORIGIN_FILE_SCOPE",
+        "ORIGIN_LINE_BOUNDS"
+      ],
+      "title": "DevelopmentResponseFailureReason",
+      "type": "string"
+    },
+    "DevelopmentResponseField": {
+      "enum": [
+        "response",
+        "schema_version",
+        "summary",
+        "findings",
+        "finding",
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "kind",
+        "vulnerability_class",
+        "violated_invariant",
+        "root_cause_ref",
+        "root_cause_ref.filename",
+        "root_cause_ref.line_start",
+        "root_cause_ref.line_end",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentResponseField",
+      "type": "string"
+    },
+    "DevelopmentResponseRejection": {
+      "additionalProperties": false,
+      "description": "Hash-bound refusal detail, meaningful only with its incomplete parent observation.",
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentResponseField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finding_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Index"
+        },
+        "reason": {
+          "$ref": "#/$defs/DevelopmentResponseFailureReason"
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Sha256"
+        },
+        "schema_issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DevelopmentSchemaIssue"
+          },
+          "maxItems": 8,
+          "title": "Schema Issues",
+          "type": "array"
+        },
+        "schema_issues_truncated": {
+          "default": false,
+          "title": "Schema Issues Truncated",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "HTTP_BODY",
+            "COMPLETION_ENVELOPE",
+            "STRUCTURED_OUTPUT",
+            "SOURCE_SCOPE"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "structured_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredOutputFailureCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "stage",
+        "reason"
+      ],
+      "title": "DevelopmentResponseRejection",
+      "type": "object"
+    },
+    "DevelopmentResponseVersion": {
+      "enum": [
+        "1.0",
+        "2.0"
+      ],
+      "type": "string"
+    },
+    "DevelopmentReviewDiagnostic": {
+      "enum": [
+        "HTTP_ERROR",
+        "TRANSPORT_ERROR",
+        "TIMEOUT",
+        "INVALID_RESPONSE",
+        "IDENTITY_MISMATCH",
+        "INCOMPLETE_OUTPUT",
+        "SECRET_OUTPUT",
+        "UNKNOWN_COST",
+        "COST_OVERRUN"
+      ],
+      "title": "DevelopmentReviewDiagnostic",
+      "type": "string"
+    },
+    "DevelopmentReviewResponse": {
+      "additionalProperties": false,
+      "description": "Bounded source review only; no execution, consensus, or validation credit.",
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentFinding"
+          },
+          "maxItems": 16,
+          "title": "Findings",
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "findings"
+      ],
+      "title": "DevelopmentReviewResponse",
+      "type": "object"
+    },
+    "DevelopmentRootCauseReference": {
+      "additionalProperties": false,
+      "description": "Model-proposed origin coordinates, never proof that a root cause is valid.",
+      "properties": {
+        "filename": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,95}\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentRootCauseReference",
+      "type": "object"
+    },
+    "DevelopmentRoutingContext": {
+      "additionalProperties": false,
+      "description": "Supplied request/discovery binding, not independently authenticated provider evidence.",
+      "properties": {
+        "canonical_model_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Model Id"
+        },
+        "catalog_identity_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog Identity Binding Sha256"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "identity_basis": {
+          "enum": [
+            "REQUEST_ID_ONLY",
+            "SUPPLIED_DISCOVERY_BOUND"
+          ],
+          "title": "Identity Basis",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Metadata Snapshot Sha256"
+        },
+        "provider_endpoint": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "endpoint_snapshot_sha256",
+        "identity_basis"
+      ],
+      "title": "DevelopmentRoutingContext",
+      "type": "object"
+    },
+    "DevelopmentRoutingEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Status"
+        },
+        "model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "provider": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        }
+      },
+      "required": [
+        "model",
+        "provider"
+      ],
+      "title": "DevelopmentRoutingEndpoint",
+      "type": "object"
+    },
+    "DevelopmentRoutingEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_kind": {
+          "const": "development_routing_observation",
+          "default": "development_routing_observation",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "attempt_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Attempt Count"
+        },
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+          },
+          "maxItems": 128,
+          "title": "Attempts",
+          "type": "array"
+        },
+        "available_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Available Count"
+        },
+        "context": {
+          "$ref": "#/$defs/DevelopmentRoutingContext"
+        },
+        "endpoint_total": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Endpoint Total"
+        },
+        "evidence_class": {
+          "const": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+          "default": "BOUNDED_UNTRUSTED_PROVIDER_OBSERVATION",
+          "title": "Evidence Class",
+          "type": "string"
+        },
+        "failure_codes": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingFailure"
+          },
+          "maxItems": 20,
+          "title": "Failure Codes",
+          "type": "array"
+        },
+        "metadata_shape": {
+          "enum": [
+            "ABSENT",
+            "OBJECT",
+            "INVALID"
+          ],
+          "title": "Metadata Shape",
+          "type": "string"
+        },
+        "pipeline_count": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pipeline Count"
+        },
+        "requested_model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "response_provider": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "returned_model": {
+          "$ref": "#/$defs/DevelopmentRoutingIdentity"
+        },
+        "router_attempt": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Router Attempt"
+        },
+        "router_byok": {
+          "$ref": "#/$defs/ByokObservation"
+        },
+        "runtime_authority": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authority",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_endpoints": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentRoutingEndpoint"
+          },
+          "maxItems": 128,
+          "title": "Selected Endpoints",
+          "type": "array"
+        },
+        "strategy": {
+          "enum": [
+            "ABSENT",
+            "DIRECT",
+            "OTHER",
+            "INVALID"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "usage_byok": {
+          "$ref": "#/$defs/ByokObservation"
+        }
+      },
+      "required": [
+        "context",
+        "returned_model",
+        "response_provider",
+        "requested_model",
+        "metadata_shape",
+        "strategy",
+        "router_attempt",
+        "router_byok",
+        "usage_byok",
+        "endpoint_total",
+        "available_count",
+        "selected_endpoints",
+        "attempt_count",
+        "attempts",
+        "pipeline_count",
+        "failure_codes"
+      ],
+      "title": "DevelopmentRoutingEvidence",
+      "type": "object"
+    },
+    "DevelopmentRoutingFailure": {
+      "enum": [
+        "RETURNED_MODEL",
+        "RESPONSE_PROVIDER",
+        "ROUTER_METADATA",
+        "REQUESTED_MODEL",
+        "STRATEGY",
+        "ROUTER_ATTEMPT",
+        "BYOK_EVIDENCE_MISSING",
+        "BYOK_REPORTED",
+        "BYOK_INVALID",
+        "PIPELINE",
+        "ENDPOINT_SHAPE",
+        "SELECTION_COUNT",
+        "SELECTED_MODEL",
+        "SELECTED_PROVIDER",
+        "ATTEMPT_SHAPE",
+        "ATTEMPT_MODEL",
+        "ATTEMPT_PROVIDER",
+        "ATTEMPT_STATUS",
+        "GENERATION_HEADER",
+        "GENERATION_REUSE"
+      ],
+      "title": "DevelopmentRoutingFailure",
+      "type": "string"
+    },
+    "DevelopmentRoutingIdentity": {
+      "additionalProperties": false,
+      "description": "Unknown response strings are suppressed completely, not heuristically echoed.",
+      "properties": {
+        "status": {
+          "enum": [
+            "REQUESTED",
+            "CANONICAL",
+            "PROVIDER",
+            "UNBOUND",
+            "ABSENT",
+            "INVALID",
+            "REDACTED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "DevelopmentRoutingIdentity",
+      "type": "object"
+    },
+    "DevelopmentSchemaConstraint": {
+      "enum": [
+        "REQUIRED_FIELD",
+        "EXTRA_FIELD",
+        "FIELD_TYPE",
+        "ENUM_VALUE",
+        "FIELD_BOUND",
+        "FIELD_FORMAT",
+        "LINE_ORDER",
+        "ADVISORY_FIELD_MUST_BE_NULL",
+        "INVARIANT_FIELD_MUST_BE_SET",
+        "SCHEMA_CONSTRAINT"
+      ],
+      "title": "DevelopmentSchemaConstraint",
+      "type": "string"
+    },
+    "DevelopmentSchemaIssue": {
+      "additionalProperties": false,
+      "description": "A known schema coordinate, never an input-authored key, value or error message.",
+      "properties": {
+        "constraint": {
+          "$ref": "#/$defs/DevelopmentSchemaConstraint"
+        },
+        "field": {
+          "$ref": "#/$defs/DevelopmentResponseField"
+        },
+        "finding_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Finding Index"
+        }
+      },
+      "required": [
+        "constraint",
+        "field",
+        "finding_index"
+      ],
+      "title": "DevelopmentSchemaIssue",
+      "type": "object"
+    },
+    "DevelopmentScoredAuditShardObservation": {
+      "additionalProperties": false,
+      "description": "V2 response with producer-measured elapsed time; no execution or quality authority.",
+      "properties": {
+        "accounted_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Accounted Cost Usd"
+        },
+        "accounting_status": {
+          "$ref": "#/$defs/CostEntryStatus"
+        },
+        "artifact_kind": {
+          "const": "development_audit_shard_observation",
+          "default": "development_audit_shard_observation",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "completion_telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentCompletionTelemetry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "corpus_id": {
+          "$ref": "#/$defs/DevelopmentCorpusId"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentReviewDiagnostic"
+          },
+          "maxItems": 10,
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "elapsed_seconds": {
+          "minimum": 0,
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "estimate": {
+          "$ref": "#/$defs/DevelopmentCostEstimate"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "generation_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generation Id"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Http Status"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "rejection_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentResponseRejection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "reported_cost_usd": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1000000000000.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reported Cost Usd"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentScoredReviewResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Sha256"
+        },
+        "routing_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentRoutingEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^file-0[123]$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "source_filename": {
+          "title": "Source Filename",
+          "type": "string"
+        },
+        "source_scope": {
+          "const": "PINNED_SYNTHETIC_AUDIT_CORPUS",
+          "default": "PINNED_SYNTHETIC_AUDIT_CORPUS",
+          "title": "Source Scope",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OBSERVED",
+            "INCOMPLETE"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "transport": {
+          "enum": [
+            "MOCK_HTTP",
+            "HTTP_OBSERVATION"
+          ],
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_filename",
+        "source_sha256",
+        "estimate",
+        "attempt",
+        "transport",
+        "status",
+        "diagnostics",
+        "http_status",
+        "response_sha256",
+        "generation_id",
+        "accounting_status",
+        "reported_cost_usd",
+        "accounted_cost_usd",
+        "response",
+        "corpus_id",
+        "corpus_sha256",
+        "run_id",
+        "shard_id",
+        "schema_version",
+        "elapsed_seconds"
+      ],
+      "title": "DevelopmentScoredAuditShardObservation",
+      "type": "object"
+    },
+    "DevelopmentScoredFinding": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "advisory"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "type": "null"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "title": "Violated Invariant",
+              "type": "null"
+            },
+            "vulnerability_class": {
+              "title": "Vulnerability Class",
+              "type": "null"
+            }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
+          ],
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "invariant_violation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "$ref": "#/$defs/DevelopmentRootCauseReference"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Violated Invariant",
+              "type": "string"
+            },
+            "vulnerability_class": {
+              "enum": [
+                "access_control",
+                "accounting",
+                "reservation",
+                "pause",
+                "other"
+              ],
+              "title": "Vulnerability Class",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
+          ],
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
+        }
+      ],
+      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+      "title": "DevelopmentScoredFinding"
+    },
+    "DevelopmentScoredReviewResponse": {
+      "additionalProperties": false,
+      "description": "Versioned development claims, disjoint from legacy or qualified audit findings.",
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentScoredFinding"
+          },
+          "maxItems": 16,
+          "title": "Findings",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "summary",
+        "findings"
+      ],
+      "title": "DevelopmentScoredReviewResponse",
+      "type": "object"
+    },
+    "DevelopmentTelemetryCount": {
+      "additionalProperties": false,
+      "description": "One reported bounded integer; missing and invalid values are not zero.",
+      "properties": {
+        "state": {
+          "enum": [
+            "REPORTED",
+            "NOT_REPORTED",
+            "INVALID"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 4000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "state",
+        "value"
+      ],
+      "title": "DevelopmentTelemetryCount",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "StructuredOutputFailureCode": {
+      "description": "Non-secret classification for one rejected structured response.",
+      "enum": [
+        "TRUNCATED_RESPONSE",
+        "INVALID_JSON_SYNTAX",
+        "DUPLICATE_OBJECT_KEY",
+        "NON_FINITE_NUMBER",
+        "SCHEMA_VALIDATION_FAILED"
+      ],
+      "title": "StructuredOutputFailureCode",
+      "type": "string"
+    },
+    "_Consistency": {
+      "enum": [
+        "CONSISTENT",
+        "INCONSISTENT",
+        "NOT_OBSERVED"
+      ],
+      "type": "string"
+    },
+    "_FinishReason": {
+      "enum": [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "error"
+      ],
+      "type": "string"
+    },
+    "_NativeFinishReason": {
+      "enum": [
+        "stop",
+        "stop_sequence",
+        "end_turn",
+        "eos_token",
+        "completed",
+        "length",
+        "max_tokens",
+        "model_length",
+        "tool_calls",
+        "function_call",
+        "content_filter",
+        "error"
+      ],
+      "type": "string"
+    },
+    "_TelemetryState": {
+      "enum": [
+        "REPORTED",
+        "NOT_REPORTED",
+        "INVALID",
+        "UNRECOGNIZED",
+        "AMBIGUOUS"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_judgment_plan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen candidate, reviewer and estimate bindings; identity diversity is not independence.",
+  "properties": {
+    "artifact_kind": {
+      "const": "development_judgment_plan",
+      "default": "development_judgment_plan",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "candidate": {
+      "$ref": "#/$defs/DevelopmentAuditObservation"
+    },
+    "candidate_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Sha256",
+      "type": "string"
+    },
+    "empty_candidate_shard_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3,
+      "title": "Empty Candidate Shard Ids",
+      "type": "array"
+    },
+    "estimated_total_cost_usd": {
+      "anyOf": [
+        {
+          "maximum": 250.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Estimated Total Cost Usd"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "lineage_independence": {
+      "const": "NOT_ESTABLISHED",
+      "default": "NOT_ESTABLISHED",
+      "title": "Lineage Independence",
+      "type": "string"
+    },
+    "maximum_completion_tokens": {
+      "maximum": 65536,
+      "minimum": 1,
+      "title": "Maximum Completion Tokens",
+      "type": "integer"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/DevelopmentCostPolicy"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "reviewer": {
+      "$ref": "#/$defs/DevelopmentRoutingContext"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "shards": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentJudgmentShardPlan"
+      },
+      "maxItems": 3,
+      "title": "Shards",
+      "type": "array"
+    }
+  },
+  "required": [
+    "candidate",
+    "candidate_sha256",
+    "run_id",
+    "reviewer",
+    "policy",
+    "maximum_completion_tokens",
+    "shards",
+    "empty_candidate_shard_ids",
+    "estimated_total_cost_usd",
+    "plan_sha256"
+  ],
+  "title": "DevelopmentJudgmentPlan",
+  "type": "object"
+}

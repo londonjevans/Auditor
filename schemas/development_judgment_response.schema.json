@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "DevelopmentJudgmentDecision": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Source-grounded review of one immutable hypothesis, not a validated finding.",
+          "properties": {
+            "claim_id": {
+              "pattern": "^file-0[123]:(?:0[1-9]|1[0-6])$",
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "source_refs": {
+              "items": {
+                "$ref": "#/$defs/DevelopmentRootCauseReference"
+              },
+              "maxItems": 6,
+              "minItems": 1,
+              "title": "Source Refs",
+              "type": "array"
+            },
+            "verdict": {
+              "enum": [
+                "SUPPORTED",
+                "REFUTED"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "claim_id",
+            "verdict",
+            "explanation",
+            "source_refs"
+          ],
+          "title": "DevelopmentJudgmentDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Source-grounded review of one immutable hypothesis, not a validated finding.",
+          "properties": {
+            "claim_id": {
+              "pattern": "^file-0[123]:(?:0[1-9]|1[0-6])$",
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "source_refs": {
+              "items": {
+                "$ref": "#/$defs/DevelopmentRootCauseReference"
+              },
+              "maxItems": 6,
+              "minItems": 0,
+              "title": "Source Refs",
+              "type": "array"
+            },
+            "verdict": {
+              "enum": [
+                "INCONCLUSIVE"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "claim_id",
+            "verdict",
+            "explanation",
+            "source_refs"
+          ],
+          "title": "DevelopmentJudgmentDecision",
+          "type": "object"
+        }
+      ],
+      "description": "Source-grounded review of one immutable hypothesis, not a validated finding.",
+      "title": "DevelopmentJudgmentDecision"
+    },
+    "DevelopmentRootCauseReference": {
+      "additionalProperties": false,
+      "description": "Model-proposed origin coordinates, never proof that a root cause is valid.",
+      "properties": {
+        "filename": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,95}\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentRootCauseReference",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_judgment_response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded candidate decisions; neither support nor a citation grants assurance.",
+  "properties": {
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentJudgmentDecision"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Decisions",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "decisions"
+  ],
+  "title": "DevelopmentJudgmentResponse",
+  "type": "object"
+}
