@@ -3,6 +3,90 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T22:18Z — **`V3-DEVTIMEOUT-001` verified live: 17 of 19 shards of the 4,952-line corpus observed in 9.3 min, 35 claims, 1.19 USD real; stopped by a `together` 429 at shard 18. Key quality finding: the 14 market modules are template-identical, yet the model flagged 4 and cleared 10 — a free consistency benchmark, and the template itself is derivable truth.**
+
+Timestamp from the clock. Development ledger #3: 91 entries, 85 reconciled, 6 uncertain.
+**Actual development spend across ledgers 2.596349356 USD**; phantom uncertain reservations
+3.257646236 USD. Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. Run
+
+`devmanifest-20260908-005k-deepseek-2`: `audit-manifest`, corpus
+`realistic-scale-solidity-005k-v1` (manifest `4c2c5ab1…`), deepseek-v4-pro=together, 16384 tokens,
+**`--request-timeout-seconds 900`**, run deadline 1800 s, per-attempt 1.00, carry mode. Output
+`…/development-audits/manifest-005k-deepseek-together-20260908-r2/`.
+
+```
+status SHARD_INCOMPLETE   observed 17/19   claims 35   real 1.19226756   uncertain +0.74143798
+elapsed 559.4 s   primary lines observed 4,336 / 4,952
+file-0018 (src/markets/SyntheticMarket013.sol): HTTP 429 → HTTP_ERROR, UNKNOWN_COST   (first 429 from together today, after 17 requests in 9 min)
+```
+
+Per shard: 51.5k prompt tokens, 0.068 USD, 4–8 s for the 13 files with no claims; 87–145 s for the
+four files with claims. The 900 s timeout was never approached, so DEVTIMEOUT is verified as
+sufficient for this route; the earlier 180 s failure (21:30Z) was a slow-but-successful response
+class, not a hang.
+
+### 2. Claims (35, all on four files)
+
+| shard | file | claims (inv / adv) | examples |
+|---|---|---|---|
+| file-0006 | `src/markets/SyntheticMarket001.sol` | 7 / 0 | overflow claims on deposit/borrow/liquidation/index (high) |
+| file-0008 | `SyntheticMarket003.sol` | 4 / 6 | unchecked `uint128` casts (high); guardian emergency drain; unvalidated strategy accounting (low) |
+| file-0010 | `SyntheticMarket005.sol` | 5 / 3 | deposit to zero address locks assets; borrow check ignores existing debt; liquidation on healthy positions (high) |
+| file-0017 | `SyntheticMarket012.sol` | 7 / 3 | unchecked `uint128` casts (high); market can be reinitialized (high); double-counted strategy assets (medium) |
+| 13 others | interfaces, core, 10 other markets | 0 | "no invariant violations or advisories identified" |
+
+Operator spot-check on `SyntheticMarket012.sol`, source only, no validation claimed: line 83
+`_positions[receiver].collateral += uint128(assets);` is an unchecked narrowing cast (real pattern,
+practically unreachable at 2^128); `initializeMarket` (41–57) is `external` with no visible
+initializer guard beyond `_initializeSyntheticAccess`; `emergencyAssetReturn` (203–209) lets any
+guardian transfer any amount to any receiver while paused. These are legitimate finding classes on
+a synthetic protocol; the "overflow" claims on file-0006 look like the same casts described less
+precisely.
+
+### 3. The important observation ($0)
+
+`diff SyntheticMarket001.sol SyntheticMarket002.sol` differs only in the contract name, `MARKET_ID`
+and six fee constants; 001 vs 003 differs in 54 lines of the same kind. The generator
+(`scripts/generate_realistic_scale_fixtures.py:438 _market_source`) emits **one template for all 14
+markets**, including the `uint128` casts (lines 525/564/575/593/598 of the template) and the
+guardian emergency path. So:
+
+- Every defect class the model reported on markets 001/003/005/012 is present, by construction, in
+  all 14 markets. The model reported them on **4 of 14** and returned "no findings" on the other 10.
+  On identical code. That is a **29 % per-file consistency rate** for this model at this context size,
+  and it is the first quantitative quality signal from a realistic-size run.
+- Because the template is the source of the pattern, **the template is derivable truth**: a
+  `truth-*.json` for this corpus can be generated from the generator (the cast sites, the
+  unguarded initializer, the guardian drain) rather than hand-labelled, with the 14 markets giving
+  14 independent chances to detect each root. That converts this corpus into a scored,
+  multi-root benchmark with essentially zero authoring cost and no model-authored labels.
+- Whether each template pattern is a "defect" is a judgment (the cast is unreachable in practice;
+  the guardian drain is a documented trust assumption). The truth manifest already has `expected:
+  PLANTED | GUARDED`; a third class, e.g. `DESIGN_CHOICE`, would let the scorer count consistency
+  without asserting exploitability.
+
+### 4. Requests
+
+1. Record DEVTIMEOUT as verified (900 s, no timeout in 17 shards) and record this run.
+2. **Generate truth for `solidity_005k` from the generator template** (the three patterns above, one
+   entry per market file), and extend `--truth-manifest` scoring to `audit-manifest`. Then the
+   existing scorer yields per-root recall across 14 identical instances, which is the consistency
+   number the objective's "stability" requirement (V3-STABILITY-001) needs anyway.
+3. The 429 retry (`Retry-After`, one bounded attempt) remains the top reliability request; `together`
+   now rate-limits too under sustained load.
+4. Cost lever from 21:30Z stands: per-shard context subsets. At 0.068 USD per file the 35k-line
+   corpus is ≈ 12 USD per candidate pass.
+
+### 5. Operator plan
+
+Pause here: rerunning for the last two shards costs ≈ 0.14 USD and adds no information until the
+retry exists, and the consistency finding does not need them. Ledger #3 remains usable under carry
+mode. The operator will run the truth-scored version of this corpus, and the ensemble on it, as
+soon as request 2 lands.
+
 ## 2026-09-08T21:30Z — **`V3-DEVCORPUS-001` verified live on the 19-file / 4,952-line realistic-scale corpus: manifest freeze and 2 of 19 shards work; shard 3 hit the fixed 180 s request cap and stopped the run. The 180 s cap with no retry is now the binding constraint on anything larger than three files.**
 
 Timestamp from the clock. Development ledger #3: 66 entries (+3), 61 reconciled, 5 uncertain.
