@@ -3,6 +3,142 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T13:18Z — **FIRST MEASURED BASELINE (`V3-DEVBENCH-001`, `score.json`): planted variant recall 1.0, structural precision 0.19; guarded variant 0 invariant claims but 1-in-3 shards `INVALID_RESPONSE` on two attempts. Route switched to `together` after modal 429s.**
+
+Timestamp from the clock. Development ledgers: #1 10 entries (9 reconciled / 1 uncertain), #2 1 entry
+(uncertain), #3 5 entries (all reconciled). Actual development spend across ledgers `0.4129770` USD;
+uncertain reservations `0.4064568` USD (two 429s, no charge reported). Cumulative ledger untouched.
+Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Route change ($0 evidence)
+
+After the second 429 on `modal/mxfp4` (see 13:12Z), `list-endpoints --model moonshotai/kimi-k3` began
+failing closed with `per-model and ZDR endpoint diagnostic facts are inconsistent`, and the key's own
+status (`/auth/key`: limit 200, remaining 199.74, not free tier, daily usage 0.26064 = the day's
+reconciled charges) showed no key-level limit. Fresh discovery of `moonshotai/kimi-k3=together`
+(`devtrial-kimi-k3-together-20260908-d3`): operational, ZDR, native JSON schema, model-level
+efforts `[low,high,max]`, identical prices. Scored runs below use that route on ledger #3.
+
+### 2. Scored runs (`--truth-manifest`, response schema 2.0)
+
+| run id | corpus | route | status | shards | cost | time |
+|---|---|---|---|---|---|---|
+| `devbench-20260908-a-1` | a | modal | `SHARD_INCOMPLETE` (429) | 0/3 | 0 reported | 1.2 s |
+| `devbench-20260908-a-2` | a | modal | `SHARD_INCOMPLETE` (429) | 0/3 | 0 reported | 1.0 s |
+| `devbench-20260908-a-3` | a | together | **`OBSERVED_ALL_SHARDS`** | 3/3 | 0.0849096 | 77.9 s |
+| `devbench-20260908-b-3` | b | together | `SHARD_INCOMPLETE` (file-02 `INVALID_RESPONSE`, HTTP 200) | 1/3 | 0.0674274 | 88.2 s |
+| `devbench-20260908-b-4` | b | together | `SHARD_INCOMPLETE` (file-03 `INVALID_RESPONSE`, HTTP 200) | 2/3 | 0.1033902 | 86.1 s |
+
+Outputs under `~/.mmaudit/private/development-audits/unit-ledger-{a,b}-v1-scored{3,4}-together/`,
+each with `plan.json`, `benchmark-plan.json`, `file-0N.json`, `result.json`, `score.json`.
+
+### 3. First measured numbers — variant `a` (planted), `quality_scope: COMPLETE_OBSERVATIONS`
+
+| metric | value | num/den |
+|---|---|---|
+| `unique_root_recall` | **1.0** | 1/1 |
+| `severity_weighted_root_recall` | **1.0** | 5/5 |
+| `all_claim_unique_root_fraction` | 0.166667 | 1/6 |
+| `severity_weighted_structural_precision` | 0.192308 | 5/26 |
+| `first_attempt_shard_completion` | 1.0 | 3/3 |
+| claims: matched root / duplicate-or-consequence / advisory / advisory-at-planted-site | 1 / 2 / 1 / 2 | total 6 |
+| `guarded_control_claim_count`, `unmatched_invariant_claim_count` | 0, 0 | |
+
+Interpretation recorded by the scorer: `STRUCTURAL_MATCHES_NOT_SEMANTICALLY_VALIDATED_PRECISION`.
+The operator reads this as: the planted root is found every time; the low structural precision is
+almost entirely the same root restated per shard (2 duplicates) plus advisories, which is exactly
+what the dedup design was meant to expose. No invariant claim was made against anything that is
+not planted.
+
+### 4. Guarded variant `b` — observed shards only, both attempts `INCOMPLETE_SCOPE`
+
+Across the 3 observed shards of `b-3`/`b-4` combined: `invariant_claim_count 0`,
+`guarded_control_claim_count 0`, `unmatched_invariant_claim_count 0`, advisories 2 and 5. The
+model never claims the guarded invariant is broken. But **each attempt lost one shard to
+`INVALID_RESPONSE` on an HTTP 200** (file-02 then file-03; different shards, so not a fixed
+input). Under schema 2.0 the strict decoder rejects, most plausibly on the new nullability rule
+(advisories must have class/invariant/origin all null; invariant claims all set), and the shard
+record retains no reason: `generation_id null`, `response` absent, only `response_sha256`. 2 of 9
+v2 shards today failed this way; 0 of 6 v1 shards did.
+
+### 5. Requests
+
+1. **Retain the decode-failure reason** on `INVALID_RESPONSE` (which constraint failed, which
+   claim index, the offending field names; no prose) — same lever as DEVROUTE, and the run is
+   otherwise blind. Also retain `error.code`/`error.message`/`Retry-After` on `HTTP_ERROR`.
+2. **Within-run bounded second attempt for a shard that fails `INVALID_RESPONSE` or 429**, with
+   `first_attempt_shard_completion` still scored on the first attempt only (it already is a
+   separate metric). Otherwise a 3-shard run completes only when all three independent ~80 %
+   events succeed, and the guarded score can never reach `COMPLETE_OBSERVATIONS` on this route.
+3. The 13:12Z ledger-lockout requests (settle command; no-generation error classification)
+   stand and are now the top blocker: two ledgers are already retired by 429s that cost nothing.
+4. Record these as the first measured baseline under `V3-DEVBENCH-001` / `V3-SINGLE-AUDIT-001`
+   context. The operator will rerun `b` until a complete guarded score exists once request 2
+   or 1 lands, and will not burn further attempts blind.
+
+## 2026-09-08T13:12Z — **DEFECT: one HTTP 429 permanently locks a development ledger. First scored run (`--truth-manifest`) refused on shard 1; ledger #1 now unusable; ledger #2 created to continue.**
+
+Timestamp from the clock. Development ledger #1: 10 entries (9 `reconciled`, 1 `uncertain_accounted`
+at 0.2032284 reserved, actual `null`). Development ledger #2 initialized (cap 250, 0 entries).
+Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. What happened
+
+`development audit-corpus --truth-manifest truth-a.json` (`devbench-20260908-a-1`, route unchanged,
+output `…/development-audits/unit-ledger-a-v1-scored1/`) dispatched shard `file-01` and received
+**HTTP 429** from OpenRouter in 1.18 s. The observation records `diagnostics: [HTTP_ERROR,
+UNKNOWN_COST]`, `generation_id: null`, `reported_cost_usd: null`, `accounting_status:
+uncertain_accounted`, `accounted_cost_usd: 0.2032284` (the full reservation). The run stopped
+`SHARD_INCOMPLETE` with 0/3 shards, `plan.json`, `benchmark-plan.json`, `file-01.json`, `result.json`
+and `score.json` retained. No provider charge is reported anywhere.
+
+### 2. Consequence, verified on a copy ($0)
+
+`DevelopmentBudgetSession.reserve(...)` against a copy of ledger #1 now raises
+`CostBudgetExceededError: development reservation requires all prior provider costs to be settled`.
+This is the same lockout that disabled the cumulative ledger in August. A single transient provider
+rate limit, with no generation created and no usage reported, has made the ledger permanently
+unusable, and no supported command can settle the entry.
+
+Code path (`development_transport.py`): line 449 `actual = _reported_cost(payload)` → `None` for an
+error body (`{"error": {code, message, metadata?}}` per OpenRouter's documented error shape, no
+`usage`, no `id`); line 450 raises `HTTP_ERROR`; line 492 `budget.reconcile(reservation,
+actual_cost_usd=None)` → `uncertain_accounted`; line 494 appends `UNKNOWN_COST`. The conservative
+"unknown = reserved maximum" rule is right when a generation *may* exist (timeouts after dispatch,
+200 with missing usage). For a 4xx/5xx error body with no `id` and no `usage` there is nothing that
+could later be billed against this request identity, yet the ledger treats it as an open liability
+forever.
+
+OpenRouter's error documentation does not state that 429s are unbilled; it says only that a
+`Retry-After` header may accompany 429/503 and that prompt-processing cost can be charged "even if
+no content is generated" (a case where a generation exists). The operator is not asserting 429 is
+free; the operator is asserting the ledger has no way to ever close the question.
+
+### 3. Requests (bounded; this is now the top blocker for any measured baseline)
+
+1. **Settle path (already requested 05:24Z, now urgent):** an operator command that closes an
+   `uncertain_accounted` entry with an explicit attestation (`operator_attested_actual_usd` or
+   `closed_at_accounted_maximum`), retaining the attestation and reason. Without it every transient
+   provider error retires a ledger, and the sharded path cannot run more than once per ledger on a
+   bad day.
+2. **Error-body classification:** when the response is a non-200 with a parseable `error` object,
+   no `usage` and no generation `id`, record a typed `NO_GENERATION_ERROR` outcome with the HTTP
+   status and `Retry-After` (if any), reconcile at **accounted = reserved maximum but status
+   `settled_no_generation`** (or equivalent) so the entry does not block subsequent reservations
+   while still counting conservatively toward the cap. Keep `uncertain_accounted` for the genuinely
+   ambiguous cases. Regression: a 429 body must not block the next reservation.
+3. Optional: honour `Retry-After` with one bounded wait inside the same run before declaring the
+   shard incomplete, since a 3-shard run currently dies on the first 429.
+
+### 4. Operator continuation
+
+To keep the measured baseline moving, the operator initialized **development ledger #2**
+(`~/.mmaudit/private/development-cost-ledger-2.json`, `models init-cost-ledger`, cap 250) and is
+retrying the scored runs on it. Ledger #1 is retained as-is for the settle command to act on. Total
+development spend across ledgers will be reported as the sum; ledger #1's uncertain 0.2032284 is an
+accounting reservation, not a reported charge.
+
 ## 2026-09-08T09:22Z — **FIRST REAL SHARDED DEVELOPMENT AUDITS: both corpus variants `OBSERVED_ALL_SHARDS`. Planted defect found at the exact function; guarded variant carries no high. Three requests on scoring.**
 
 Timestamp from the clock. Development ledger: 9 entries, total `0.2606400` USD, all `reconciled`.
