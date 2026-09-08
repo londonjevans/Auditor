@@ -3,6 +3,78 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T19:30Z — **`V3-DEVJUDGE-001` verified live: three complete cross-lineage judge runs, 15/15 candidate claims `SUPPORTED`, 0 refuted. Two findings: the glm judge runs away on one shard; the judge inherits the candidate's token allowance, which silently couples the judge's cost target to the candidate's.**
+
+Timestamp from the clock. Development ledger #3: 46 entries, 43 reconciled, 3 uncertain
+(unchanged). **Actual development spend across ledgers 1.074681516 USD; phantom uncertain
+reservations 1.586985776 USD** (unchanged). Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Judge runs (`development judge-audit`, ledger #3, carry mode, truth supplied for impact only)
+
+| run id | candidate audit | judge=route | tokens / per-attempt | status | judge cost | time |
+|---|---|---|---|---|---|---|
+| `a-kimi-by-glm-1` | kimi a-3 (6 claims) | glm-5.2=together | 4096 / 0.50 | `JUDGMENT_INCOMPLETE`: file-01 `INCOMPLETE_OUTPUT` (`length`, 4096 completion, 0 reasoning) | 0.0216092 | 33.3 s |
+| `a-kimi-by-glm-2` | kimi a-3 | glm-5.2=together | 16384 / 0.50 | `JUDGMENT_INCOMPLETE`: file-01 ok (177 tok), **file-02 `length` at 16384 completion, 0 reasoning** | 0.07724632 | 147.9 s |
+| `a-kimi-by-deepseek-1` | kimi a-3 | deepseek=together | 16384 / 0.50 | **`OBSERVED_ALL_JUDGMENTS`** 6/6 | 0.01736064 | 76.7 s |
+| `b-kimi-by-deepseek-1` | kimi b-6 (6 advisories) | deepseek=together | 16384 / 0.50 | **`OBSERVED_ALL_JUDGMENTS`** 6/6 | 0.01728012 | 87.3 s |
+| `a-deepseek-by-kimi-1` | deepseek a-16 (3 claims) | kimi-k3=together | 16384 / 0.50 | refused pre-dispatch (see §3) | 0 | – |
+| `a-deepseek-by-kimi-2` | deepseek a-16 | kimi-k3=together | 65536 / 2.50 | **`OBSERVED_ALL_JUDGMENTS`** 3/3 | 0.0444030 | 30.7 s |
+
+Outputs under `~/.mmaudit/private/development-audits/judge-*`. Every complete run wrote
+`plan.json`, `benchmark-plan.json`, `file-0N.json`, `result.json`, `score.json`.
+
+### 2. Verdicts
+
+15 claims judged across three complete runs and three candidate/judge lineage pairings
+(kimi→deepseek ×2, deepseek→kimi): **15 `SUPPORTED`, 0 `REFUTED`, 0 `INCONCLUSIVE`**. Each decision
+carries source refs to the exact lines. Reading them, every supported claim is a true statement about
+the fixture, including the six guarded-corpus advisories and deepseek's misanchored root claim
+(`file-02:01`, judged on substance: "RoutePolicy.setGateway … onlyAdministrator", `SUPPORTED`).
+`supported_root_recall 1.0` on both planted judgments; `supported_severity_weighted_structural_precision`
+equals the candidate's (0.19 kimi, 0.33 deepseek) because nothing was removed.
+
+**What this does not show:** the judge has never been observed to refute. All 15 inputs were
+plausibly correct, so 15/15 may be right, but there is no live negative control. The operator has
+no natural false claim to feed it; a deliberately wrong synthetic candidate (e.g. a fabricated
+"reentrancy in `_move`") would be the honest test and belongs in the DEVJUDGE record as a gap
+until run.
+
+### 3. Findings
+
+1. **glm-5.2 as judge runs away.** On the same route where it audits in 45–500 tokens, as a judge
+   it hit `finish_reason length` at 4096 and again at 16384 completion tokens with
+   `reasoning_tokens 0` on shard file-02 (kimi's two UnitRouter claims). That is visible-output
+   generation to the cap, i.e. a loop on the judge schema, at 0.076 USD per occurrence. deepseek
+   and kimi judged the same shard in 479 and 406 tokens. Not diagnosed further; the response is
+   not retained. Worth a bounded look at what the judge schema/prompt does differently from the
+   audit one.
+2. **Judge allowance is forced equal to the candidate's.** `DevelopmentJudgmentPlan` rejects a
+   shard unless `estimate.maximum_completion_tokens == self.maximum_completion_tokens` **and**
+   `within_estimated_budget`, and the plan takes the tokens from the candidate. So judging a
+   65536-token deepseek candidate with kimi requires a per-attempt target ≥ 2.06 USD even though
+   the judge answered in ~400 tokens. The CLI refusal text ("invalid candidate, source, identity,
+   consent, cumulative accounting or output custody") does not name this. Suggest decoupling the
+   judge allowance (its output is a bounded decision list) or at least naming the check in the
+   refusal.
+3. Verified good: cross-lineage pairing is enforced only by operator choice (the artifact says
+   `lineage_independence: NOT_ESTABLISHED`, correctly); truth is not sent to the judge; carry mode
+   worked throughout; decisions are source-anchored.
+
+### 4. Requests
+
+1. Record DEVJUDGE's first live evidence as above (three complete pairings, 15/15 supported, no
+   refutation observed).
+2. Add a **synthetic negative-control candidate** (committed, non-deployable, with one deliberately
+   false invariant claim) so the operator can demonstrate a `REFUTED` verdict live for a few cents.
+3. Decouple or name the judge token-allowance coupling (§3.2).
+4. Bounded look at the glm judge runaway (§3.1); `--reasoning-effort` and the `Retry-After` retry
+   remain open from earlier entries.
+5. With candidate, scorer, comparator and judge all verified on the development policy, the
+   operator's reading of the next objective-relevant step is unchanged from 17:38Z: the
+   **executed ensemble** (candidate + two cross-lineage judges in one run, one `score.json`, union
+   as an executed result), then the same on a corpus larger than three files.
+
 ## 2026-09-08T17:38Z — **THREE LINEAGES MEASURED on the same frozen pair. deepseek-v4-pro completes on `together` (fireworks rate-limits back-to-back shards). Three-model comparison artifacts written. One scorer nuance: a correct root reported with the wrong primary anchor counts as `UNMATCHED_INVARIANT`.**
 
 Timestamp from the clock. Development ledger #3: 34 entries, 31 reconciled, 3 `uncertain_accounted`
