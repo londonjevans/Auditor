@@ -3,6 +3,82 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T21:30Z — **`V3-DEVCORPUS-001` verified live on the 19-file / 4,952-line realistic-scale corpus: manifest freeze and 2 of 19 shards work; shard 3 hit the fixed 180 s request cap and stopped the run. The 180 s cap with no retry is now the binding constraint on anything larger than three files.**
+
+Timestamp from the clock. Development ledger #3: 66 entries (+3), 61 reconciled, 5 uncertain.
+**Actual development spend across ledgers 1.358435756 USD**; phantom uncertain reservations
+2.516208256 USD (+0.74143508 from this run's two reserved-but-timed-out estimate slots).
+Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. What the operator did ($0 then paid)
+
+- No committed corpus with more than one planted root exists yet; DEVCORPUS delivered the
+  mechanism (`freeze_development_corpus` + `development audit-manifest`, 1–64 files), not a new
+  corpus. The repository's `tests/fixtures/solidity/realistic_scale/solidity_005k` (19 `.sol`,
+  175,158 bytes, 4,952 lines, generator-built, **no planted-defect metadata**) is the only
+  realistic-size synthetic tree, so the operator froze it:
+  `freeze_development_corpus(corpus_id='realistic-scale-solidity-005k-v1',
+  source_scope='OPERATOR_SUPPLIED_SYNTHETIC', ...)` →
+  `~/.mmaudit/private/development-corpora/realistic-scale-solidity-005k-v1.manifest.json`
+  (`manifest_sha256 4c2c5ab1…`). Note for the guide: `DevelopmentCorpusScope` is a string Literal,
+  not an enum; the docs' "declared `OPERATOR_SUPPLIED_SYNTHETIC`" is correct but a reader trying
+  `list(DevelopmentCorpusScope)` gets a `TypeError`.
+- `devmanifest-20260908-005k-deepseek-1`: `audit-manifest`, deepseek-v4-pro=together, 16384
+  tokens, per-attempt 1.00, carry mode, run deadline 1800 s.
+
+### 2. Result
+
+| shard | primary | status | prompt / completion tokens | cost | time |
+|---|---|---|---|---|---|
+| file-0001 | `src/core/Interfaces.sol` | `OBSERVED`, 0 claims ("only interface declarations") | 51,535 / 59 | 0.06825984 | 13.2 s |
+| file-0002 | (second file) | `OBSERVED`, 0 claims | 51,535 / 44 | 0.06820044 | 8.5 s |
+| file-0003 | (third file) | **`TIMEOUT` at 180.0 s**, `UNKNOWN_COST`, `uncertain_accounted` | – | 0 reported | 180 s |
+| file-0004…0019 | | unobserved (run stopped) | | | |
+
+`coverage_interpretation: RESPONSE_COMPLETION_NOT_VALIDATED_ANALYSIS_COVERAGE`; observed
+primary lines 119 / 4,952. Real cost 0.13646028 USD for two files. Output under
+`…/development-audits/manifest-005k-deepseek-together-20260908/` (`plan.json`, `sources.json`,
+`file-000N.json`, `result.json`).
+
+### 3. What this establishes
+
+- The manifest path works end to end: freeze, bounds, exact-byte custody, 51k-token full-context
+  requests, strict v3 decoding, accounting. Two honest "no findings" on interface-only files.
+- **Cost shape:** every request repeats the whole 175 KB snapshot (51.5k prompt tokens ≈ 0.068 USD
+  at deepseek's price), so this corpus costs ≈ 1.3 USD per full candidate pass before any output,
+  and 3–10× that for kimi. That is the documented "not dependency-aware sharding" caveat made
+  concrete.
+- **The fixed 180 s per-request cap is now the binding constraint.** Today it killed a glm
+  reviewer stage (20:37Z) and this candidate run at shard 3 of 19. With no retry and
+  stop-on-incomplete, a 19-shard run needs 19 consecutive sub-180 s responses on a 51k-token
+  prompt; deepseek took 8–13 s on two and >180 s on the third. Each timeout also parks a
+  ~0.37 USD phantom reservation.
+
+### 4. Requests (ordered by what unblocks the objective)
+
+1. **Per-request timeout as an option** (`--request-timeout-seconds`, bounded by the run deadline)
+   and/or **one bounded retry of a timed-out or 429'd shard within the remaining run deadline**,
+   with first-attempt metrics kept separate. This is the third entry today asking for the retry;
+   it is now the difference between the manifest path being usable and not.
+2. **A committed multi-root synthetic corpus with truth** (the DEVCORPUS ticket's own next step):
+   either plant N labelled defects into a copy of `solidity_005k` with a `truth-*.json` in the
+   existing manifest format, or build a ~10-file corpus with 3–5 roots and a guarded twin. Without
+   truth the manifest path yields observations only; with it, the scorer/comparator/ensemble
+   already built can run on it unchanged once they accept a general manifest.
+3. Extend truth scoring, `judge-audit` and `ensemble-corpus` to general manifests (the doc says
+   they "retain their fixed v2 three-file scope").
+4. Optional cost lever: allow a per-shard context subset (declared imports/neighbours) instead of
+   the whole snapshot; the current design is correct but 0.07 USD per file on a 5k-line corpus
+   will not scale to 35k lines within the 250 USD envelope for multi-model runs.
+
+### 5. Operator plan
+
+No further paid manifest runs tonight: without request 1 the expected outcome of a 19-shard run is
+another timeout and another ~0.4 USD of phantom reservation. Everything through the three-file
+ensemble is verified and reproducible from committed inputs. The operator will resume the moment
+request 1 or 2 lands.
+
 ## 2026-09-08T20:37Z — **`V3-DEVENSEMBLE-001` verified live: first EXECUTED cross-lineage ensemble completes on the planted corpus (candidate deepseek, reviewers kimi + glm, 9 requests, all stages observed, 0.068 USD, 100 s). Guarded corpus: 2 of 3 stages; the glm reviewer timed out at 180 s. glm is now the unreliable role-player.**
 
 Timestamp from the clock. Development ledger #3: 63 entries, 59 reconciled, 4 uncertain. **Actual
