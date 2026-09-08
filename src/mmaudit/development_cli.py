@@ -83,6 +83,13 @@ def preview_development_cost(
     maximum_attempts: Annotated[int, typer.Option("--maximum-attempts", min=1, max=32)] = 1,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    carry_uncertain_estimates: Annotated[
+        bool,
+        typer.Option(
+            "--carry-uncertain-estimates",
+            help="Carry unknown development costs at their estimates; never settle or retry them.",
+        ),
+    ] = False,
 ) -> None:
     """Estimate supplied local JSON only; never select a model or send a request."""
 
@@ -99,6 +106,9 @@ def preview_development_cost(
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
                 "maximum_attempts": maximum_attempts,
+                "uncertain_cost_policy": (
+                    "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"
+                ),
             }
         )
         if not endpoint_snapshot.is_absolute() or not request_file.is_absolute():
@@ -160,6 +170,13 @@ def review_development_fixture_command(
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    carry_uncertain_estimates: Annotated[
+        bool,
+        typer.Option(
+            "--carry-uncertain-estimates",
+            help="Carry unknown development costs at their estimates; never settle or retry them.",
+        ),
+    ] = False,
 ) -> None:
     """Paid-capable, explicit one-attempt review of a pinned non-deployable fixture.
 
@@ -183,6 +200,9 @@ def review_development_fixture_command(
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
                 "maximum_attempts": maximum_attempts,
+                "uncertain_cost_policy": (
+                    "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"
+                ),
             }
         )
         if attempt > maximum_attempts:
@@ -271,6 +291,13 @@ def audit_development_corpus_command(
             help="Exact frozen development-control JSON; selects v2 and writes a non-qualifying score.",
         ),
     ] = None,
+    carry_uncertain_estimates: Annotated[
+        bool,
+        typer.Option(
+            "--carry-uncertain-estimates",
+            help="Carry unknown development costs at their estimates; never settle or retry them.",
+        ),
+    ] = False,
 ) -> None:
     """Opt-in, non-qualifying three-file audit of one frozen synthetic corpus.
 
@@ -321,6 +348,9 @@ def audit_development_corpus_command(
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
                 "maximum_attempts": 1,
+                "uncertain_cost_policy": (
+                    "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"
+                ),
             }
         )
         metadata: DevelopmentReviewMetadata = TypeAdapter(DevelopmentReviewMetadata).validate_json(

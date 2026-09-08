@@ -121,6 +121,44 @@ cannot repair a refusal or override admission. Old observations omit this option
 remain parseable. No telemetry is backfilled, no counts are inferred from prices, and no request,
 retry, effort/budget change or generation lookup is selected by retaining these fields.
 
+## Continuing development with an uncertain estimated charge
+
+Development cost policy still defaults to `uncertain_cost_policy: STOP`. An unknown charge
+remains `UNCERTAIN_ACCOUNTED`, with `actual_cost_usd: null` and its full reserved estimate
+counted against the same cumulative budget. An error status or missing id/usage does not prove
+zero cost or that no generation occurred. The default therefore blocks later development requests.
+
+`preview-cost`, `review-fixture` and `audit-corpus` accept the optional
+`--carry-uncertain-estimates` flag. It selects `CARRY_RESERVED_ESTIMATE` in the existing typed
+development policy; the selected mode is retained in estimates, frozen plans and observations.
+The existing `--accept-estimate-risk` acknowledgement is still required, as is
+`--allow-code-egress` for paid-capable commands. This is pre-run configuration, not per-error
+settlement or permission to choose a model, source, ledger, endpoint or a paid attempt.
+
+In this mode, a later separately selected attempt or new run can use the remaining estimated
+budget on the **same ledger**, without discarding history or resetting the cap. Only fully
+accounted unknown entries in the existing canonical development request namespace are eligible.
+That namespace is an accounting convention, not authenticated proof of provider origin. Up to
+4,096 exact request/reservation/amount handles are revalidated under the same ledger lock as
+the new reservation. Stale, changed, duplicated or newly unlisted uncertainty still refuses.
+Pending requests, held portfolio slots, foreign unknown entries, prior overruns, insufficient
+remaining budget and reused request/run identities also refuse. Reopening the ledger neither
+settles unknown entries nor changes these checks.
+
+The prior unknown records and failed artifacts remain unchanged. Each failed current run still
+ends incomplete: this feature does not retry, resume missing shards, classify a request as free,
+release a reservation, or fabricate known charges. Existing known-cost reconciliation can still
+replace an unknown amount with observed cost; a resulting overrun remains blocking. Run and
+score totals stay run-scoped, while the ledger includes all historical estimated liabilities;
+do not substitute the latest successful run's subtotal for cumulative accounting.
+
+Estimates can be exceeded, including by carried unknown charges. This opt-in is not a
+provider-enforced ceiling, strict-cost proof, qualification or completed audit. Default policy
+serialization and provider request bytes remain unchanged; old observations are not backfilled.
+Local synthetic CLI/mock-HTTP tests exercise both corpora and schema versions across 429,
+missing-cost, malformed-JSON and timeout failures followed by a separately selected run. These
+controls do not authenticate private billing or demonstrate an actual provider recovery.
+
 ## Comparing retained runs without another provider call
 
 `mmaudit development compare-scores` accepts two through eight explicit absolute

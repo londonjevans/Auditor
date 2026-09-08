@@ -3386,6 +3386,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.consensus import preliminary_status
     from mmaudit.orchestration.cost_ledger import AtomicCostLedger
     from mmaudit.orchestration.development_audit import run_development_audit
+    from mmaudit.orchestration.development_budget import development_uncertain_reservations
     from mmaudit.orchestration.development_comparison import compare_development_score_files
     from mmaudit.orchestration.managed_fork_archives import (
         ManagedForkArchives,
@@ -3568,6 +3569,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "cost-ledger-existing-state-contract",
             AtomicCostLedger,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-uncertain-estimate-carry",
+            development_uncertain_reservations,
             "gate-cost-ledger-provisioning",
         ),
         _explicit_anchor(

@@ -29,6 +29,7 @@ _SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_DECIMAL_PLACES: Final = 18
 _MAX_INTEGER_DIGITS: Final = 12
 _MAX_STATE_BYTES: Final = 16 * 1024 * 1024
+MAX_UNCERTAIN_RESERVATION_ALLOWANCES: Final = 4096
 _LEGACY_STATE_KEYS: Final = frozenset({"schema_version", "cap_usd", "entries"})
 _PORTFOLIO_STATE_KEYS: Final = frozenset(
     {"schema_version", "cap_usd", "entries", "portfolio_holds"}
@@ -439,16 +440,38 @@ class AtomicCostLedger:
         maximum_cost_usd: Decimal,
         *,
         require_settled_prior_costs: bool = False,
+        allowed_uncertain_reservations: tuple[CostReservation, ...] = (),
     ) -> CostReservation:
         """Atomically reserve the supplied amount; optionally require settled history.
 
-        The opt-in settled-cost check excludes pending or uncertain costs under the
-        same lock as reservation. It does not turn a development estimate into a
-        provider-enforced maximum; existing callers retain their prior behavior.
+        The opt-in settled-cost check excludes pending and unlisted uncertain costs
+        under the same lock as reservation. Exact listed unknown entries remain
+        unchanged and fully accounted; allowances never settle or release them.
+        This does not turn an estimate into a provider-enforced maximum.
         """
 
         if type(require_settled_prior_costs) is not bool:
             raise CostLedgerConfigurationError("settled-cost requirement must be boolean")
+        if (
+            type(allowed_uncertain_reservations) is not tuple
+            or len(allowed_uncertain_reservations) > MAX_UNCERTAIN_RESERVATION_ALLOWANCES
+            or (allowed_uncertain_reservations and not require_settled_prior_costs)
+        ):
+            raise CostLedgerConfigurationError(
+                "uncertain allowances require a bounded tuple and settled-cost enforcement"
+            )
+        carried_request_ids: set[str] = set()
+        for allowance in allowed_uncertain_reservations:
+            if (
+                type(allowance) is not CostReservation
+                or type(allowance.reservation_id) is not str
+                or re.fullmatch(r"[0-9a-f]{32}", allowance.reservation_id) is None
+            ):
+                raise CostReservationStateError("uncertain reservation allowance is invalid")
+            _validate_request_id(allowance.request_id)
+            if allowance.request_id in carried_request_ids:
+                raise CostReservationStateError("uncertain reservation allowance is repeated")
+            carried_request_ids.add(allowance.request_id)
         _validate_request_id(request_id)
         requested = _validate_money(
             maximum_cost_usd,
@@ -461,10 +484,24 @@ class AtomicCostLedger:
             if request_id in entries or request_id in _portfolio_request_ids(portfolio_holds):
                 raise CostReservationStateError(f"request ID already recorded: {request_id}")
             snapshot = _snapshot(self.cap_usd, entries, portfolio_holds)
+            for allowance in allowed_uncertain_reservations:
+                prior = _matching_entry(entries, allowance)
+                if (
+                    prior.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED
+                    or prior.actual_cost_usd is not None
+                    or prior.accounted_cost_usd != prior.reserved_usd
+                ):
+                    raise CostReservationStateError(
+                        "uncertain reservation allowance is stale or not fully accounted"
+                    )
             if require_settled_prior_costs and (
                 snapshot.held_portfolio_usd > 0
                 or any(
-                    entry.status in {CostEntryStatus.RESERVED, CostEntryStatus.UNCERTAIN_ACCOUNTED}
+                    entry.status is CostEntryStatus.RESERVED
+                    or (
+                        entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+                        and entry.request_id not in carried_request_ids
+                    )
                     for entry in snapshot.entries
                 )
             ):

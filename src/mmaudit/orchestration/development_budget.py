@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -15,13 +16,40 @@ from mmaudit.models.development_costs import (
 )
 from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.orchestration.cost_ledger import (
+    MAX_UNCERTAIN_RESERVATION_ALLOWANCES,
     AtomicCostLedger,
     CostBudgetExceededError,
     CostEntry,
+    CostEntryStatus,
+    CostLedgerSnapshot,
     CostReservation,
     CostReservationStateError,
     ReleaseReason,
 )
+
+_DEVELOPMENT_LEDGER_REQUEST_ID = re.compile(
+    r"dev-estimate-[0-9a-f]{64}:(?:[1-9]|[12][0-9]|3[0-2])\Z"
+)
+
+
+def development_uncertain_reservations(
+    *, policy: DevelopmentCostPolicy, snapshot: CostLedgerSnapshot
+) -> tuple[CostReservation, ...]:
+    """Select estimated liabilities only; the ledger must revalidate these under lock."""
+
+    if policy.uncertain_cost_policy != "CARRY_RESERVED_ESTIMATE":
+        return ()
+    allowances = tuple(
+        CostReservation(entry.request_id, entry.reservation_id, entry.reserved_usd)
+        for entry in snapshot.entries
+        if entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+        and _DEVELOPMENT_LEDGER_REQUEST_ID.fullmatch(entry.request_id)
+        and entry.actual_cost_usd is None
+        and entry.accounted_cost_usd == entry.reserved_usd
+    )
+    if len(allowances) > MAX_UNCERTAIN_RESERVATION_ALLOWANCES:
+        raise DevelopmentCostError("development uncertain history exceeds its bounded allowance")
+    return allowances
 
 
 @dataclass(frozen=True)
@@ -34,7 +62,7 @@ class DevelopmentReservation:
 
 
 class DevelopmentCostUncertainError(CostReservationStateError):
-    """An unknown paid cost was accounted conservatively; stop until reconciled."""
+    """An unknown cost was fully accounted; the current attempt must remain incomplete."""
 
 
 class DevelopmentBudgetSession:
@@ -81,13 +109,17 @@ class DevelopmentBudgetSession:
                 "development estimate exceeds its requested budget targets"
             )
         prefix = "dev-estimate-" + hashlib.sha256(request_id.encode("utf-8")).hexdigest()
-        prior_ids = {entry.request_id for entry in self._ledger.snapshot().entries}
+        snapshot = self._ledger.snapshot()
+        prior_ids = {entry.request_id for entry in snapshot.entries}
         if any(f"{prefix}:{prior}" not in prior_ids for prior in range(1, attempt)):
             raise DevelopmentCostError("development retry is missing its prior attempt")
         reservation = self._ledger.reserve(
             f"{prefix}:{attempt}",
             estimate.estimated_cost_per_attempt_usd,
             require_settled_prior_costs=True,
+            allowed_uncertain_reservations=development_uncertain_reservations(
+                policy=self._policy, snapshot=snapshot
+            ),
         )
         result = DevelopmentReservation(estimate, attempt, reservation)
         self._issued[reservation.reservation_id] = result
@@ -96,7 +128,7 @@ class DevelopmentBudgetSession:
     def reconcile(
         self, reservation: DevelopmentReservation, *, actual_cost_usd: Decimal | None
     ) -> CostEntry:
-        """Persist actual spend first; unknown costs and overruns stop further work."""
+        """Persist spend first; unknown costs never become a successful current attempt."""
 
         if (
             type(reservation) is not DevelopmentReservation
@@ -108,7 +140,7 @@ class DevelopmentBudgetSession:
         entry = self._ledger.reconcile(reservation.ledger_reservation, actual_cost_usd)
         if actual_cost_usd is None:
             raise DevelopmentCostUncertainError(
-                "unknown development cost accounted at its estimate; reconcile before continuing"
+                "unknown development cost accounted at its estimate; current attempt is incomplete"
             )
         return entry
 

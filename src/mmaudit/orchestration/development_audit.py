@@ -32,6 +32,7 @@ from mmaudit.models.development_routing import DevelopmentRoutingEvidence, Devel
 from mmaudit.models.development_transport import review_development_audit_shard
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
+from mmaudit.orchestration.development_budget import development_uncertain_reservations
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
@@ -146,7 +147,7 @@ async def run_development_audit(
     mock_transport: httpx.MockTransport | None = None,
     benchmark_truth: DevelopmentBenchmarkTruth | None = None,
 ) -> DevelopmentAuditObservation:
-    """Run each shard once; persist exact outputs and keep uncertainty blocking.
+    """Run each shard once; keep unknown liabilities and stop each incomplete run.
 
     Output must be a new directory. Existing run IDs/output are refused, not replayed
     or resumed on assumed success. This does not initialize/reset a ledger or grant
@@ -179,6 +180,12 @@ async def run_development_audit(
         else None
     )
     state = ledger.snapshot()
+    carried_ids = {
+        allowance.request_id
+        for allowance in development_uncertain_reservations(
+            policy=prepared.plan.shards[0].estimate.policy, snapshot=state
+        )
+    }
     request_ids = {
         development_ledger_request_id(shard.estimate.request_id) for shard in prepared.plan.shards
     }
@@ -188,7 +195,11 @@ async def run_development_audit(
         or state.has_reservation_overrun
         or state.active_reserved_usd != 0
         or any(
-            entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED or entry.request_id in request_ids
+            (
+                entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+                and entry.request_id not in carried_ids
+            )
+            or entry.request_id in request_ids
             for entry in state.entries
         )
         or prepared.plan.estimated_total_cost_usd > state.remaining_usd

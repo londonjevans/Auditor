@@ -12,7 +12,15 @@ import re
 from decimal import ROUND_CEILING, Decimal, localcontext
 from typing import Annotated, Any, Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.models.route_constraints import (
@@ -73,6 +81,18 @@ class DevelopmentCostPolicy(_StrictModel):
     per_attempt_budget_usd: Decimal = Field(gt=0, le=250)
     safety_multiplier: Decimal = Field(default=Decimal("2"), ge=2, le=10)
     maximum_attempts: int = Field(default=1, ge=1, le=32)
+    uncertain_cost_policy: Literal["STOP", "CARRY_RESERVED_ESTIMATE"] = "STOP"
+
+    @model_serializer(mode="wrap")
+    def omit_default_uncertainty_policy(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Keep legacy bytes exact; a selected carry mode is always retained."""
+
+        result: dict[str, Any] = handler(self)
+        if self.uncertain_cost_policy == "STOP":
+            result.pop("uncertain_cost_policy", None)
+        return result
 
     @field_validator("overspend_risk_accepted", mode="before")
     @classmethod
