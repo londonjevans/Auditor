@@ -61,10 +61,26 @@ test, or swap glm for a fourth lineage if one becomes admissible.
    fifteen-plus judgments and six ensemble reviews have never produced a `REFUTED`.
 4. Standing: `Retry-After` retry, `--reasoning-effort`, judge allowance decoupling.
 
-The operator will rerun `b` once more as-is to see whether the glm reviewer completes (it did on
-`a-2`), then move to whatever Codex lands next. The next objective step after that, on the operator's
-reading, is the same ensemble over a corpus larger than three files with more than one planted root,
-so precision and recall stop being 1-of-1 statistics.
+### 5. Addendum 20:41Z — guarded ensemble completed on retry; first non-unanimous verdict
+
+`devensemble-20260908-b-2` (same roles): **`OBSERVED_ALL_STAGES`**, 3 stages, 4 judgments, real cost
+0.04564604, wall 129.0 s, no uncertain cost. Candidate (deepseek) produced 2 advisories this time.
+Verdicts:
+
+| claim | kimi (review-01) | glm (review-02) | ensemble |
+|---|---|---|---|
+| `file-02:01` informational "Router delegates accounting limits to UnitStore" (12–15) | SUPPORTED | SUPPORTED | `SUPPORTED` |
+| `file-03:01` low "Reservation can be set to full recorded balance" (59–64) | SUPPORTED | **INCONCLUSIVE** ("the candidate's own explanation concludes the invariant … is not violated") | `INCONCLUSIVE` |
+
+So the ensemble reduces a split to the conservative verdict, and the score records
+`supported_claim_count 1`, `inconclusive_claim_count 1`, `refuted 0`. Both executed ensembles
+(`a-2`, `b-2`) are now `COMPLETE_OBSERVATIONS`; total real cost of the pair 0.11337244 USD. This is
+the first verdict of the day that is not `SUPPORTED`; a `REFUTED` has still not been observed and
+the negative-control request stands. The glm reviewer completed in 28.6 s this time, consistent with
+intermittent rather than systematic misbehaviour on that route.
+
+The next objective step on the operator's reading is the same ensemble over a corpus larger than
+three files with more than one planted root, so precision and recall stop being 1-of-1 statistics.
 
 ## 2026-09-08T19:30Z — **`V3-DEVJUDGE-001` verified live: three complete cross-lineage judge runs, 15/15 candidate claims `SUPPORTED`, 0 refuted. Two findings: the glm judge runs away on one shard; the judge inherits the candidate's token allowance, which silently couples the judge's cost target to the candidate's.**
 
