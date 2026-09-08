@@ -3,6 +3,79 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T17:38Z — **THREE LINEAGES MEASURED on the same frozen pair. deepseek-v4-pro completes on `together` (fireworks rate-limits back-to-back shards). Three-model comparison artifacts written. One scorer nuance: a correct root reported with the wrong primary anchor counts as `UNMATCHED_INVARIANT`.**
+
+Timestamp from the clock. Development ledger #3: 34 entries, 31 reconciled, 3 `uncertain_accounted`
+(three fireworks 429s). **Actual development spend across ledgers 0.896782236 USD; phantom
+uncertain reservations 1.586985776 USD.** Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Runs since 17:33Z (all ledger #3, carry mode, 65536 tokens, per-attempt 1.00)
+
+| run id | model=route | corpus | status | cost | time |
+|---|---|---|---|---|---|
+| `a-15-deepseek` | deepseek=fireworks | a | `SHARD_INCOMPLETE`: file-01 ok (2855 tok, 2546 reasoning), **file-02 HTTP 429** | 0.011462572 real | 32.6 s |
+| `a-16-deepseek-together` | deepseek=**together** | a | **`OBSERVED_ALL_SHARDS`** | 0.01241856 | 34.5 s |
+| `b-17-deepseek-together` | deepseek=together | b | **`OBSERVED_ALL_SHARDS`** | 0.01357884 | 52.1 s |
+
+fireworks returned 429 on the 2nd or 3rd consecutive shard in three of three multi-shard attempts;
+`together` served all six shards first time. Discovery: `devtrial-deepseek-v4-pro-together-20260908-d8`
+(operational, ZDR, native schema, efforts `[low, high, max]`, prompt 1.32e-6 / completion 3.96e-6).
+Telemetry difference worth recording: on `together` deepseek reports `reasoning_tokens: 0` and
+completes in 45–1014 completion tokens; on fireworks the same model at the same `effort: high`
+reported 2.5–4.7k reasoning tokens. Same model id, materially different reasoning behaviour by
+provider; the operator has no basis to say which is "correct".
+
+### 2. Three-model comparison (`compare-scores`, provider-free)
+
+`compare-a-three-models-20260908.json` (sha `32ff8b3f…`) and `compare-b-three-models-20260908.json`
+(sha `10072fe0…`) under `~/.mmaudit/private/development-audits/`. Both `COMPLETE_OBSERVATIONS`;
+self-labels unchanged (descriptive, lineage/parity not established, superiority not evaluated).
+
+Planted corpus `a`:
+
+| model=route | tokens | root recall | sw structural precision | claims / dup / adv / unmatched | cost | time |
+|---|---|---|---|---|---|---|
+| `z-ai/glm-5.2=together` | 4096 | 1.0 | **0.50** | 2 / 1 / 0 / 0 | 0.01205044 | 19.6 s |
+| `deepseek-v4-pro-0813=together` | 65536 | 1.0 | 0.33 | 3 / 1 / 0 / **1** | 0.01241856 | 34.5 s |
+| `moonshotai/kimi-k3=together` | 4096 | 1.0 | 0.19 | 6 / 2 / 3 / 0 | 0.0849096 | 77.9 s |
+
+Guarded corpus `b`:
+
+| model=route | invariant claims | guarded-control claims | advisories | first-attempt completion | cost | time |
+|---|---|---|---|---|---|---|
+| glm-5.2 | 0 | 0 | 0 | 1.0 | 0.00918728 | 6.5 s |
+| deepseek-v4-pro | 0 | 0 | 5 (all UnitStore, all `low`) | 1.0 | 0.01357884 | 52.1 s |
+| kimi-k3 | 0 | 0 | 6 | 1.0 | 0.1043244 | 71.5 s |
+
+Union row on `a`: one root, shared by all three. No model produced a guarded-control claim on `b`.
+All three lineages find the planted defect at the exact span; none claims the guarded invariant is
+broken. They differ in noise and cost. On this corpus pair, in this order: glm, deepseek, kimi.
+
+### 3. Scorer nuance, for the DEVBENCH record
+
+deepseek's `UNMATCHED_INVARIANT` (`file-02:01`, weight 5) is **the planted root**, correctly
+described ("RoutePolicy.setGateway is declared without the onlyAdministrator modifier…"), with
+`root_cause_ref` `RoutePolicy.sol:40–46` — but its primary anchor is also `40–46` on a UnitRouter
+shard, outside the manifest's UnitRouter claim sites. The scorer is right by its rules (primary
+must be in the primary file), and the operator agrees the rule should stay. But lumping this with
+"claimed something not planted" hides a real distinction. Suggest a third disposition,
+e.g. `MISANCHORED_CONSEQUENCE` (root matches, primary anchor invalid), kept in all-claim
+denominators but reported separately from unmatched claims that name a different defect.
+
+### 4. Requests
+
+1. Record the three-lineage measurement under DEVBENCH/DEVCOMPARE. Inputs are all committed
+   corpora and frozen discovery files; every number above is recomputable from `score.json`.
+2. `MISANCHORED_CONSEQUENCE` (or equivalent) disposition — small, scoring-only.
+3. `Retry-After` single in-run retry (fireworks is now the concrete case, three of three).
+4. `--reasoning-effort` (deepseek at `high` needs ≥16k headroom on fireworks; on together it
+   apparently does not reason at all — the effort should be recorded per plan so this is visible).
+5. Now that three lineages have complete pairs, the next capability toward the objective is the
+   **executed ensemble** over these routes (candidate + cross-lineage judges on the development
+   policy, scored by the same truth), so that `union` becomes an executed result rather than a
+   recorded-run union. The operator will run it on the same corpora and ledger.
+
 ## 2026-09-08T17:33Z — **`V3-DEVCARRY-001` and `V3-DEVTELEMETRY-001` verified live. Ledger #3 reopened under carry mode. deepseek truncation explained by telemetry: at a 4096 allowance it spends all 4096 tokens reasoning; at 65536 it finishes in 3–5k and finds the root. A mid-run 429 now leaves a 0.556 USD phantom reservation instead of a dead ledger.**
 
 Timestamp from the clock. Development ledger #3: 26 entries, 24 reconciled, 2 `uncertain_accounted`
