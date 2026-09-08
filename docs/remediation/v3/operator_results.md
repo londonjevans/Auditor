@@ -3,6 +3,51 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T16:26Z — **THIRD LEDGER RETIRED BY A ZERO-COST 429. `V3-DEVTELEMETRY-001` verified on that response (all fields `NOT_REPORTED`, correctly). Paid runs paused until the settle / no-generation fix lands.**
+
+Timestamp from the clock. Development ledger #3: 22 entries, 21 reconciled, **1 `uncertain_accounted`
+at 0.069107368 reserved, actual `null`** → locked. Actual development spend across ledgers
+unchanged at 0.802410772 USD; phantom uncertain reservations now 0.475564168 USD across three
+retired ledgers. Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. Run
+
+`devbench-20260908-a-11-deepseek` (deepseek-v4-pro=fireworks, corpus a, 4096 tokens, ledger #3),
+intended to read the newly retained token counts behind the two `INCOMPLETE_OUTPUT` truncations.
+fireworks returned **HTTP 429 in 0.8 s** on shard 1 → `[HTTP_ERROR, UNKNOWN_COST]`,
+`uncertain_accounted`, run `SHARD_INCOMPLETE` 0/3. Output
+`…/unit-ledger-a-v1-scored11-deepseek-fireworks/`.
+
+### 2. DEVTELEMETRY verified for the error path
+
+`completion_telemetry` is present on the rejected shard with `interpretation:
+REPORTED_METADATA_NOT_VERIFIED_USAGE`, `finish_reason_state: NOT_REPORTED`, all four token fields
+`{state: NOT_REPORTED, value: null}`, `token_sum_consistency: NOT_OBSERVED`. That is the correct
+rendering of a 429 error body. The truncation question for deepseek remains open because the
+provider rate-limited before a generation; the operator will not probe again until §3 is fixed.
+
+### 3. This is now the single most damaging defect in the product
+
+Three 429s today, each costing nothing, have retired three ledgers holding the entire day's
+reconciled history (0.80 USD of real, settled charges), because `reconcile(reservation,
+actual_cost_usd=None)` on an error body permanently blocks every later reservation and nothing can
+close the entry. Consequences observed today: the operator cannot rerun a variant on the same
+ledger after any provider flap; cumulative accounting is fragmented across files; and the more
+flaky the route, the faster the ledger dies. The restated request, in order of preference:
+
+1. **No-generation classification** (13:12Z req. 2): non-200 with a parseable `error` body, no
+   `usage`, no `id` → `settled_no_generation` (accounted at the reserved maximum if you want to stay
+   conservative toward the cap, but **not** a blocking unsettled liability). Regression: a 429 must
+   not block the next reservation.
+2. **Operator settle command** (05:24Z / 13:12Z req. 1) for the existing three entries, with the
+   attestation retained.
+3. `Retry-After`-bounded single in-run retry on 429 (13:18Z req. 2).
+
+Until 1 or 2 lands the operator will run no further paid development commands; there is no
+sensible fourth ledger. Everything else (comparator, schema alignment, telemetry) is verified and
+in use.
+
 ## 2026-09-08T15:43Z — `V3-DEVCOMPARE-001` verified: `compare-scores` run on both corpora, provider-free. Two comparison artifacts on disk.
 
 Timestamp from the clock. No provider call, no ledger access. Development ledgers unchanged from
