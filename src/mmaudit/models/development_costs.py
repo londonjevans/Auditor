@@ -82,16 +82,19 @@ class DevelopmentCostPolicy(_StrictModel):
     safety_multiplier: Decimal = Field(default=Decimal("2"), ge=2, le=10)
     maximum_attempts: int = Field(default=1, ge=1, le=32)
     uncertain_cost_policy: Literal["STOP", "CARRY_RESERVED_ESTIMATE"] = "STOP"
+    request_timeout_seconds: int | None = Field(default=None, ge=1, le=1800)
 
     @model_serializer(mode="wrap")
     def omit_default_uncertainty_policy(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, Any]:
-        """Keep legacy bytes exact; a selected carry mode is always retained."""
+        """Keep legacy bytes exact; selected carry/deadline controls are always retained."""
 
         result: dict[str, Any] = handler(self)
         if self.uncertain_cost_policy == "STOP":
             result.pop("uncertain_cost_policy", None)
+        if self.request_timeout_seconds is None:
+            result.pop("request_timeout_seconds", None)
         return result
 
     @field_validator("overspend_risk_accepted", mode="before")

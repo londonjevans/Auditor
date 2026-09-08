@@ -1123,6 +1123,20 @@
           "title": "Purpose",
           "type": "string"
         },
+        "request_timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 1800,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Timeout Seconds"
+        },
         "safety_multiplier": {
           "default": "2",
           "pattern": "^(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,18})?$",

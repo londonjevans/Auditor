@@ -3392,6 +3392,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.models.development_routing import observe_development_routing
     from mmaudit.models.development_transport import (
+        development_request_timeout_seconds,
         review_development_audit_shard,
         review_development_corpus_shard,
         review_development_judgment_shard,
@@ -3557,6 +3558,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-shard-transport",
             review_development_corpus_shard,
+            "gate-provider-secret-transport",
+        ),
+        _explicit_anchor(
+            "development-selected-request-deadline",
+            development_request_timeout_seconds,
             "gate-provider-secret-transport",
         ),
         _explicit_anchor(

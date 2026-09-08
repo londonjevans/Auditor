@@ -31,6 +31,7 @@ from mmaudit.models.development_corpus import (
     prepare_development_corpus_shard,
     validate_development_corpus_response,
 )
+from mmaudit.models.development_costs import DevelopmentCostPolicy
 from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
     DevelopmentResponseRejection,
@@ -99,6 +100,19 @@ type _PreparedSource = (
 
 class DevelopmentTransportError(ValueError):
     """Controlled non-operational error; never embeds HTTP, source, or credential data."""
+
+
+def development_request_timeout_seconds(policy: DevelopmentCostPolicy) -> float:
+    """Resolve a frozen attempt limit; an enclosing run deadline can still cancel earlier."""
+
+    if type(policy) is not DevelopmentCostPolicy:
+        raise DevelopmentTransportError("development deadline requires an exact policy")
+    policy = DevelopmentCostPolicy.model_validate_json(policy.model_dump_json(), strict=True)
+    return float(
+        DEVELOPMENT_ATTEMPT_TIMEOUT_SECONDS
+        if policy.request_timeout_seconds is None
+        else policy.request_timeout_seconds
+    )
 
 
 class _ResponseRejected(ValueError):
@@ -624,6 +638,7 @@ async def _review_development_source(
     rejection_evidence: DevelopmentResponseRejection | None = None
     completion_telemetry: DevelopmentCompletionTelemetry | None = None
     status_code: int | None = None
+    request_timeout = development_request_timeout_seconds(prepared.estimate.policy)
     started = _DEVELOPMENT_MONOTONIC()
     transport = (
         mock_transport
@@ -638,7 +653,9 @@ async def _review_development_source(
         transport=transport,
         trust_env=False,
         follow_redirects=False,
-        timeout=httpx.Timeout(DEVELOPMENT_ATTEMPT_TIMEOUT_SECONDS, connect=10, pool=10),
+        timeout=httpx.Timeout(
+            request_timeout, connect=min(10, request_timeout), pool=min(10, request_timeout)
+        ),
     ) as client:
         reservation = budget.reserve(
             endpoint_snapshot=prepared.endpoint_snapshot,
@@ -681,7 +698,7 @@ async def _review_development_source(
                 raise DevelopmentTransportError(
                     "development dispatch bytes differ from their reservation"
                 )
-            async with asyncio.timeout(DEVELOPMENT_ATTEMPT_TIMEOUT_SECONDS):
+            async with asyncio.timeout(request_timeout):
                 # Set before the first transport await: errors/cancellation can mean paid usage.
                 dispatched = True
                 response = await client.send(request, stream=True)

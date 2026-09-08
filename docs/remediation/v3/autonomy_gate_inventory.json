@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4157,
-  "inventory_sha256": "05b7feaf30007a7ebe2066e32a4afc20a25dd42083d06429ad1865ede5421f1f",
+  "gate_source_count": 4158,
+  "inventory_sha256": "7f493dfc28e2866e70b0bb517f0c2de7fbbcc1873a040bd7c9f90dd7ae3b6ff2",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -3217,6 +3217,7 @@
         "explicit:development-corpus-shard-transport",
         "explicit:development-judgment-shard-transport",
         "explicit:development-routing-observation",
+        "explicit:development-selected-request-deadline",
         "filesystem-input:operator_secrets:_read_validated_secret_file:1",
         "filesystem-input:operator_secrets:_read_validated_secret_file:2",
         "filesystem-input:operator_secrets:_read_validated_secret_file:3",
@@ -4569,7 +4570,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4209,
+  "source_count": 4210,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -10068,7 +10069,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/development_cli.py",
-      "source_semantics_sha256": "9c9cf1eba397e262b5cfc35342d422743282df4bf95c8d0c52477e92cc29dae8"
+      "source_semantics_sha256": "96f36bff0d44964d5e28ae995c6057ab26fe6a62a04c0bc5ef948485c7525ac0"
     },
     {
       "classification": "GATE",
@@ -10392,7 +10393,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_costs.py",
-      "source_semantics_sha256": "871bd99e0a945e35e7a54c4442a9db0daed971bfda3fef243ec94013de1ba3fc"
+      "source_semantics_sha256": "b1b493b7e82307951de97891868ac55ec71514526c4170d07300db2b77a905e8"
     },
     {
       "classification": "GATE",
@@ -10446,7 +10447,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_transport.py",
-      "source_semantics_sha256": "fe3c2a6c658a49b9a2703a135aced0f8a89ed1419fa2da3eb1aea7ed52a649d3"
+      "source_semantics_sha256": "aad89cdcd9ab9f99febef16b673520b283e26e5a4db3a0f4537e0dd79e747e1b"
     },
     {
       "classification": "GATE",
@@ -10941,7 +10942,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "1cd867ccd3180641dfacf5230d52d6611755e52c0c4527a71e292dc3041bd4fc"
+      "source_semantics_sha256": "59f43b2f8ca015d48147d559aab439805584d8f6208ca00ed6eeab05c47c56b0"
     },
     {
       "classification": "GATE",
@@ -21787,6 +21788,15 @@
       "source_occurrence_count": 1,
       "source_path": "mmaudit.models.development_routing.observe_development_routing",
       "source_semantics_sha256": "c320a07cbbcb30bb517abb751f235701f5c80e061e0e0958745c4606927d953f"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-provider-secret-transport",
+      "source_id": "explicit:development-selected-request-deadline",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.development_transport.development_request_timeout_seconds",
+      "source_semantics_sha256": "1a6f1ac45e2dafc1adfcce01e415ef487b4a34d82be7bce4c6551cab5a52818b"
     },
     {
       "classification": "GATE",
@@ -42453,7 +42463,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "bc97c2124525db4b438524d53b31e2d4ae1851d5baad90aefc22344a71008c53",
+  "source_discovery_semantics_sha256": "2ab01e1b98d804b6f8856dc792057d0483ae37610a29f842df51ee5f3b02dec1",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 297,
     "AUDIT_CONFIG_LEAF": 513,
@@ -42464,13 +42474,13 @@
     "DIRECT_ENVIRONMENT_INPUT": 549,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2269,
+    "EXPLICIT_NON_FIELD_GATE": 2270,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4212,
-  "source_universe_sha256": "6e0c41f26ca60671c3f5a106a1440e52b3639cec8a70e982086a9556c52db0fe",
+  "source_occurrence_count": 4213,
+  "source_universe_sha256": "225d357c26a69a1a4a56a0ebd245eab94b0ac4cfd4f3c91c978e1790dda93f5c",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

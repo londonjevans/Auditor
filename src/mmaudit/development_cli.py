@@ -79,6 +79,15 @@ def audit_development_manifest_command(
     maximum_run_seconds: Annotated[
         int, typer.Option("--maximum-run-seconds", min=1, max=1800)
     ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
@@ -126,6 +135,7 @@ def audit_development_manifest_command(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": 1,
                 "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
                 if carry_uncertain_estimates
@@ -198,6 +208,15 @@ def ensemble_development_corpus_command(
     maximum_run_seconds: Annotated[
         int, typer.Option("--maximum-run-seconds", min=1, max=1800)
     ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
@@ -281,6 +300,7 @@ def ensemble_development_corpus_command(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": 1,
                 "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
                 if carry_uncertain_estimates
@@ -355,6 +375,15 @@ def judge_development_audit_command(
     maximum_run_seconds: Annotated[
         int, typer.Option("--maximum-run-seconds", min=1, max=1800)
     ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
@@ -447,6 +476,7 @@ def judge_development_audit_command(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": 1,
                 "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
                 if carry_uncertain_estimates
@@ -542,6 +572,15 @@ def preview_development_cost(
     per_attempt_usd: Annotated[str, typer.Option("--per-attempt-usd")],
     request_id: Annotated[str, typer.Option("--request-id")] = "development-preview",
     maximum_attempts: Annotated[int, typer.Option("--maximum-attempts", min=1, max=32)] = 1,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     carry_uncertain_estimates: Annotated[
@@ -566,6 +605,7 @@ def preview_development_cost(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": maximum_attempts,
                 "uncertain_cost_policy": (
                     "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"
@@ -628,6 +668,15 @@ def review_development_fixture_command(
     maximum_completion_tokens: Annotated[
         int, typer.Option("--maximum-completion-tokens", min=1, max=65536)
     ] = 4096,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
@@ -660,6 +709,7 @@ def review_development_fixture_command(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": maximum_attempts,
                 "uncertain_cost_policy": (
                     "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"
@@ -742,6 +792,15 @@ def audit_development_corpus_command(
     maximum_run_seconds: Annotated[
         int, typer.Option("--maximum-run-seconds", min=1, max=1800)
     ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends a whole-run deadline.",
+        ),
+    ] = None,
     safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
@@ -808,6 +867,7 @@ def audit_development_corpus_command(
                 "total_budget_usd": budget_usd,
                 "per_attempt_budget_usd": per_attempt_usd,
                 "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
                 "maximum_attempts": 1,
                 "uncertain_cost_policy": (
                     "CARRY_RESERVED_ESTIMATE" if carry_uncertain_estimates else "STOP"

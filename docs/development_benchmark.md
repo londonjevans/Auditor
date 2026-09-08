@@ -326,6 +326,31 @@ live negative-control discrimination, private billing authenticity, external tru
 genuine root independence, a reproducible external evidence seal or the frozen hard-cost objective.
 All qualification, release, audit-completion and finding-validation authority stays false.
 
+## Bounded development request deadlines
+
+All six development request commands accept `--request-timeout-seconds` as an optional
+integer from 1 to 1800: `preview-cost`, `review-fixture`, `audit-corpus`, `audit-manifest`,
+`judge-audit` and `ensemble-corpus`. Omission preserves the 180-second default and legacy
+serialized policy bytes. Explicit selection is retained in `DevelopmentCostPolicy`, estimates,
+plans and observations, including every ensemble role; it changes neither provider JSON
+request bodies nor numeric token/cost estimates. Offline preview makes no request.
+
+The shared transport applies the selection to HTTP read/write and the whole async attempt,
+including reading the response body. Connect/pool waits are bounded to the smaller of
+10 seconds and the selected limit. An enclosing whole-run deadline can cancel earlier:
+the active attempt gets at most its own limit and the remaining run budget, without resetting
+the run clock for later shards or roles. Existing bounded response cleanup and synchronous
+durable accounting/finalization still occur; these are not a hard end-to-end wall-clock SLA.
+
+A longer selected wait does not guarantee completion, retry a request, settle an uncertain
+charge or establish a zero bill. First-attempt failure evidence and all existing unknown-cost,
+cumulative-budget, carry/STOP, consent, routing and privacy controls remain intact. No
+automatic retry or resume is introduced. Qualified client limits and cost admission are unchanged.
+Local MockTransport regressions exercise actual short deadlines, remaining parent budget,
+first/middle/last failures, cancellation and stream closure. The scaled-default and existing
+19-file synthetic-source checks demonstrate propagation, not live long-wait performance,
+semantic audit quality or a provider-enforced spending ceiling. No paid command is selected here.
+
 ## Explicit source-manifest development candidates
 
 `development audit-manifest` reviews a supplied local source inventory beyond the two
@@ -355,8 +380,9 @@ Each selected file receives one request with its entire primary file and the ent
 selected source snapshot as context. Requests share one exact model/metadata selection,
 completion allowance and one-attempt estimated-cost policy. Full context is repeated per
 file, so input cost scales with both corpus size and file count; this is not semantic
-dependency-aware sharding. The existing independent 180-second request cap still applies,
-within a whole-run `--maximum-run-seconds` deadline (default600, maximum1800). There is no
+dependency-aware sharding. The per-request deadline defaults to 180 seconds and can be explicitly
+selected as above, within a whole-run `--maximum-run-seconds` deadline (default600, maximum1800).
+Existing bounded cleanup/finalization overhead still applies. There is no
 automatic retry or resume, and estimated costs are not a provider-enforced ceiling.
 Explicit carry mode preserves prior eligible uncertain estimates as liabilities.
 
