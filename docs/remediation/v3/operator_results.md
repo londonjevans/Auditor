@@ -3,6 +3,77 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T23:20Z — **`V3-CORPUSJUDGE-001` verified live: kimi reviewed all 35 deepseek claims on the 5k corpus — 21 `SUPPORTED`, 14 `REFUTED`. First refutations ever observed. Nine refutations are correct; five rest on a false statement about Solidity semantics. The judge can be confidently wrong; a second reviewer or truth is required before a refutation removes a claim.**
+
+Timestamp from the clock. Development ledger #3: 95 entries, 89 reconciled, 6 uncertain.
+**Actual development spend across ledgers 3.354574156 USD**; phantom uncertain reservations
+3.257646236 USD (unchanged). Cumulative ledger untouched. Ledger unchanged at 57 entries /
+`0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Run
+
+`devjudgemanifest-20260908-005k-deepseek-by-kimi-2`: `judge-manifest` over the 17/19 deepseek
+result (`manifest-005k-deepseek-together-20260908-r2/result.json` + `sources.json`), judge
+kimi-k3=together, 16384 tokens, request timeout 900 s, per-attempt **2.50** (the 16384-token
+judge estimate with the 175 KB snapshot in the prompt is ≈ 1.93 USD per shard; 1.00 refused with
+the same coupled-allowance message as 19:30Z §3.2), carry mode. Output
+`…/development-audits/judge-manifest-005k-deepseek-by-kimi-20260908-r2/`.
+
+```
+status INCOMPLETE (CANDIDATE_INCOMPLETE — inherited from the 17/19 candidate, correctly)
+judgments 35/35 across 4 shards   real judge cost 0.7582248   elapsed 120.4 s   no uncertain cost
+prompt tokens per shard 51.2–51.9k   completion 1.4–3.6k   reasoning 0.35–2.1k
+verdicts: SUPPORTED 21, REFUTED 14, INCONCLUSIVE 0
+```
+
+### 2. The refutations, checked against the source by the operator
+
+| claim(s) | kimi's ground | operator check | verdict on the verdict |
+|---|---|---|---|
+| `file-0006:02–07` — six "silent overflow" claims on `amount * 2`, `boundedRepayment * 11 / 10`, index accrual, `totalAssets` add, health `collateral * price`, `riskWindow` math | Solidity 0.8.30 checked arithmetic reverts on overflow | `pragma solidity 0.8.30`, plain operators, no `unchecked` block | **correct** |
+| `file-0008:03`, `file-0008:04` — cast truncation of `boundedRepayment` / `collateralReleased` | both values are capped at a `uint128` field before the cast | lines 150–157 as described | **correct** |
+| `file-0017:10` — "market can be reinitialized" | `_initializeSyntheticAccess` reverts `AlreadyInitialized` when `_governor` is set | `SyntheticFixtureOnly.sol:42-47` confirms | **correct** |
+| **`file-0006:01`, `file-0008:01`, `file-0008:02`, `file-0017:01`, `file-0017:02`** — unchecked `uint128(assets)` / `uint128(amount)` truncation on deposit and borrow | "explicit narrowing conversions … revert if the value does not fit" | **false.** Solidity 0.8 checked arithmetic covers operators, not explicit conversions; `uint128(x)` truncates silently. `_depositFrom` (lines 74–84) has no bound on `assets` before the cast. The candidate's mechanism is correct (practical reachability is a separate question). | **wrong** |
+
+So the first refutations the build has produced are 9 correct, 5 incorrect, with the incorrect five
+all sharing one hallucinated language rule stated with high confidence and precise line citations.
+The candidate (deepseek) was right about the casts and wrong about the arithmetic; the judge
+(kimi) was the reverse. Neither side's confidence correlated with correctness.
+
+### 3. What this establishes
+
+- The manifest judge path works at realistic size: 35 claims, four 51k-token prompts, 2 minutes,
+  0.76 USD, complete telemetry, decisions with source refs. Verified.
+- **A single cross-lineage refutation is not sufficient to drop a claim.** The design already
+  treats verdicts as opinions and never edits findings, which is exactly right; the scorer must
+  keep treating `REFUTED` as a second opinion, not a truth. With a second reviewer (the ensemble
+  path) the five wrong refutations would very likely have produced disagreement rather than
+  consensus, which is the argument for the executed ensemble over single-judge review.
+- This is also the concrete case for **template-derived truth** (22:18Z §3): the casts are in the
+  generator template, so the truth manifest can state the mechanism once, and the scorer can then
+  measure both the candidate's 4-of-14 detection consistency and the judge's refutation accuracy
+  against something neither model authored.
+
+### 4. Requests
+
+1. Record CORPUSJUDGE's first live evidence including the 9/5 split above (operator-checked
+   against source, not independently validated).
+2. Bring the **ensemble path to manifests** (candidate + two reviewers) before any scoring treats a
+   lone `REFUTED` as removal; and in the scorer, report `REFUTED_BY_ONE` / `REFUTED_BY_BOTH`
+   separately.
+3. Template-derived truth for `solidity_005k` (22:18Z req. 2), now with a worked example: control
+   "unchecked uint128 narrowing on deposit/borrow", class `accounting` or `other`, one origin per
+   market, `expected: PLANTED` or a new `DESIGN_CHOICE` class.
+4. Judge-allowance decoupling (19:30Z §3.2) is now a cost item too: 2.50 USD per-attempt targets to
+   get a 1.4k-token answer.
+
+### 5. Operator plan
+
+Pause paid runs here. Today's chain is complete and reproducible from committed inputs through:
+three-file baseline → three-model comparison → judge → executed ensemble → 19-file candidate →
+19-file second-lineage review. Real spend 3.35 USD. The operator resumes when either the manifest
+ensemble or the template truth lands.
+
 ## 2026-09-08T22:18Z — **`V3-DEVTIMEOUT-001` verified live: 17 of 19 shards of the 4,952-line corpus observed in 9.3 min, 35 claims, 1.19 USD real; stopped by a `together` 429 at shard 18. Key quality finding: the 14 market modules are template-identical, yet the model flagged 4 and cleared 10 — a free consistency benchmark, and the template itself is derivable truth.**
 
 Timestamp from the clock. Development ledger #3: 91 entries, 85 reconciled, 6 uncertain.
