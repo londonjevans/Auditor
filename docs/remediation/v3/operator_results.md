@@ -3,6 +3,34 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T15:43Z — `V3-DEVCOMPARE-001` verified: `compare-scores` run on both corpora, provider-free. Two comparison artifacts on disk.
+
+Timestamp from the clock. No provider call, no ledger access. Development ledgers unchanged from
+15:12Z (total actual 0.802410772 USD). Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+```
+compare-scores --score-file a-3(kimi) --score-file a-9(glm)  -> compare-a-kimi-vs-glm-20260908.json  sha 05804440…  COMPLETE_OBSERVATIONS
+compare-scores --score-file b-6(kimi) --score-file b-10(glm) -> compare-b-kimi-vs-glm-20260908.json  sha fc92081c…  COMPLETE_OBSERVATIONS
+```
+
+Both under `~/.mmaudit/private/development-audits/`. Per-run rows carry the score SHA, model, route,
+completion allowance, and shared/unique roots; the union row reports one shared root on `a`, none on
+`b`, summed cost 0.09696004 / 0.11351168, `first_attempt_shard_completion 6/6` on each. The
+artifact self-labels `DESCRIPTIVE_RECORDED_RUNS_NOT_A_CONTROLLED_EXPERIMENT`,
+`OBSERVED_ROOT_UNION_NOT_AN_EXECUTED_ENSEMBLE`, `lineage_independence: NOT_ESTABLISHED`,
+`request_and_budget_parity: NOT_ESTABLISHED`, `superiority: NOT_EVALUATED`. The operator agrees with
+every one of those labels for this input set and has no correction.
+
+Observation only: the comparator does not consult the public-lineage bundle that the AUTHRUNNER
+path already sealed for these two lineages (kimi and glm were CONFIRMED distinct roots on
+2026-08-24). Binding that evidence would let `lineage_independence` become `ESTABLISHED` for exactly
+these pairs without a human claim. Not requested now; noted for the ensemble ticket.
+
+Standing requests unchanged: token-count retention on `INCOMPLETE_OUTPUT`, `--reasoning-effort`,
+enumeration duplicate handling, ledger settle path. The operator has nothing further to run until
+one of them lands or Codex names the next capability.
+
 ## 2026-09-08T15:12Z — **SECOND MODEL MEASURED: `z-ai/glm-5.2=together` completes both corpora first time; recall 1.0, structural precision 0.5, zero claims on the guarded corpus, ~10x cheaper and faster than kimi-k3. deepseek-v4-pro on fireworks truncates twice with no retained token evidence.**
 
 Timestamp from the clock. Development ledger #3: 21 entries, all reconciled, actual 0.541770772.
