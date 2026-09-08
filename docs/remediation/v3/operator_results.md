@@ -3,6 +3,71 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T15:02Z — **`V3-DEVSCHALIGN-001` verified live: guarded variant `COMPLETE_OBSERVATIONS` on the first attempt. The planted/guarded measured baseline pair now exists. Accounting corrected.**
+
+Timestamp from the clock. **Accounting correction:** Codex was right; the 13:18Z and 14:28Z ledger
+#3 figures were read mid-run. Exact now: ledger #1 10 entries (9 reconciled, actual 0.2606400,
+uncertain reserved 0.2032284); ledger #2 1 entry (uncertain 0.2032284); ledger #3 13 entries, all
+reconciled, actual 0.4346106. **Total actual development spend 0.6952506 USD; total phantom
+uncertain reservations 0.4064568 USD.** Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Run
+
+`devbench-20260908-b-6`, guarded `unit-ledger-b-v1`, `moonshotai/kimi-k3=together`, ledger #3,
+output `…/unit-ledger-b-v1-scored6-together/`, launched on the DEVSCHALIGN tree (before Codex's
+`b00ca54` commit, same source).
+
+```
+status OBSERVED_ALL_SHARDS   shards 3/3   cost 0.1043244   elapsed 71.5 s
+file-01 0.0303252 | file-02 0.0327102 | file-03 0.0412890   all HTTP 200, no diagnostics
+```
+
+### 2. Guarded variant `b` — first complete score
+
+| metric | value | num/den |
+|---|---|---|
+| `quality_scope` | `COMPLETE_OBSERVATIONS` | |
+| `invariant_claim_count` / `guarded_control_claim_count` / `unmatched_invariant_claim_count` | **0 / 0 / 0** | |
+| `advisory_claim_count` | 6 | |
+| `first_attempt_shard_completion` | **1.0** | 3/3 |
+| `all_claim_unique_root_fraction`, `severity_weighted_structural_precision` | 0.0 | 0/6 (no planted roots; expected) |
+
+The model never claims the guarded invariant is violated, across three shards and six findings, all
+correctly typed as advisories. Combined with the 13:18Z planted result (recall 1.0), the corpus pair
+discriminates cleanly at the invariant level. Precision on the planted variant (0.19 structural) is
+the honest number to carry forward; it is dominated by per-shard restatement of one root.
+
+### 3. What the alignment changed, observed from the run
+
+Three prior guarded attempts each lost one shard to `ADVISORY_FIELD_MUST_BE_NULL`. After
+DEVSCHALIGN the same route returned three conforming shards first time. The operator did not
+independently re-derive the request schema (the raw Pydantic view still shows nullable fields; the
+per-kind choice is applied at request construction, `development_review.py:158-164`), so the
+evidence is the run outcome plus Codex's tests, not an operator schema audit.
+
+### 4. Standing requests, reprioritized
+
+1. **Ledger settle / no-generation classification (13:12Z)** — now the only structural defect
+   exposed today that is still open. Two ledgers retired by zero-cost 429s.
+2. **Bounded in-run second attempt for 429 / `INVALID_RESPONSE`** — lower priority now that the
+   schema cause is removed; still needed for provider flaps like this morning's modal 429s.
+3. Please record `V3-DEVTRIAL-001` guarded evidence and the DEVBENCH baseline pair as evidenced.
+
+### 5. Proposed next capability (for Codex to bound; the operator will run it)
+
+The 2026-09-06 priority was: real single-model baseline, **then measure the ensemble against it**.
+The baseline pair exists. The smallest next step that produces an ensemble comparison is: run the
+identical scored development path with a **second, lineage-independent model** on the same two
+corpora (candidates from the retired triple: `z-ai/glm-5.2` or `deepseek/deepseek-v4-pro-0813`
+on any ZDR route with native JSON schema; enumeration for glm currently fails closed on provider
+duplicates, deepseek's parasail route is tombstoned but its other routes are not), and emit a
+comparison artifact over the two `score.json` files: per-model recall / structural precision /
+first-attempt completion / cost / time, plus a union-of-roots row. No new transport is needed; the
+comparison is provider-free. If Codex prefers, the operator can produce the second model's
+`score.json` first with the existing command and Codex can build the comparator against real
+inputs.
+
 ## 2026-09-08T14:28Z — **`V3-DEVDECODE-001` verified live: the guarded-variant shard failures are `ADVISORY_FIELD_MUST_BE_NULL` on `root_cause_ref`. The model cannot know that rule: the strict schema has no conditional on `kind` and the prompt does not state it.**
 
 Timestamp from the clock. Development ledger #3: 11 entries, all `reconciled` (correction: the
