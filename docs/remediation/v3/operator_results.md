@@ -3,6 +3,89 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T15:12Z — **SECOND MODEL MEASURED: `z-ai/glm-5.2=together` completes both corpora first time; recall 1.0, structural precision 0.5, zero claims on the guarded corpus, ~10x cheaper and faster than kimi-k3. deepseek-v4-pro on fireworks truncates twice with no retained token evidence.**
+
+Timestamp from the clock. Development ledger #3: 21 entries, all reconciled, actual 0.541770772.
+Ledgers #1/#2 unchanged (retired). **Total actual development spend 0.802410772 USD; phantom
+uncertain reservations 0.4064568 USD.** Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Route selection ($0)
+
+`list-endpoints` fails closed for both `deepseek/deepseek-v4-pro-0813` and `z-ai/glm-5.2` with
+`endpoint inventory contains duplicate exact routes`. A direct read of OpenRouter's per-model
+endpoint list shows the cause is upstream: the provider inventory literally lists `baseten/fp4`
+twice for deepseek and `baseten/fp8` + `baseten/fast` twice each for glm. The enumerator is
+correct to refuse ambiguity, but it now refuses two of the three lineages the product has ever
+used; request 3 below. `discover` on an explicit route still works. glm's former judge route
+`sail-research/fp8` no longer exists. Frozen: `devtrial-glm-5-2-together-20260908-d7`
+(operational, ZDR, native JSON schema, model efforts `[high, xhigh]`, prompt 1.4e-6 /
+completion 4.4e-6) and `devtrial-deepseek-v4-pro-fireworks-20260908-d6` (operational, ZDR, native
+schema, efforts `[low, high, max]`, prompt 1.32e-6 / completion 3.96e-6).
+
+### 2. Runs
+
+| run id | model=route | corpus | status | shards | cost | time |
+|---|---|---|---|---|---|---|
+| `devbench-20260908-a-7-deepseek` | deepseek-v4-pro=fireworks | a | `SHARD_INCOMPLETE` file-01 `INCOMPLETE_OUTPUT` (4096 tok) | 0/3 | 0.02088504 | 54.9 s |
+| `devbench-20260908-a-8-deepseek` | deepseek-v4-pro=fireworks | a | `SHARD_INCOMPLETE` file-01 `INCOMPLETE_OUTPUT` (16384 tok) | 0/3 | 0.065037412 | 127.7 s |
+| `devbench-20260908-a-9-glm` | glm-5.2=together | a | **`OBSERVED_ALL_SHARDS`** | 3/3 | 0.01205044 | 19.6 s |
+| `devbench-20260908-b-10-glm` | glm-5.2=together | b | **`OBSERVED_ALL_SHARDS`** | 3/3 | 0.00918728 | 6.5 s |
+
+Outputs: `…/development-audits/unit-ledger-a-v1-scored{7,8}-deepseek-fireworks/`,
+`…/unit-ledger-a-v1-scored9-glm-together/`, `…/unit-ledger-b-v1-scored10-glm-together/`.
+
+### 3. Two-model comparison on the same frozen corpora (both `COMPLETE_OBSERVATIONS`)
+
+| metric | kimi-k3=together (a-3 / b-6) | glm-5.2=together (a-9 / b-10) |
+|---|---|---|
+| `unique_root_recall` | 1.0 | 1.0 |
+| `severity_weighted_root_recall` | 1.0 | 1.0 |
+| `all_claim_unique_root_fraction` | 0.166667 (1/6) | **0.5** (1/2) |
+| `severity_weighted_structural_precision` | 0.192308 (5/26) | **0.5** (5/10) |
+| planted: claims / duplicates / advisories | 6 / 2 / 3 | 2 / 1 / 0 |
+| guarded: invariant claims / advisories | 0 / 6 | **0 / 0** |
+| `first_attempt_shard_completion` (a, b) | 1.0, 1.0 (b needed 4 attempts pre-SCHALIGN) | 1.0, 1.0 |
+| cost (a + b) | 0.0849096 + 0.1043244 = 0.1892340 | 0.01205044 + 0.00918728 = **0.02123772** |
+| wall clock (a + b) | 77.9 + 71.5 s | **19.6 + 6.5 s** |
+
+glm's planted output: `file-01` high "setGateway lacks administrator authorization" lines 40–46
+(matched root) and `file-03` the same title and span anchored to UnitStore (duplicate). Nothing
+else. On the guarded corpus it returned no findings at all in three shards. kimi finds the same
+root, then adds a consequence restatement per shard and several advisories.
+
+Operator reading, not validation: on this two-root, six-shard development pair, glm-5.2 is at
+least as good on recall, strictly better on structural precision, and roughly 9x cheaper and 6x
+faster. That is the first empirical fact this build has produced about model choice. It is one
+tiny public corpus; it says nothing about coverage on real code. But it is exactly the shape of
+evidence the 2026-09-06 priority asked for, and it is now reproducible from committed inputs.
+
+### 4. deepseek: cannot be measured yet; diagnosability gap
+
+Both attempts consumed the entire completion allowance (cost ⇔ ~4.1k then ~16.4k completion
+tokens at fireworks' price) and were rejected as `INCOMPLETE_OUTPUT`. The shard record retains
+**no `finish_reason` and no token counts**, so the operator cannot tell whether the model is
+reasoning past the cap at `effort: high` (the dev path hard-codes `high`), looping on the strict
+schema, or something else. August smoke evidence shows this model at ~1.2–1.9k completion tokens
+with reasoning ≈ completion on a 234-token prompt, so 16k+ on a 3k-token prompt is anomalous. The
+operator stopped at $0.086 rather than spend $0.26 blind.
+
+### 5. Requests
+
+1. **`INCOMPLETE_OUTPUT` (and every non-structured rejection) must retain `finish_reason`,
+   `prompt_tokens`, `completion_tokens`, `reasoning_tokens` when the provider reports them.**
+   DEVDECODE covered the structured-output stage; this stage is still blind.
+2. Consider exposing `--reasoning-effort {low,medium,high}` on the development commands, default
+   `high` unchanged, so a model that overruns at `high` can be measured at a lower effort with the
+   effort recorded in `plan.json`.
+3. **Enumeration:** when OpenRouter lists an exact tag twice, retain the duplicate as evidence and
+   continue with the deduplicated set (identical records) or mark only that tag ambiguous, rather
+   than refusing the whole model. Two of three lineages are currently unenumerable.
+4. Bound a **provider-free comparator** over N `score.json` files (per-model rows for the metrics
+   in §3 plus a union-of-roots row and cost/time), since the two inputs now exist on disk. The
+   operator will supply the paths.
+5. Ledger settle / no-generation classification (13:12Z) remains open.
+
 ## 2026-09-08T15:02Z — **`V3-DEVSCHALIGN-001` verified live: guarded variant `COMPLETE_OBSERVATIONS` on the first attempt. The planted/guarded measured baseline pair now exists. Accounting corrected.**
 
 Timestamp from the clock. **Accounting correction:** Codex was right; the 13:18Z and 14:28Z ledger
