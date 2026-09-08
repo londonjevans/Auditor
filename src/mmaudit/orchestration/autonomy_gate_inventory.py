@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "09ad2cfe2da87d07844d367238a8db91346b2151d28770f2673b8c9a60cd8fad"
+    "afae6ea60072272725f7001296ef40f9fc425532b26bd29375a4debb70fee819"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3372,6 +3372,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         score_development_judgment,
     )
     from mmaudit.benchmark.development_comparison import compare_development_scores
+    from mmaudit.benchmark.development_ensemble import score_development_ensemble
     from mmaudit.isolation.container import (
         SingleLoopbackHardhatBackend,
         rootless_runtime_environment,
@@ -3380,6 +3381,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.isolation.dependencies import prepare_dependencies
     from mmaudit.models.development_audit import prepare_development_audit
     from mmaudit.models.development_diagnostics import project_development_completion_telemetry
+    from mmaudit.models.development_ensemble import prepare_development_ensemble
     from mmaudit.models.development_judgment import (
         prepare_development_judgment,
         validate_development_candidate_accounting,
@@ -3396,6 +3398,8 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_audit import run_development_audit
     from mmaudit.orchestration.development_budget import development_uncertain_reservations
     from mmaudit.orchestration.development_comparison import compare_development_score_files
+    from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
+    from mmaudit.orchestration.development_ensemble import run_development_ensemble
     from mmaudit.orchestration.development_judgment import run_development_judgment
     from mmaudit.orchestration.managed_fork_archives import (
         ManagedForkArchives,
@@ -3505,6 +3509,26 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-judgment-impact",
             score_development_judgment,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-ensemble-frozen-plan",
+            prepare_development_ensemble,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-ensemble-sequential-run",
+            run_development_ensemble,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "development-ensemble-accounting",
+            ensemble_accounting_report,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-ensemble-impact",
+            score_development_ensemble,
             "gate-benchmark-evidence-authority",
         ),
         _explicit_anchor(

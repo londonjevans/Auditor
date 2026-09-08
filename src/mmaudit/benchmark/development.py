@@ -7,6 +7,7 @@ are frozen independently of responses, not external or exhaustive ground truth.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Literal, Self
 
@@ -498,6 +499,34 @@ def _judgment_impact_parts(
         if shard.status == "OBSERVED" and shard.response is not None
         for decision in shard.response.decisions
     }
+    return _review_impact_parts(
+        candidate_score,
+        decisions,
+        complete=observation.status != "INCOMPLETE",
+        no_candidates=observation.status == "NO_CANDIDATES",
+        combined_accounted_cost_usd=_money_sum(
+            (
+                candidate_score.observation.total_accounted_cost_usd,
+                observation.judgment_accounted_cost_usd,
+            )
+        ),
+        active_reserved_usd=observation.active_reserved_usd,
+        summed_stage_elapsed_seconds=observation.summed_stage_elapsed_seconds,
+    )
+
+
+def _review_impact_parts(
+    candidate_score: DevelopmentBenchmarkScore,
+    decisions: Mapping[str, Literal["SUPPORTED", "REFUTED", "INCONCLUSIVE"]],
+    *,
+    complete: bool,
+    no_candidates: bool,
+    combined_accounted_cost_usd: Decimal,
+    active_reserved_usd: Decimal,
+    summed_stage_elapsed_seconds: float,
+) -> tuple[tuple[DevelopmentJudgmentImpactRow, ...], DevelopmentJudgmentImpactSummary]:
+    """Measure supplied opinions against unchanged claims; never synthesize a provider record."""
+
     rows = tuple(
         DevelopmentJudgmentImpactRow(
             candidate_claim=claim, judgment=decisions.get(claim.claim_id, "UNREVIEWED")
@@ -520,13 +549,12 @@ def _judgment_impact_parts(
             }
         )
     )
-    complete = observation.status != "INCOMPLETE"
     matched_weight = sum(
         _WEIGHTS[root.severity] for root in roots if root.control_id in supported_roots
     )
     summary = DevelopmentJudgmentImpactSummary(
         quality_scope="NO_CANDIDATES"
-        if observation.status == "NO_CANDIDATES"
+        if no_candidates
         else ("COMPLETE_OBSERVATIONS" if complete else "INCOMPLETE_OBSERVATIONS"),
         candidate_claim_count=len(rows),
         supported_claim_count=len(supported),
@@ -556,14 +584,9 @@ def _judgment_impact_parts(
         all_candidate_severity_weighted_structural_precision=_ratio(
             matched_weight, sum(claim.weight for claim in candidate_score.claims), complete=complete
         ),
-        combined_accounted_cost_usd=_money_sum(
-            (
-                candidate_score.observation.total_accounted_cost_usd,
-                observation.judgment_accounted_cost_usd,
-            )
-        ),
-        active_reserved_usd=observation.active_reserved_usd,
-        summed_stage_elapsed_seconds=observation.summed_stage_elapsed_seconds,
+        combined_accounted_cost_usd=combined_accounted_cost_usd,
+        active_reserved_usd=active_reserved_usd,
+        summed_stage_elapsed_seconds=summed_stage_elapsed_seconds,
     )
     return rows, summary
 

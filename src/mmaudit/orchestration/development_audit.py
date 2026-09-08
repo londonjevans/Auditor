@@ -74,7 +74,17 @@ def _rebuild(prepared: PreparedDevelopmentAudit) -> PreparedDevelopmentAudit:
     return rebuilt
 
 
-def _write(output_dir: Path, filename: str, model: BaseModel) -> ManifestFileBinding:
+def _write(
+    output_dir: Path,
+    filename: str,
+    model: BaseModel,
+    *,
+    max_bytes: int = MAX_DEVELOPMENT_AUDIT_ARTIFACT_BYTES,
+) -> ManifestFileBinding:
+    """Preserve the existing private writer; composed records have a bounded larger envelope."""
+
+    if type(max_bytes) is not int or not 1 <= max_bytes <= 16_000_000:
+        raise DevelopmentAuditError("development output byte bound is invalid")
     expected = model.model_dump(mode="json")
 
     def validate(content: bytes) -> None:
@@ -86,7 +96,7 @@ def _write(output_dir: Path, filename: str, model: BaseModel) -> ManifestFileBin
         evidence_root=output_dir,
         relative_path=filename,
         value=expected,
-        max_bytes=MAX_DEVELOPMENT_AUDIT_ARTIFACT_BYTES,
+        max_bytes=max_bytes,
         validate_content=validate,
         require_private_parent=True,
     )

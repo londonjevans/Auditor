@@ -30,7 +30,11 @@ from mmaudit.models.development_judgment import (
     validate_development_candidate_accounting,
 )
 from mmaudit.models.development_review import DevelopmentReviewDiagnostic
-from mmaudit.models.development_routing import DevelopmentRoutingEvidence, DevelopmentRoutingFailure
+from mmaudit.models.development_routing import (
+    DEVELOPMENT_GENERATION_ID,
+    DevelopmentRoutingEvidence,
+    DevelopmentRoutingFailure,
+)
 from mmaudit.models.development_transport import review_development_judgment_shard
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
@@ -41,6 +45,7 @@ from mmaudit.repository.directory_custody import (
     observe_unlinked_directory,
     require_same_unlinked_directory_objects,
 )
+from mmaudit.repository.redaction import detect_secrets
 
 
 class DevelopmentJudgmentError(ValueError):
@@ -143,12 +148,14 @@ async def run_development_judgment(
     maximum_run_seconds: float = 600.0,
     mock_transport: httpx.MockTransport | None = None,
     benchmark_truth: DevelopmentBenchmarkTruth | None = None,
+    excluded_generation_ids: tuple[str, ...] = (),
 ) -> DevelopmentJudgmentObservation:
     """Review every nonempty candidate shard once, retaining original costs and failures.
 
     The input audit remains unchanged. No request means NO_CANDIDATES, not a completed
     judgment. Cancellation retains durable accounting and owned artifacts, then propagates.
     Supplied metadata can reject identity collisions, never prove root-lineage independence.
+    Prior ensemble generation IDs add rejections only; they never authorize an observation.
     """
 
     if allow_code_egress is not True:
@@ -173,6 +180,19 @@ async def run_development_judgment(
         or not 0 < maximum_run_seconds <= 1800
     ):
         raise DevelopmentJudgmentError("development judgment requires a bounded run deadline")
+    if (
+        type(excluded_generation_ids) is not tuple
+        or len(excluded_generation_ids) > 6
+        or any(
+            type(value) is not str
+            or DEVELOPMENT_GENERATION_ID.fullmatch(value) is None
+            or detect_secrets(value)
+            or operator_secrets.openrouter_api_key in value
+            for value in excluded_generation_ids
+        )
+        or len(set(excluded_generation_ids)) != len(excluded_generation_ids)
+    ):
+        raise DevelopmentJudgmentError("development judgment prior-generation exclusion is invalid")
     prepared = _rebuild(prepared)
     transport: Literal["MOCK_HTTP", "HTTP_OBSERVATION"] = (
         "MOCK_HTTP" if mock_transport is not None else "HTTP_OBSERVATION"
@@ -242,7 +262,10 @@ async def run_development_judgment(
     observations: list[DevelopmentJudgmentShardObservation] = []
     reason: Literal["JUDGMENT_INCOMPLETE", "LOCAL_FAILURE", "INTERRUPTED"] | None = None
     interruption: BaseException | None = None
-    generations = {item.generation_id for item in prepared.plan.candidate.observations}
+    generations = {
+        *excluded_generation_ids,
+        *(item.generation_id for item in prepared.plan.candidate.observations),
+    }
     try:
         async with asyncio.timeout(maximum_run_seconds):
             for shard in prepared.shards:

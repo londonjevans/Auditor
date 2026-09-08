@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_benchmark_truth.schema.json",
         "development_benchmark_binding.schema.json",
         "development_benchmark_score.schema.json",
+        "development_ensemble_plan.schema.json",
+        "development_ensemble_observation.schema.json",
+        "development_ensemble_score.schema.json",
     ],
 )
 def test_new_development_schemas_are_exact_canonical_artifacts(filename):
@@ -69,5 +72,10 @@ def test_documentation_retains_exact_metric_and_provenance_limits():
         "value: null",
         "unknown",
         "not independent authentication",
+        "ensemble-corpus",
+        "TWO_REVIEW_UNANIMOUS_OPINION_ONLY",
+        "not a portfolio reservation",
+        "review_opinion_observation_rate",
+        "separately selected token allowances",
     ):
         assert marker in text

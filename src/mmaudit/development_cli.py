@@ -28,6 +28,7 @@ from mmaudit.models.development_costs import (
     DevelopmentCostPolicy,
     estimate_development_request,
 )
+from mmaudit.models.development_ensemble import prepare_development_ensemble
 from mmaudit.models.development_judgment import (
     MAX_DEVELOPMENT_JUDGMENT_INPUT_BYTES,
     prepare_development_judgment,
@@ -44,6 +45,7 @@ from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.development_audit import run_development_audit
 from mmaudit.orchestration.development_comparison import compare_development_score_files
+from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
     read_file_evidence,
@@ -52,6 +54,175 @@ from mmaudit.release_io import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("ensemble-corpus")
+def ensemble_development_corpus_command(
+    candidate_endpoint_snapshot: Annotated[Path, typer.Option("--candidate-endpoint-snapshot")],
+    first_reviewer_endpoint_snapshot: Annotated[
+        Path, typer.Option("--first-reviewer-endpoint-snapshot")
+    ],
+    second_reviewer_endpoint_snapshot: Annotated[
+        Path, typer.Option("--second-reviewer-endpoint-snapshot")
+    ],
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    corpus_id: Annotated[str, typer.Option("--corpus-id")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    budget_usd: Annotated[str, typer.Option("--budget-usd")],
+    per_attempt_usd: Annotated[str, typer.Option("--per-attempt-usd")],
+    candidate_maximum_completion_tokens: Annotated[
+        int, typer.Option("--candidate-maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    first_reviewer_maximum_completion_tokens: Annotated[
+        int, typer.Option("--first-reviewer-maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    second_reviewer_maximum_completion_tokens: Annotated[
+        int, typer.Option("--second-reviewer-maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    maximum_run_seconds: Annotated[
+        int, typer.Option("--maximum-run-seconds", min=1, max=1800)
+    ] = 600,
+    safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+    truth_manifest: Annotated[Path | None, typer.Option("--truth-manifest")] = None,
+) -> None:
+    """Execute source candidates and two reviews with one ledger and bounded whole-run scope.
+
+    Role-specific allowances are independent. Unknown costs stay accounted, failed stages
+    stop, and distinct model names or agreement never establish qualified root independence.
+    Optional truth is consumed only by local scoring, never included in model prompts.
+    """
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Development ensemble requires --accept-estimate-risk and --allow-code-egress; "
+            "estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        metadata_paths = (
+            candidate_endpoint_snapshot,
+            first_reviewer_endpoint_snapshot,
+            second_reviewer_endpoint_snapshot,
+        )
+        inputs: tuple[Path, ...] = (*metadata_paths, corpus_root, cost_ledger, secrets_env_file)
+        if truth_manifest is not None:
+            inputs += (truth_manifest,)
+        paths = (*inputs, output_dir)
+        if any(not path.is_absolute() or ".." in path.parts for path in paths) or len(
+            set(paths)
+        ) != len(paths):
+            raise DevelopmentCostError(
+                "development ensemble paths must be absolute, distinct and normalized"
+            )
+        if output_dir.is_relative_to(corpus_root) or any(
+            path.is_relative_to(output_dir) for path in inputs
+        ):
+            raise DevelopmentCostError("development ensemble output overlaps input/control scope")
+        if corpus_id not in DEVELOPMENT_AUDIT_SOURCE_PINS:
+            raise DevelopmentCostError("development ensemble corpus is not allowlisted")
+        metadata_inputs = tuple(
+            read_json_evidence(
+                evidence_root=path.parent, relative_path=path.name, max_bytes=2_000_000
+            )
+            for path in metadata_paths
+        )
+        metadata: tuple[DevelopmentReviewMetadata, ...] = tuple(
+            TypeAdapter(DevelopmentReviewMetadata).validate_json(item.content, strict=True)
+            for item in metadata_inputs
+        )
+        truth_input = (
+            read_file_evidence(
+                evidence_root=truth_manifest.parent,
+                relative_path=truth_manifest.name,
+                max_bytes=MAX_DEVELOPMENT_TRUTH_BYTES,
+            )
+            if truth_manifest is not None
+            else None
+        )
+        truth = (
+            read_development_benchmark_truth(truth_input.content)
+            if truth_input is not None
+            else None
+        )
+        sources = tuple(
+            (
+                name,
+                read_file_evidence(
+                    evidence_root=corpus_root,
+                    relative_path=name,
+                    max_bytes=MAX_DEVELOPMENT_AUDIT_SOURCE_BYTES,
+                ).content,
+            )
+            for name, _digest, _size, _lines in DEVELOPMENT_AUDIT_SOURCE_PINS[corpus_id]
+        )
+        policy = DevelopmentCostPolicy.model_validate(
+            {
+                "overspend_risk_accepted": accept_estimate_risk,
+                "total_budget_usd": budget_usd,
+                "per_attempt_budget_usd": per_attempt_usd,
+                "safety_multiplier": safety_multiplier,
+                "maximum_attempts": 1,
+                "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
+                if carry_uncertain_estimates
+                else "STOP",
+            }
+        )
+        prepared = prepare_development_ensemble(
+            policy=policy,
+            candidate_metadata=metadata[0],
+            reviewer_metadata=metadata[1:],
+            corpus_id=cast(DevelopmentCorpusId, corpus_id),
+            source_files=sources,
+            run_id=run_id,
+            candidate_maximum_completion_tokens=candidate_maximum_completion_tokens,
+            reviewer_maximum_completion_tokens=(
+                first_reviewer_maximum_completion_tokens,
+                second_reviewer_maximum_completion_tokens,
+            ),
+            maximum_run_seconds=float(maximum_run_seconds),
+        )
+        if truth is not None:
+            bind_development_benchmark(plan=prepared.plan.candidate, truth=truth)
+        for path, evidence in zip(metadata_paths, metadata_inputs, strict=True):
+            revalidate_evidence_file_binding(
+                evidence_root=path.parent, binding=evidence.binding, max_bytes=2_000_000
+            )
+        if truth_manifest is not None and truth_input is not None:
+            revalidate_evidence_file_binding(
+                evidence_root=truth_manifest.parent,
+                binding=truth_input.binding,
+                max_bytes=MAX_DEVELOPMENT_TRUTH_BYTES,
+            )
+        ledger = AtomicCostLedger.open_existing(cost_ledger, cap_usd=policy.total_budget_usd)
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            observation = asyncio.run(
+                run_development_ensemble(
+                    prepared=prepared,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                    benchmark_truth=truth,
+                )
+            )
+    except Exception:
+        typer.echo(
+            "Development ensemble refused: invalid source, role metadata/allowance, consent, "
+            "cumulative accounting/headroom or output custody. Inspect retained stage records; "
+            "no independent-lineage authority or validated audit is implied.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(observation.model_dump_json(indent=2))
+    if observation.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 @development_app.command("judge-audit")

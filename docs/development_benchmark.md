@@ -245,6 +245,87 @@ and recomputable hashes cannot establish independent roots, external ground-trut
 an evidence-anchored seal, guaranteed budget enforcement, validated findings or superiority.
 The existing strict qualified runner and frozen objective are unchanged.
 
+## Executed development candidate and dual-review ensemble
+
+`development ensemble-corpus` joins one v2 candidate audit and two source-grounded reviews
+in a single owned run. It is paid-capable; documentation and synthetic tests do not select a
+provider run. This is development automation, not the qualified three-configuration ensemble
+experiment, an independently validated audit or evidence of superiority.
+
+Supply three explicit metadata files using `--candidate-endpoint-snapshot`,
+`--first-reviewer-endpoint-snapshot` and `--second-reviewer-endpoint-snapshot`, plus
+`--corpus-root`, `--corpus-id`, one existing `--cost-ledger`, `--secrets-env-file`, a fresh
+`--output-dir` and `--run-id`. The existing `--budget-usd`, `--per-attempt-usd`,
+`--safety-multiplier`, `--accept-estimate-risk`, `--allow-code-egress` and optional
+`--carry-uncertain-estimates` retain their meanings. Paths must be absolute, distinct,
+normalized and outside output scope. Only the two frozen three-file local corpora are admitted.
+`--truth-manifest` is optional and consumed only by local scoring, never model prompts.
+
+All three roles have separately selected token allowances: `--candidate-maximum-completion-tokens`,
+`--first-reviewer-maximum-completion-tokens` and `--second-reviewer-maximum-completion-tokens`.
+Each defaults to 4096 and must fit its own endpoint metadata and exact request estimate.
+The candidate's allowance does not force either review's allowance. The whole-run
+`--maximum-run-seconds` defaults to 600 and is bounded to 1800. Requested model identities and
+known canonical aliases must be pairwise distinct; names do not establish independent roots,
+and `lineage_independence` remains `NOT_ESTABLISHED`.
+
+The frozen parent plan preflights the candidate estimate plus six per-attempt review allowances
+against the same ledger's remaining estimated budget. This is headroom, not a portfolio reservation
+or a provider-enforced ceiling. Each actual review request is constructed only after candidates
+exist and must independently fit its allowance. Concurrent spending, uncertainty or an actual
+overrun can therefore stop a later stage despite successful initial preflight. Prior liabilities
+remain in the original ledger; a run cannot reset them or silently retry.
+
+Execution is sequential: three candidate requests, then up to three requests for each review,
+at most nine first attempts and 48 unchanged candidates. Both reviews receive the same original
+candidates and frozen source. Neither sees the other review, score or truth. Untrusted candidate
+prose is unchanged, so this does not guarantee semantic blinding. Every nonempty shard requires
+exact ordered decisions; malformed, missing or duplicate decisions stop the stage. Generation
+IDs cannot be reused across roles. There is no automatic retry, repair or model-generated execution.
+
+The private parent directory contains `plan.json`, optional `benchmark-plan.json`, exact
+`review-01-plan.json` and `review-02-plan.json` when prepared, `result.json` and optional
+`score.json`. Child directories `candidate/`, `review-01/` and `review-02/` retain their original
+plan, shard observations and result. Parent and completed child bindings are rechecked between
+stages and at finalization; each child keeps its own per-request custody checks. Parent/prior-child
+tampering during a child can prevent the next stage or final result, not retroactively cancel
+that child's already dispatched requests. Charges survive custody failure. The existing child
+artifact limit remains 2 MB; composed parent results/scores have an explicit 16 MB limit.
+
+`OBSERVED_ALL_STAGES` means all three stages returned complete observations, not validated
+findings. Empty candidate sets produce `NO_CANDIDATES` after the three source requests and
+dispatch neither review: one observed stage out of three, zero judgments and a null opinion
+rate, never perfect recall. `INCOMPLETE` retains every observed original claim, missing stage,
+unknown/reserved liability and failed response. A cancelled or otherwise unreturned child earns
+no fabricated observation credit even if some child files exist; known request accounting remains.
+Cancellation is re-raised after best-effort finalization. Custody failure can prevent a parent
+result altogether, without implying success or zero charge.
+
+`TWO_REVIEW_UNANIMOUS_OPINION_ONLY` preserves both opinions per original claim: two supports
+or two refutations agree; differing opinions or an inconclusive review yield `INCONCLUSIVE`;
+any missing review yields `UNREVIEWED`. Agreement does not validate a vulnerability. The score
+keeps the original candidate score and every structural denominator, including guarded,
+unmatched and advisory noise. It reuses the review-impact metrics above without synthesizing a
+filtered candidate audit. Incomplete runs keep complete-quality ratios null.
+
+`review_opinion_observation_rate` counts actual individual opinions over twice the number of
+retained candidate claims, with an empty denominator reported as null; it does not invent claims
+from missing source shards. `stage_observation_rate` always uses three stages. Parent accounted
+cost sums unique candidate and review entries once, not each review's candidate-inclusive total.
+This run total can be smaller than the entire ledger total, which retains other attempts.
+`executed_ensemble_wall_clock_seconds` measures the owned execution interval after preparation
+and initial output setup, before final parent result/score serialization. It includes stage handoff
+and any unreturned child work. The separate observed-stage sum contains only returned child
+durations; missing durations are not invented. Neither measurement is a controlled parallel run.
+
+Synthetic local integration tests trap real network and process execution and use disposable
+ledgers with explicit fake credentials. They cover both corpora, maximum and empty scope,
+agreement/disagreement, failures in each stage, carry, overruns, deadlines, cancellation,
+generation reuse, output custody, CLI consent and score tampering. They do not demonstrate
+live negative-control discrimination, private billing authenticity, external truth provenance,
+genuine root independence, a reproducible external evidence seal or the frozen hard-cost objective.
+All qualification, release, audit-completion and finding-validation authority stays false.
+
 ## Comparing retained runs without another provider call
 
 `mmaudit development compare-scores` accepts two through eight explicit absolute
