@@ -3,6 +3,69 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T20:37Z — **`V3-DEVENSEMBLE-001` verified live: first EXECUTED cross-lineage ensemble completes on the planted corpus (candidate deepseek, reviewers kimi + glm, 9 requests, all stages observed, 0.068 USD, 100 s). Guarded corpus: 2 of 3 stages; the glm reviewer timed out at 180 s. glm is now the unreliable role-player.**
+
+Timestamp from the clock. Development ledger #3: 63 entries, 59 reconciled, 4 uncertain. **Actual
+development spend across ledgers 1.221975476 USD**; phantom uncertain reservations 1.774773176 USD
+(the new one is a genuine post-dispatch timeout, correctly uncertain). Cumulative ledger untouched.
+Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Runs (`development ensemble-corpus`, ledger #3, carry mode, truth for scoring only, per-attempt 1.00)
+
+| run id | candidate / reviewer 1 / reviewer 2 (all `=together`) | corpus | status | real cost | wall |
+|---|---|---|---|---|---|
+| `devensemble-20260908-a-1` | glm (4096) / deepseek (16384) / kimi (16384) | a | `CANDIDATE_INCOMPLETE`: glm shard 1 `length` at 4096 completion, 0 reasoning | 0.0211878 | 91 s |
+| `devensemble-20260908-a-2` | **deepseek (65536) / kimi (16384) / glm (16384)** | a | **`OBSERVED_ALL_STAGES`** 3 stages, 6 judgments | 0.06772640 | 100 s |
+| `devensemble-20260908-b-1` | deepseek / kimi / glm | b | `REVIEW_INCOMPLETE`: candidate ok, kimi 3/3, **glm review-02 file-01 `TIMEOUT` at 180.0 s**, `UNKNOWN_COST` | 0.05837976 (+0.1877874 uncertain) | 321 s |
+
+Outputs `…/development-audits/ensemble-{a,b}-*-20260908/` with `plan.json`, `benchmark-plan.json`,
+`candidate/`, `review-01/`, `review-02/`, `review-0N-plan.json`, `result.json`, `score.json`.
+
+### 2. The executed ensemble result (corpus `a`, run `a-2`)
+
+```
+quality_scope COMPLETE_OBSERVATIONS   candidate claims 3   supported 3 / refuted 0 / inconclusive 0
+supported_root_recall 1.0   supported_severity_weighted_structural_precision 0.333333 (5/15)
+first_attempt_claim_observation_rate 3/3   executed_ensemble_wall_clock_seconds 100.4
+stage costs: candidate 0.0125928 | kimi review 0.0430602 | glm review 0.0120734
+```
+
+Both reviewers independently supported all three deepseek claims (the planted root, its
+consequence, and the misanchored restatement), each with source refs. This is the first time the
+`union`/ensemble figure in this build is an **executed** result rather than a recorded-run union,
+and it was produced unattended by one command on the development policy. The artifact still says
+`lineage_independence: NOT_ESTABLISHED`, correctly.
+
+On corpus `b` the observed stages agree with everything earlier today: candidate 3 advisories,
+kimi supports all three as advisories, no invariant claim against the guarded control.
+
+### 3. glm-5.2 on `together` is unreliable in every role except unattended candidate on `a`
+
+Today's glm tally on this route: audits `a`/`b` completed (2 runs); judge over kimi: 2 runaways to
+the token cap; ensemble candidate: 1 runaway; ensemble reviewer: 1 success, 1 hang to the 180 s
+deadline with no usage reported. deepseek and kimi have had zero such events on `together`. The
+operator cannot see inside the failed responses, but the pattern (visible-output generation to the
+cap, then a full-deadline hang) is provider/route behaviour, not a property of the corpus. For the
+ensemble the operator will prefer deepseek and kimi as reviewers and treat glm as the candidate under
+test, or swap glm for a fourth lineage if one becomes admissible.
+
+### 4. Requests
+
+1. Record DEVENSEMBLE's first live evidence: one complete executed ensemble on `a`, a 2-of-3 on `b`
+   with the exact failure stage.
+2. **Timeout should honour the whole-run deadline budget per stage, or be configurable per role.**
+   The reviewer stage hard-stops at 180 s; the run had 1800 s available and the other reviewer
+   finished in 22 s. A per-role `--*-timeout-seconds`, or one bounded retry of the timed-out stage
+   within the remaining run deadline, would have completed `b-1`.
+3. The synthetic negative-control candidate (19:30Z) is now the most valuable small addition:
+   fifteen-plus judgments and six ensemble reviews have never produced a `REFUTED`.
+4. Standing: `Retry-After` retry, `--reasoning-effort`, judge allowance decoupling.
+
+The operator will rerun `b` once more as-is to see whether the glm reviewer completes (it did on
+`a-2`), then move to whatever Codex lands next. The next objective step after that, on the operator's
+reading, is the same ensemble over a corpus larger than three files with more than one planted root,
+so precision and recall stop being 1-of-1 statistics.
+
 ## 2026-09-08T19:30Z — **`V3-DEVJUDGE-001` verified live: three complete cross-lineage judge runs, 15/15 candidate claims `SUPPORTED`, 0 refuted. Two findings: the glm judge runs away on one shard; the judge inherits the candidate's token allowance, which silently couples the judge's cost target to the candidate's.**
 
 Timestamp from the clock. Development ledger #3: 46 entries, 43 reconciled, 3 uncertain
