@@ -3,6 +3,58 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T17:33Z — **`V3-DEVCARRY-001` and `V3-DEVTELEMETRY-001` verified live. Ledger #3 reopened under carry mode. deepseek truncation explained by telemetry: at a 4096 allowance it spends all 4096 tokens reasoning; at 65536 it finishes in 3–5k and finds the root. A mid-run 429 now leaves a 0.556 USD phantom reservation instead of a dead ledger.**
+
+Timestamp from the clock. Development ledger #3: 26 entries, 24 reconciled, 2 `uncertain_accounted`
+(0.069107368 + 0.555709440 reserved). **Actual development spend across ledgers 0.859322264 USD;
+phantom uncertain reservations 1.031273608 USD.** Cumulative ledger untouched. Ledger unchanged
+at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. DEVCARRY verified ($0 then live)
+
+On a copy of locked ledger #3: default policy → `CostBudgetExceededError … requires all prior
+provider costs to be settled`; `uncertain_cost_policy: CARRY_RESERVED_ESTIMATE` → reserved and
+released. Live: `--carry-uncertain-estimates` on the real ledger #3 accepted three runs below. The
+uncertain entries stay byte-exact and fully counted. Ledgers #1 and #2 are therefore also usable
+again with the flag; the operator will consolidate on #3.
+
+### 2. DEVTELEMETRY verified with real numbers; deepseek truncation explained
+
+| run | allowance | shard 1 telemetry | result |
+|---|---|---|---|
+| `a-12-deepseek` | 4096 | `finish_reason length`, prompt 3534, completion **4096**, reasoning **4096**, `CONSISTENT` | `INCOMPLETE_OUTPUT`, 0.02088504 |
+| `a-13-deepseek` | 65536 @ per-attempt 0.50 | refused pre-dispatch: estimate exceeds target (policy working) | no charge |
+| `a-14-deepseek` | 65536 @ per-attempt 1.00 | file-01 `stop`, completion 2903 / reasoning 2607; file-02 `stop`, 4977 / 4651; **file-03 HTTP 429** | 2/3 observed, real charges 0.011652652 + 0.0243738 |
+
+So `deepseek/deepseek-v4-pro-0813` at `reasoning.effort: high` on fireworks consumes the entire
+completion allowance as reasoning when the allowance is small, producing zero visible output; with
+headroom it reasons 2.6–4.7k tokens and answers. The two earlier "truncations" were the same
+behaviour. Observed shards: `MATCHED_ROOT` on RoutePolicy (the planted defect) plus one
+`DUPLICATE_OR_CONSEQUENCE`, no advisories — the same shape as glm's output, at glm-like cost per
+shard.
+
+### 3. The 429 pattern on fireworks
+
+Three fireworks 429s today (`a-11` first request; `a-14` third consecutive request; both within
+seconds of a prior request). Under carry mode the `a-14` one leaves `uncertain_accounted` at the
+full 65536-token reservation (0.555709440) and the score's `accounted_cost_usd` reports
+0.591735892 against 0.036026452 real. The scorer already carries `reported_actual_cost_usd`
+separately, so nothing is misreported, but the phantom will dominate any cost column until settled.
+
+### 4. Requests, in current priority
+
+1. **`Retry-After`-bounded single in-run retry on 429** (first raised 13:18Z). It would have
+   completed `a-14` and is now the difference between a 3-shard run finishing and not on this
+   provider. Please keep first-attempt completion scored on the first attempt.
+2. **`--reasoning-effort`** on the development commands (15:12Z req. 2). deepseek needs `high`
+   with ≥ 16k headroom or a lower effort; kimi and glm are fine at `high`/4096. Record the effort
+   in `plan.json`.
+3. Settle attestation for `uncertain_accounted` entries remains wanted for the cumulative ledger's
+   long-term hygiene, but is no longer blocking development.
+
+The operator will retry deepseek on both corpora once request 1 lands, spacing requests to avoid
+the provider limit in the meantime is not something the operator can do inside a single run.
+
 ## 2026-09-08T16:26Z — **THIRD LEDGER RETIRED BY A ZERO-COST 429. `V3-DEVTELEMETRY-001` verified on that response (all fields `NOT_REPORTED`, correctly). Paid runs paused until the settle / no-generation fix lands.**
 
 Timestamp from the clock. Development ledger #3: 22 entries, 21 reconciled, **1 `uncertain_accounted`
