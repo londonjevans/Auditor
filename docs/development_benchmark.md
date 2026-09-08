@@ -86,6 +86,49 @@ not independently authenticated provider acceptance or a qualified audit. These 
 controls do not reconstruct private response bytes. HTTP error messages/Retry-After handling and
 accounting recovery are separate work; no charge is inferred from an absent generation identifier.
 
+## Comparing retained runs without another provider call
+
+`mmaudit development compare-scores` accepts two through eight explicit absolute
+`--score-file` paths and one absolute `--output-file`. Each input must be a retained v2
+`score.json` for the same exact frozen corpus, truth, scorer version and transport class.
+Compare planted and guarded variants separately; do not pool unlike controls into one ratio.
+The output parent must already exist, be owned and not group/world-writable; the output file
+must not exist. Files and parent paths cannot traverse links, and input/output paths must be
+distinct. The writer creates one mode-0600 file, never directories or a ledger.
+
+Every score and its derived metrics are strictly revalidated. Rows are ordered by run ID and
+retain model/endpoint labels, completion-token allowance and the complete existing summary,
+including incomplete shards, misses, duplicates, guarded claims, missing costs and timings.
+Run/request/reservation and known generation identities must not be reused across inputs.
+An equal error-body hash alone is not proof of a duplicated request: separate failed calls can
+return identical bodies, and their costs must remain visible. A failed repeated generation
+inside one already-validated run stays failure evidence, not a reason to erase that run's cost.
+
+Each row lists roots unique to that run and roots shared with another input. The union counts
+each observed frozen root once; its conservative all-claim fraction divides that count by
+**all** claims across **all** selected runs, keeping repeated consequences and advisories.
+The union's quality ratios are null if any input has incomplete observations, even if another
+run found the planted root. Shard completion always uses the full three-times-run-count
+denominator. Empty truth never produces perfect recall. Every original score is embedded and
+hash-bound, and all rows/union metrics are recomputed when the comparison is parsed.
+
+Estimated, reported-actual, accounted, uncertain and active-reserved costs are summed separately.
+The sum of owned run durations is not a measured ensemble wall clock: the union was not executed,
+and `executed_ensemble_wall_clock_seconds` stays null. Model names do not prove independent
+root lineages; effort/request and budget parity are not established by these artifacts. The
+comparison cannot claim a controlled experiment, semantic precision, superiority, qualification
+or audit completion. The truth remains agent-constructed/public-labelled development material.
+Including failed runs is essential; comparing hand-picked successful runs cannot establish an
+unbiased campaign completion rate. This command does not discover or select omitted runs.
+
+The command reads no credentials or ledgers, calls no provider and performs no retries. Exact
+input byte bindings are checked before writing and again while the created output is still owned;
+input/output drift refuses success. Existing or replacement output files are not overwritten or
+deleted. Complete observations return success; a safely retained comparison containing incomplete
+observations returns `INCOMPLETE`. Bad input or file custody returns a redacted configuration error.
+These filesystem checks establish observed consistency, not authentication of private provider
+execution or protection against an actor that controls the whole host after validation.
+
 ## Matching and duplicate handling
 
 The planted control is the missing administrator guard on `RoutePolicy.sol:40`; the guarded

@@ -15,6 +15,7 @@ from mmaudit.benchmark.development import (
     DevelopmentBenchmarkScore,
     DevelopmentBenchmarkTruth,
 )
+from mmaudit.benchmark.development_comparison import DevelopmentBenchmarkComparison
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
@@ -229,6 +230,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_benchmark_truth.schema.json": DevelopmentBenchmarkTruth,
     "development_benchmark_binding.schema.json": DevelopmentBenchmarkBinding,
     "development_benchmark_score.schema.json": DevelopmentBenchmarkScore,
+    "development_benchmark_comparison.schema.json": DevelopmentBenchmarkComparison,
     "openrouter_endpoint_inventory_diagnostic.schema.json": (OpenRouterEndpointInventoryDiagnostic),
     "findings_artifact.schema.json": FindingsArtifact,
     "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,

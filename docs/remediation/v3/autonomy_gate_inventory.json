@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4128,
-  "inventory_sha256": "ce309ae08f80f1330ebc3d0ccde8726b6ad82be6f9de4744d4d73fd1a2ae3af9",
+  "gate_source_count": 4132,
+  "inventory_sha256": "eb96d2865a3f8c64ea73842aa64023b509e30c1a9fc76d8d0e454d03df802816",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -567,6 +567,7 @@
         "direct-env-ast:cli:_preflight_model_calibration_output:working-directory:4",
         "direct-env-ast:models.calibration:_open_private_json_parent:working-directory:1",
         "entropy-ast:cli:models_benchmark.execute:uuid-uuid4:1",
+        "explicit:development-benchmark-comparison",
         "explicit:development-benchmark-score",
         "explicit:development-benchmark-truth",
         "filesystem-input:benchmark.certificate:_file_sha256:1",
@@ -896,6 +897,7 @@
         "environment-override:mmaudit_solidity_project_root",
         "explicit:development-audit-frozen-plan",
         "explicit:development-benchmark-plan-binding",
+        "explicit:development-comparison-files",
         "filesystem-input:cli:_repo_path:1",
         "filesystem-input:orchestration.actor_model:_open_exact_actor_path_component:1",
         "filesystem-input:orchestration.actor_model:_open_exact_actor_path_component:2",
@@ -3982,6 +3984,7 @@
         "audited-module:benchmark.claims",
         "audited-module:benchmark.cross_lineage_adjudication",
         "audited-module:benchmark.development",
+        "audited-module:benchmark.development_comparison",
         "audited-module:benchmark.engine",
         "audited-module:benchmark.foundry_mutation_executor",
         "audited-module:benchmark.model_portfolio",
@@ -4097,6 +4100,7 @@
         "audited-module:orchestration.coverage",
         "audited-module:orchestration.development_audit",
         "audited-module:orchestration.development_budget",
+        "audited-module:orchestration.development_comparison",
         "audited-module:orchestration.execution_candidates",
         "audited-module:orchestration.learning",
         "audited-module:orchestration.managed_fork_archives",
@@ -4540,7 +4544,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4180,
+  "source_count": 4184,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9945,6 +9949,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:benchmark.development_comparison",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/benchmark/development_comparison.py",
+      "source_semantics_sha256": "4eb41b27564e3ab41e6c91844994dd3a797fa4b070b111620d1e1c212ebc21c4"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
       "source_id": "audited-module:benchmark.engine",
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
@@ -10021,7 +10034,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/development_cli.py",
-      "source_semantics_sha256": "ce3d63624d2320ceaa7f4b765d3a8838a5ef9bf4f66724992024c0ed0c82bf55"
+      "source_semantics_sha256": "946995d9e55b0026a0ab52e92561e0c2ab0649978be487e39ce1b84dfa1bc174"
     },
     {
       "classification": "GATE",
@@ -10867,7 +10880,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "d24928349c0875df704d0eeeb4238d9d0272f695fd077fe443bcfa14dd9f9f4b"
+      "source_semantics_sha256": "192ee4accb452a88142d98cc4ba45fb2d9490d2cbd5ff80ef8f361b127c094a9"
     },
     {
       "classification": "GATE",
@@ -10976,6 +10989,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_budget.py",
       "source_semantics_sha256": "8ad78149f1e8788a40122518f063a9ffd81645e1a527bcd58cf691853c975d45"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:orchestration.development_comparison",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_comparison.py",
+      "source_semantics_sha256": "a073b824b947f35e4a94c8446e2f8a350ed149f47213d99ba89f9023df3d6a92"
     },
     {
       "classification": "GATE",
@@ -21473,6 +21495,15 @@
     },
     {
       "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "explicit:development-benchmark-comparison",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.benchmark.development_comparison.compare_development_scores",
+      "source_semantics_sha256": "b92bff4d8b5a553bbd2aa2ab1e6a3246839934d871d772d48f7d81a21745cc0a"
+    },
+    {
+      "classification": "GATE",
       "logical_gate_id": "gate-client-audit-scope",
       "source_id": "explicit:development-benchmark-plan-binding",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
@@ -21497,6 +21528,15 @@
       "source_occurrence_count": 1,
       "source_path": "mmaudit.benchmark.development.read_development_benchmark_truth",
       "source_semantics_sha256": "3333077a4ebe3761556a26acc13d8925152b93ff418308505cb725a93a98efd8"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-comparison-files",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_comparison.compare_development_score_files",
+      "source_semantics_sha256": "16ad519e515cc0a64fad2fcd6a5aa117f510784797a556ddedfa63c65f4e3f96"
     },
     {
       "classification": "GATE",
@@ -42163,9 +42203,9 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "6399e30fab24d10a6fefd02111ba52c12384cf9d733d1991feaee0b410df5f5b",
+  "source_discovery_semantics_sha256": "3e214db7e418b8044a288cbedb47253ee428097a46fb58fa5a9b5cfb204678f7",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 287,
+    "AUDITED_MODULE_UNIVERSE": 289,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
@@ -42174,13 +42214,13 @@
     "DIRECT_ENVIRONMENT_INPUT": 549,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2250,
+    "EXPLICIT_NON_FIELD_GATE": 2252,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4183,
-  "source_universe_sha256": "c00fd4715e892461b52a218a6123af7a8f9ec2587492ea55894bf50cb35bd654",
+  "source_occurrence_count": 4187,
+  "source_universe_sha256": "8153c505961f00b0bd504f9725075927c21cefc1456b5f54209afdeb8de31820",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

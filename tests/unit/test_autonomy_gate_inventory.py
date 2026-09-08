@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4180
-    assert inventory.source_occurrence_count == 4183
+    assert inventory.source_count == 4184
+    assert inventory.source_occurrence_count == 4187
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 287,
-        "EXPLICIT_NON_FIELD_GATE": 2250,
+        "AUDITED_MODULE_UNIVERSE": 289,
+        "EXPLICIT_NON_FIELD_GATE": 2252,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4128,
+        SourceCoverageClassification.GATE: 4132,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1284,6 +1284,25 @@ def test_development_rejection_projection_is_audited_without_acquiring_authority
     )
     assert source.source_path == "src/mmaudit/models/development_diagnostics.py"
     assert source.logical_gate_id == "gate-runtime-package-integrity"
+    assert source.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize(
+    ("source_id", "gate_id"),
+    [
+        ("audited-module:benchmark.development_comparison", "gate-runtime-package-integrity"),
+        ("audited-module:orchestration.development_comparison", "gate-runtime-package-integrity"),
+        ("explicit:development-benchmark-comparison", "gate-benchmark-evidence-authority"),
+        ("explicit:development-comparison-files", "gate-client-audit-scope"),
+    ],
+)
+def test_development_comparison_inputs_and_outputs_have_explicit_gate_coverage(
+    inventory: AutonomyGateInventory, source_id: str, gate_id: str
+) -> None:
+    source = next(item for item in inventory.source_coverage if item.source_id == source_id)
+    assert source.logical_gate_id == gate_id
     assert source.classification is SourceCoverageClassification.GATE
     assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
     assert inventory.runtime_authority is inventory.managed_run_ready is False

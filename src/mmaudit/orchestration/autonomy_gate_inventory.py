@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "1aa8d9e7dcb767993a2c5863377e5347787f7a746f45e31cdedc681f609694c7"
+    "93861f3fb30311fded60236b2bf3e10fa8f623dccc5816feb1b8b2a48e8ca4c6"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3370,6 +3370,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_development_benchmark_truth,
         score_development_audit,
     )
+    from mmaudit.benchmark.development_comparison import compare_development_scores
     from mmaudit.isolation.container import (
         SingleLoopbackHardhatBackend,
         rootless_runtime_environment,
@@ -3384,6 +3385,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.consensus import preliminary_status
     from mmaudit.orchestration.cost_ledger import AtomicCostLedger
     from mmaudit.orchestration.development_audit import run_development_audit
+    from mmaudit.orchestration.development_comparison import compare_development_score_files
     from mmaudit.orchestration.managed_fork_archives import (
         ManagedForkArchives,
         ManagedForkArchiveSource,
@@ -3437,6 +3439,16 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-benchmark-score",
             score_development_audit,
             "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-benchmark-comparison",
+            compare_development_scores,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-comparison-files",
+            compare_development_score_files,
+            "gate-client-audit-scope",
         ),
         _explicit_anchor(
             "development-routing-observation",

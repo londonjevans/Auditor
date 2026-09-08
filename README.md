@@ -525,6 +525,14 @@ this option the v1 request and observation interpretation are unchanged. See
 [development measurement](docs/development_benchmark.md) for exact matching rules, denominators,
 costs, missing evidence and the explicitly non-qualifying, agent-constructed truth boundary.
 
+`mmaudit development compare-scores --score-file /absolute/run-a/score.json
+--score-file /absolute/run-b/score.json --output-file /absolute/private/comparison.json`
+compares two through eight retained same-corpus scores without provider or ledger access.
+It reports per-run metrics and shared/unique/union roots while preserving incomplete scope and
+all costs. The output must be new; its parent must already exist. An observed union is not an
+executed ensemble, proof of independent lineages or a superiority verdict; see the measurement
+guide for exact limits and file-custody rules.
+
 ## Solidity smart-contract analysis
 
 Solidity discovery is enabled by default and is read-only. `mmaudit` detects Foundry, Hardhat, mixed,

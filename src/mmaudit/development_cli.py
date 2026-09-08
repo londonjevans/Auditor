@@ -38,9 +38,39 @@ from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.development_audit import run_development_audit
+from mmaudit.orchestration.development_comparison import compare_development_score_files
 from mmaudit.release_io import read_file_evidence, read_json_evidence
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("compare-scores")
+def compare_development_scores_command(
+    score_files: Annotated[list[Path], typer.Option("--score-file")],
+    output_file: Annotated[Path, typer.Option("--output-file")],
+) -> None:
+    """Compare two through eight same-corpus scores locally, without provider or ledger access."""
+
+    try:
+        result = compare_development_score_files(
+            score_files=tuple(score_files), output_file=output_file
+        )
+    except Exception:
+        typer.echo(
+            "Development comparison refused: invalid, repeated or incompatible scores, "
+            "unsafe input/output paths or changed file custody. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Development comparison written: "
+        + result.comparison_sha256
+        + "; "
+        + result.union.quality_scope
+        + ". No ensemble execution or qualification is implied."
+    )
+    if result.union.quality_scope != "COMPLETE_OBSERVATIONS":
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 @development_app.command("preview-cost")
