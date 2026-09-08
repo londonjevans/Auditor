@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 
 from scripts.generate_release_schemas import MODELS, rendered_schema
 from tests.development_benchmark_support import scored_file_response
+from tests.development_corpus_judgment_support import manifest_judgment_response
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,6 +32,10 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_plan.schema.json",
         "development_corpus_shard_observation.schema.json",
         "development_corpus_observation.schema.json",
+        "development_corpus_judgment_response.schema.json",
+        "development_corpus_judgment_plan.schema.json",
+        "development_corpus_judgment_shard_observation.schema.json",
+        "development_corpus_judgment_observation.schema.json",
     ],
 )
 def test_new_development_schemas_are_exact_canonical_artifacts(filename):
@@ -41,6 +46,7 @@ def test_new_development_schemas_are_exact_canonical_artifacts(filename):
     if filename not in {
         "development_scored_review_response.schema.json",
         "development_corpus_response.schema.json",
+        "development_corpus_judgment_response.schema.json",
     }:
         for field in (
             "findings_validated",
@@ -95,5 +101,31 @@ def test_documentation_retains_exact_metric_and_provenance_limits():
         "EXPLICIT_MANIFEST_ONLY",
         "RESPONSE_COMPLETION_NOT_VALIDATED_ANALYSIS_COVERAGE",
         "sources.json",
+        "judge-manifest",
+        "CANDIDATE_INCOMPLETE",
+        "64 MB",
     ):
         assert marker in text
+
+
+@pytest.mark.parametrize("verdict", ["SUPPORTED", "REFUTED", "INCONCLUSIVE"])
+@pytest.mark.parametrize("references", [False, True])
+def test_public_manifest_judgment_schema_retains_bounded_nested_reference_contract(
+    verdict, references
+):
+    schema = json.loads(
+        (ROOT / "schemas/development_corpus_judgment_response.schema.json").read_text()
+    )
+    response = manifest_judgment_response(verdict=verdict)
+    decision = response["decisions"][0]
+    decision["claim_id"] = "file-0064:16"
+    if references:
+        decision["source_refs"][0].update(
+            filename="src/nested/Maximum.sol", line_start=10000, line_end=10000
+        )
+    else:
+        decision["source_refs"] = []
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid(response) == (references or verdict == "INCONCLUSIVE")
+    decision["claim_id"] = "file-0065:16"
+    assert not validator.is_valid(response)

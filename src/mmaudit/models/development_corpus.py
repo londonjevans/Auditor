@@ -399,15 +399,7 @@ def prepare_development_corpus_shard(
     request_id = development_corpus_request_id(run_id, manifest, primary_filename)
     snapshot, discovery = _development_metadata(endpoint_snapshot)
     primary = next(i for i, s in enumerate(manifest.sources, 1) if s.filename == primary_filename)
-    prompt = (
-        f"Primary file: {primary_filename}\nSelected manifest SHA-256: {manifest.manifest_sha256}\n"
-    )
-    for source, (name, content) in zip(manifest.sources, source_files, strict=True):
-        prompt += f"\nSource file: {name}\nSource SHA-256: {source.sha256}\n"
-        prompt += "\n".join(
-            f"{i}: {line}" for i, line in enumerate(content.decode("utf-8").splitlines(), 1)
-        )
-        prompt += "\nEnd source file.\n"
+    prompt = render_development_corpus_sources(manifest, source_files, primary_filename)
     body = _development_request_body(
         snapshot=snapshot,
         system_prompt=_SYSTEM_PROMPT,
@@ -430,6 +422,28 @@ def prepare_development_corpus_shard(
         material,
         discovery,
     )
+
+
+def render_development_corpus_sources(
+    manifest: DevelopmentCorpusManifest,
+    source_files: DevelopmentSourceBytes,
+    primary_filename: str,
+) -> str:
+    """Render exact supplied context for generation or review without reading external source."""
+
+    validate_development_corpus_sources(manifest, source_files)
+    if primary_filename not in {s.filename for s in manifest.sources}:
+        raise DevelopmentCostError("development primary file is outside the manifest")
+    prompt = (
+        f"Primary file: {primary_filename}\nSelected manifest SHA-256: {manifest.manifest_sha256}\n"
+    )
+    for source, (name, content) in zip(manifest.sources, source_files, strict=True):
+        prompt += f"\nSource file: {name}\nSource SHA-256: {source.sha256}\n"
+        prompt += "\n".join(
+            f"{i}: {line}" for i, line in enumerate(content.decode("utf-8").splitlines(), 1)
+        )
+        prompt += "\nEnd source file.\n"
+    return prompt
 
 
 def prepare_development_corpus(

@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "9d275f35df616c42c1f73578bfd620aaed8aa844e9951b9d306e6cf091a3a30f"
+    "646f25a64fe3375b3c6f56d8694ff7253854abdb9b111f6537277fc98afa0971"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3384,6 +3384,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         freeze_development_corpus,
         prepare_development_corpus,
     )
+    from mmaudit.models.development_corpus_judgment import (
+        prepare_development_corpus_judgment,
+        require_development_corpus_judgment_candidate,
+    )
     from mmaudit.models.development_diagnostics import project_development_completion_telemetry
     from mmaudit.models.development_ensemble import prepare_development_ensemble
     from mmaudit.models.development_judgment import (
@@ -3394,6 +3398,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.models.development_transport import (
         development_request_timeout_seconds,
         review_development_audit_shard,
+        review_development_corpus_judgment_shard,
         review_development_corpus_shard,
         review_development_judgment_shard,
     )
@@ -3406,6 +3411,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_comparison import compare_development_score_files
     from mmaudit.orchestration.development_corpus import _report as corpus_accounting_report
     from mmaudit.orchestration.development_corpus import run_development_corpus
+    from mmaudit.orchestration.development_corpus_judgment import (
+        _report as corpus_judgment_accounting_report,
+    )
+    from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
     from mmaudit.orchestration.development_judgment import run_development_judgment
@@ -3573,6 +3582,31 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-accounting",
             corpus_accounting_report,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-retained-candidate",
+            require_development_corpus_judgment_candidate,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-frozen-plan",
+            prepare_development_corpus_judgment,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-shard-transport",
+            review_development_corpus_judgment_shard,
+            "gate-provider-secret-transport",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-sequential-run",
+            run_development_corpus_judgment,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-accounting",
+            corpus_judgment_accounting_report,
             "gate-cost-ledger-provisioning",
         ),
         _explicit_anchor(

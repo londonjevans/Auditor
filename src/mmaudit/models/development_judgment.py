@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal, localcontext
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -44,6 +44,9 @@ from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.orchestration.cost_ledger import CostEntryStatus, CostLedgerSnapshot
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.repository.redaction import detect_secrets
+
+if TYPE_CHECKING:
+    from mmaudit.models.development_corpus import DevelopmentCorpusObservation
 
 _SHA = r"^[0-9a-f]{64}$"
 _RUN_ID = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
@@ -139,9 +142,15 @@ def development_judgment_request_id(run_id: str, candidate_sha256: str, shard_id
 
 
 def _require_distinct_model_identity(
-    candidate: DevelopmentAuditObservation, reviewer: DevelopmentRoutingContext
+    candidate: DevelopmentAuditObservation | DevelopmentCorpusObservation,
+    reviewer: DevelopmentRoutingContext,
 ) -> None:
     producer_ids = {candidate.plan.shards[0].estimate.exact_model_id}
+    if not isinstance(candidate, DevelopmentAuditObservation):
+        # Manifest plans retain metadata even if optional per-response routing is absent.
+        producer_ids.add(candidate.plan.routing.exact_model_id)
+        if candidate.plan.routing.canonical_model_id is not None:
+            producer_ids.add(candidate.plan.routing.canonical_model_id)
     for shard in candidate.observations:
         if shard.routing_evidence is not None:
             context = shard.routing_evidence.context
@@ -156,7 +165,8 @@ def _require_distinct_model_identity(
 
 
 def validate_development_candidate_accounting(
-    candidate: DevelopmentAuditObservation, snapshot: CostLedgerSnapshot
+    candidate: DevelopmentAuditObservation | DevelopmentCorpusObservation,
+    snapshot: CostLedgerSnapshot,
 ) -> None:
     """Require retained candidate costs on the same ledger, never a fresh budget copy."""
 

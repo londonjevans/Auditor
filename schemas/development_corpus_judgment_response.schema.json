@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "DevelopmentCorpusJudgmentDecision": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claim_id": {
+              "pattern": "^file-00(?:0[1-9]|[1-5][0-9]|6[0-4]):(?:0[1-9]|1[0-6])$",
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "source_refs": {
+              "items": {
+                "$ref": "#/$defs/DevelopmentCorpusRootCauseReference"
+              },
+              "maxItems": 6,
+              "minItems": 1,
+              "title": "Source Refs",
+              "type": "array"
+            },
+            "verdict": {
+              "enum": [
+                "SUPPORTED",
+                "REFUTED"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "claim_id",
+            "verdict",
+            "explanation",
+            "source_refs"
+          ],
+          "title": "DevelopmentCorpusJudgmentDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claim_id": {
+              "pattern": "^file-00(?:0[1-9]|[1-5][0-9]|6[0-4]):(?:0[1-9]|1[0-6])$",
+              "title": "Claim Id",
+              "type": "string"
+            },
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "source_refs": {
+              "items": {
+                "$ref": "#/$defs/DevelopmentCorpusRootCauseReference"
+              },
+              "maxItems": 6,
+              "minItems": 0,
+              "title": "Source Refs",
+              "type": "array"
+            },
+            "verdict": {
+              "enum": [
+                "INCONCLUSIVE"
+              ],
+              "title": "Verdict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "claim_id",
+            "verdict",
+            "explanation",
+            "source_refs"
+          ],
+          "title": "DevelopmentCorpusJudgmentDecision",
+          "type": "object"
+        }
+      ],
+      "title": "DevelopmentCorpusJudgmentDecision"
+    },
+    "DevelopmentCorpusRootCauseReference": {
+      "additionalProperties": false,
+      "description": "An unvalidated origin in the explicitly supplied nested source namespace.",
+      "properties": {
+        "filename": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentCorpusRootCauseReference",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_corpus_judgment_response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentCorpusJudgmentDecision"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Decisions",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "summary",
+    "decisions"
+  ],
+  "title": "DevelopmentCorpusJudgmentResponse",
+  "type": "object"
+}

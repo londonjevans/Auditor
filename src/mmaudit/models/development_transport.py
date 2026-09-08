@@ -31,6 +31,13 @@ from mmaudit.models.development_corpus import (
     prepare_development_corpus_shard,
     validate_development_corpus_response,
 )
+from mmaudit.models.development_corpus_judgment import (
+    DevelopmentCorpusJudgmentResponse,
+    DevelopmentCorpusJudgmentShardObservation,
+    PreparedDevelopmentCorpusJudgmentShard,
+    prepare_development_corpus_judgment_shard,
+    validate_development_corpus_judgment_response,
+)
 from mmaudit.models.development_costs import DevelopmentCostPolicy
 from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
@@ -95,6 +102,7 @@ type _PreparedSource = (
     | PreparedDevelopmentAuditShard
     | PreparedDevelopmentJudgmentShard
     | PreparedDevelopmentCorpusShard
+    | PreparedDevelopmentCorpusJudgmentShard
 )
 
 
@@ -255,7 +263,8 @@ def _validated_review(
     DevelopmentReviewResponse
     | DevelopmentScoredReviewResponse
     | DevelopmentJudgmentResponse
-    | DevelopmentCorpusResponse,
+    | DevelopmentCorpusResponse
+    | DevelopmentCorpusJudgmentResponse,
 ]:
     _validate_routing(routing_evidence)
     generation_id = payload.get("id")
@@ -314,6 +323,15 @@ def _validated_review(
         or detect_secrets(generation_id)
     ):
         raise _ResponseRejected(Diagnostic.SECRET_OUTPUT)
+    if type(prepared) is PreparedDevelopmentCorpusJudgmentShard:
+        manifest_judgment = _decode_development_review(content, DevelopmentCorpusJudgmentResponse)
+        try:
+            validate_development_corpus_judgment_response(
+                manifest_judgment, manifest=prepared.candidate.plan.manifest, claims=prepared.claims
+            )
+        except ValueError:
+            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE) from None
+        return generation_id, manifest_judgment
     if type(prepared) is PreparedDevelopmentCorpusShard:
         corpus_response = _decode_development_review(content, DevelopmentCorpusResponse)
         try:
@@ -490,6 +508,30 @@ async def review_development_corpus_shard(
     return result
 
 
+async def review_development_corpus_judgment_shard(
+    *,
+    prepared: PreparedDevelopmentCorpusJudgmentShard,
+    ledger: AtomicCostLedger,
+    operator_secrets: OperatorSecrets,
+    allow_code_egress: bool = False,
+    mock_transport: httpx.MockTransport | None = None,
+) -> DevelopmentCorpusJudgmentShardObservation:
+    """Review unchanged manifest claims through the shared single-attempt accounting boundary."""
+
+    if type(prepared) is not PreparedDevelopmentCorpusJudgmentShard:
+        raise DevelopmentTransportError("manifest judgment requires its exact prepared shard")
+    result = await _review_development_source(
+        prepared=prepared,
+        ledger=ledger,
+        operator_secrets=operator_secrets,
+        allow_code_egress=allow_code_egress,
+        attempt=1,
+        mock_transport=mock_transport,
+    )
+    assert type(result) is DevelopmentCorpusJudgmentShardObservation
+    return result
+
+
 async def _review_development_source(
     *,
     prepared: _PreparedSource,
@@ -503,6 +545,7 @@ async def _review_development_source(
     | DevelopmentAnyAuditShardObservation
     | DevelopmentJudgmentShardObservation
     | DevelopmentCorpusShardObservation
+    | DevelopmentCorpusJudgmentShardObservation
 ):
     """Execute one explicit attempt; never automatically retry an ambiguous paid call.
 
@@ -521,6 +564,7 @@ async def _review_development_source(
             PreparedDevelopmentAuditShard,
             PreparedDevelopmentJudgmentShard,
             PreparedDevelopmentCorpusShard,
+            PreparedDevelopmentCorpusJudgmentShard,
         }
         or type(ledger) is not AtomicCostLedger
     ):
@@ -568,6 +612,18 @@ async def _review_development_source(
             run_id=prepared.run_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
         )
+    elif type(prepared) is PreparedDevelopmentCorpusJudgmentShard:
+        if attempt != 1:
+            raise DevelopmentTransportError("manifest judgments do not automatically retry")
+        rebuilt = prepare_development_corpus_judgment_shard(
+            candidate=prepared.candidate,
+            policy=prepared.estimate.policy,
+            endpoint_snapshot=prepared.discovery or prepared.endpoint_snapshot,
+            source_files=prepared.source_files,
+            shard_id=prepared.shard_id,
+            run_id=prepared.run_id,
+            maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
+        )
     else:
         assert type(prepared) is PreparedDevelopmentJudgmentShard
         if attempt != 1:
@@ -583,6 +639,10 @@ async def _review_development_source(
             run_id=prepared.run_id,
             maximum_completion_tokens=prepared.estimate.maximum_completion_tokens,
         )
+    if (
+        type(rebuilt) is PreparedDevelopmentJudgmentShard
+        or type(rebuilt) is PreparedDevelopmentCorpusJudgmentShard
+    ):
         validate_development_candidate_accounting(rebuilt.candidate, ledger.snapshot())
         if rebuilt.candidate.transport != (
             "MOCK_HTTP" if mock_transport is not None else "HTTP_OBSERVATION"
@@ -632,6 +692,7 @@ async def _review_development_source(
         | DevelopmentScoredReviewResponse
         | DevelopmentJudgmentResponse
         | DevelopmentCorpusResponse
+        | DevelopmentCorpusJudgmentResponse
         | None
     ) = None
     routing_evidence: DevelopmentRoutingEvidence | None = None
@@ -723,7 +784,10 @@ async def _review_development_source(
                     api_key=api_key,
                     generation_header_ids=tuple(response.headers.get_list("x-generation-id")),
                 )
-                if type(prepared) is PreparedDevelopmentJudgmentShard and any(
+                if (
+                    type(prepared) is PreparedDevelopmentJudgmentShard
+                    or type(prepared) is PreparedDevelopmentCorpusJudgmentShard
+                ) and any(
                     item.generation_id == payload.get("id")
                     for item in prepared.candidate.observations
                 ):
@@ -836,6 +900,16 @@ async def _review_development_source(
             elapsed_seconds=_DEVELOPMENT_MONOTONIC() - started,
         )
         return DevelopmentJudgmentShardObservation.model_validate(values)
+    if type(prepared) is PreparedDevelopmentCorpusJudgmentShard:
+        values.update(
+            candidate_sha256=prepared.candidate_sha256,
+            manifest=prepared.candidate.plan.manifest,
+            run_id=prepared.run_id,
+            shard_id=prepared.shard_id,
+            claims=prepared.claims,
+            elapsed_seconds=_DEVELOPMENT_MONOTONIC() - started,
+        )
+        return DevelopmentCorpusJudgmentShardObservation.model_validate(values)
     assert type(prepared) is PreparedDevelopmentAuditShard
     values.update(
         corpus_id=prepared.corpus_id,

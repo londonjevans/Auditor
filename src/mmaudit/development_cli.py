@@ -22,7 +22,13 @@ from mmaudit.models.development_audit import (
     DevelopmentCorpusId,
     prepare_development_audit,
 )
-from mmaudit.models.development_corpus import prepare_development_corpus
+from mmaudit.models.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+    DevelopmentCorpusMaterial,
+    DevelopmentCorpusObservation,
+    prepare_development_corpus,
+)
+from mmaudit.models.development_corpus_judgment import prepare_development_corpus_judgment
 from mmaudit.models.development_costs import (
     MAX_DEVELOPMENT_REQUEST_BYTES,
     DevelopmentCostError,
@@ -47,6 +53,7 @@ from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.development_audit import run_development_audit
 from mmaudit.orchestration.development_comparison import compare_development_score_files
 from mmaudit.orchestration.development_corpus import run_development_corpus
+from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
@@ -60,6 +67,149 @@ from mmaudit.repository.development_corpus import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("judge-manifest")
+def judge_development_manifest_command(
+    candidate_audit_file: Annotated[Path, typer.Option("--candidate-audit-file")],
+    source_material_file: Annotated[Path, typer.Option("--source-material-file")],
+    endpoint_snapshot: Annotated[Path, typer.Option("--endpoint-snapshot")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    budget_usd: Annotated[str, typer.Option("--budget-usd")],
+    per_attempt_usd: Annotated[str, typer.Option("--per-attempt-usd")],
+    maximum_completion_tokens: Annotated[
+        int, typer.Option("--maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    maximum_run_seconds: Annotated[
+        int, typer.Option("--maximum-run-seconds", min=1, max=1800)
+    ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait limit; defaults to 180s and never extends the run deadline.",
+        ),
+    ] = None,
+    safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+) -> None:
+    """Review observed manifest claims against the retained sources.json snapshot.
+
+    Incomplete candidates stay incomplete even when every available claim receives an opinion.
+    No source discovery, truth scoring, automatic retry or lineage qualification is performed.
+    """
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Manifest judgment requires --accept-estimate-risk and --allow-code-egress; "
+            "estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        inputs = (
+            candidate_audit_file,
+            source_material_file,
+            endpoint_snapshot,
+            cost_ledger,
+            secrets_env_file,
+        )
+        paths = (*inputs, output_dir)
+        if any(not p.is_absolute() or ".." in p.parts for p in paths) or len(set(paths)) != len(
+            paths
+        ):
+            raise DevelopmentCostError(
+                "manifest judgment paths must be absolute, distinct and normalized"
+            )
+        if any(p.is_relative_to(output_dir) for p in inputs):
+            raise DevelopmentCostError("manifest judgment output overlaps an input or control")
+        candidate_input = read_json_evidence(
+            evidence_root=candidate_audit_file.parent,
+            relative_path=candidate_audit_file.name,
+            max_bytes=MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+        )
+        candidate = DevelopmentCorpusObservation.model_validate_json(
+            candidate_input.content, strict=True
+        )
+        material_input = read_json_evidence(
+            evidence_root=source_material_file.parent,
+            relative_path=source_material_file.name,
+            max_bytes=2_000_000,
+        )
+        material = DevelopmentCorpusMaterial.model_validate_json(
+            material_input.content, strict=True
+        )
+        if material.manifest != candidate.plan.manifest:
+            raise DevelopmentCostError(
+                "manifest judgment source snapshot differs from its candidate"
+            )
+        metadata_input = read_json_evidence(
+            evidence_root=endpoint_snapshot.parent,
+            relative_path=endpoint_snapshot.name,
+            max_bytes=2_000_000,
+        )
+        metadata: DevelopmentReviewMetadata = TypeAdapter(DevelopmentReviewMetadata).validate_json(
+            metadata_input.content, strict=True
+        )
+        policy = DevelopmentCostPolicy.model_validate(
+            {
+                "overspend_risk_accepted": accept_estimate_risk,
+                "total_budget_usd": budget_usd,
+                "per_attempt_budget_usd": per_attempt_usd,
+                "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
+                "maximum_attempts": 1,
+                "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
+                if carry_uncertain_estimates
+                else "STOP",
+            }
+        )
+        prepared = prepare_development_corpus_judgment(
+            candidate=candidate,
+            policy=policy,
+            endpoint_snapshot=metadata,
+            source_files=material.source_files,
+            run_id=run_id,
+            maximum_completion_tokens=maximum_completion_tokens,
+            maximum_run_seconds=float(maximum_run_seconds),
+        )
+        for path, evidence, bound in (
+            (candidate_audit_file, candidate_input, MAX_DEVELOPMENT_CORPUS_RESULT_BYTES),
+            (source_material_file, material_input, 2_000_000),
+            (endpoint_snapshot, metadata_input, 2_000_000),
+        ):
+            revalidate_evidence_file_binding(
+                evidence_root=path.parent, binding=evidence.binding, max_bytes=bound
+            )
+        ledger = AtomicCostLedger.open_existing(cost_ledger, cap_usd=policy.total_budget_usd)
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            observation = asyncio.run(
+                run_development_corpus_judgment(
+                    prepared=prepared,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                )
+            )
+    except Exception:
+        typer.echo(
+            "Manifest judgment refused: invalid candidate, retained source, identity, consent, "
+            "cumulative accounting or output custody. No validated finding or independent-lineage "
+            "authority is implied; preserve existing costs and incomplete source scope.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(observation.model_dump_json(indent=2))
+    if observation.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 @development_app.command("audit-manifest")

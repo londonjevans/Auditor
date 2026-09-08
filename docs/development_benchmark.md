@@ -328,9 +328,9 @@ All qualification, release, audit-completion and finding-validation authority st
 
 ## Bounded development request deadlines
 
-All six development request commands accept `--request-timeout-seconds` as an optional
+All seven development request commands accept `--request-timeout-seconds` as an optional
 integer from 1 to 1800: `preview-cost`, `review-fixture`, `audit-corpus`, `audit-manifest`,
-`judge-audit` and `ensemble-corpus`. Omission preserves the 180-second default and legacy
+`judge-audit`, `judge-manifest` and `ensemble-corpus`. Omission preserves the 180-second default and legacy
 serialized policy bytes. Explicit selection is retained in `DevelopmentCostPolicy`, estimates,
 plans and observations, including every ensemble role; it changes neither provider JSON
 request bodies nor numeric token/cost estimates. Offline preview makes no request.
@@ -399,11 +399,68 @@ owned-output drift refuse. Completion means responses were observed for selected
 `RESPONSE_COMPLETION_NOT_VALIDATED_ANALYSIS_COVERAGE`. All audit, validation, qualification
 and release flags remain false, including when every response contains no findings.
 
-This candidate consumer does not yet supply general-manifest truth scoring, candidate
-judgment or the dual-review ensemble. Those existing commands retain their fixed v2
-three-file scope. Local tests use the larger paired synthetic source fixture and a64-file
+General-manifest candidate review is available separately through `judge-manifest` below.
+General-manifest truth scoring and the dual-review ensemble remain unavailable; the existing
+scorer, `judge-audit` and `ensemble-corpus` retain their fixed v2 three-file scope.
+Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
+
+## Reviewing retained source-manifest candidates
+
+`development judge-manifest` consumes an exact v3 `DevelopmentCorpusObservation` through
+`--candidate-audit-file` and its original `sources.json` through `--source-material-file`.
+It does not rediscover files or reread a mutable source tree. Supply explicit absolute,
+distinct paths for `--endpoint-snapshot`, `--cost-ledger`, `--secrets-env-file` and a new
+`--output-dir`, together with `--run-id`, `--budget-usd` and `--per-attempt-usd`.
+Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
+These interface details do not select a provider run or authorize spending.
+
+The full original candidate and manifest remain in the review plan. Observed nonempty
+shards receive one review request each, with unchanged ordered `file-0001:01` through
+`file-0064:16` claim IDs and the entire frozen source context. Observed empty sources are
+recorded separately from unobserved candidate sources; neither receives a request.
+An incomplete candidate is accepted without manufacturing a filtered complete candidate:
+its review result remains `INCOMPLETE`, with `CANDIDATE_INCOMPLETE` after every available
+claim has been reviewed. Original missing sources and any still-unreviewed available claims
+remain separate denominators. A complete, empty candidate produces `NO_CANDIDATES`, not a
+validated clean audit. Local failure after observing all candidate shards also remains
+incomplete even if the unobserved-source list is empty.
+
+Review responses use a distinct version2.0 manifest-judgment schema with at most16 ordered
+decisions per shard and up to six references per decision. References permit the manifest's
+nested paths and10000-line bound, but must also fit its actual file lengths. `SUPPORTED`
+and `REFUTED` require source references; `INCONCLUSIVE` may have none. Reviewers are prompted
+to follow supplied helpers before asserting missing guards and not to equate repeated
+patterns or privileged design choices with defects. Opinions are not deterministic
+semantic validation or external truth. Producer exact IDs and known canonical aliases are
+excluded, including aliases retained only in the manifest candidate plan; distinct IDs do
+not prove independent root lineages. `lineage_independence` stays `NOT_ESTABLISHED`.
+
+The reviewer has its own `--maximum-completion-tokens` selection (default4096), separate
+from the candidate's allowance. The whole-run deadline defaults to600seconds, is bounded
+to1800seconds, and is frozen in the plan. The independently selected request deadline uses
+the shared transport described above; remaining run time is never reset. Existing bounded
+cleanup and durable accounting may outlast the active deadline. There is no automatic retry,
+resume, truth injection, score artifact or general-manifest ensemble composition.
+
+The budget must match the candidate's cumulative target and the same durable ledger must
+retain its exact entries before every dispatch. Known charges, unknown estimated liabilities,
+overruns, active reservations and prior request IDs are not cleared. Default STOP refuses an
+uncertain original; only the existing explicit `--carry-uncertain-estimates` policy can carry
+eligible unknown estimates, without claiming billing reconciliation. Candidate cost is counted
+once in the combined total. Candidate/review generation reuse stops further requests while
+preserving charges. Cancellation finalizes available accounting before propagating.
+
+Candidate input is bounded to16 MB and source material to2 MB. New composed review artifacts
+have a fixed64 MB ceiling through the existing private evidence writer; the old fixed-corpus
+writer's limits are unchanged. Owned mode0700 output contains mode0600 `plan.json`, original
+`sources.json`, nonempty-shard opinions and `result.json`. Exact request rebuilding and retained
+file/directory revalidation reject input or output substitution before further dispatch.
+All finding-validation, audit-completion, qualification and release flags remain false.
+Synthetic local tests exercise partial/empty/mixed candidates,64sources/1024opinions, costs,
+identity, generation reuse, deadlines, cancellation and custody; they do not establish live
+model quality, real audit completion or the full frozen objective.
 
 ## Comparing retained runs without another provider call
 
