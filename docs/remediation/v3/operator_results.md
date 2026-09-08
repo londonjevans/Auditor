@@ -3,6 +3,64 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-08T14:28Z — **`V3-DEVDECODE-001` verified live: the guarded-variant shard failures are `ADVISORY_FIELD_MUST_BE_NULL` on `root_cause_ref`. The model cannot know that rule: the strict schema has no conditional on `kind` and the prompt does not state it.**
+
+Timestamp from the clock. Development ledger #3: 11 entries, all `reconciled` (correction: the
+13:18Z entry said 5; it was 8 at that moment, the b-4 run had already settled). Actual development
+spend across the three ledgers `0.4875360` USD. Cumulative ledger untouched. Ledger unchanged at
+57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Run
+
+`devbench-20260908-b-5`, guarded `unit-ledger-b-v1`, route `moonshotai/kimi-k3=together`, ledger #3,
+output `…/unit-ledger-b-v1-scored5-together/`. Result `SHARD_INCOMPLETE` at `file-02` again:
+`file-01 OBSERVED` (0.0319662), `file-02 INCOMPLETE [INVALID_RESPONSE]` HTTP 200 (0.0425928,
+reconciled). 105.6 s, 0.0745590 USD. Observed shard: 4 advisories, 0 invariant claims, 0 guarded
+control claims. Third consecutive guarded attempt to lose one shard this way (b-3 file-02, b-4
+file-03, b-5 file-02).
+
+### 2. Retained reason (new, from DEVDECODE)
+
+```
+rejection_evidence.stage:              STRUCTURED_OUTPUT
+rejection_evidence.structured_failure: SCHEMA_VALIDATION_FAILED
+rejection_evidence.schema_issues:      [{constraint: ADVISORY_FIELD_MUST_BE_NULL,
+                                         field: root_cause_ref, finding_index: 2}]
+```
+
+One advisory (finding 2 of the shard) carried a `root_cause_ref`, and the strict post-decoder rejected
+the entire shard. The diagnosability request is closed; this is exactly what was needed.
+
+### 3. Why the model does this ($0, from the shipped schema and prompt)
+
+`strict_json_schema(DevelopmentScoredReviewResponse)` presents `kind` as an enum
+`[invariant_violation, advisory]` and, independently, `root_cause_ref`, `vulnerability_class` and
+`violated_invariant` as plain `anyOf[X, null]`. There is **no `if`/`oneOf`/`allOf` conditional tying
+those fields to `kind`**, and the system prompt contains no sentence about advisories requiring
+nulls. So the provider-side schema admits an advisory with a `root_cause_ref`, the model reasonably
+emits one (an advisory that points at the planted root is a sensible thing to say), and the
+client-side rule then discards ~1 shard in 3 on the guarded corpus. Note the failure only appears on
+the guarded variant, where nearly every finding is an advisory; on the planted variant most findings
+are invariant claims and the rule is rarely exercised.
+
+### 4. Requests (bounded; whichever is cheapest first)
+
+1. **Express the rule where the model can see it.** Preferred: a `oneOf` on `kind` in the strict
+   schema (advisory branch with the three fields typed `null`; violation branch with them required).
+   If OpenRouter strict mode rejects conditionals for this route, then (a) state the rule in the
+   system prompt and (b) make the client-side decoder **tolerant for advisories**: drop or retain-as-
+   annotation any `root_cause_ref`/class/invariant on an advisory rather than rejecting the shard.
+   Keep the rule strict for `invariant_violation`, where those fields carry scoring weight. An
+   advisory pointing at a root is harmless to the scorer (it already has `ADVISORY_AT_PLANTED_SITE`).
+2. The bounded in-run second attempt (13:18Z request 2) still matters for 429s and genuine schema
+   failures, but request 1 alone would likely have completed all three guarded runs today.
+3. The ledger settle path and no-generation error classification (13:12Z) remain the top structural
+   blocker; ledgers #1 and #2 are still retired with 0.4064568 USD of phantom reservations.
+
+The operator will rerun the guarded variant once request 1 lands. `V3-DEVTRIAL-001` guarded
+evidence is otherwise complete on every observed shard: no invariant claim was ever made against the
+guarded control.
+
 ## 2026-09-08T13:18Z — **FIRST MEASURED BASELINE (`V3-DEVBENCH-001`, `score.json`): planted variant recall 1.0, structural precision 0.19; guarded variant 0 invariant claims but 1-in-3 shards `INVALID_RESPONSE` on two attempts. Route switched to `together` after modal 429s.**
 
 Timestamp from the clock. Development ledgers: #1 10 entries (9 reconciled / 1 uncertain), #2 1 entry
