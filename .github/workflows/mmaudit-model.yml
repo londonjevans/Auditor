@@ -1,5 +1,7 @@
 name: mmaudit model metadata refresh
 
+# Automatic refresh is paused during engine stabilization. A deliberate manual run
+# retains all provider and protected-environment prerequisites.
 on:
   workflow_dispatch:
     inputs:
@@ -8,8 +10,6 @@ on:
         required: true
         default: false
         type: boolean
-  schedule:
-    - cron: "17 3 * * *"
 
 permissions:
   actions: read

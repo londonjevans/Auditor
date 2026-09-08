@@ -776,11 +776,27 @@ commit requires a newly prepared and validated external report.
 
 ## CI
 
-`.github/workflows/mmaudit.yml` is the provider-free deterministic path. Pull requests, default-branch
-pushes, and manual invocations all call `mmaudit ci`, which is structurally scanner-only and cannot
-schedule model roles. The workflow file has no provider-secret reference. Checkout uses full Git
-history so `--changed-since` can prioritize the exact base revision without reducing the complete
-coverage denominator.
+Automatic GitHub Actions triggers are paused during engine stabilization. Both workflow definitions
+retain only `workflow_dispatch`; push, pull-request and scheduled triggers are absent. Continue local
+validation with `make check PYTHON=.venv/bin/python` and focused tests. Restore automatic CI once the
+hosted environment and validation baseline pass reliably, before deployment. A manual run remains
+an intentional checkpoint, not a deployment or audit-readiness claim.
+
+Framed-review integrity checks regenerate all schema roots together on every invocation, sharing
+definitions only within that invocation. Bounded mutable-input snapshots and renderer/model checks
+reject drift during schema generation. This does not cache a passing integrity decision or change
+provider wire schemas.
+
+Automatic formatting/lint discovery excludes the exact externally authored evidence file
+`docs/remediation/v3/operator_results.md`. Owned source and adjacent documentation remain in scope.
+Do not pass that evidence file directly to a mutating formatter: explicit file arguments can bypass
+directory-discovery exclusions unless `--force-exclude` is supplied.
+
+`.github/workflows/mmaudit.yml` is the provider-free deterministic path. Manual invocations call
+`mmaudit ci`, which is structurally scanner-only and cannot schedule model roles. The workflow file
+has no provider-secret reference. Checkout uses full Git history so `--changed-since` can prioritize
+the exact base revision without reducing the complete coverage denominator. Existing push and
+pull-request event handling is retained for future re-enablement of automatic triggers.
 
 Default-branch runs may save a successful, integrity-checked prior run as a candidate CI baseline.
 Pull requests can restore only the cache namespace for their trusted base commit. Admission requires
@@ -827,7 +843,7 @@ verified original run directory. This staging remains independent of the finding
 valid evidence is retained when the audit gate fails because it found an unsafe condition.
 
 Provider access is isolated in `.github/workflows/mmaudit-model.yml`. It has no pull-request trigger,
-runs only for scheduled or manually selected default-branch revisions, and requires approval through
+runs only for manually selected default-branch revisions, and requires approval through
 the named `mmaudit-provider` environment. The example performs an exact-provider preflight; it does
 not imply that paid model review ran. GitHub cannot encode environment protection settings in this
 file: before storing a credential, configure that environment in repository settings with required

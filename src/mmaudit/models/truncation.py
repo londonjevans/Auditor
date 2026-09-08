@@ -17,8 +17,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from itertools import pairwise
+from types import FunctionType
 from typing import Annotated, Any, Literal, Never
 
+import pydantic.json_schema as _PYDANTIC_JSON_SCHEMA_MODULE
+import pydantic.main as _PYDANTIC_MAIN_MODULE
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mmaudit.models.schemas import (
@@ -1580,6 +1583,114 @@ def _strict_schema_sha256(model: type[BaseModel]) -> str:
     return _canonical_sha256(schema)
 
 
+def _candidate_review_schema_inventory_sha256(models: tuple[type[BaseModel], ...]) -> str:
+    """Regenerate every root with shared definitions; retain no cross-call schema cache."""
+
+    roots, definitions = _PYDANTIC_JSON_SCHEMA_MODULE.models_json_schema(
+        [(model, "validation") for model in models]
+    )
+    inventory = {
+        "roots": [roots[(model, "validation")] for model in models],
+        "definitions": definitions,
+    }
+
+    def normalize(node: Any) -> None:
+        if isinstance(node, dict):
+            node.pop("default", None)
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["required"] = list(properties)
+                node["additionalProperties"] = False
+            for child in node.values():
+                normalize(child)
+        elif isinstance(node, list):
+            for child in node:
+                normalize(child)
+
+    normalize(inventory)
+    return _canonical_sha256(inventory)
+
+
+def _candidate_review_schema_input_guard(
+    models: tuple[type[BaseModel], ...],
+) -> Callable[[], bool] | None:
+    """Bind mutable schema/configuration edges for one synchronous generation only."""
+
+    mappings: list[tuple[dict[Any, Any], tuple[tuple[Any, Any], ...]]] = []
+    sequences: list[tuple[list[Any] | tuple[Any, ...], tuple[Any, ...]]] = []
+    classes: list[tuple[type[Any], tuple[tuple[str, Any], ...]]] = []
+    pending: list[Any] = list(models)
+    seen: set[int] = set()
+    remaining_edges = 50_000
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if len(seen) > 50_000:
+            return None
+        if type(value) is dict:
+            if len(value) > remaining_edges:
+                return None
+            remaining_edges -= len(value)
+            items = tuple(value.items())
+            mappings.append((value, items))
+            pending.extend(child for _key, child in items)
+        elif type(value) in (list, tuple):
+            if len(value) > remaining_edges:
+                return None
+            remaining_edges -= len(value)
+            children = tuple(value)
+            sequences.append((value, children))
+            pending.extend(children)
+        elif isinstance(value, (Mapping, Sequence)) and not isinstance(value, (str, bytes)):
+            return None
+        elif isinstance(value, type):
+            if remaining_edges < 6:
+                return None
+            remaining_edges -= 6
+            attributes = tuple(
+                (name, getattr(value, name, None))
+                for name in (
+                    "__name__",
+                    "__qualname__",
+                    "__module__",
+                    "__doc__",
+                    "__pydantic_core_schema__",
+                    "model_config",
+                )
+            )
+            classes.append((value, attributes))
+            pending.extend(child for _name, child in attributes)
+
+    def inputs_are_current() -> bool:
+        for mapping, items in mappings:
+            if len(mapping) != len(items) or any(
+                key is not expected_key or value is not expected_value
+                for (key, value), (expected_key, expected_value) in zip(
+                    mapping.items(), items, strict=True
+                )
+            ):
+                return False
+        for sequence, children in sequences:
+            if len(sequence) != len(children) or any(
+                value is not expected for value, expected in zip(sequence, children, strict=True)
+            ):
+                return False
+        for model, attributes in classes:
+            for name, expected in attributes:
+                current = getattr(model, name, None)
+                if current is expected:
+                    continue
+                # Builtin type metadata can return freshly allocated exact strings.
+                if type(current) is str and type(expected) is str and current == expected:
+                    continue
+                return False
+        return True
+
+    return inputs_are_current
+
+
 def _canonical_sha256(value: Any) -> str:
     return _bytes_sha256(_CANONICAL_JSON_DUMPS(value).encode("utf-8"))
 
@@ -2271,6 +2382,9 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "json",
         "math",
         "_COPY_DEEPCOPY",
+        "_PYDANTIC_JSON_SCHEMA_MODULE",
+        "_PYDANTIC_MAIN_MODULE",
+        "FunctionType",
         "_HASHLIB_SHA256",
         "_JSON_DECODE_ERROR",
         "_JSON_DUMPS",
@@ -2328,6 +2442,8 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "_strict_candidate_review_batch",
         "_require_every_model_field_supplied",
         "_strict_schema_sha256",
+        "_candidate_review_schema_inventory_sha256",
+        "_candidate_review_schema_input_guard",
         "_canonical_sha256",
         "_bytes_sha256",
         "_reject_duplicate_pairs",
@@ -2374,7 +2490,35 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
         "candidate_review_batch_schema_sha256",
     )
     trusted_bindings = tuple((name, globals()[name]) for name in binding_names)
+    single_model_renderer = getattr(_PYDANTIC_MAIN_MODULE, "model_json_schema", None)
+    if not isinstance(single_model_renderer, FunctionType):
+        raise RuntimeError("candidate-review single-model schema renderer is unsupported")
     trusted_dependency_attributes = (
+        (
+            _PYDANTIC_MAIN_MODULE,
+            "model_json_schema",
+            single_model_renderer,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE,
+            "models_json_schema",
+            _PYDANTIC_JSON_SCHEMA_MODULE.models_json_schema,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE,
+            "GenerateJsonSchema",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "generate",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate,
+        ),
+        (
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema,
+            "generate_definitions",
+            _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_definitions,
+        ),
         (copy, "deepcopy", _COPY_DEEPCOPY),
         (hashlib, "sha256", _HASHLIB_SHA256),
         (json, "JSONDecodeError", _JSON_DECODE_ERROR),
@@ -2428,17 +2572,43 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
             )
         )
 
-    trusted_strict_schema_sha256 = _strict_schema_sha256
+    model_renderer = getattr(BaseModel.model_json_schema, "__func__", None)
+    if not isinstance(model_renderer, FunctionType):
+        raise RuntimeError("candidate-review model schema renderer is unsupported")
+    rendering_functions = (
+        model_renderer,
+        single_model_renderer,
+        _PYDANTIC_JSON_SCHEMA_MODULE.models_json_schema,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate,
+        _PYDANTIC_JSON_SCHEMA_MODULE.GenerateJsonSchema.generate_definitions,
+    )
+    rendering_states = tuple(
+        (
+            function,
+            function.__code__,
+            function.__defaults__,
+            function.__kwdefaults__,
+            tuple((function.__kwdefaults__ or {}).items()),
+        )
+        for function in rendering_functions
+    )
     model_states = tuple(
         (
             model,
             model.__pydantic_validator__,
             model.__pydantic_core_schema__,
             descriptor_surface(model),
-            trusted_strict_schema_sha256(model),
         )
         for model in models
     )
+    trusted_schema_inventory = _candidate_review_schema_inventory_sha256
+    trusted_schema_input_guard = _candidate_review_schema_input_guard
+    initial_inputs = trusted_schema_input_guard(models)
+    if initial_inputs is None:
+        raise RuntimeError("candidate-review schema input graph exceeds its bound")
+    schema_inventory_sha256 = trusted_schema_inventory(models)
+    if not initial_inputs():
+        raise RuntimeError("candidate-review schema inputs changed during guard construction")
     trusted_frame_models = tuple(_FRAME_MODELS.items())
     constant_names = (
         "_WIRE_PREFIX",
@@ -2455,7 +2625,7 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
     )
     trusted_constants = tuple((name, globals()[name]) for name in constant_names)
 
-    def implementation_is_pristine() -> bool:
+    def bindings_are_current() -> bool:
         if any(globals().get(name) is not value for name, value in trusted_bindings):
             return False
         if any(
@@ -2467,13 +2637,27 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
             _FRAME_MODELS.get(phase) is not model for phase, model in trusted_frame_models
         ):
             return False
-        if any(globals().get(name) is not value for name, value in trusted_constants):
-            return False
-        for model, validator, core_schema, descriptors, schema_sha256 in model_states:
+        return not any(globals().get(name) is not value for name, value in trusted_constants)
+
+    def model_inputs_are_current() -> bool:
+        for function, code, defaults, kwdefaults, keyword_items in rendering_states:
+            current_keywords = function.__kwdefaults__
+            if (
+                function.__code__ is not code
+                or function.__defaults__ is not defaults
+                or current_keywords is not kwdefaults
+                or len(current_keywords or {}) != len(keyword_items)
+                or any(
+                    (current_keywords or {}).get(name) is not value for name, value in keyword_items
+                )
+            ):
+                return False
+        for model, validator, core_schema, descriptors in model_states:
             current_descriptors = descriptor_surface(model)
             if (
                 model.__pydantic_validator__ is not validator
                 or model.__pydantic_core_schema__ is not core_schema
+                or getattr(model.model_json_schema, "__func__", None) is not model_renderer
                 or len(current_descriptors) != len(descriptors)
                 or any(
                     current_name != trusted_name or current is not trusted
@@ -2483,10 +2667,23 @@ def _seal_candidate_review_protocol_pristine_guard() -> Callable[[], bool]:
                         strict=True,
                     )
                 )
-                or trusted_strict_schema_sha256(model) != schema_sha256
             ):
                 return False
         return True
+
+    def implementation_is_pristine() -> bool:
+        if not bindings_are_current() or not model_inputs_are_current():
+            return False
+        inputs_are_current = trusted_schema_input_guard(models)
+        if inputs_are_current is None:
+            return False
+        current_inventory = trusted_schema_inventory(models)
+        return (
+            current_inventory == schema_inventory_sha256
+            and inputs_are_current()
+            and bindings_are_current()
+            and model_inputs_are_current()
+        )
 
     return implementation_is_pristine
 

@@ -1,9 +1,8 @@
 name: mmaudit deterministic CI
 
+# Automatic runs are paused during engine stabilization. Retain manual checkpoints;
+# restore automatic triggers once the hosted validation baseline is reliable.
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       fail_on:

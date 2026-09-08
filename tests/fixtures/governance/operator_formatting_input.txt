@@ -1,0 +1,11 @@
+# Synthetic operator observation — formatting custody only
+
+This deliberately unformatted quoted snippet is inert external evidence.
+It is copied only into a disposable local formatter workspace, never executed.
+
+```python
+observed = tuple((left, right,
+                 index) for left, right, index in pairs)
+```
+
+The original bytes, not the formatter's preferred layout, are the observation.

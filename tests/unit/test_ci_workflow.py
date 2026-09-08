@@ -146,10 +146,11 @@ def load_run_evidence_manifest(path):
     return completed, destination
 
 
-def test_pull_request_workflow_is_provider_and_model_free() -> None:
+def test_manual_ci_workflow_is_provider_and_model_free() -> None:
     workflow = _read(CI_WORKFLOW)
 
-    assert "pull_request:" in workflow
+    triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    assert re.findall(r"(?m)^  ([a-z_]+):", triggers) == ["workflow_dispatch"]
     assert "pull_request_target" not in workflow
     assert "OPENROUTER" not in workflow
     assert "secrets." not in workflow
@@ -467,7 +468,7 @@ def test_provider_workflow_is_separate_and_never_runs_on_pull_requests() -> None
     assert "pull_request" not in provider_workflow
     assert "pull_request_target" not in provider_workflow
     assert "workflow_dispatch:" in provider_workflow
-    assert "schedule:" in provider_workflow
+    assert "\n  schedule:" not in provider_workflow
     assert "environment: mmaudit-provider" in provider_job
     assert (
         "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"

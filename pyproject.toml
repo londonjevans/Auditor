@@ -51,6 +51,8 @@ line-length = 100
 extend-exclude = [
     "config/public_model_lineage/sources/**",
     "docs/remediation/v3/operator_captures/**",
+    # Preserve externally authored, hash-bound observations, including quoted code.
+    "docs/remediation/v3/operator_results.md",
 ]
 
 [tool.ruff.lint]
