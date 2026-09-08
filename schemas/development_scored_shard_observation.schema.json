@@ -267,6 +267,146 @@
       ],
       "type": "string"
     },
+    "DevelopmentResponseFailureReason": {
+      "enum": [
+        "CONTENT_ENCODING",
+        "CONTENT_LENGTH",
+        "RESPONSE_SIZE",
+        "RESPONSE_JSON",
+        "GENERATION_ID",
+        "COMPLETION_OBJECT",
+        "USAGE",
+        "TOKEN_COUNTS",
+        "SERVER_TOOLS",
+        "CHOICES",
+        "CHOICE_INDEX",
+        "MESSAGE",
+        "STRUCTURED_OUTPUT",
+        "FINDING_LINE_BOUNDS",
+        "ORIGIN_FILE_SCOPE",
+        "ORIGIN_LINE_BOUNDS"
+      ],
+      "title": "DevelopmentResponseFailureReason",
+      "type": "string"
+    },
+    "DevelopmentResponseField": {
+      "enum": [
+        "response",
+        "schema_version",
+        "summary",
+        "findings",
+        "finding",
+        "title",
+        "severity",
+        "line_start",
+        "line_end",
+        "kind",
+        "vulnerability_class",
+        "violated_invariant",
+        "root_cause_ref",
+        "root_cause_ref.filename",
+        "root_cause_ref.line_start",
+        "root_cause_ref.line_end",
+        "explanation",
+        "recommendation"
+      ],
+      "title": "DevelopmentResponseField",
+      "type": "string"
+    },
+    "DevelopmentResponseRejection": {
+      "additionalProperties": false,
+      "description": "Hash-bound refusal detail, meaningful only with its incomplete parent observation.",
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DevelopmentResponseField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finding_index": {
+          "anyOf": [
+            {
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Index"
+        },
+        "reason": {
+          "$ref": "#/$defs/DevelopmentResponseFailureReason"
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Sha256"
+        },
+        "schema_issues": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DevelopmentSchemaIssue"
+          },
+          "maxItems": 8,
+          "title": "Schema Issues",
+          "type": "array"
+        },
+        "schema_issues_truncated": {
+          "default": false,
+          "title": "Schema Issues Truncated",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "HTTP_BODY",
+            "COMPLETION_ENVELOPE",
+            "STRUCTURED_OUTPUT",
+            "SOURCE_SCOPE"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "structured_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredOutputFailureCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "stage",
+        "reason"
+      ],
+      "title": "DevelopmentResponseRejection",
+      "type": "object"
+    },
     "DevelopmentReviewDiagnostic": {
       "enum": [
         "HTTP_ERROR",
@@ -668,135 +808,181 @@
       "title": "DevelopmentRoutingIdentity",
       "type": "object"
     },
-    "DevelopmentScoredFinding": {
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "advisory"
-              }
-            },
-            "required": [
-              "kind"
-            ]
-          },
-          "then": {
-            "properties": {
-              "root_cause_ref": {
-                "type": "null"
-              },
-              "violated_invariant": {
-                "type": "null"
-              },
-              "vulnerability_class": {
-                "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "invariant_violation"
-              }
-            },
-            "required": [
-              "kind"
-            ]
-          },
-          "then": {
-            "properties": {
-              "root_cause_ref": {
-                "not": {
-                  "type": "null"
-                }
-              },
-              "violated_invariant": {
-                "not": {
-                  "type": "null"
-                }
-              },
-              "vulnerability_class": {
-                "not": {
-                  "type": "null"
-                }
-              }
-            }
-          }
-        }
+    "DevelopmentSchemaConstraint": {
+      "enum": [
+        "REQUIRED_FIELD",
+        "EXTRA_FIELD",
+        "FIELD_TYPE",
+        "ENUM_VALUE",
+        "FIELD_BOUND",
+        "FIELD_FORMAT",
+        "LINE_ORDER",
+        "ADVISORY_FIELD_MUST_BE_NULL",
+        "INVARIANT_FIELD_MUST_BE_SET",
+        "SCHEMA_CONSTRAINT"
       ],
-      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+      "title": "DevelopmentSchemaConstraint",
+      "type": "string"
+    },
+    "DevelopmentSchemaIssue": {
+      "additionalProperties": false,
+      "description": "A known schema coordinate, never an input-authored key, value or error message.",
       "properties": {
-        "explanation": {
-          "maxLength": 2000,
-          "minLength": 1,
-          "title": "Explanation",
-          "type": "string"
+        "constraint": {
+          "$ref": "#/$defs/DevelopmentSchemaConstraint"
         },
-        "kind": {
-          "enum": [
-            "invariant_violation",
-            "advisory"
-          ],
-          "title": "Kind",
-          "type": "string"
+        "field": {
+          "$ref": "#/$defs/DevelopmentResponseField"
         },
-        "line_end": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Line End",
-          "type": "integer"
-        },
-        "line_start": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Line Start",
-          "type": "integer"
-        },
-        "recommendation": {
-          "maxLength": 1000,
-          "minLength": 1,
-          "title": "Recommendation",
-          "type": "string"
-        },
-        "root_cause_ref": {
+        "finding_index": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DevelopmentRootCauseReference"
+              "maximum": 15,
+              "minimum": 0,
+              "type": "integer"
             },
             {
               "type": "null"
             }
-          ]
-        },
-        "severity": {
-          "$ref": "#/$defs/Severity"
-        },
-        "title": {
-          "maxLength": 200,
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "violated_invariant": {
-          "anyOf": [
-            {
-              "maxLength": 1000,
+          ],
+          "title": "Finding Index"
+        }
+      },
+      "required": [
+        "constraint",
+        "field",
+        "finding_index"
+      ],
+      "title": "DevelopmentSchemaIssue",
+      "type": "object"
+    },
+    "DevelopmentScoredFinding": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
               "minLength": 1,
+              "title": "Explanation",
               "type": "string"
             },
-            {
+            "kind": {
+              "enum": [
+                "advisory"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "type": "null"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "title": "Violated Invariant",
+              "type": "null"
+            },
+            "vulnerability_class": {
+              "title": "Vulnerability Class",
               "type": "null"
             }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
           ],
-          "title": "Violated Invariant"
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
         },
-        "vulnerability_class": {
-          "anyOf": [
-            {
+        {
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "invariant_violation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "$ref": "#/$defs/DevelopmentRootCauseReference"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Violated Invariant",
+              "type": "string"
+            },
+            "vulnerability_class": {
               "enum": [
                 "access_control",
                 "accounting",
@@ -804,29 +990,28 @@
                 "pause",
                 "other"
               ],
+              "title": "Vulnerability Class",
               "type": "string"
-            },
-            {
-              "type": "null"
             }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
           ],
-          "title": "Vulnerability Class"
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
         }
-      },
-      "required": [
-        "title",
-        "severity",
-        "line_start",
-        "line_end",
-        "kind",
-        "vulnerability_class",
-        "violated_invariant",
-        "root_cause_ref",
-        "explanation",
-        "recommendation"
       ],
-      "title": "DevelopmentScoredFinding",
-      "type": "object"
+      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+      "title": "DevelopmentScoredFinding"
     },
     "DevelopmentScoredReviewResponse": {
       "additionalProperties": false,
@@ -869,6 +1054,18 @@
         "critical"
       ],
       "title": "Severity",
+      "type": "string"
+    },
+    "StructuredOutputFailureCode": {
+      "description": "Non-secret classification for one rejected structured response.",
+      "enum": [
+        "TRUNCATED_RESPONSE",
+        "INVALID_JSON_SYNTAX",
+        "DUPLICATE_OBJECT_KEY",
+        "NON_FINITE_NUMBER",
+        "SCHEMA_VALIDATION_FAILED"
+      ],
+      "title": "StructuredOutputFailureCode",
       "type": "string"
     }
   },
@@ -972,6 +1169,17 @@
       "default": false,
       "title": "Qualification Eligible",
       "type": "boolean"
+    },
+    "rejection_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DevelopmentResponseRejection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "release_eligible": {
       "const": false,

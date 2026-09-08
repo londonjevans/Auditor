@@ -51,6 +51,7 @@ from mmaudit.models.development_audit import (
     DevelopmentScoredAuditShardObservation,
 )
 from mmaudit.models.development_costs import DevelopmentCostEstimate, DevelopmentCostPolicy
+from mmaudit.models.development_diagnostics import DevelopmentResponseRejection
 from mmaudit.models.development_review import (
     DevelopmentReviewObservation,
     DevelopmentReviewResponse,
@@ -222,6 +223,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_audit_shard_observation.schema.json": DevelopmentAuditShardObservation,
     "development_audit_observation.schema.json": DevelopmentAuditObservation,
     "development_routing_observation.schema.json": DevelopmentRoutingEvidence,
+    "development_response_rejection.schema.json": DevelopmentResponseRejection,
     "development_scored_review_response.schema.json": DevelopmentScoredReviewResponse,
     "development_scored_shard_observation.schema.json": DevelopmentScoredAuditShardObservation,
     "development_benchmark_truth.schema.json": DevelopmentBenchmarkTruth,
@@ -2021,21 +2023,6 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
 
     schema = model.model_json_schema()
     _strengthen_minimum_floor_recovery_contract(schema)
-    scored_finding = schema.get("$defs", {}).get("DevelopmentScoredFinding")
-    if scored_finding is not None:
-        # Public schemas enforce the same nullable-kind contract as runtime validation.
-        # Provider request generation remains owned by its separate compiled response model.
-        fields = ("vulnerability_class", "violated_invariant", "root_cause_ref")
-        scored_finding["allOf"] = [
-            {
-                "if": {"properties": {"kind": {"const": kind}}, "required": ["kind"]},
-                "then": {"properties": {field: constraint for field in fields}},
-            }
-            for kind, constraint in (
-                ("advisory", {"type": "null"}),
-                ("invariant_violation", {"not": {"type": "null"}}),
-            )
-        ]
     if filename == "models_config.schema.json":
         lineage = schema["$defs"]["ModelLineageConfig"]
         measured_quality = lineage["properties"]["measured_quality"]

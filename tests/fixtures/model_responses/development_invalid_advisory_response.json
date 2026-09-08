@@ -1,0 +1,18 @@
+{
+  "schema_version": "2.0",
+  "summary": "Synthetic non-production rejected-advisory regression, not provider evidence.",
+  "findings": [
+    {
+      "title": "Synthetic advisory with prohibited invariant metadata",
+      "severity": "informational",
+      "line_start": 40,
+      "line_end": 46,
+      "kind": "advisory",
+      "vulnerability_class": "access_control",
+      "violated_invariant": null,
+      "root_cause_ref": null,
+      "explanation": "The intentionally malformed advisory keeps a non-null class.",
+      "recommendation": "Set vulnerability_class to null as in the valid advisory control."
+    }
+  ]
+}

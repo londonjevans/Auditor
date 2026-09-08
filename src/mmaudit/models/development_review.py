@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 
 from mmaudit.models.candidate_revocation import require_candidate_assignment_eligible
 from mmaudit.models.development_costs import (
@@ -17,6 +27,10 @@ from mmaudit.models.development_costs import (
     DevelopmentCostEstimate,
     DevelopmentCostPolicy,
     estimate_development_request,
+)
+from mmaudit.models.development_diagnostics import (
+    DevelopmentResponseFailureReason,
+    DevelopmentResponseRejection,
 )
 from mmaudit.models.development_routing import DevelopmentRoutingEvidence
 from mmaudit.models.discovery import (
@@ -71,7 +85,9 @@ class DevelopmentFinding(_DevelopmentModel):
     @model_validator(mode="after")
     def lines_are_ordered(self) -> DevelopmentFinding:
         if self.line_start > self.line_end:
-            raise ValueError("development finding lines are reversed")
+            raise PydanticCustomError(
+                "development_finding_line_order", "development finding lines are reversed"
+            )
         return self
 
 
@@ -95,12 +111,69 @@ class DevelopmentRootCauseReference(_DevelopmentModel):
     @model_validator(mode="after")
     def lines_are_ordered(self) -> Self:
         if self.line_start > self.line_end:
-            raise ValueError("development origin lines are reversed")
+            raise PydanticCustomError(
+                "development_origin_line_order", "development origin lines are reversed"
+            )
         return self
+
+
+def _scored_finding_schema(schema: dict[str, Any]) -> None:
+    """Share kind/nullability constraints across public schemas and actual wire requests.
+
+    Each alternative is a complete closed object. Partial-property conditionals
+    would conflict with the strict request normalizer's additional-properties rule.
+    This only exports existing semantics; it does not repair or validate a response.
+    """
+
+    properties = schema.get("properties")
+    kind_schema = properties.get("kind") if type(properties) is dict else None
+    if (
+        type(properties) is not dict
+        or type(kind_schema) is not dict
+        or schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or any(key in schema for key in ("anyOf", "oneOf", "allOf"))
+        or kind_schema.get("enum") != ["invariant_violation", "advisory"]
+        or set(schema.get("required", ())) != set(properties)
+    ):
+        raise ValueError("development finding schema has an unexpected object shape")
+    nullable_fields = ("vulnerability_class", "violated_invariant", "root_cause_ref")
+    choices: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for name in nullable_fields:
+        field = properties.get(name)
+        options = field.get("anyOf") if type(field) is dict else None
+        if (
+            type(options) is not list
+            or len(options) != 2
+            or any(type(option) is not dict for option in options)
+        ):
+            raise ValueError("development finding schema has an unexpected nullable field")
+        nulls = [option for option in options if option.get("type") == "null"]
+        non_nulls = [option for option in options if option.get("type") != "null"]
+        if len(nulls) != 1 or len(non_nulls) != 1:
+            raise ValueError("development finding schema must have one null and one value branch")
+        choices[name] = (nulls[0], non_nulls[0])
+    original = deepcopy(schema)
+    branches = []
+    for kind in ("advisory", "invariant_violation"):
+        branch = deepcopy(original)
+        branch["properties"]["kind"]["enum"] = [kind]
+        for name in nullable_fields:
+            field = branch["properties"][name]
+            field.pop("anyOf")
+            field.update(deepcopy(choices[name][0 if kind == "advisory" else 1]))
+        branches.append(branch)
+    schema.clear()
+    schema.update({"anyOf": branches})
+    for annotation in ("title", "description"):
+        if annotation in original:
+            schema[annotation] = original[annotation]
 
 
 class DevelopmentScoredFinding(_DevelopmentModel):
     """Explicit v2 claim semantics; neither kind nor origin is a correctness verdict."""
+
+    model_config = ConfigDict(json_schema_extra=_scored_finding_schema)
 
     title: str = Field(min_length=1, max_length=200)
     severity: Severity
@@ -118,13 +191,24 @@ class DevelopmentScoredFinding(_DevelopmentModel):
     @model_validator(mode="after")
     def kind_and_origin_are_consistent(self) -> Self:
         if self.line_start > self.line_end:
-            raise ValueError("development scored finding lines are reversed")
-        fields = (self.vulnerability_class, self.violated_invariant, self.root_cause_ref)
-        if self.kind == "advisory":
-            if any(value is not None for value in fields):
-                raise ValueError("development advisories cannot claim a violated invariant or root")
-        elif any(value is None for value in fields):
-            raise ValueError("development invariant claims require a class, invariant and origin")
+            raise PydanticCustomError(
+                "development_finding_line_order", "development scored finding lines are reversed"
+            )
+        for name, value in (
+            ("vulnerability_class", self.vulnerability_class),
+            ("violated_invariant", self.violated_invariant),
+            ("root_cause_ref", self.root_cause_ref),
+        ):
+            if self.kind == "advisory" and value is not None:
+                raise PydanticCustomError(
+                    "development_advisory_" + name,
+                    "development advisories cannot claim a violated invariant or root",
+                )
+            if self.kind != "advisory" and value is None:
+                raise PydanticCustomError(
+                    "development_invariant_" + name,
+                    "development invariant claims require a class, invariant and origin",
+                )
         return self
 
 
@@ -168,10 +252,22 @@ class _DevelopmentAccountedObservation[
     accounted_cost_usd: Decimal = Field(ge=0, lt=Decimal("1000000000000"))
     response: ReviewT | None
     routing_evidence: DevelopmentRoutingEvidence | None = None
+    rejection_evidence: DevelopmentResponseRejection | None = None
     findings_validated: Literal[False] = False
     audit_complete: Literal[False] = False
     qualification_eligible: Literal[False] = False
     release_eligible: Literal[False] = False
+
+    @model_serializer(mode="wrap")
+    def omit_absent_rejection_evidence(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """Keep legacy and successful observation bytes unchanged when no detail was observed."""
+
+        result: dict[str, Any] = handler(self)
+        if self.rejection_evidence is None:
+            result.pop("rejection_evidence", None)
+        return result
 
     @field_validator(
         "findings_validated",
@@ -188,6 +284,23 @@ class _DevelopmentAccountedObservation[
 
     @model_validator(mode="after")
     def observation_is_consistent(self) -> Self:
+        if self.rejection_evidence is not None:
+            rejection = self.rejection_evidence
+            if (
+                self.status != "INCOMPLETE"
+                or DevelopmentReviewDiagnostic.INVALID_RESPONSE not in self.diagnostics
+                or self.http_status is None
+                or rejection.response_sha256 != self.response_sha256
+                or (
+                    rejection.reason is DevelopmentResponseFailureReason.RESPONSE_JSON
+                    and self.response_sha256 is None
+                )
+                or (
+                    rejection.stage != "HTTP_BODY"
+                    and (self.http_status != 200 or self.response_sha256 is None)
+                )
+            ):
+                raise ValueError("development rejection is not bound to its incomplete response")
         if self.routing_evidence is not None:
             routing = self.routing_evidence
             if (

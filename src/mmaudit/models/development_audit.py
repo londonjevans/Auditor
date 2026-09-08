@@ -89,9 +89,12 @@ _SYSTEM_PROMPT = (
     "of safety. Return only the required JSON schema."
 )
 _SCORED_SYSTEM_PROMPT = _SYSTEM_PROMPT + (
-    " Distinguish advisory observations from potential invariant violations. Advisories must "
-    "use null class, violated_invariant and root_cause_ref fields. For an invariant claim, "
-    "supply its class and the minimal originating file/line span in the supplied corpus. "
+    " Set kind to exactly advisory or invariant_violation. When kind is advisory, "
+    "vulnerability_class, violated_invariant and root_cause_ref must all be JSON null. "
+    "When kind is invariant_violation, all three fields must be non-null: supply the "
+    "vulnerability_class, the violated_invariant and the minimal originating file/line span "
+    "in root_cause_ref within the supplied corpus. Do not label an advisory as an invariant "
+    "violation just to supply origin fields. "
     "An effect in the primary file may cite a different source file as its origin. "
     "Origin coordinates are hypotheses, not proof. Do not invent unsupported findings."
 )

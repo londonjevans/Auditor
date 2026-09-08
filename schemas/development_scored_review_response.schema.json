@@ -31,134 +31,132 @@
       "type": "object"
     },
     "DevelopmentScoredFinding": {
-      "additionalProperties": false,
-      "allOf": [
+      "anyOf": [
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "advisory"
-              }
-            },
-            "required": [
-              "kind"
-            ]
-          },
-          "then": {
-            "properties": {
-              "root_cause_ref": {
-                "type": "null"
-              },
-              "violated_invariant": {
-                "type": "null"
-              },
-              "vulnerability_class": {
-                "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "invariant_violation"
-              }
-            },
-            "required": [
-              "kind"
-            ]
-          },
-          "then": {
-            "properties": {
-              "root_cause_ref": {
-                "not": {
-                  "type": "null"
-                }
-              },
-              "violated_invariant": {
-                "not": {
-                  "type": "null"
-                }
-              },
-              "vulnerability_class": {
-                "not": {
-                  "type": "null"
-                }
-              }
-            }
-          }
-        }
-      ],
-      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
-      "properties": {
-        "explanation": {
-          "maxLength": 2000,
-          "minLength": 1,
-          "title": "Explanation",
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "invariant_violation",
-            "advisory"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "line_end": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Line End",
-          "type": "integer"
-        },
-        "line_start": {
-          "maximum": 1000,
-          "minimum": 1,
-          "title": "Line Start",
-          "type": "integer"
-        },
-        "recommendation": {
-          "maxLength": 1000,
-          "minLength": 1,
-          "title": "Recommendation",
-          "type": "string"
-        },
-        "root_cause_ref": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DevelopmentRootCauseReference"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "severity": {
-          "$ref": "#/$defs/Severity"
-        },
-        "title": {
-          "maxLength": 200,
-          "minLength": 1,
-          "title": "Title",
-          "type": "string"
-        },
-        "violated_invariant": {
-          "anyOf": [
-            {
-              "maxLength": 1000,
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
               "minLength": 1,
+              "title": "Explanation",
               "type": "string"
             },
-            {
+            "kind": {
+              "enum": [
+                "advisory"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "type": "null"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "title": "Violated Invariant",
+              "type": "null"
+            },
+            "vulnerability_class": {
+              "title": "Vulnerability Class",
               "type": "null"
             }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
           ],
-          "title": "Violated Invariant"
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
         },
-        "vulnerability_class": {
-          "anyOf": [
-            {
+        {
+          "additionalProperties": false,
+          "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+          "properties": {
+            "explanation": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Explanation",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "invariant_violation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "line_end": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line End",
+              "type": "integer"
+            },
+            "line_start": {
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Line Start",
+              "type": "integer"
+            },
+            "recommendation": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Recommendation",
+              "type": "string"
+            },
+            "root_cause_ref": {
+              "$ref": "#/$defs/DevelopmentRootCauseReference"
+            },
+            "severity": {
+              "$ref": "#/$defs/Severity"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "violated_invariant": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "title": "Violated Invariant",
+              "type": "string"
+            },
+            "vulnerability_class": {
               "enum": [
                 "access_control",
                 "accounting",
@@ -166,29 +164,28 @@
                 "pause",
                 "other"
               ],
+              "title": "Vulnerability Class",
               "type": "string"
-            },
-            {
-              "type": "null"
             }
+          },
+          "required": [
+            "title",
+            "severity",
+            "line_start",
+            "line_end",
+            "kind",
+            "vulnerability_class",
+            "violated_invariant",
+            "root_cause_ref",
+            "explanation",
+            "recommendation"
           ],
-          "title": "Vulnerability Class"
+          "title": "DevelopmentScoredFinding",
+          "type": "object"
         }
-      },
-      "required": [
-        "title",
-        "severity",
-        "line_start",
-        "line_end",
-        "kind",
-        "vulnerability_class",
-        "violated_invariant",
-        "root_cause_ref",
-        "explanation",
-        "recommendation"
       ],
-      "title": "DevelopmentScoredFinding",
-      "type": "object"
+      "description": "Explicit v2 claim semantics; neither kind nor origin is a correctness verdict.",
+      "title": "DevelopmentScoredFinding"
     },
     "Severity": {
       "enum": [

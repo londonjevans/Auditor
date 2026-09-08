@@ -14,6 +14,7 @@ from time import monotonic as _DEVELOPMENT_MONOTONIC
 from typing import Any, NoReturn, cast
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from mmaudit.models.candidate_revocation import require_candidate_assignment_eligible
 from mmaudit.models.development_audit import (
@@ -23,15 +24,29 @@ from mmaudit.models.development_audit import (
     PreparedDevelopmentAuditShard,
     prepare_development_audit_shard,
 )
-from mmaudit.models.development_review import (
-    DevelopmentReviewDiagnostic as Diagnostic,
+from mmaudit.models.development_diagnostics import (
+    DevelopmentResponseFailureReason as FailureReason,
+)
+from mmaudit.models.development_diagnostics import (
+    DevelopmentResponseField as ResponseField,
+)
+from mmaudit.models.development_diagnostics import (
+    DevelopmentResponseRejection,
+    DevelopmentSchemaIssue,
+    development_failure_stage,
+    project_development_schema_failure,
 )
 from mmaudit.models.development_review import (
+    DevelopmentFinding,
     DevelopmentReviewObservation,
     DevelopmentReviewResponse,
+    DevelopmentScoredFinding,
     DevelopmentScoredReviewResponse,
     PreparedDevelopmentReview,
     prepare_development_review,
+)
+from mmaudit.models.development_review import (
+    DevelopmentReviewDiagnostic as Diagnostic,
 )
 from mmaudit.models.development_routing import (
     DEVELOPMENT_GENERATION_ID,
@@ -39,7 +54,11 @@ from mmaudit.models.development_routing import (
     DevelopmentRoutingEvidence,
     observe_development_routing,
 )
-from mmaudit.models.structured_output import decode_structured_output
+from mmaudit.models.structured_output import (
+    StructuredOutputDecodeError,
+    StructuredOutputFailureCode,
+    decode_structured_output,
+)
 from mmaudit.operator_secrets import MAX_OPERATOR_SECRET_VALUE_BYTES, OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostReservationOverrunError
 from mmaudit.orchestration.development_budget import (
@@ -60,9 +79,73 @@ class DevelopmentTransportError(ValueError):
 
 
 class _ResponseRejected(ValueError):
-    def __init__(self, diagnostic: Diagnostic) -> None:
+    def __init__(
+        self, diagnostic: Diagnostic, *, rejection: DevelopmentResponseRejection | None = None
+    ) -> None:
         self.diagnostic = diagnostic
+        self.rejection = rejection
         super().__init__(diagnostic.value)
+
+
+def _invalid_response(
+    reason: FailureReason,
+    *,
+    finding_index: int | None = None,
+    field: ResponseField | None = None,
+) -> _ResponseRejected:
+    return _ResponseRejected(
+        Diagnostic.INVALID_RESPONSE,
+        rejection=DevelopmentResponseRejection(
+            stage=development_failure_stage(reason),
+            reason=reason,
+            finding_index=finding_index,
+            field=field,
+        ),
+    )
+
+
+def _decode_development_review[ResponseT: BaseModel](
+    content: str, response_model: type[ResponseT]
+) -> ResponseT:
+    """Keep the strict decoder authoritative; revalidation can only describe its refusal.
+
+    The optional diagnostic pass uses the same captured schema generation, with no
+    coercion or repair. If it cannot explain the original refusal, detail stays absent.
+    No diagnostic result is ever returned as a decoded response.
+    """
+
+    validator = response_model.__pydantic_validator__
+    schema = response_model.__pydantic_core_schema__
+    try:
+        return decode_structured_output(content, response_model).value
+    except StructuredOutputDecodeError as exc:
+        issues: tuple[DevelopmentSchemaIssue, ...] = ()
+        truncated = False
+        if (
+            exc.code is StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+            and response_model.__pydantic_validator__ is validator
+            and response_model.__pydantic_core_schema__ is schema
+        ):
+            try:
+                validator.validate_json(content, strict=True, extra="forbid")
+            except ValidationError as error:
+                if (
+                    response_model.__pydantic_validator__ is validator
+                    and response_model.__pydantic_core_schema__ is schema
+                ):
+                    issues, truncated = project_development_schema_failure(error)
+            except (ValueError, TypeError, AssertionError, RecursionError):
+                pass
+        raise _ResponseRejected(
+            Diagnostic.INVALID_RESPONSE,
+            rejection=DevelopmentResponseRejection(
+                stage="STRUCTURED_OUTPUT",
+                reason=FailureReason.STRUCTURED_OUTPUT,
+                structured_failure=exc.code,
+                schema_issues=issues,
+                schema_issues_truncated=truncated,
+            ),
+        ) from None
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -79,14 +162,17 @@ def _reject_constant(_value: str) -> NoReturn:
 
 
 def _decode_response(content: bytes) -> dict[str, Any]:
-    value = json.loads(
-        content.decode("utf-8"),
-        parse_float=Decimal,
-        parse_constant=_reject_constant,
-        object_pairs_hook=_unique_object,
-    )
+    try:
+        value = json.loads(
+            content.decode("utf-8"),
+            parse_float=Decimal,
+            parse_constant=_reject_constant,
+            object_pairs_hook=_unique_object,
+        )
+    except (ValueError, UnicodeError, RecursionError, ArithmeticError):
+        raise _invalid_response(FailureReason.RESPONSE_JSON) from None
     if type(value) is not dict:
-        raise ValueError("response is not a JSON object")
+        raise _invalid_response(FailureReason.RESPONSE_JSON)
     return value
 
 
@@ -116,7 +202,7 @@ def _validate_routing(evidence: DevelopmentRoutingEvidence) -> None:
 def _token_count(usage: dict[str, Any], name: str) -> int:
     value = usage.get(name)
     if type(value) is not int or not 0 <= value <= 4_000_000:
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.TOKEN_COUNTS)
     return value
 
 
@@ -131,15 +217,15 @@ def _validated_review(
     _validate_routing(routing_evidence)
     generation_id = payload.get("id")
     if type(generation_id) is not str or _GENERATION_ID.fullmatch(generation_id) is None:
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.GENERATION_ID)
     header_ids = headers.get_list("x-generation-id")
     if header_ids and header_ids != [generation_id]:
         raise _ResponseRejected(Diagnostic.IDENTITY_MISMATCH)
     if "error" in payload or payload.get("object") != "chat.completion":
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.COMPLETION_OBJECT)
     usage = payload.get("usage")
     if type(usage) is not dict or usage.get("is_byok", False) is not False:
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.USAGE)
     counts = [
         _token_count(usage, name) for name in ("prompt_tokens", "completion_tokens", "total_tokens")
     ]
@@ -147,15 +233,16 @@ def _validated_review(
         counts[0] + counts[1] != counts[2]
         or counts[0] > prepared.estimate.request_bytes
         or counts[1] > prepared.estimate.maximum_completion_tokens
-        or usage.get("server_tool_use_details") not in (None, {})
     ):
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.TOKEN_COUNTS)
+    if usage.get("server_tool_use_details") not in (None, {}):
+        raise _invalid_response(FailureReason.SERVER_TOOLS)
     choices = payload.get("choices")
     if type(choices) is not list or len(choices) != 1 or type(choices[0]) is not dict:
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.CHOICES)
     choice = choices[0]
     if type(choice.get("index")) is not int or choice["index"] != 0:
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.CHOICE_INDEX)
     native_finish = choice.get("native_finish_reason")
     if choice.get("finish_reason") != "stop" or (
         native_finish is not None
@@ -175,7 +262,7 @@ def _validated_review(
         or message.get("refusal") not in (None, "")
         or type(message.get("content")) is not str
     ):
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.MESSAGE)
     content = message["content"]
     if (
         api_key in content
@@ -186,47 +273,58 @@ def _validated_review(
         raise _ResponseRejected(Diagnostic.SECRET_OUTPUT)
     response: DevelopmentReviewResponse | DevelopmentScoredReviewResponse
     if type(prepared) is PreparedDevelopmentAuditShard and prepared.schema_version == "2.0":
-        response = decode_structured_output(content, DevelopmentScoredReviewResponse).value
+        response = _decode_development_review(content, DevelopmentScoredReviewResponse)
         source_lines = {
             name: len(material.splitlines()) for name, material in prepared.source_files
         }
-        if any(
-            finding.root_cause_ref is not None
-            and (
-                finding.root_cause_ref.filename not in source_lines
-                or finding.root_cause_ref.line_end > source_lines[finding.root_cause_ref.filename]
-            )
-            for finding in response.findings
-        ):
-            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        for index, finding in enumerate(response.findings):
+            origin = finding.root_cause_ref
+            if origin is not None and origin.filename not in source_lines:
+                raise _invalid_response(
+                    FailureReason.ORIGIN_FILE_SCOPE,
+                    finding_index=index,
+                    field=ResponseField.ORIGIN_FILENAME,
+                )
+            if origin is not None and origin.line_end > source_lines[origin.filename]:
+                raise _invalid_response(
+                    FailureReason.ORIGIN_LINE_BOUNDS,
+                    finding_index=index,
+                    field=ResponseField.ORIGIN_LINE_END,
+                )
     else:
-        response = decode_structured_output(content, DevelopmentReviewResponse).value
-    if any(item.line_end > len(prepared.source_content.splitlines()) for item in response.findings):
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        response = _decode_development_review(content, DevelopmentReviewResponse)
+    findings: tuple[DevelopmentFinding | DevelopmentScoredFinding, ...] = response.findings
+    for index, item in enumerate(findings):
+        if item.line_end > len(prepared.source_content.splitlines()):
+            raise _invalid_response(
+                FailureReason.FINDING_LINE_BOUNDS,
+                finding_index=index,
+                field=ResponseField.LINE_END,
+            )
     return generation_id, response
 
 
 async def _read_response(response: httpx.Response) -> bytes:
     if response.headers.get("content-encoding", "identity").lower() != "identity":
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.CONTENT_ENCODING)
     content_length = response.headers.get("content-length")
     if content_length is not None and (
         not content_length.isdecimal()
         or len(content_length) > 10
         or int(content_length) > MAX_DEVELOPMENT_RESPONSE_BYTES
     ):
-        raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+        raise _invalid_response(FailureReason.CONTENT_LENGTH)
     material = bytearray()
     if response.is_stream_consumed:
         # MockTransport may return an already-buffered response. Owned network responses
         # use stream=True above; enforce the same size limit on either representation.
         if len(response.content) > MAX_DEVELOPMENT_RESPONSE_BYTES:
-            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+            raise _invalid_response(FailureReason.RESPONSE_SIZE)
         return response.content
     # A raw iterator avoids decompressing an unbounded response before enforcing the limit.
     async for chunk in response.aiter_raw():
         if len(material) + len(chunk) > MAX_DEVELOPMENT_RESPONSE_BYTES:
-            raise _ResponseRejected(Diagnostic.INVALID_RESPONSE)
+            raise _invalid_response(FailureReason.RESPONSE_SIZE)
         material.extend(chunk)
     return bytes(material)
 
@@ -380,6 +478,7 @@ async def _review_development_source(
     generation_id: str | None = None
     review: DevelopmentReviewResponse | DevelopmentScoredReviewResponse | None = None
     routing_evidence: DevelopmentRoutingEvidence | None = None
+    rejection_evidence: DevelopmentResponseRejection | None = None
     status_code: int | None = None
     started = _DEVELOPMENT_MONOTONIC()
     transport = (
@@ -464,6 +563,10 @@ async def _review_development_source(
                 )
         except _ResponseRejected as exc:
             diagnostics.append(exc.diagnostic)
+            if exc.rejection is not None:
+                rejection_evidence = DevelopmentResponseRejection.model_validate(
+                    {**exc.rejection.model_dump(), "response_sha256": response_hash}
+                )
         except (httpx.TimeoutException, TimeoutError):
             diagnostics.append(Diagnostic.TIMEOUT)
         except httpx.HTTPError:
@@ -524,6 +627,7 @@ async def _review_development_source(
         accounted_cost_usd=entry.accounted_cost_usd,
         response=None if diagnostics else review,
         routing_evidence=routing_evidence,
+        rejection_evidence=rejection_evidence,
     )
     if type(prepared) is PreparedDevelopmentReview:
         return DevelopmentReviewObservation.model_validate(values)

@@ -21,6 +21,21 @@ path. V2 invariant claims require a class, named invariant and bounded originati
 advisories require all three fields to be null. Both retain a primary-file location and severity.
 Kind, location and severity remain unvalidated model hypotheses.
 
+The v2 finding model owns the kind/nullability contract used by raw model schemas, the
+actual provider request and generated public schemas. It exports two complete, closed `anyOf`
+object alternatives with disjoint `kind` values. In the `advisory` branch, `vulnerability_class`,
+`violated_invariant` and `root_cause_ref` must all be JSON null; in the `invariant_violation`
+branch all three must be non-null. Every existing field remains required. The v2 prompt names
+these exact fields. Strict client validation and source bounds remain authoritative: no metadata
+is dropped, kind changed or rejected content repaired to make a response pass.
+
+This alignment changes v2 request bytes and their byte-based estimates and plan bindings.
+Prepare fresh estimates/plans for any separately authorized future attempt; the existing runner
+rejects changed prepared requests before reservation or output. V1 bytes and historical response
+interpretation remain unchanged. Local JSON Schema and mock-HTTP checks establish kind/nullability
+parity, not every semantic invariant or real-provider acceptance of the revised schema. No paid
+verification, retry or billing-policy change is implied.
+
 The output parent must already be a private, unlinked directory with mode 0700. Only the new
 run directory is created. The output sequence is:
 
@@ -40,6 +55,34 @@ Scoring failure cannot produce CLI success or erase an already retained `result.
 charge. Output-custody failure may prevent trustworthy aggregate/score writes; missing artifacts
 are not passes. Cancellation makes a best-effort incomplete result/score and propagates the
 interruption. No automatic retry, fallback, ledger reset or command execution was added.
+
+## Explaining rejected development responses
+
+New incomplete fixture/shard observations may include `rejection_evidence`. It separates HTTP-body,
+completion-envelope, structured-output and source-scope failures while retaining the existing
+`INVALID_RESPONSE` diagnostic. The nested `response_sha256` must match its parent observation.
+If encoding, length or size checks refuse before a whole body is read, both hashes remain null;
+this does not assert custody of unseen response bytes. Old observations without this field still
+parse, and successful observations do not gain a new null field.
+
+Structured rejection retains the original strict decoder's failure code, including syntax,
+duplicate-key, nonfinite-number or schema rejection. For a schema rejection only, a diagnostic
+revalidation against the same captured schema generation can project at most eight issues. Each
+contains a constant constraint name, an allowlisted field name and, when applicable, a zero-based
+finding index from 0 through 15. `schema_issues_truncated` reports a discarded suffix. Unknown
+keys map to their known container, never to the input-authored key. Values, model prose, error
+messages and validation contexts are never retained. Cross-field validation may report only its
+first failing constraint; the issue list is not an exhaustive explanation of every defect.
+
+For example, a synthetic advisory with a non-null `vulnerability_class` remains rejected with
+`ADVISORY_FIELD_MUST_BE_NULL`, that constant field name and its finding index. Missing evidence or
+schema-generation drift leaves the finer detail absent. A successful diagnostic revalidation can
+never override the original rejection. This path does not repair content, relax a schema, retry,
+select a provider, settle uncertain costs or promote a partial score to complete scope. The
+September-8 14:28 report names an advisory `root_cause_ref` nullability rejection; its private
+response bytes remain unauthenticated here. These are local synthetic controls, not a reconstruction
+of private response bytes. HTTP error messages/Retry-After handling and
+accounting recovery are separate work; no charge is inferred from an absent generation identifier.
 
 ## Matching and duplicate handling
 

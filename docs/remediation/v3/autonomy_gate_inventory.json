@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4127,
-  "inventory_sha256": "247f9966e6417d9af02769a92386483951a2622e7ab4303a5cd75489febfe26f",
+  "gate_source_count": 4128,
+  "inventory_sha256": "ce309ae08f80f1330ebc3d0ccde8726b6ad82be6f9de4744d4d73fd1a2ae3af9",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -4026,6 +4026,7 @@
         "audited-module:models.coverage_planning",
         "audited-module:models.development_audit",
         "audited-module:models.development_costs",
+        "audited-module:models.development_diagnostics",
         "audited-module:models.development_review",
         "audited-module:models.development_routing",
         "audited-module:models.development_transport",
@@ -4539,7 +4540,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4179,
+  "source_count": 4180,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -10326,7 +10327,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_audit.py",
-      "source_semantics_sha256": "d6478291c8d268a9a8732e6f8ccf84f99285169b928a00d61c7b1aec074c43c7"
+      "source_semantics_sha256": "8416f040a6482e92eb46454e8878e85e985514fa783e45443e027abf7966f31c"
     },
     {
       "classification": "GATE",
@@ -10340,11 +10341,20 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:models.development_diagnostics",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/development_diagnostics.py",
+      "source_semantics_sha256": "8d645287d3ff45ce79fa9f19160c2d35f1e9484bd8a5f4a7258a3488e9e02d5a"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
       "source_id": "audited-module:models.development_review",
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_review.py",
-      "source_semantics_sha256": "2982046875a2137f97e639fab3a4ecb25edda5a94cf0bb5629ad17b3a5ed3a41"
+      "source_semantics_sha256": "966afaf336b585b5582beb50c1632a8fd1544dd815b79ba05b3e2477bbbccceb"
     },
     {
       "classification": "GATE",
@@ -10362,7 +10372,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/development_transport.py",
-      "source_semantics_sha256": "12c9d64c9e3344f222f673490e5fae7eff7bebdd9eca7015be5ff0ab10cd9df0"
+      "source_semantics_sha256": "36dc864e4c109752232148aae830fe1b1b8534f9b8417d0bb0498e467f05b7b0"
     },
     {
       "classification": "GATE",
@@ -10857,7 +10867,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "8c2a33d64a3cf707a6d76fad31c0ab3551ffb51e389290d0d289ce1c82896260"
+      "source_semantics_sha256": "d24928349c0875df704d0eeeb4238d9d0272f695fd077fe443bcfa14dd9f9f4b"
     },
     {
       "classification": "GATE",
@@ -42153,9 +42163,9 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "4d498def4a78ca27c68f0ec4e8fa15cb3ef90b5cf62e8d1012727aec2177dfa3",
+  "source_discovery_semantics_sha256": "6399e30fab24d10a6fefd02111ba52c12384cf9d733d1991feaee0b410df5f5b",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 286,
+    "AUDITED_MODULE_UNIVERSE": 287,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
@@ -42169,8 +42179,8 @@
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4182,
-  "source_universe_sha256": "554ec746ef33fc212f2e32cb8c359020266c45fd7d970a245e790b38b77d33ce",
+  "source_occurrence_count": 4183,
+  "source_universe_sha256": "c00fd4715e892461b52a218a6123af7a8f9ec2587492ea55894bf50cb35bd654",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }
