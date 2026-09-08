@@ -80,8 +80,10 @@ schema-generation drift leaves the finer detail absent. A successful diagnostic 
 never override the original rejection. This path does not repair content, relax a schema, retry,
 select a provider, settle uncertain costs or promote a partial score to complete scope. The
 September-8 14:28 report names an advisory `root_cause_ref` nullability rejection; its private
-response bytes remain unauthenticated here. These are local synthetic controls, not a reconstruction
-of private response bytes. HTTP error messages/Retry-After handling and
+response bytes remain unauthenticated here. The later 15:02 report records three conforming guarded
+shards and a complete synthetic baseline pair; this is operator-reported development evidence,
+not independently authenticated provider acceptance or a qualified audit. These local synthetic
+controls do not reconstruct private response bytes. HTTP error messages/Retry-After handling and
 accounting recovery are separate work; no charge is inferred from an absent generation identifier.
 
 ## Matching and duplicate handling
