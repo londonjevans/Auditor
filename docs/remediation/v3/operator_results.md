@@ -3,6 +3,98 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T00:16Z — **`V3-CORPUSSCORE-001` verified live with OPERATOR-SUPPLIED labels for the 5k corpus (75 controls). Scored run: 10/19 shards, 33 claims, 0 matched roots. Cause verified offline: the scorer's exact-class gate; the model labels 18/19 invariant claims `other`. With class treated as wildcard the same run matches 3 roots and flags 1 guarded-control claim.**
+
+Timestamp from the clock. Development ledger #3: 106 entries, 99 reconciled, 7 uncertain.
+**Actual development spend across ledgers 4.067256676 USD**; phantom uncertain reservations
+3.999084216 USD. Cumulative ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD.
+`completed_real_audits` remains `0`.
+
+### 1. Labels (operator-supplied, not model-authored, not exhaustive)
+
+Codex declined template-truth generation (correctly: a template does not prove reachability), and
+exposed `provenance: OPERATOR_SUPPLIED_DEVELOPMENT_LABELS`. The operator authored labels from the
+four source facts verified today (22:18Z, 23:20Z), five controls per market file × 15 files = 75:
+
+| control (per `src/markets/SyntheticMarketNNN.sol`) | expected | class | sev | origin / required line |
+|---|---|---|---|---|
+| `deposit-cast-truncation` — `collateral += uint128(assets)`, no bound on `assets` | PLANTED | accounting | low | 74–86 / 83 (v1: 83–83) |
+| `borrow-cast-truncation` — `debt += uint128(amount)` | PLANTED | accounting | low | 112–126 / 122 (v1: 122–122) |
+| `guardian-emergency-drain` — `emergencyAssetReturn(receiver, amount)` while paused | PLANTED | access_control | medium | 203–210 / 208 |
+| `reinitialization-guarded` — `_initializeSyntheticAccess` reverts `AlreadyInitialized` | GUARDED | access_control | high | 41–58 / 47 |
+| `checked-arithmetic-guarded` — 0.8.30 checked operators in borrow/liquidation/accrual/totals/health/risk windows | GUARDED | accounting | high | 112–298 / 119, six claim sites |
+
+Files: `~/.mmaudit/private/development-corpora/realistic-scale-solidity-005k-v1.truth.json`
+(v1, sha `fa80b223…`, single-line cast origins) and `…truth-v2.json` (sha `18733372…`, function-span
+origins matching the `truth-a.json` convention). Both validate through
+`read_development_corpus_truth`. All sites verified at identical line numbers in all 15 markets.
+
+### 2. Scored run (v1 labels)
+
+`devmanifest-20260909-005k-deepseek-scored-1`: `audit-manifest --truth-manifest … --truth-sha256 …`,
+deepseek=together, 16384 tokens, request timeout 900 s, per-attempt 1.00. Output
+`…/development-audits/manifest-005k-deepseek-together-scored-20260909/` incl. `benchmark-plan.json`,
+`score.json`.
+
+```
+status SHARD_INCOMPLETE   observed 10/19   claims 33 (19 invariant, 14 advisory)   real 0.71268252   461 s
+file-0011: HTTP 429 (together, after 10 consecutive requests)
+score: matched roots 0 / 45 planted; observed-missed 18; unobserved 27; guarded-control claims 0
+       dispositions: UNMATCHED_INVARIANT 19, ADVISORY 12, ADVISORY_AT_PLANTED_SITE 2
+       all quality ratios null (INCOMPLETE_SCOPE), correctly
+```
+
+CORPUSSCORE itself is verified: labels bound before dispatch, `score.json` retained alongside an
+unchanged `result.json`, incomplete scope handled honestly.
+
+### 3. Why zero matches — verified offline ($0) by rescoring the retained observation
+
+`bind_development_corpus_benchmark` + `score_development_corpus` on the same `result.json` under
+three label variants:
+
+| labels | matched roots | observed-missed | guarded-control claims |
+|---|---|---|---|
+| v1 as run (single-line origins, honest classes) | 0 | 18 | 0 |
+| v2 (function-span origins, honest classes) | **0** | 18 | 0 |
+| v2 with every control's class set to `other` (counterfactual, diagnostic only) | **3** | 15 | **1** |
+
+So origin geometry was not the cause. **The exact `vulnerability_class` gate is.** deepseek labelled
+18 of its 19 invariant claims `other` (the remaining one `access_control`, on `SyntheticProxies.sol`),
+including "Unchecked uint128 cast in deposit collateral accounting" at exactly 83–84 and "Guardian
+can drain assets via emergencyAssetReturn when paused" at 203–209 — both located correctly, both
+unmatched because the label says `accounting` / `access_control`. Under the wildcard the scorer also
+correctly flags one claim against the checked-arithmetic **guarded** control (a scored false
+positive), which is precisely the disagreement class from 23:20Z now made measurable.
+
+The counterfactual is not offered as a score; it is offered as proof of which predicate decides the
+result. Under it, deepseek found 3 of 18 observed planted roots (17 %), consistent with the 4-of-14
+file consistency seen at 22:18Z.
+
+### 4. Requests
+
+1. **Class matching:** either treat candidate class `other` as a wildcard, or match on
+   origin + primary site + required line and report class agreement as a separate column. With a
+   five-value taxonomy and a model that defaults to `other`, exact-class gating measures the
+   taxonomy, not the detector.
+2. Encourage specific classes at the prompt/schema level (e.g. describe each enum value), and
+   consider `arithmetic` / `initialization` / `trust` classes; `accounting` vs `other` for a cast
+   truncation is a coin flip even for a human.
+3. Accept operator-supplied labels v2 as the working truth for this corpus (files above); Codex may
+   copy them into the repository under `OPERATOR_SUPPLIED_DEVELOPMENT_LABELS` if a committed
+   artifact is wanted. They are declared non-exhaustive; `SyntheticProxies.sol:21-27` ("unprotected
+   proxy initialization") is a candidate for a sixth control the operator has not verified.
+4. `Retry-After` single retry — fifth request; `together` now 429s after ~10 consecutive requests, so
+   no 19-shard run can complete without it. The operator will not spend on further 19-shard
+   attempts until it exists.
+5. Judge-allowance decoupling (19:30Z) — the judge estimate at 16384 tokens with the snapshot is
+   ≈ 1.93 USD per shard, forcing a 2.50 per-attempt target for ~1.4k-token answers.
+
+### 5. Operator plan
+
+Paused. Real spend today 4.07 USD. The chain is now verified from three-file baseline through
+19-file candidate, second-lineage review and labelled scoring; the two things standing between
+this and a complete measured 19-file result are the retry and the class gate, both Codex-side.
+
 ## 2026-09-08T23:20Z — **`V3-CORPUSJUDGE-001` verified live: kimi reviewed all 35 deepseek claims on the 5k corpus — 21 `SUPPORTED`, 14 `REFUTED`. First refutations ever observed. Nine refutations are correct; five rest on a false statement about Solidity semantics. The judge can be confidently wrong; a second reviewer or truth is required before a refutation removes a claim.**
 
 Timestamp from the clock. Development ledger #3: 95 entries, 89 reconciled, 6 uncertain.
