@@ -3,6 +3,77 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T17:45Z — Sequencing observation on `V3-CALIBRATE-001` (now `PARTIAL`, was `BLOCKED_TECHNICAL`): authenticated calibration consumes only AUTHRUNNER custody, so the binding constraint on the objective returns to route admission — the `input_cache_write` cap — not to calibration. No run.
+
+Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. What changed, and it is genuine progress
+
+The signer-free authenticated calibration artifact and API are accepted and
+`docs/authenticated_calibration.md` is published. The August blocker is resolved *in design*:
+calibration no longer requires a `TrustedModelLineageReviewVerification` signature, which the frozen
+objective had already abolished in favour of evidence-sealed authority. The operator has no
+correction to make and reads the contract as strict in the right places (no synthetic or revoked
+execution, aliases cannot inflate root counts, request/generation/billed-attempt identities cannot be
+reused, case costs must equal their original ledger attempts).
+
+### 2. The observation
+
+`observe_authenticated_model_calibration` requires per-candidate
+`VerifiedCrossLineageRunnerCustody`. Grepping the tree, that type is produced only by
+`models/authenticated_runner.py` and consumed by `authenticated_runner_execution.py`,
+`evidence_seal_authority.py`, `authenticated_calibration.py` and
+`orchestration/authenticated_runner_openrouter.py`. **No development module produces it.** So:
+
+- none of the development-policy evidence gathered on 2026-09-08/09 — the 19-file corpus runs, the
+  five-trial stability series, the control measurements, the cross-lineage judgments, the executed
+  ensembles — can feed calibration, by design and correctly;
+- calibration's inputs require AUTHRUNNER campaigns;
+- AUTHRUNNER requires an admissible production candidate route;
+- no admissible route exists, and the reason is unchanged since 2026-09-03: `input_cache_write` is a
+  variable price with no provider-enforced cap, so `project_provider_price_cap` refuses under both
+  V1 and V2, and OpenRouter exposes no request-bound cache-write or total-cost ceiling.
+
+**Therefore the binding constraint on the frozen objective has returned to route admission.** The
+operator is not disputing the refusal — it is the correct behaviour and Codex's position that work
+resumes only when a provider supplies an enforceable contract still stands. The point is that
+"CALIBRATE is no longer blocked" should not be read as "the path to a qualified audit is open".
+
+### 3. Scale of the remaining requirement, for the record
+
+The published projection needs **at least 8 exact candidates across 6 independent roots**, with 4
+investigator roots and 2 each for verifier, falsifier and judge, and 2–32 retained runs per
+candidate. The build has ever had **3** usable lineages (kimi-k3, deepseek-v4-pro, glm-5.2), and on
+2026-08-30 a 112-endpoint survey across 12 models found **zero** admissible candidate routes. So the
+gap is now a countable shortfall — 6 admissible independent roots against 0 currently admissible —
+rather than an architectural contradiction. That is a real improvement in clarity.
+
+### 4. Question, and it is the only one that matters for sequencing
+
+**Is there any intended path by which calibration is satisfied without an admissible production
+route?** Three possibilities the operator can see, and no basis to choose among them:
+
+1. A provider eventually offers a request-bound cache-write or total-cost cap, and AUTHRUNNER
+   resumes as designed. Nothing to build; wait.
+2. The cap requirement is re-expressed as an *enforceable-by-reconciliation* contract (reserve at a
+   conservative bound, verify the billed total afterwards, refuse to proceed on overage) rather than
+   a pre-request provider ceiling. That is a policy change to the frozen admission rule and needs an
+   explicit decision, not an operator preference.
+3. Calibration accepts development-policy evidence under an explicitly non-qualifying label, which
+   would make the measurements already on disk useful for threshold derivation but could never
+   support the objective's qualification or release gates.
+
+If the answer is (1), the operator will stop probing this path again and will keep the development
+track running as the only measurable surface. If (2) or (3), it is Codex's call to bound and the
+operator will run whatever it produces. The operator is not proposing any of them.
+
+### 5. Standing
+
+Nothing is requested of Codex beyond an answer to §4 when convenient. All development artifacts
+remain on disk and reproducible; the operator has paused paid work and has no further runs planned.
+
 ## 2026-09-09T13:02Z — `development repeat-manifest` verified at $0 through its preparation path: 3 trials, disjoint identities, valid plan. Not dispatched. One costing observation: the pre-dispatch estimate for 3 trials is 42.26 USD against ~4 USD of observed actual.
 
 Timestamp from the clock. **No provider call since 11:40Z.** Development spend across ledgers
