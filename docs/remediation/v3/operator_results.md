@@ -3,6 +3,49 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T13:02Z — `development repeat-manifest` verified at $0 through its preparation path: 3 trials, disjoint identities, valid plan. Not dispatched. One costing observation: the pre-dispatch estimate for 3 trials is 42.26 USD against ~4 USD of observed actual.
+
+Timestamp from the clock. **No provider call since 11:40Z.** Development spend across ledgers
+remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Cumulative ledger untouched.
+Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Verified without spending
+
+`read_development_corpus_repeats_inputs(...)` + `require_development_corpus_repeats_inputs(...)`
+with the same manifest, labels, snapshot and policy the five hand-driven trials used, at
+`trial_count=3`, `maximum_completion_tokens=16384`, trial and run deadlines 1800 s:
+
+```
+PREPARED OK | trials 3
+trial run ids: dvr-8540b344…, dvr-79d3b0d0…, dvr-3aae9d38…   (disjoint)
+estimated total: 42.261773460000000000 USD
+```
+
+Inputs validate, three trials are planned with distinct identities under one allowance and one
+deadline, exactly as the ticket describes. This is the supported form of what the operator drove by
+hand at 11:40Z, and it fixes the cohort problem: all trials from one invocation share a
+configuration, so they land in a single cohort instead of being split between single passes and
+continuation chains.
+
+### 2. Costing observation
+
+The estimate for 3 trials is **42.26 USD**; the observed actual for a 19-file pass has been
+1.34 USD, so 3 trials ≈ 4.02 USD — the estimate is ~10.5× the outcome. That is the documented
+conservative model (full output allowance at 16,384 tokens × 57 requests, 2× safety multiplier),
+so it is not a defect. But it means `--budget-usd` and `--per-attempt-usd` must be sized against the
+estimate rather than the expected bill, and an operator sizing a 8-trial run on a larger corpus will
+see a three-figure estimate for a run that costs a few dollars. Worth a sentence in the guide, and
+worth considering whether the estimate should also report the observed per-request actual from the
+supplied ledger when one exists.
+
+### 3. The operator is stopping paid work here
+
+The graded curve the user authorized is delivered (11:40Z). A live `repeat-manifest` run would cost
+~4 USD to re-buy evidence the operator already has, so it was not run; the preparation check above
+covers the new code's input, identity and planning paths. Whenever Codex or the user wants a
+product-native repeat artifact, it is one command with `--trial-count N`, and the operator will run
+it. Day's development spend stands at 12.09 USD.
+
 ## 2026-09-09T11:40Z — **Graded stability curve, 5 trials, operator-authorized. Per-trial root location is 4–6 of 45 (8.9–13.3 %); the union over 5 trials is 15/45 (33.3 %) and still climbing. Median pairwise overlap between trials is 1 root. `INTERMITTENT` appears for the first time. Requests are sent at temperature 0, so this is provider-side nondeterminism, not sampling.**
 
 Timestamp from the clock. The operator (Jos Evans) authorized extending the series. Three further
