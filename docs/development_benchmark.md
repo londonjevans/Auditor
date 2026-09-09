@@ -635,8 +635,9 @@ composed result input/output at 192,000,000 bytes. Existing ordinary evidence li
 Exact input/output file identity, private output permissions and unchanged ancestors are checked
 through finalization. Selection may be post-hoc and incomplete: distinct identifiers cannot prove
 independent trials, exhaustive external truth or independent roots. This is candidate-only
-measurement groundwork. Automated repeated execution, other audit roles and qualified client
-reporting remain unfinished in `V3-STABILITY-001`; no audit or release authority is granted.
+measurement groundwork. The retained-file command does not execute repeated trials; the Python
+producer below covers that candidate-only step. Other audit roles and qualified client reporting
+remain unfinished in `V3-STABILITY-001`; no audit or release authority is granted.
 
 Local capacity regressions exercise eight retained 64-source/1024-claim measurements through the
 real file consumer: 8192 claims, 81920 pooled critical weights, 28 pairs, and either one fixed
@@ -647,11 +648,45 @@ and runtime observations. These tests reuse synthetic source and constructed lin
 data handling; they are neither independent semantic roots nor executed provider audits. Raw byte
 ceilings remain separate constraints, not a promise that every conceivable combination fits.
 
-The next orchestration step must predeclare trial count, exact configuration, all run identities,
+Each automatically executed series must predeclare trial count, exact configuration, all run identities,
 a shared budget and a parent deadline before dispatch. Every planned, missing or failed trial must
 remain visible; a successful-only subset must not be presented as the full series. Trial count and
 selection scope must accompany future quality claims. The current retained-file command does not
 provide that execution producer or establish predictive variance from a small, post-hoc sample.
+
+The Python producer now uses `prepare_development_corpus_repeats` and
+`run_development_corpus_repeats` to freeze two to eight full candidate plans, original label bytes,
+identical request configuration, disjoint identities, one estimated budget and a parent deadline.
+It writes the complete series plan and shared inputs before dispatch, then runs each selected trial
+at most once through the existing candidate runner. All calls use the same supplied ledger; the
+remaining whole-series estimate is checked before each child. This is estimated-risk development
+accounting, not an atomic portfolio reservation or the frozen objective's provider-enforced ceiling.
+No new uncertainty allowance, automatic retry or credential-loading path is introduced.
+
+`result.json` retains every planned trial as `NOT_STARTED`, `MISSING_RESULT`, `INCOMPLETE` or
+`COMPLETE`, including original child observations and every recorded charge. A started slot means
+the controller selected the child invocation, not proof that an HTTP request was transmitted.
+Missing accounting/runtime requests stay explicit. `COMPLETE` means all selected candidate
+responses were retained, not validated findings or complete audits. Reused generation evidence
+is retained and flagged, never accepted as distinct observations for stability.
+
+The producer writes `stability.json` only when all planned trial results are retained without
+reused evidence identities. Incomplete child observations remain in that evaluator's denominators
+and retain null quality where scope is missing. If an entire trial result is unavailable, it
+withholds full-series measurement instead of selecting only successful trials. A derivative write
+failure raises an error while preserving a valid durable series result where possible; the result's
+measurement-scope field describes input availability, not proof that the derivative file exists.
+Cancellation preserves available child evidence and costs before propagating the original
+interruption. Exact private file identities, bytes, modes and parent objects are checked; shared
+input custody is also checked before each individual child request.
+
+The active-execution deadline is shared rather than reset per trial. Recorded parent elapsed time
+covers execution and child recovery, excluding final series measurement; bounded finalization can
+outlast the active deadline. Plan/result readers have independent 16 MB / 192 MB ceilings, without
+changing existing child or retained-stability limits. Local predeclaration is not independently
+registered/exhaustive campaign selection, external truth, root independence or a predictive law.
+CLI handoff, maximum-width producer acceptance and full actual-audit/per-role/client-report
+integration remain open under `V3-STABILITY-001`; no qualification or release authority changes.
 
 ## Measuring source-manifest candidates against declared labels
 

@@ -66,14 +66,14 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "6d756ad751f1b16577a2256f3cf6a950c2d9a029eb779fd3403488f9511e415b"
+    "7b0d4f4d7980d97a99129e44888c8f09b909f2aec7e13d4fea3dadb42584c9a0"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "745b9dae00bfcfa491565b42af2ef46ac540e3156896881cf02b986a1d501cab"
+    "ce5ccb53dd6f24207ee40a60970ef716e39fe2fdae2415b24bebf68a0e4a8bbd"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -2981,6 +2981,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "orchestration/ci.py": "gate-release-evidence-pipeline",
     "orchestration/context_manifest.py": "gate-full-quality-analysis",
     "orchestration/cost_ledger.py": "gate-cost-ledger-provisioning",
+    "orchestration/development_corpus_repeats.py": "gate-release-evidence-pipeline",
     "orchestration/learning.py": "gate-managed-output-provisioning",
     "orchestration/manifest.py": "gate-release-evidence-pipeline",
     "orchestration/managed_host_tools.py": "gate-managed-toolchain-bundle",
@@ -3418,6 +3419,12 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         prepare_development_corpus_judgment,
         require_development_corpus_judgment_candidate,
     )
+    from mmaudit.models.development_corpus_repeats import (
+        prepare_development_corpus_repeats,
+        read_development_corpus_repeats,
+        read_development_corpus_repeats_plan,
+        repeat_projection,
+    )
     from mmaudit.models.development_corpus_resume import (
         freeze_development_corpus_resume_history,
         prepare_development_corpus_resume,
@@ -3469,6 +3476,15 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_corpus_judgment import (
         require_development_corpus_upstream,
         run_development_corpus_judgment,
+    )
+    from mmaudit.orchestration.development_corpus_repeats import (
+        _preflight as repeat_series_preflight,
+    )
+    from mmaudit.orchestration.development_corpus_repeats import (
+        _write as write_repeat_series,
+    )
+    from mmaudit.orchestration.development_corpus_repeats import (
+        run_development_corpus_repeats,
     )
     from mmaudit.orchestration.development_corpus_resume import (
         _require_file as require_continuation_file_objects,
@@ -3875,6 +3891,41 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-stability-cli",
             measure_development_stability_command,
             "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-prepare",
+            prepare_development_corpus_repeats,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-projection",
+            repeat_projection,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-reader",
+            read_development_corpus_repeats,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-plan-reader",
+            read_development_corpus_repeats_plan,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-writer",
+            write_repeat_series,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-preflight",
+            repeat_series_preflight,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-runner",
+            run_development_corpus_repeats,
+            "gate-provider-secret-transport",
         ),
         _explicit_anchor(
             "bounded-composed-json-writer",

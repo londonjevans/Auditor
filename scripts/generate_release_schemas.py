@@ -85,6 +85,10 @@ from mmaudit.models.development_corpus_judgment import (
     DevelopmentCorpusJudgmentResponse,
     DevelopmentCorpusJudgmentShardObservation,
 )
+from mmaudit.models.development_corpus_repeats import (
+    DevelopmentCorpusRepeatsObservation,
+    DevelopmentCorpusRepeatsPlan,
+)
 from mmaudit.models.development_corpus_resume import (
     DevelopmentCorpusResumeAttempt,
     DevelopmentCorpusResumeHistory,
@@ -305,6 +309,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_corpus_control_measurement.schema.json": DevelopmentCorpusControlMeasurement,
     "development_corpus_stability.schema.json": DevelopmentCorpusStability,
     "development_corpus_stability_selection.schema.json": DevelopmentStabilitySelection,
+    "development_corpus_repeats_plan.schema.json": DevelopmentCorpusRepeatsPlan,
+    "development_corpus_repeats_observation.schema.json": DevelopmentCorpusRepeatsObservation,
     "development_corpus_ensemble_plan.schema.json": DevelopmentCorpusEnsemblePlan,
     "development_corpus_ensemble_observation.schema.json": DevelopmentCorpusEnsembleObservation,
     "development_corpus_ensemble_score.schema.json": DevelopmentCorpusEnsembleScore,

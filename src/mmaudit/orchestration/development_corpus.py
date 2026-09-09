@@ -72,6 +72,7 @@ class DevelopmentCorpusUpstream:
 
     directory: DirectoryCustodyObservation
     files: tuple[ManifestFileBinding, ...]
+    file_custody: tuple[RegularFileCustodyObservation, ...] = ()
 
 
 def require_development_corpus_upstream(upstream: DevelopmentCorpusUpstream) -> None:
@@ -81,6 +82,18 @@ def require_development_corpus_upstream(upstream: DevelopmentCorpusUpstream) -> 
         type(upstream) is not DevelopmentCorpusUpstream
         or type(upstream.directory) is not DirectoryCustodyObservation
         or type(upstream.files) is not tuple
+        or type(upstream.file_custody) is not tuple
+        or (
+            upstream.file_custody
+            and (
+                len(upstream.file_custody) != len(upstream.files)
+                or any(type(f) is not RegularFileCustodyObservation for f in upstream.file_custody)
+                or any(
+                    f.root != upstream.directory.path or f.binding != binding
+                    for f, binding in zip(upstream.file_custody, upstream.files, strict=True)
+                )
+            )
+        )
         or not 2 <= len(upstream.files) <= 3
         or any(type(f) is not ManifestFileBinding for f in upstream.files)
         or tuple(f.path for f in upstream.files)
@@ -96,6 +109,14 @@ def require_development_corpus_upstream(upstream: DevelopmentCorpusUpstream) -> 
     for binding in upstream.files:
         revalidate_evidence_file_binding(
             evidence_root=upstream.directory.path, binding=binding, max_bytes=binding.size
+        )
+    for retained in upstream.file_custody:
+        require_regular_file_custody_unchanged(
+            retained,
+            label="manifest candidate upstream file",
+            max_bytes=retained.binding.size,
+            allow_directory_entry_metadata_change=True,
+            allow_composed_evidence=True,
         )
 
 
