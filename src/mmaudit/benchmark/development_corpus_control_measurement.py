@@ -364,8 +364,14 @@ class DevelopmentCorpusControlMeasurement(_AuditArtifact):
     origin_policy: Literal["EXPLICIT_REFERENCE_OR_SAME_FILE_ANCHORED_PRIMARY_SPAN"] = (
         "EXPLICIT_REFERENCE_OR_SAME_FILE_ANCHORED_PRIMARY_SPAN"
     )
-    precision_denominator: Literal["ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS"] = (
-        "ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS"
+    precision_denominator: Literal["ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS"] = Field(
+        default="ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS",
+        description=(
+            "Stable v1 identifier: every claim contributes to both precision denominators. "
+            "A unique location match uses frozen control severity; ambiguous locations use "
+            "the maximum candidate control weight; an unmatched claim uses reported severity. "
+            "Category and kind do not remove claims or change these weight rules."
+        ),
     )
     cost_runtime_reference: Literal["EXACT_EMBEDDED_SCORE_NOT_NEW_RECONCILIATION_OR_END_TO_END"] = (
         "EXACT_EMBEDDED_SCORE_NOT_NEW_RECONCILIATION_OR_END_TO_END"

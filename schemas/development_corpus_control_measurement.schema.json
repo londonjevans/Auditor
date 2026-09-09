@@ -4154,6 +4154,7 @@
     "precision_denominator": {
       "const": "ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS",
       "default": "ALL_CLAIMS_WITH_FROZEN_MATCH_OR_MAX_AMBIGUOUS_WEIGHTS",
+      "description": "Stable v1 identifier: every claim contributes to both precision denominators. A unique location match uses frozen control severity; ambiguous locations use the maximum candidate control weight; an unmatched claim uses reported severity. Category and kind do not remove claims or change these weight rules.",
       "title": "Precision Denominator",
       "type": "string"
     },

@@ -273,7 +273,11 @@ def _bind_child(
         if not recovered or (root / stage / "score.json").exists():
             score = score_development_corpus(binding=benchmark_binding, observation=observation)
             expected["score.json"] = score
-            if not recovered or (root / stage / "control-measurement.json").exists():
+            if (
+                not recovered
+                or (root / stage / "control-measurement.json").exists()
+                or (root / stage / "control-measurement.json").is_symlink()
+            ):
                 expected["control-measurement.json"] = measure_development_corpus_controls(
                     score=score
                 )

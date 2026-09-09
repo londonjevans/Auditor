@@ -17,6 +17,9 @@ from mmaudit.benchmark.development_corpus import (
     DevelopmentCorpusBenchmarkScore,
     DevelopmentCorpusBenchmarkTruth,
 )
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    read_development_corpus_control_measurement,
+)
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import DevelopmentCorpusObservation
 from mmaudit.models.development_costs import DevelopmentCostPolicy
@@ -380,6 +383,18 @@ async def test_maximum_64_sources_1024_critical_claims_and_controls_keep_10240_w
     assert score.summary.severity_weighted_structural_precision.denominator == 10240
     assert score.summary.severity_weighted_structural_precision.value == 1.0
     assert score.summary.accounted_cost_usd == Decimal("0.64")
+    measured = read_development_corpus_control_measurement(
+        (tmp_path / "run/control-measurement.json").read_bytes()
+    )
+    assert measured.source_score == score
+    assert measured.source_scope == "ORIGINAL_FIRST_ATTEMPT"
+    assert len(measured.claims) == len(measured.summary.located_root_ids) == 1024
+    assert len(measured.summary.invariant_asserted_root_ids) == 1024
+    assert measured.summary.unique_root_location_coverage.value == 1
+    assert measured.summary.severity_weighted_structural_precision.denominator == 10_240
+    assert measured.summary.severity_weighted_asserted_structural_precision.denominator == 10_240
+    assert all(claim.weight == 10 and claim.stage_index == 0 for claim in measured.claims)
+    assert not measured.audit_complete and not measured.qualification_eligible
     with pytest.raises(ValueError):
         DevelopmentCorpusBenchmarkTruth.model_validate_json(
             json.dumps({**truth.model_dump(mode="json"), "controls": [*controls, controls[-1]]}),

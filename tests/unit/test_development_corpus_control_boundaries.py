@@ -9,6 +9,7 @@ import pytest
 
 import mmaudit.benchmark.development_corpus_control_measurement as measurement
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.release_io import read_file_evidence
 from mmaudit.repository.file_custody import (
     observe_regular_file_custody,
     require_regular_file_custody_unchanged,
@@ -154,18 +155,24 @@ def test_shared_file_revalidation_requires_an_exact_boolean_opt_in(tmp_path, val
 @pytest.mark.parametrize(
     "kind", ["bytes", "replace", "mode", "parent", "ancestor", "symlink", "hardlink"]
 )
-def test_entry_churn_opt_in_still_refuses_every_selected_file_or_ancestor_change(tmp_path, kind):
+@pytest.mark.parametrize("composed", [False, True])
+def test_entry_churn_opt_in_still_refuses_every_selected_file_or_ancestor_change(
+    tmp_path, kind, composed
+):
     parent = tmp_path / "middle" / "inner"
     parent.mkdir(parents=True)
     target = parent / "synthetic.json"
     target.write_bytes(b"{}")
     target.chmod(0o600)
+    bound = read_file_evidence(evidence_root=parent, relative_path=target.name).binding
     expected = observe_regular_file_custody(
         root=parent,
         relative_path=target.name,
         label="synthetic",
         max_bytes=100,
         allow_directory_entry_metadata_change=True,
+        expected_binding=bound,
+        allow_composed_evidence=composed,
     )
     if kind == "bytes":
         target.write_bytes(b"{} ")
@@ -189,5 +196,9 @@ def test_entry_churn_opt_in_still_refuses_every_selected_file_or_ancestor_change
             os.link(retained, target)
     with pytest.raises(ValueError):
         require_regular_file_custody_unchanged(
-            expected, label="synthetic", max_bytes=100, allow_directory_entry_metadata_change=True
+            expected,
+            label="synthetic",
+            max_bytes=100,
+            allow_directory_entry_metadata_change=True,
+            allow_composed_evidence=composed,
         )

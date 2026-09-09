@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -205,7 +206,7 @@ async def test_prior_stage_ledger_drift_stops_the_real_parent_before_another_req
         for s in (0, 1, 2)
         for name in ("plan.json", "sources.json", "result.json", "file-0001.json")
     ]
-    + [(0, "score.json")],
+    + [(0, "score.json"), (0, "control-measurement.json")],
 )
 async def test_completed_child_bytes_cannot_change_before_parent_adoption(
     tmp_path, monkeypatch, stage, filename
@@ -225,6 +226,53 @@ async def test_completed_child_bytes_cannot_change_before_parent_adoption(
     assert case.counts == ([6, 0, 0], [6, 3, 0], [6, 3, 3])[stage]
     assert not (case.root / "result.json").exists()
     assert case.ledger.snapshot().spent_usd == Decimal("0.01") * sum(case.counts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize(
+    "kind", ["missing", "dangling", "cycle", "symlink", "hardlink", "directory"]
+)
+async def test_parent_recovery_distinguishes_absent_measurement_from_unsafe_existing_alias(
+    tmp_path, monkeypatch, interrupted, kind
+):
+    case = execution_case(tmp_path)
+    cancellation = asyncio.CancelledError("synthetic post-candidate interruption")
+
+    async def wrapper(original, kwargs):
+        child = await original(**kwargs)
+        if kwargs["output_dir"].name == "candidate":
+            path = kwargs["output_dir"] / "control-measurement.json"
+            retained = path.with_suffix(".retained")
+            path.rename(retained)
+            if kind == "dangling":
+                path.symlink_to(path.with_name("synthetic-missing.json"))
+            elif kind == "cycle":
+                path.symlink_to(path.name)
+            elif kind == "symlink":
+                path.symlink_to(retained)
+            elif kind == "hardlink":
+                os.link(retained, path)
+            elif kind == "directory":
+                path.mkdir(mode=0o700)
+            if interrupted:
+                raise cancellation
+        return child
+
+    wrap_children(monkeypatch, wrapper)
+    if interrupted:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await execute(case)
+        assert caught.value is cancellation
+    elif kind == "missing":
+        result = await execute(case)
+        assert result.status != "OBSERVED_ALL_STAGES"
+    else:
+        with pytest.raises(ValueError):
+            await execute(case)
+    assert (case.root / "result.json").exists() is (kind == "missing")
+    assert case.counts == [6, 0, 0]
+    assert case.ledger.snapshot().spent_usd == Decimal("0.06")
 
 
 @pytest.mark.asyncio

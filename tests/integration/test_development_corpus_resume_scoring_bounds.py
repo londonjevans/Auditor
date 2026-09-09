@@ -11,6 +11,9 @@ import httpx
 import pytest
 
 from mmaudit.benchmark.development_corpus import score_development_corpus
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    read_development_corpus_control_measurement,
+)
 from mmaudit.benchmark.development_corpus_resume import (
     MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
     read_development_corpus_resume_score,
@@ -57,6 +60,12 @@ async def test_actual_maximum_history_scores_1024_claims_after_72_requests_and_r
     inputs = case.inputs
     metadata = prepared.shards[0].discovery or prepared.shards[0].endpoint_snapshot
     original_score_bytes = case.inputs.history.original_score.model_dump_json()
+    first_measurement = read_development_corpus_control_measurement(
+        (tmp_path / "original/control-measurement.json").read_bytes()
+    )
+    assert first_measurement.source_score == case.inputs.history.original_score
+    assert first_measurement.summary.total_claim_count == 1008
+    assert first_measurement.summary.unique_root_location_coverage.value is None
     for stage in range(1, 9):
         selected = selected_resume(inputs.history, metadata)
         output = tmp_path / f"stage-{stage}"
@@ -79,6 +88,19 @@ async def test_actual_maximum_history_scores_1024_claims_after_72_requests_and_r
         assert score.history == history
         assert score.history.original_score.model_dump_json() == original_score_bytes
         assert score.cumulative_quality.unique_root_recall.value == (1.0 if stage == 8 else None)
+        measured = read_development_corpus_control_measurement(
+            (output / "control-measurement.json").read_bytes()
+        )
+        assert measured.source_score == score
+        assert measured.source_scope == "CUMULATIVE_RECORDED_ATTEMPTS"
+        assert measured.summary.total_claim_count == (1024 if stage == 8 else 1008)
+        assert measured.summary.unique_root_location_coverage.value == (1 if stage == 8 else None)
+        assert measured.summary.invariant_asserted_root_coverage.value == (
+            1 if stage == 8 else None
+        )
+        assert [(c.claim_id, c.stage_index, c.run_id, c.request_id) for c in measured.claims] == [
+            (c.claim_id, c.stage_index, c.run_id, c.request_id) for c in score.claims
+        ]
         inputs = read_development_corpus_resume_inputs(history_file=output / "result.json")
     assert len(case.calls) == 8 and len(case.ledger.snapshot().entries) == 72
     assert len(score.requests) == 72 and len(score.claims) == 1024
@@ -93,6 +115,15 @@ async def test_actual_maximum_history_scores_1024_claims_after_72_requests_and_r
     assert score.first_attempt_summary.first_attempt_shard_completion.numerator == 63
     assert score.first_attempt_summary.unique_root_recall.value is None
     assert score.root_independence == "NOT_ESTABLISHED" and not score.audit_complete
+    assert measured.summary.severity_weighted_structural_precision.denominator == 10_240
+    assert measured.summary.severity_weighted_asserted_structural_precision.denominator == 10_240
+    assert len(measured.summary.located_root_ids) == 1024
+    assert len(measured.summary.invariant_asserted_root_ids) == 1024
+    assert sum(c.stage_index == 8 for c in measured.claims) == 16
+    assert sum(c.stage_index == 0 for c in measured.claims) == 1008
+    assert len(measured.source_score.unknown_actual_cost_request_ids) == 8
+    assert measured.source_score.cumulative_summary == score.cumulative_summary
+    assert not measured.audit_complete and not measured.qualification_eligible
     raw = (output / "result.json").read_bytes()
     padded = tmp_path / "synthetic-padded-history.json"
     padded.write_bytes(raw + b" " * (64_000_000 - len(raw)))
@@ -100,6 +131,9 @@ async def test_actual_maximum_history_scores_1024_claims_after_72_requests_and_r
         history_file=padded, output_dir=tmp_path / "offline"
     )
     assert offline == score and padded.stat().st_size == 64_000_000
+    assert (tmp_path / "offline/control-measurement.json").read_bytes() == (
+        output / "control-measurement.json"
+    ).read_bytes()
 
 
 def test_all_576_selected_planned_requests_remain_visible_without_observations():

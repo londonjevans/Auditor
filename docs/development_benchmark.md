@@ -526,12 +526,22 @@ claims use reported severity. Incomplete ratios remain null and an empty denomin
 perfect result. Original or cumulative stage/run/request provenance and all retained accounting
 remain in the artifact; no cost settlement or end-to-end timing is inferred.
 
+The published v1 `precision_denominator` identifier remains unchanged for compatibility. Its
+schema description explicitly documents all three weight branches above, including unmatched
+reported severity; it does not introduce a new scorer policy or invalidate retained measurements.
+
 The new composed output is capped at 128 MB. Original score input remains capped at 32 MB,
 cumulative score input at 96 MB, and ordinary evidence I/O at 100 MB. Composed reads require an
 explicit original size/hash binding. Private output and unchanged file/ancestor objects are
 rechecked throughout; durable old evidence and liabilities survive derivative failures, with
-original cancellation taking precedence. Expanded new-artifact maximum-bound acceptance remains
-pending in `V3-CONTROLMEASURE-001`; this tested checkpoint is PARTIAL. Review-impact/comparison
+original cancellation taking precedence. Local acceptance is complete in `V3-CONTROLMEASURE-001`:
+actual 32/96/128 MB byte boundaries, published-byte compatibility and explicit maximum 64-source,
+1024-claim, eight-stage sidecar assertions pass, alongside the broader development, accounting,
+custody and release-integrity regression selections. This does not qualify an actual audit.
+When the ensemble recovers a terminated child, a genuinely absent derivative remains optional,
+but any existing measurement symlink, including a dangling or self-referencing one, is rejected
+by the bound evidence reader. Original cancellation and durable accounting are preserved.
+Review-impact/comparison
 policies and repeated-run stability are separate work. Location coverage establishes neither
 validated findings, independent/exhaustive truth, root independence nor audit/release eligibility.
 
