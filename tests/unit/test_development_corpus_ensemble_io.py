@@ -6,6 +6,12 @@ from dataclasses import replace
 
 import pytest
 
+from mmaudit.models.development_corpus import DevelopmentCorpusMaterial, DevelopmentCorpusText
+from mmaudit.orchestration.development_corpus import (
+    DevelopmentCorpusUpstream,
+    require_development_corpus_upstream,
+)
+from mmaudit.orchestration.development_corpus_ensemble import _bind_child
 from mmaudit.release_io import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     MAX_COMPOSED_EVIDENCE_BYTES,
@@ -16,6 +22,7 @@ from mmaudit.release_io import (
 )
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.directory_custody import prepare_owned_empty_directory
+from tests.development_corpus_judgment_support import pure_candidate
 
 
 def test_precreated_child_must_be_the_same_private_empty_directory(tmp_path):
@@ -27,6 +34,69 @@ def test_precreated_child_must_be_the_same_private_empty_directory(tmp_path):
     )
     with pytest.raises(FileExistsError):
         prepare_owned_empty_directory(path, label="synthetic child")
+
+
+@pytest.mark.parametrize("kind", ["exact", "truncated", "reordered", "empty"])
+def test_candidate_upstream_retains_the_entire_ordered_directory_chain(tmp_path, kind):
+    path = tmp_path / "synthetic-parent"
+    custody = prepare_owned_empty_directory(path, label="synthetic parent")
+    files = tuple(
+        write_json_evidence(evidence_root=path, relative_path=name, value={})
+        for name in ("plan.json", "sources.json")
+    )
+    if kind == "truncated":
+        custody = replace(custody, component_identities=custody.component_identities[-1:])
+    elif kind == "reordered":
+        custody = replace(
+            custody,
+            component_identities=(
+                *reversed(custody.component_identities[:-1]),
+                custody.component_identities[-1],
+            ),
+        )
+    elif kind == "empty":
+        custody = replace(custody, component_identities=())
+    upstream = DevelopmentCorpusUpstream(custody, files)
+    if kind == "exact":
+        require_development_corpus_upstream(upstream)
+    else:
+        with pytest.raises(ValueError, match="upstream custody"):
+            require_development_corpus_upstream(upstream)
+
+
+@pytest.mark.parametrize(
+    "changed", [None, "plan.json", "sources.json", "result.json", "file-0001.json"]
+)
+def test_adopted_child_records_match_the_canonical_writer_bytes_not_only_json_values(
+    tmp_path, changed
+):
+    prepared, candidate = pure_candidate(count=1, claims=0)
+    material = DevelopmentCorpusMaterial(
+        manifest=prepared.plan.manifest,
+        sources=tuple(
+            DevelopmentCorpusText(filename=name, content=raw.decode())
+            for name, raw in prepared.shards[0].source_files
+        ),
+    )
+    child = tmp_path / "candidate"
+    child.mkdir(mode=0o700)
+    values = {
+        "plan.json": candidate.plan,
+        "sources.json": material,
+        "result.json": candidate,
+        "file-0001.json": candidate.observations[0],
+    }
+    for name, value in values.items():
+        write_json_evidence(
+            evidence_root=child, relative_path=name, value=value.model_dump(mode="json")
+        )
+    if changed is not None:
+        path = child / changed
+        path.write_bytes(path.read_bytes() + b" ")
+        with pytest.raises(ValueError, match="differs from its result"):
+            _bind_child(tmp_path, "candidate", candidate, material, None)
+    else:
+        assert len(_bind_child(tmp_path, "candidate", candidate, material, None)) == 4
 
 
 @pytest.mark.parametrize(

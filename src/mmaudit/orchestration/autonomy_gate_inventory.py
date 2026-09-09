@@ -3425,6 +3425,12 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.orchestration.development_corpus import run_development_corpus
     from mmaudit.orchestration.development_corpus_ensemble import (
+        _bind_child as bind_corpus_ensemble_child,
+    )
+    from mmaudit.orchestration.development_corpus_ensemble import (
+        _recover_child as recover_corpus_ensemble_child,
+    )
+    from mmaudit.orchestration.development_corpus_ensemble import (
         _report as corpus_ensemble_accounting_report,
     )
     from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
@@ -3663,6 +3669,16 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-ensemble-accounting",
             corpus_ensemble_accounting_report,
             "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-child-adoption",
+            bind_corpus_ensemble_child,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-terminated-child-recovery",
+            recover_corpus_ensemble_child,
+            "gate-release-evidence-pipeline",
         ),
         _explicit_anchor(
             "development-corpus-ensemble-original-measurement",

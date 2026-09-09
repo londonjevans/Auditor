@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4239
-    assert inventory.source_occurrence_count == 4242
+    assert inventory.source_count == 4241
+    assert inventory.source_occurrence_count == 4244
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -69,11 +69,11 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
         "AUDITED_MODULE_UNIVERSE": 303,
-        "EXPLICIT_NON_FIELD_GATE": 2293,
+        "EXPLICIT_NON_FIELD_GATE": 2295,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4187,
+        SourceCoverageClassification.GATE: 4189,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1500,6 +1500,11 @@ def test_manifest_ensemble_foundation_does_not_claim_an_executed_parent_or_autho
         ("audited-module:benchmark.development_corpus_ensemble", "gate-runtime-package-integrity"),
         ("explicit:development-corpus-ensemble-sequential-run", "gate-full-quality-analysis"),
         ("explicit:development-corpus-ensemble-accounting", "gate-cost-ledger-provisioning"),
+        ("explicit:development-corpus-ensemble-child-adoption", "gate-release-evidence-pipeline"),
+        (
+            "explicit:development-corpus-ensemble-terminated-child-recovery",
+            "gate-release-evidence-pipeline",
+        ),
         (
             "explicit:development-corpus-ensemble-original-measurement",
             "gate-benchmark-evidence-authority",

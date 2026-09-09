@@ -77,8 +77,8 @@ def require_development_corpus_upstream(upstream: DevelopmentCorpusUpstream) -> 
         or any(not 0 < f.size <= MAX_DEVELOPMENT_CORPUS_RESULT_BYTES for f in upstream.files)
         or not upstream.directory.path.is_absolute()
         or ".." in upstream.directory.path.parts
-        or not upstream.directory.component_identities
-        or upstream.directory.component_identities[-1][0] != upstream.directory.path
+        or tuple(p for p, _identity in upstream.directory.component_identities)
+        != (*reversed(upstream.directory.path.parents), upstream.directory.path)
     ):
         raise DevelopmentCorpusError("manifest candidate upstream custody is invalid")
     require_same_unlinked_directory_objects(upstream.directory, label="manifest candidate upstream")

@@ -109,7 +109,7 @@ def require_development_corpus_upstream(
         *((root / "review-01",) if prior is not None else ()),
     )
     if tuple(d.path for d in upstream.directories) != expected_directories or any(
-        not d.component_identities or d.component_identities[-1][0] != d.path
+        tuple(p for p, _identity in d.component_identities) != (*reversed(d.path.parents), d.path)
         for d in upstream.directories
     ):
         raise DevelopmentCorpusJudgmentError("manifest judgment upstream directory scope differs")

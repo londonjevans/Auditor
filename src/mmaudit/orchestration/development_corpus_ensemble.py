@@ -69,6 +69,7 @@ from mmaudit.release_io import (
     revalidate_composed_evidence_file_binding,
     write_composed_json_evidence,
 )
+from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.directory_custody import (
     DirectoryCustodyObservation,
     prepare_owned_empty_directory,
@@ -274,7 +275,10 @@ def _bind_child(
             relative_path=stage + "/" + name,
             max_bytes=MAX_DEVELOPMENT_CORPUS_SCORE_BYTES if name == "score.json" else maximum,
         )
-        if actual.value != model.model_dump(mode="json"):
+        expected_value = model.model_dump(mode="json")
+        if actual.value != expected_value or actual.content != stable_json(expected_value).encode(
+            "utf-8"
+        ):
             raise DevelopmentCorpusEnsembleError("manifest child output differs from its result")
         bindings.append(actual.binding)
     return bindings

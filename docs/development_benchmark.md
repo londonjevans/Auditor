@@ -400,18 +400,18 @@ owned-output drift refuse. Completion means responses were observed for selected
 and release flags remain false, including when every response contains no findings.
 
 General-manifest candidate review is available separately through `judge-manifest` below.
-Optional source-manifest candidate scoring is described below. General-manifest review-impact,
-comparison and dual-review ensemble consumers remain unavailable; the existing fixed scorer,
+Optional source-manifest candidate scoring and the manifest ensemble are described below.
+General-manifest cross-configuration comparison remains unavailable. The existing fixed scorer,
 `judge-audit` and `ensemble-corpus` retain their v2 three-file scope.
 Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
 
-### Full-manifest development ensemble (partial acceptance)
+### Full-manifest development ensemble
 
 `development ensemble-manifest` executes a development-only full-manifest candidate and two
-separately prompted reviews. `V3-CORPUSENSEMBLE-001` retains partial acceptance until its
-expanded whole-run boundary checks are complete. The plan binds one candidate and two
+separately prompted reviews. Local acceptance is development-only, not a qualified audit or
+evidence of model quality. The plan binds one candidate and two
 known-distinct reviewer selections, separate token allowances, exact source scope and a
 common estimated-cost policy. Candidate estimates plus two future per-file review allowances
 must fit the shared target; this is neither reserved portfolio capacity nor a hard cost cap.
@@ -424,6 +424,10 @@ cannot complete an incomplete candidate; an empty candidate earns no review-comp
 The existing manifest review API optionally accepts an exact local upstream-custody bundle.
 It rechecks retained parent/candidate/previous-review files, directory objects and prior ledger
 entries before and after each request, and automatically excludes prior-review generation IDs.
+Custody includes every directory ancestor in exact order; a matching leaf alone is insufficient.
+Parent adoption and interrupted-child recovery also require the exact canonical bytes emitted
+by the child writers, not only equal decoded JSON values. Replaced or weakened custody is a
+refusal even when a copied directory contains byte-identical artifacts.
 Without this explicit bundle, standalone review behavior is unchanged. The parent creates and
 binds each private child directory before dispatch. One absolute deadline can shorten, never
 extend, child limits; bounded cleanup/finalization follows. Verified durable child observations
@@ -453,8 +457,14 @@ disposable local ledgers and actual network/process traps. Maximum structural ex
 64sources/1024original claims/2048opinions/192first-attempt requests, not maximum artifact bytes
 or semantic audit quality. Paired, partial, empty, failure and cancellation cases retain original
 scope/costs; separate I/O tests really cross100MB while ordinary readers still refuse that size.
-Expanded deadline, custody/recovery and realistic19-file acceptance remain pending for this
-checkpoint; passing scoped tests do not imply a completed unattended qualified audit.
+Additional local tests exercise shared and expired deadlines, invalid handoffs, cost/replay/known
+alias/generation/prior-ledger refusals, changed child bytes and cancellation under replaced
+directories. Durable candidate results survive a missing derivative score; a failed parent score
+write is not returned as success. The pinned19-file/175158-byte/4952-line fixture executes as one
+manifest through57synthetic requests. A plan whose estimated headroom exceeds250 is refused;
+a fitting explicit allowance preserves the same sources/models/tokens without increasing that
+target. No labels are invented from repeated templates. These tests do not imply a completed
+unattended qualified audit, a hard cost cap or complete semantic scope.
 All qualification/release flags remain false and genuine root independence is not established.
 
 ## Measuring source-manifest candidates against declared labels
