@@ -3,6 +3,58 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T18:28Z — **CORRECTION: the operator's 17:45Z attribution was wrong. The `input_cache_write` cap does not block the three working routes; all three pass V1 and V2 projection. The binding blocker is the unlisted-endpoint / ancestry refusal.** Codex's `route_admission_review_2026_09_09.md` is accepted in full.
+
+Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. What the operator got wrong
+
+At 17:45Z the operator wrote that "the binding constraint on the frozen objective has returned to
+route admission" and identified `input_cache_write` as that constraint, reasoning from the
+2026-09-03 dead end and from Codex's remark that V1/V2 refuse cache-write "even when the observed
+value is zero". The source analysis shows the correct distinction, which the operator did not make:
+
+- the projector **does not invent absent components**; all three shared routes price only
+  `{prompt, completion, input_cache_read}` with cache reads prompt-dominated, and **pass both V1 and
+  V2 cap projection**;
+- the refusal that dead-ended 2026-09-03 applied to a route that *did* quote cache-write
+  (`x-ai/grok-4.6=amazon-bedrock/us-west-2`). An explicitly present zero quote and an absent
+  component are different cases.
+
+The operator's 17:45Z §2 conclusion is therefore withdrawn as to cause. Its §4 question stands and
+has now been answered.
+
+### 2. The actual blockers, as recorded by Codex
+
+For all three routes the first refusal is
+`candidate-selection reactivation route uses an unlisted endpoint`: the plan's allowlists still name
+`modal/mxfp4` (kimi), `parasail/fp8` (deepseek) and `sail-research/fp8` (glm). The ordinary
+successor deriver separately refuses the unavailable predecessor pending authenticated ancestry.
+`V3-PLANANCESTRY-001` is locally COMPLETE but by design only narrows an already-listed endpoint, so
+it cannot carry a three-route refresh. Constrained discovery and runtime evidence remain missing
+downstream. **Relaxing cost enforcement alone would not have removed any of these**, exactly as the
+review states.
+
+### 3. Points the operator agrees with and will not relitigate
+
+- The DeepSeek/Parasail FP8 tombstone stays effective; absence of a tombstone on DeepSeek/Together
+  is not conformance proof. The operator will not treat the 2026-09-08/09 development runs on that
+  route as evidence of schema conformance for admission purposes.
+- Proposed roles (DeepSeek/Together candidate, GLM/DeepInfra FP4 primary, Kimi/Together replay) are
+  sensible; sharing Together across two routes is not a root-independence failure, and
+  serving-provider diversity is not a substitute for root independence.
+- `OP-COST-2026-09-09` is correctly recorded as a deliberate operator relaxation rather than a
+  finding that the prior rule was wrong. That is the operator's position too.
+
+### 4. Standing
+
+No operator action pending. `V3-PLANROUTES-001` is the unblocking ticket and `V3-COSTRECON-001`
+implements the recorded relaxation; the operator will run whatever either produces. Paid work
+remains paused, and the six shared discovery files remain at the gitignored path for as long as they
+are useful.
+
 ## 2026-09-09T18:05Z — Answering Codex's request: the six credential-free discovery files for the three working routes are staged inside the repo at a gitignored path. No provider call, no commit, nothing published.
 
 Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
