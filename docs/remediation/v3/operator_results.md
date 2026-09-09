@@ -3,6 +3,113 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T11:40Z — **Graded stability curve, 5 trials, operator-authorized. Per-trial root location is 4–6 of 45 (8.9–13.3 %); the union over 5 trials is 15/45 (33.3 %) and still climbing. Median pairwise overlap between trials is 1 root. `INTERMITTENT` appears for the first time. Requests are sent at temperature 0, so this is provider-side nondeterminism, not sampling.**
+
+Timestamp from the clock. The operator (Jos Evans) authorized extending the series. Three further
+paid passes plus four continuations. **Actual development spend across ledgers 12.093483578 USD**;
+uncertain reservations 5.481960176 USD (two new 429/truncation liabilities). Cumulative ledger
+untouched. Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Five trials, identical corpus / labels / model / route / config
+
+| trial | kind | shards | claims | located | asserted | guarded-inv |
+|---|---|---|---|---|---|---|
+| 1 | chain (10+9) | 19/19 | 53 | 6/45 | 3/45 | 2 |
+| 2 | single pass | 19/19 | 46 | 6/45 | 3/45 | 0 |
+| 3 | single pass | 19/19 | 45 | 4/45 | 3/45 | 2 |
+| 4 | chain (7+7+5) | 19/19 | 37 | 4/45 | 2/45 | 2 |
+| 5 | chain (5+14) | 19/19 | 46 | 4/45 | 3/45 | 2 |
+
+Trials 4 and 5 each stopped mid-run (one `INCOMPLETE_OUTPUT` at 16,384 tokens, one 429) and were
+completed with `resume-manifest`; trial 4 needed three continuations, one of which was itself
+429'd on its first request with no progress and no charge. Claim counts on identical input range
+**37 to 53**.
+
+### 2. Coverage-versus-N curve (union of located roots, trials in run order)
+
+| N | union located | increment |
+|---|---|---|
+| 1 | 6/45 (13.3 %) | — |
+| 2 | 9/45 (20.0 %) | +3 |
+| 3 | 12/45 (26.7 %) | +3 |
+| 4 | 14/45 (31.1 %) | +2 |
+| 5 | **15/45 (33.3 %)** | +1 |
+
+Combined artifact: `union_location_coverage 15/45 = 0.333333`,
+`union_assertion_coverage 12/45 = 0.266667`, severity-weighted 35/75 and 26/75,
+`pooled_per_trial_location_precision 62/749 = 0.083`, 227 claims of which 194 match no label,
+`guarded_invariant_claim_count 8`.
+
+The curve has not flattened at N=5. Per-trial coverage is 8.9–13.3 %; five trials together reach
+33.3 %. If trials were independent with p≈0.11 per root, union at N=5 would be ≈ 43 %; the observed
+33 % implies mild positive correlation (some roots are systematically easier), but the dominant
+effect is genuine per-run variation.
+
+### 3. Pairwise overlap — the sharpest number
+
+| pair | shared / union of located |
+|---|---|
+| 1 vs 2 | 3 / 9 |
+| 1 vs 5 | 3 / 7 |
+| 2 vs 5 | 2 / 8 |
+| 1 vs 3, 1 vs 4, 2 vs 3, 2 vs 4, 3 vs 4, 4 vs 5 | 1 / 7–9 |
+| 3 vs 5 | **0 / 8** |
+
+Median overlap is one root. One pair of complete, identically-configured runs over the same 4,952
+lines shares **no located root at all**.
+
+### 4. Graded classifications (`stability.json`, sha `3819ad50…`)
+
+Two cohorts, since the tool separates single passes from continuation chains:
+
+| cohort | trials | location | assertion |
+|---|---|---|---|
+| `SAME_ORIGINAL_REQUEST_CONFIGURATION` | 2 | STABLE 1, SINGLE_RUN 11, NEVER 63 | STABLE 0, SINGLE_RUN 8, NEVER 67 |
+| `…CONTINUATION_CHAINS_NOT_SINGLE_PASSES` | 3 | STABLE 1, **INTERMITTENT 3**, SINGLE_RUN 11, NEVER 60 | INTERMITTENT 2, SINGLE_RUN 10, NEVER 63 |
+
+In the 3-trial cohort exactly one control is located in all three
+(`market-000-guardian-emergency-drain`, and it is asserted in **none** of them), three are
+intermittent at 2/3, and eleven appear once. Assertion is `STABLE` for **zero** controls in either
+cohort across all five trials.
+
+### 5. Temperature
+
+The development request body pins `temperature: 0` and `reasoning.effort: high`, and every trial
+sent byte-identical request bytes (same manifest, same snapshot digest). The variation above is
+therefore **provider-side nondeterminism** — batching, kernel/precision, or expert-routing effects —
+not sampling temperature. That strengthens rather than weakens the conclusion: the operator cannot
+remove this variance by changing a decoding parameter.
+
+### 6. What the operator takes as established
+
+1. **N must be reported with any coverage figure**, and N=1 is not a measurement for this engine.
+2. **Union-of-N is the audit unit.** At current prices a 19-file pass is ≈ 1.34 USD, so N=5 costs
+   ≈ 6.70 USD and reaches a third of the labelled roots; the curve suggests N≈8–10 before flattening,
+   which is within the 250 USD envelope for this corpus but scales linearly with corpus size.
+3. **Assertion is less stable than location.** Nothing was asserted in every trial; the engine finds
+   a site more reliably than it commits to a violation there. Any pipeline that filters on
+   asserted-violation only will be substantially less stable than one that keeps located advisories
+   for adjudication.
+4. **Guarded-control claims recur** (8 across 227 claims), so the false-positive side is not
+   eliminated by repetition either.
+5. The ensemble result of 03:10Z should be re-read in this light: two reviewers agreeing on a single
+   candidate pass says nothing about whether that pass found the right things.
+
+### 7. Requests
+
+1. Record the curve and classifications; this belongs directly against `V3-STABILITY-001` and
+   should gate `V3-BENCHMARK-001` and the objective's superiority verdict.
+2. Consider making `measure-stability` emit the union-versus-N curve itself, and consider whether
+   continuation chains should be poolable with single passes when their cumulative source coverage
+   is identical (the current separation is defensible, but it halved the operator's usable N).
+3. Nothing further is needed from the operator to reproduce any of this: all five trials, their
+   measurements, and the selection are retained on disk.
+
+Artifacts: `…/development-audits/manifest-005k-deepseek-pass{2,3,4,5}-20260909/`,
+`…/resume-005k-pass{4,5}-*/`, `…/measure-controls-005k-{cumulative,pass2,pass3}-20260909/`,
+`…/stability-inputs-005k-all5/selection.json`,
+`…/stability-005k-all5-20260909/stability.json` (sha `3819ad50…`).
+
 ## 2026-09-09T10:58Z — **`V3-STABILITY-001` measured live, product-computed: two identical passes over the identical corpus and labels agree on almost nothing. Of 75 controls, location is `STABLE` for 1, `SINGLE_RUN` for 11, `NEVER` for 63; assertion is `STABLE` for 0, `SINGLE_RUN` for 8. Mean per-run root location 11.1 %, union of two runs 20 %. Two paid passes, 2.68 USD.**
 
 Timestamp from the clock. Two paid runs since 09:40Z. Development ledger #3 now carries them;
