@@ -407,6 +407,31 @@ Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
 
+### Partial manifest-ensemble foundation
+
+`V3-CORPUSENSEMBLE-001` has development-only frozen plan and observation contracts,
+not an automated full-manifest ensemble runner. The plan binds one candidate and two
+known-distinct reviewer selections, separate token allowances, exact source scope and a
+common estimated-cost policy. Candidate estimates plus two future per-file review allowances
+must fit the shared target; this is neither reserved portfolio capacity nor a hard cost cap.
+
+The observation contract retains every original claim, both available opinions, source/stage
+gaps and unique known/unknown liabilities. `REFUTED_BY_ONE` and `REFUTED_BY_BOTH` describe
+opinions, never truth or permission to remove a claim. Complete reviews of available claims
+cannot complete an incomplete candidate; an empty candidate earns no review-completion credit.
+
+The existing manifest review API optionally accepts an exact local upstream-custody bundle.
+It rechecks retained parent/candidate/previous-review files, directory objects and prior ledger
+entries before and after each request, and automatically excludes prior-review generation IDs.
+Without this explicit bundle, standalone review behavior is unchanged. Existing evidence-reader
+and writer limits are unchanged; the new composed-record ceiling does not widen child artifacts.
+
+Tests directly execute the existing child runners using synthetic MockTransport, fake credentials
+and disposable local ledgers, then construct an aggregate model-test observation. They do not
+exercise a production parent runner or establish a whole-run deadline. The parent executor,
+measurement adapter, `ensemble-manifest` CLI and their whole-run acceptance remain unimplemented.
+All qualification/release flags remain false and genuine root independence is not established.
+
 ## Measuring source-manifest candidates against declared labels
 
 `development audit-manifest` accepts optional paired `--truth-manifest` and `--truth-sha256`

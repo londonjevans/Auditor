@@ -170,10 +170,25 @@ def validate_development_candidate_accounting(
 ) -> None:
     """Require retained candidate costs on the same ledger, never a fresh budget copy."""
 
-    if snapshot.cap_usd != candidate.plan.shards[0].estimate.policy.total_budget_usd:
+    validate_development_accounting_entries(
+        candidate.accounting,
+        snapshot,
+        budget_usd=candidate.plan.shards[0].estimate.policy.total_budget_usd,
+    )
+
+
+def validate_development_accounting_entries(
+    accounting: tuple[DevelopmentAuditAccountingEntry, ...],
+    snapshot: CostLedgerSnapshot,
+    *,
+    budget_usd: Decimal,
+) -> None:
+    """Recheck retained stage liabilities on the same ledger before further dispatch."""
+
+    if snapshot.cap_usd != budget_usd:
         raise DevelopmentCostError("development judgment ledger differs from candidate target")
     entries = {entry.request_id: entry for entry in snapshot.entries}
-    for account in candidate.accounting:
+    for account in accounting:
         actual = entries.get(account.ledger_request_id)
         if actual is None or (
             actual.reservation_id,

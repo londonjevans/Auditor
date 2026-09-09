@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "4ccfb64a428ef162d45222d2b4cfc1fabc2a959299e8ed6d709fa10f15090d3e"
+    "caff2691d6dbd22153d13988483037433fbb233cfcc7298b7e79883ffe27d211"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3389,6 +3389,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         freeze_development_corpus,
         prepare_development_corpus,
     )
+    from mmaudit.models.development_corpus_ensemble import prepare_development_corpus_ensemble
     from mmaudit.models.development_corpus_judgment import (
         prepare_development_corpus_judgment,
         require_development_corpus_judgment_candidate,
@@ -3397,6 +3398,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.models.development_ensemble import prepare_development_ensemble
     from mmaudit.models.development_judgment import (
         prepare_development_judgment,
+        validate_development_accounting_entries,
         validate_development_candidate_accounting,
     )
     from mmaudit.models.development_routing import observe_development_routing
@@ -3419,7 +3421,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_corpus_judgment import (
         _report as corpus_judgment_accounting_report,
     )
-    from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
+    from mmaudit.orchestration.development_corpus_judgment import (
+        require_development_corpus_upstream,
+        run_development_corpus_judgment,
+    )
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
     from mmaudit.orchestration.development_judgment import run_development_judgment
@@ -3627,6 +3632,21 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-judgment-accounting",
             corpus_judgment_accounting_report,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-frozen-plan",
+            prepare_development_corpus_ensemble,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-judgment-upstream-custody",
+            require_development_corpus_upstream,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-prior-stage-accounting",
+            validate_development_accounting_entries,
             "gate-cost-ledger-provisioning",
         ),
         _explicit_anchor(

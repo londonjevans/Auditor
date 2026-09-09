@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +17,10 @@ from mmaudit.models.development_corpus import (
     DevelopmentCorpusMaterial,
     DevelopmentCorpusText,
 )
+from mmaudit.models.development_corpus_ensemble import (
+    MAX_DEVELOPMENT_CORPUS_ENSEMBLE_BYTES,
+    manifest_review_has_all_available_opinions,
+)
 from mmaudit.models.development_corpus_judgment import (
     MAX_DEVELOPMENT_CORPUS_JUDGMENT_ARTIFACT_BYTES,
     DevelopmentCorpusJudgmentObservation,
@@ -25,8 +30,10 @@ from mmaudit.models.development_corpus_judgment import (
     PreparedDevelopmentCorpusJudgmentShard,
     prepare_development_corpus_judgment,
 )
+from mmaudit.models.development_ensemble import _require_distinct_roles
 from mmaudit.models.development_judgment import (
     _money_sum,
+    validate_development_accounting_entries,
     validate_development_candidate_accounting,
 )
 from mmaudit.models.development_review import DevelopmentReviewDiagnostic
@@ -42,6 +49,7 @@ from mmaudit.orchestration.development_budget import development_uncertain_reser
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
+    DirectoryCustodyObservation,
     observe_unlinked_directory,
     require_same_unlinked_directory_objects,
 )
@@ -55,6 +63,106 @@ type _StopReason = Literal[
 
 class DevelopmentCorpusJudgmentError(ValueError):
     """Controlled refusal without provider prose, source content, paths or credential detail."""
+
+
+@dataclass(frozen=True)
+class DevelopmentCorpusJudgmentUpstream:
+    """Owned parent/previous-stage custody; no callbacks or additional provider input."""
+
+    evidence_root: Path
+    directories: tuple[DirectoryCustodyObservation, ...]
+    files: tuple[ManifestFileBinding, ...]
+    prior_review: DevelopmentCorpusJudgmentObservation | None = None
+
+
+def require_development_corpus_upstream(
+    upstream: DevelopmentCorpusJudgmentUpstream,
+    *,
+    prepared: PreparedDevelopmentCorpusJudgment,
+    ledger: AtomicCostLedger,
+) -> None:
+    """Before each review request, preserve every retained upstream byte and stage charge."""
+
+    if (
+        type(upstream) is not DevelopmentCorpusJudgmentUpstream
+        or not isinstance(upstream.evidence_root, Path)
+        or not upstream.evidence_root.is_absolute()
+        or ".." in upstream.evidence_root.parts
+        or type(upstream.directories) is not tuple
+        or not 2 <= len(upstream.directories) <= 3
+        or type(upstream.files) is not tuple
+        or not 1 <= len(upstream.files) <= 200
+        or any(type(d) is not DirectoryCustodyObservation for d in upstream.directories)
+        or any(
+            type(f) is not ManifestFileBinding
+            or not 0 < f.size <= MAX_DEVELOPMENT_CORPUS_ENSEMBLE_BYTES
+            for f in upstream.files
+        )
+    ):
+        raise DevelopmentCorpusJudgmentError("manifest judgment upstream custody is invalid")
+    root = upstream.evidence_root
+    prior = upstream.prior_review
+    expected_directories = (
+        root,
+        root / "candidate",
+        *((root / "review-01",) if prior is not None else ()),
+    )
+    if tuple(d.path for d in upstream.directories) != expected_directories or any(
+        not d.component_identities or d.component_identities[-1][0] != d.path
+        for d in upstream.directories
+    ):
+        raise DevelopmentCorpusJudgmentError("manifest judgment upstream directory scope differs")
+    required = {
+        "plan.json",
+        "sources.json",
+        "candidate/plan.json",
+        "candidate/sources.json",
+        "candidate/result.json",
+    }
+    required.update(
+        "candidate/" + s.shard_id + ".json" for s in prepared.plan.candidate.observations
+    )
+    if prior is not None:
+        if type(prior) is not DevelopmentCorpusJudgmentObservation:
+            raise DevelopmentCorpusJudgmentError("manifest judgment prior review type differs")
+        content = prior.model_dump_json()
+        if len(content.encode()) > MAX_DEVELOPMENT_CORPUS_JUDGMENT_ARTIFACT_BYTES or detect_secrets(
+            content
+        ):
+            raise DevelopmentCorpusJudgmentError("manifest judgment prior review exceeds its bound")
+        prior = DevelopmentCorpusJudgmentObservation.model_validate_json(content, strict=True)
+        if (
+            prior.plan.candidate != prepared.plan.candidate
+            or prior.plan.policy != prepared.plan.policy
+            or prior.plan.run_id == prepared.plan.run_id
+            or not manifest_review_has_all_available_opinions(prior)
+        ):
+            raise DevelopmentCorpusJudgmentError("manifest judgment prior stage selection differs")
+        _require_distinct_roles(
+            (prepared.plan.candidate.plan.routing, prior.plan.reviewer, prepared.plan.reviewer)
+        )
+        required.update(
+            {
+                "review-01-plan.json",
+                "review-01/plan.json",
+                "review-01/sources.json",
+                "review-01/result.json",
+            }
+        )
+        required.update("review-01/" + s.shard_id + ".json" for s in prior.observations)
+        validate_development_accounting_entries(
+            prior.accounting, ledger.snapshot(), budget_usd=prepared.plan.policy.total_budget_usd
+        )
+    paths = tuple(f.path for f in upstream.files)
+    if len(paths) != len(set(paths)) or not required <= set(paths):
+        raise DevelopmentCorpusJudgmentError("manifest judgment upstream artifact scope differs")
+    validate_development_candidate_accounting(prepared.plan.candidate, ledger.snapshot())
+    for directory in upstream.directories:
+        require_same_unlinked_directory_objects(directory, label="manifest judgment upstream")
+    for binding in upstream.files:
+        revalidate_evidence_file_binding(
+            evidence_root=root, binding=binding, max_bytes=binding.size
+        )
 
 
 def _rebuild(prepared: PreparedDevelopmentCorpusJudgment) -> PreparedDevelopmentCorpusJudgment:
@@ -172,6 +280,7 @@ async def run_development_corpus_judgment(
     allow_code_egress: bool = False,
     mock_transport: httpx.MockTransport | None = None,
     excluded_generation_ids: tuple[str, ...] = (),
+    upstream: DevelopmentCorpusJudgmentUpstream | None = None,
 ) -> DevelopmentCorpusJudgmentObservation:
     """Review observed claims once; preserve incomplete source scope, all charges and cancellation.
 
@@ -220,6 +329,13 @@ async def run_development_corpus_judgment(
         raise DevelopmentCorpusJudgmentError(
             "development credential overlaps retained candidate or plan"
         )
+    if upstream is not None:
+        require_development_corpus_upstream(upstream, prepared=prepared, ledger=ledger)
+        if (
+            upstream.prior_review is not None
+            and operator_secrets.openrouter_api_key in upstream.prior_review.model_dump_json()
+        ):
+            raise DevelopmentCorpusJudgmentError("development credential overlaps prior review")
     state = ledger.snapshot()
     validate_development_candidate_accounting(prepared.plan.candidate, state)
     carried = {
@@ -264,6 +380,8 @@ async def run_development_corpus_judgment(
     ]
 
     def require_outputs() -> None:
+        if upstream is not None:
+            require_development_corpus_upstream(upstream, prepared=prepared, ledger=ledger)
         require_same_unlinked_directory_objects(custody, label="manifest judgment output")
         for binding in bindings:
             revalidate_evidence_file_binding(
@@ -279,6 +397,15 @@ async def run_development_corpus_judgment(
     interruption: BaseException | None = None
     generations = {
         *excluded_generation_ids,
+        *(
+            (
+                s.generation_id
+                for s in upstream.prior_review.observations
+                if s.generation_id is not None
+            )
+            if upstream is not None and upstream.prior_review is not None
+            else ()
+        ),
         *(
             s.generation_id
             for s in prepared.plan.candidate.observations
