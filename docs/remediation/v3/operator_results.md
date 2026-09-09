@@ -3,6 +3,82 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T19:20Z — **`V3-PLANROUTES-001` VERIFIED LIVE AT $0: all three roles now pass constrained discovery, 24/29 predicates SATISFIED and NONE REFUSED. The five remaining are `UNAVAILABLE` pending a live authenticated run. This is the first admissible route set since the August revocation.**
+
+Timestamp from the clock. Metadata-only discovery, no completion requested, no charge. Development
+spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Cumulative
+ledger untouched. Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains
+`0`.
+
+### 1. Active plan
+
+`config/models.selection-plan.json` is now schema **1.9**, status `NONAUTHORIZING`, with a populated
+`authenticated_runner_selection` for the first time since `NO_ACTIVE_CANDIDATE_AFTER_REVOCATION`:
+
+| role | model | endpoint |
+|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `together` |
+| primary judge | `z-ai/glm-5.2` | `deepinfra/fp4` |
+| replay judge | `moonshotai/kimi-k3` | `together` |
+
+`required_output_mode NATIVE_JSON_SCHEMA`, `required_reasoning_effort high`,
+`required_supported_parameters ["structured_outputs"]`, `role_assignment_sha256 d95e97ef…`,
+`distinct_root_lineages_verified: false` (correctly — not yet verified).
+
+### 2. Constrained discovery, all three roles
+
+```
+deepseek/deepseek-v4-pro-0813=together   24 SATISFIED / 5 UNAVAILABLE / 0 refused
+z-ai/glm-5.2=deepinfra/fp4               24 SATISFIED / 5 UNAVAILABLE / 0 refused
+moonshotai/kimi-k3=together              24 SATISFIED / 5 UNAVAILABLE / 0 refused
+```
+
+Candidate artifacts under `~/.mmaudit/private/model-discovery/constrained-{deepseek-together,
+primary-judge,replay-judge}-*-20260909*/` with pending registries at
+`~/.mmaudit/private/authrunner/{candidate-registry-c1,primary-judge-c1-registry,
+replay-judge-c1-registry}.json`. Candidate report `report_sha256 3520351e…`,
+`facts_sha256 209978ca…`, constraint `7c4d3c77…`, profile `00b33f3e…` (the retained exact V1
+profile, unchanged).
+
+The five `UNAVAILABLE` predicates are identical across all three roles and all require live
+execution, not metadata:
+
+| predicate | reason |
+|---|---|
+| `FROZEN_LIVE_EQUIVALENCE` | `LIVE_EQUIVALENCE_UNAVAILABLE` |
+| `REGISTRY_SELECTION_HASH_CUSTODY` | `REGISTRY_SELECTION_CUSTODY_UNAVAILABLE` |
+| `REGISTRY_CONSTRAINT_HASH_CUSTODY` | `REGISTRY_CONSTRAINT_CUSTODY_UNAVAILABLE` |
+| `EMPIRICAL_SCHEMA_CONFORMANCE` | `EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE` |
+| `TOKEN_DETAIL_REPORTING_CONVENTION` | `TOKEN_DETAIL_CONVENTION_UNAVAILABLE` |
+
+**Nothing is refused.** Every predicate that can be decided from provider metadata is satisfied.
+
+### 3. What this changes and what it does not
+
+Changed: the unlisted-endpoint and ancestry blockers are gone, and the AUTHRUNNER path has a
+complete, constrained, three-role selection for the first time since 2026-08-28. The chain the
+operator described at 17:45Z — calibration needs runner custody, custody needs campaigns, campaigns
+need an admissible route — is no longer broken at its last link.
+
+Not changed: `completed_real_audits` is `0`; `distinct_root_lineages_verified` is `false`; the five
+predicates above are unproven; `EMPIRICAL_SCHEMA_CONFORMANCE` is precisely the property the
+DeepSeek/Parasail tombstone recorded as failing on a *different* route, and the operator repeats
+that the 2026-09-08/09 development runs on DeepSeek/Together are **not** admissible evidence for it.
+Calibration still requires 8 candidates across 6 independent roots; this set provides 3.
+
+### 4. The operator's read on the next step, and a question of authorization
+
+The natural next action is a live authenticated smoke on this selection: it is the only thing that
+can convert the five `UNAVAILABLE` predicates, and the historical cost of a 1-case smoke is
+≈ 0.04 USD, with 21 indices consumed and **22 the next free index**. The operator will not launch it
+without an explicit instruction, because it is the first authenticated-runner execution since
+2026-08-27 and it consumes a run index permanently.
+
+Codex: if a smoke is the right next step, say so and name the exact command and index; the operator
+will run it and report. If PLANROUTES should first be published, or `V3-COSTRECON-001` landed, or
+lineage verification obtained first, say that instead and the operator will wait. Metadata drifts in
+minutes, so the operator will re-run discovery immediately before any launch.
+
 ## 2026-09-09T18:28Z — **CORRECTION: the operator's 17:45Z attribution was wrong. The `input_cache_write` cap does not block the three working routes; all three pass V1 and V2 projection. The binding blocker is the unlisted-endpoint / ancestry refusal.** Codex's `route_admission_review_2026_09_09.md` is accepted in full.
 
 Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
