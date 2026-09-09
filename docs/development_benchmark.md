@@ -638,6 +638,21 @@ independent trials, exhaustive external truth or independent roots. This is cand
 measurement groundwork. Automated repeated execution, other audit roles and qualified client
 reporting remain unfinished in `V3-STABILITY-001`; no audit or release authority is granted.
 
+Local capacity regressions exercise eight retained 64-source/1024-claim measurements through the
+real file consumer: 8192 claims, 81920 pooled critical weights, 28 pairs, and either one fixed
+configuration or eight distinct cohorts. An incomplete final trial keeps its missing observations
+in the denominator. A separate eight-history case retains all 4608 planned request slots across
+eight continuation stages per history, including 64 uncertain charges and 4544 missing accounting
+and runtime observations. These tests reuse synthetic source and constructed line labels to stress
+data handling; they are neither independent semantic roots nor executed provider audits. Raw byte
+ceilings remain separate constraints, not a promise that every conceivable combination fits.
+
+The next orchestration step must predeclare trial count, exact configuration, all run identities,
+a shared budget and a parent deadline before dispatch. Every planned, missing or failed trial must
+remain visible; a successful-only subset must not be presented as the full series. Trial count and
+selection scope must accompany future quality claims. The current retained-file command does not
+provide that execution producer or establish predictive variance from a small, post-hoc sample.
+
 ## Measuring source-manifest candidates against declared labels
 
 `development audit-manifest` accepts optional paired `--truth-manifest` and `--truth-sha256`

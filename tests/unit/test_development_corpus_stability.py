@@ -317,3 +317,18 @@ def test_selection_rejects_unbounded_ambiguous_or_nonrelative_files(kind):
     files = [first] if kind == "count" else [first, second]
     with pytest.raises(ValueError):
         stability.read_development_stability_selection(json.dumps({"measurements": files}).encode())
+
+
+def test_eight_by_1024_critical_claim_weight_limit_remains_exact():
+    result = stability.DevelopmentStabilityRatio(
+        numerator=81_920, denominator=81_920, state="OBSERVED", value=1.0
+    )
+    assert result.numerator == result.denominator == 8 * 1024 * 10
+
+
+@pytest.mark.parametrize("field", ["numerator", "denominator"])
+def test_weighted_series_ratio_never_silently_clamps_excess_claim_weight(field):
+    value = {"numerator": 81_920, "denominator": 81_920, "state": "OBSERVED", "value": 1.0}
+    value[field] += 1
+    with pytest.raises(ValueError):
+        stability.DevelopmentStabilityRatio.model_validate(value)
