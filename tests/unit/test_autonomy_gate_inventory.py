@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4269
-    assert inventory.source_occurrence_count == 4272
+    assert inventory.source_count == 4277
+    assert inventory.source_occurrence_count == 4280
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 309,
-        "EXPLICIT_NON_FIELD_GATE": 2317,
+        "AUDITED_MODULE_UNIVERSE": 311,
+        "EXPLICIT_NON_FIELD_GATE": 2323,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4217,
+        SourceCoverageClassification.GATE: 4225,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1601,6 +1601,32 @@ def test_manifest_continuation_does_not_promote_response_coverage_to_audit_autho
 
 class _InnocuousNestedConfig(StrictModel):
     harmless_counter: int = 0
+
+
+@pytest.mark.parametrize(
+    "source_id,gate_id",
+    [
+        ("audited-module:benchmark.development_corpus_stability", "gate-runtime-package-integrity"),
+        (
+            "audited-module:orchestration.development_corpus_stability",
+            "gate-runtime-package-integrity",
+        ),
+        ("explicit:development-corpus-stability-measurement", "gate-benchmark-evidence-authority"),
+        ("explicit:development-corpus-stability-selection-reader", "gate-client-audit-scope"),
+        ("explicit:development-corpus-stability-reader", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-stability-writer", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-stability-offline-measurement", "gate-client-audit-scope"),
+        ("explicit:development-corpus-stability-cli", "gate-client-audit-scope"),
+    ],
+)
+def test_retained_stability_never_promotes_selected_runs_to_independent_audits(
+    inventory, source_id, gate_id
+):
+    source = next(item for item in inventory.source_coverage if item.source_id == source_id)
+    assert source.logical_gate_id == gate_id
+    assert source.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
 
 
 class _AuditConfigWithNewLeaf(AuditConfig):

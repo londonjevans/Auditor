@@ -605,6 +605,39 @@ target. No labels are invented from repeated templates. These tests do not imply
 unattended qualified audit, a hard cost cap or complete semantic scope.
 All qualification/release flags remain false and genuine root independence is not established.
 
+## Retained candidate control frequencies
+
+`development measure-stability --selection-file <absolute-selection-path> --output-dir
+<absolute-fresh-directory>` reads two to eight explicitly selected control measurements without
+a provider call. The selection JSON uses artifact kind `development_corpus_stability_selection`
+and a `measurements` array of `{ "path": "relative/measurement.json", "size": 123,
+"sha256": "<64 lowercase hex characters>" }` bindings. Supply each actual original byte size
+and hash; the example is an interface description, not a selected execution or valid binding.
+
+All inputs must share the exact complete source manifest and original label bytes. Reused run,
+request, generation, reservation or measurement evidence is rejected, including an original run
+plus its own continuation history. Different request configurations, transport or original-versus-
+cumulative scope form separate cohorts. Continuation chains are not individual audit passes.
+Different source partitions cannot be combined by this command: in particular, it does not
+reproduce the operator's manually assembled 19-file versus 10/9-file campaign union.
+
+The private `stability.json` retains all input measurements, claims, missing scope and recorded
+cost liabilities. It reports separate all-kind location and invariant-assertion frequencies,
+guarded allegations, severity groups, union coverage and pairwise Jaccard. Selected-run means and
+population variances are descriptive, not predictive; they are null for mixed cohorts,
+incomplete observations, empty root denominators or fewer than two trials. Pooled precision sums
+per-trial unique-root weights over every retained claim's weight; it is not union-root precision.
+`STABLE` means present in every selected observation, not reliable on future audits or proof that
+mixed configurations are equivalent. Unknown observations stay in the selected-trial denominator.
+
+Selection input is bounded at 65,536 bytes, total selected file input at 128,000,000 bytes and
+composed result input/output at 192,000,000 bytes. Existing ordinary evidence limits are unchanged.
+Exact input/output file identity, private output permissions and unchanged ancestors are checked
+through finalization. Selection may be post-hoc and incomplete: distinct identifiers cannot prove
+independent trials, exhaustive external truth or independent roots. This is candidate-only
+measurement groundwork. Automated repeated execution, other audit roles and qualified client
+reporting remain unfinished in `V3-STABILITY-001`; no audit or release authority is granted.
+
 ## Measuring source-manifest candidates against declared labels
 
 `development audit-manifest` accepts optional paired `--truth-manifest` and `--truth-sha256`

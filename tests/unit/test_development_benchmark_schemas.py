@@ -45,6 +45,8 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_resume_history.schema.json",
         "development_corpus_resume_benchmark_score.schema.json",
         "development_corpus_control_measurement.schema.json",
+        "development_corpus_stability.schema.json",
+        "development_corpus_stability_selection.schema.json",
         "development_corpus_ensemble_plan.schema.json",
         "development_corpus_ensemble_observation.schema.json",
         "development_corpus_ensemble_score.schema.json",

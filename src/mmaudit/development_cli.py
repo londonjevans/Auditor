@@ -72,6 +72,9 @@ from mmaudit.orchestration.development_corpus_resume import (
 from mmaudit.orchestration.development_corpus_resume_score import (
     score_development_corpus_history_file,
 )
+from mmaudit.orchestration.development_corpus_stability import (
+    measure_development_corpus_stability_files,
+)
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
@@ -85,6 +88,34 @@ from mmaudit.repository.development_corpus import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("measure-stability")
+def measure_development_stability_command(
+    selection_file: Annotated[Path, typer.Option("--selection-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+) -> None:
+    """Measure an explicit hash-bound retained-control series without provider or ledger access."""
+
+    try:
+        result = measure_development_corpus_stability_files(
+            selection_file=selection_file, output_dir=output_dir
+        )
+    except Exception:
+        typer.echo(
+            "Stability measurement refused: invalid or overlapping retained evidence, unsafe "
+            "output, exceeded bounds or changed file custody. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Stability measurement written: "
+        + result.stability_sha256
+        + "; "
+        + result.combined.quality_scope
+        + "; retained candidate locations only; independent trials and qualified stability "
+        "remain unproved."
+    )
 
 
 @development_app.command("measure-controls")

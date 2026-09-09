@@ -1,0 +1,101 @@
+{
+  "$defs": {
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_corpus_stability_selection.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicit retained files, not preregistration, source authority or permission to execute.",
+  "properties": {
+    "artifact_kind": {
+      "const": "development_corpus_stability_selection",
+      "default": "development_corpus_stability_selection",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "measurements": {
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/ManifestFileBinding"
+          },
+          {
+            "properties": {
+              "size": {
+                "maximum": 128000000,
+                "minimum": 1
+              }
+            }
+          }
+        ]
+      },
+      "maxItems": 8,
+      "minItems": 2,
+      "title": "Measurements",
+      "type": "array"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "measurements"
+  ],
+  "title": "DevelopmentStabilitySelection",
+  "type": "object"
+}

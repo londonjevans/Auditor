@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "e10e5b5a153b9153056b0a9f16cc86f99d400a1e96387809df86ee82a6bfb1cf"
+    "6d756ad751f1b16577a2256f3cf6a950c2d9a029eb779fd3403488f9511e415b"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3389,10 +3389,16 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_development_corpus_resume_score,
         score_development_corpus_resume,
     )
+    from mmaudit.benchmark.development_corpus_stability import (
+        measure_development_corpus_stability,
+        read_development_corpus_stability,
+        read_development_stability_selection,
+    )
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
     from mmaudit.development_cli import (
         ensemble_development_manifest_command,
         measure_development_controls_command,
+        measure_development_stability_command,
         resume_development_manifest_command,
         score_development_history_command,
     )
@@ -3475,6 +3481,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.orchestration.development_corpus_resume_score import (
         score_development_corpus_history_file,
+    )
+    from mmaudit.orchestration.development_corpus_stability import (
+        measure_development_corpus_stability_files,
+        write_development_corpus_stability,
     )
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
@@ -3835,6 +3845,36 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "bounded-prebound-composed-reader",
             read_composed_file_evidence,
             "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-measurement",
+            measure_development_corpus_stability,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-selection-reader",
+            read_development_stability_selection,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-reader",
+            read_development_corpus_stability,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-writer",
+            write_development_corpus_stability,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-offline-measurement",
+            measure_development_corpus_stability_files,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-cli",
+            measure_development_stability_command,
+            "gate-client-audit-scope",
         ),
         _explicit_anchor(
             "bounded-composed-json-writer",
