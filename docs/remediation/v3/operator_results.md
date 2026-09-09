@@ -3,6 +3,98 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T10:58Z — **`V3-STABILITY-001` measured live, product-computed: two identical passes over the identical corpus and labels agree on almost nothing. Of 75 controls, location is `STABLE` for 1, `SINGLE_RUN` for 11, `NEVER` for 63; assertion is `STABLE` for 0, `SINGLE_RUN` for 8. Mean per-run root location 11.1 %, union of two runs 20 %. Two paid passes, 2.68 USD.**
+
+Timestamp from the clock. Two paid runs since 09:40Z. Development ledger #3 now carries them;
+**actual development spend across ledgers 9.221385848 USD**; uncertain reservations 3.999084216 USD
+(unchanged, no new failures). Cumulative ledger untouched. Ledger unchanged at 57 entries /
+`0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Why two more paid runs
+
+`measure-stability` correctly refused the operator's first selection with `stability requires the
+exact same complete source and label bytes`: the three measurements it was given spanned different
+manifests (full corpus vs the p1/p2 split), which would have made "stability" meaningless. It also
+places a continuation chain and a single pass in **separate cohorts**
+(`SAME_REQUEST_CONFIGURATION_CONTINUATION_CHAINS_NOT_SINGLE_PASSES`), so the completed 19/19
+cumulative run could not be paired with a single pass either. Getting a product-computed stability
+number therefore required two fresh passes of identical configuration. The operator judged 2.68 USD
+proportionate for the build's central open question and ran them unattended.
+
+| run | status | shards | claims | cost | wall |
+|---|---|---|---|---|---|
+| `devmanifest-20260909-005k-deepseek-pass2` | `OBSERVED_ALL_SHARDS` | 19/19 | 46 | 1.34145132 | 668 s |
+| `devmanifest-20260909-005k-deepseek-pass3` | `OBSERVED_ALL_SHARDS` | 19/19 | 45 | 1.33762200 | 553 s |
+
+Identical model, route, manifest, labels, tokens, timeout and targets; both completed first time
+(no 429s, so the earlier rate-limit pattern is load-dependent, not fixed).
+
+### 2. The stability result (`stability.json`, `SAME_ORIGINAL_REQUEST_CONFIGURATION`, 2 trials)
+
+| classification over 75 controls | location | assertion |
+|---|---|---|
+| `STABLE` (present in both runs) | **1** | **0** |
+| `SINGLE_RUN` (present in exactly one) | 11 | 8 |
+| `NEVER` | 63 | 67 |
+
+| coverage | value |
+|---|---|
+| mean per-run root location | 0.111111 (5/45) |
+| **union over two runs** | **0.2 (9/45)** |
+| mean per-run assertion | 0.066667 (3/45) |
+| union assertion | 0.133333 (6/45) |
+| severity-weighted union location / assertion | 23/75 = 0.307 / 14/75 = 0.187 |
+| pooled per-trial precision, location / assertion | 26/295 = 0.088 / 14/295 = 0.047 |
+| population variance of per-run location coverage | 0.000494 |
+| guarded-control invariant claims | 2 |
+| claims / unmatched | 91 / 78 |
+
+Per-run located roots:
+pass2 = {000-drain, 006-borrow-cast, 006-drain, 010-drain, 012-drain, 014-drain};
+pass3 = {011-borrow-cast, 011-drain, 012-drain, 013-drain}. **Intersection: `market-012-guardian-
+emergency-drain` only.** No root was *asserted* as a violation in both runs.
+
+### 3. What this means, stated plainly
+
+On this corpus and configuration, the candidate's detection of a given planted root is close to a
+coin flip conditional on being found at all, and repeat passes are near-independent: a second pass
+almost doubles coverage (11.1 % → 20 %) precisely because it finds different things. Combined with
+the same-file repeat at 05:02Z and the two-campaign comparison at 09:40Z, three independent lines of
+evidence now agree.
+
+Consequences the operator considers established for this build:
+
+1. **A single pass is not a defensible audit unit.** Any claim of the form "the engine found X" from
+   one pass is a sample, not a measurement.
+2. **Union-of-N is the natural unit**, and N should be chosen from a measured curve rather than
+   assumed. The artifact already supports up to 8 trials; the operator can extend the series for
+   ~1.34 USD per pass whenever Codex wants a curve.
+3. **Reported quality must carry the trial count.** A recall figure without N is not interpretable
+   for this engine.
+4. The frozen objective's benchmark and superiority requirements need this handled explicitly, or a
+   comparison against any human or tool baseline will be comparing against noise.
+
+Caveats retained from the artifact: `trial_independence: NOT_ESTABLISHED`,
+`selection_scope: EXPLICIT_RETAINED_INPUTS_NOT_VERIFIED_PREREGISTERED_OR_EXHAUSTIVE`,
+`role_scope: CANDIDATE_ONLY_OTHER_AUDIT_ROLES_NOT_MEASURED`,
+`interpretation: DESCRIPTIVE_RETAINED_CONTROL_LOCATIONS_NOT_VALIDATED_FINDINGS`. Two trials is a
+small N; the labels are operator-authored and non-exhaustive; this is synthetic generator code.
+
+### 4. Requests
+
+1. Record STABILITY's first live measurement with §2. It is the strongest evidence the build has
+   produced about its own capability, and it is not flattering — which is the point.
+2. Consider whether the roadmap should now carry an explicit **N-pass policy** for any quality claim
+   (`V3-BENCHMARK-001`, `V3-CERTIFICATE-001`, and the objective's superiority verdict).
+3. A cohort of 2 gives only `STABLE`/`SINGLE_RUN`/`NEVER`. If Codex wants graded frequencies the
+   operator will run further passes on request; 4 trials would cost ~5.4 USD and give quartile
+   resolution.
+
+Artifacts: `…/development-audits/manifest-005k-deepseek-pass{2,3}-20260909/`,
+`…/measure-controls-005k-pass{2,3}-20260909/`,
+`…/stability-005k-singlepass-20260909/stability.json` (sha `6c15f2a9…`), and the mixed-cohort
+run `…/stability-005k-samecorpus-20260909/` (sha `c908d048…`).
+
 ## 2026-09-09T09:40Z — **`V3-CONTROLMEASURE-001` verified at $0. THE BUILD HAS ITS FIRST REAL QUALITY NUMBERS.** On the 19-file / 4,952-line corpus with 45 planted roots, one deepseek pass **locates 6/45 (13.3 %)** and **asserts a violation at 3/45 (6.7 %)**; structural precision 16/171. Two independent campaigns over the same corpus locate **13/45 (28.9 %) in union**, sharing only 3. Category agreement with the labels is **0 of 8**, which is why every prior official score read zero.
 
 Timestamp from the clock. No provider call since 05:02Z; all three measurements below are
