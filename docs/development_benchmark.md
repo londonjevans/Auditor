@@ -417,6 +417,14 @@ Also select `--endpoint-snapshot`, the same `--cost-ledger`, `--secrets-env-file
 Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
 These interface details are not a selected paid command or authorization to inspect private files.
 
+The metadata input accepts the complete discovery candidate file emitted by `models discover`,
+as well as the existing discovery payload and endpoint snapshot formats. No manual field extraction
+is needed. The complete file stays byte-bound under the existing 2 MB metadata limit, including
+its validated provenance and model-level reasoning facts. An endpoint-only snapshot still needs
+enough reasoning evidence of its own; accepting the wrapper does not relax that requirement.
+Serialized provenance is not execution authority, and this compatibility does not add cumulative
+history scoring or change original model, route, request, cost or first-attempt measurements.
+
 Only sources without a retained `OBSERVED` response are requested. Every request still carries
 the entire original source context and exactly the original model/route, request body, token
 allowance, estimated-cost policy and deadlines. There are no configuration overrides or

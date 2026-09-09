@@ -38,7 +38,10 @@ from mmaudit.models.development_judgment import validate_development_accounting_
 from mmaudit.models.development_review import DevelopmentReviewDiagnostic, DevelopmentReviewMetadata
 from mmaudit.models.development_routing import DevelopmentRoutingEvidence, DevelopmentRoutingFailure
 from mmaudit.models.development_transport import review_development_corpus_shard
-from mmaudit.models.discovery import OpenRouterModelDiscoveryPayload
+from mmaudit.models.discovery import (
+    OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryPayload,
+)
 from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus, CostLedgerSnapshot
@@ -143,7 +146,11 @@ def require_development_corpus_resume_inputs(inputs: DevelopmentCorpusResumeInpu
         or (
             inputs.metadata is not None
             and type(inputs.metadata)
-            not in {OpenRouterEndpointSnapshotEvidence, OpenRouterModelDiscoveryPayload}
+            not in {
+                OpenRouterEndpointSnapshotEvidence,
+                OpenRouterModelDiscoveryPayload,
+                OpenRouterModelDiscoveryEvidence,
+            }
         )
     ):
         raise DevelopmentCorpusResumeError("continuation input selection is invalid")

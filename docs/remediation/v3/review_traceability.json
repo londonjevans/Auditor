@@ -4,17 +4,17 @@
   "current_engineering_state": {
     "schema_version": "1.0",
     "status": "NONAUTHORIZING_COORDINATION",
-    "updated_at": "2026-09-09T05:08:31Z",
+    "updated_at": "2026-09-09T06:03:18Z",
     "current_ticket": null,
     "current_ticket_status": null,
-    "last_completed_ticket": "V3-CORPUSRESUME-001",
+    "last_completed_ticket": "V3-RESUMEMETA-001",
     "last_partial_ticket": "V3-DEVTRIAL-001",
     "next_ticket": "V3-DEVTRIAL-001",
     "unfinished_ticket_count": 42,
-    "queue_statuses_sha256": "355033a127efae9cb1bb02bf6a8905e2080675c729ce5ddcb195c5f647fddd57",
+    "queue_statuses_sha256": "79b53ba28b89c71d00566bc2bf6c111eba0280558723c2d8d39eb0963c49132f",
     "artifact_sha256s": {
       "config/models.selection-plan.json": "4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695",
-      "docs/remediation/v3/autonomy_gate_inventory.json": "7bec275862f92dbbce164fa122f69e62d7eb7e84af7363bcfe166ad94d332ebc",
+      "docs/remediation/v3/autonomy_gate_inventory.json": "92fd939552cc1b88307c0cde74056c66375316104be6dd5dedbd2c8fdc6399a2",
       "docs/remediation/v3/product_completion_goal.txt": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
       "schemas/autonomy_gate_inventory.schema.json": "22cf3095f7def27435cc1c6682a27762f6c2777dd9265371d9cb11f5dff5ed60",
       "schemas/candidate_selection_plan.schema.json": "001fa29df0ccd261fd7b2513cc322109a362498df027597c97d245c898439ba3",
@@ -22,9 +22,9 @@
       "schemas/managed_provisioning_state.schema.json": "dcbd42f3010fcf5b870355bd2dbecec46fbd9e45b869880f0b2229ce52375be0"
     },
     "inventory": {
-      "inventory_sha256": "f4b180cb0d3e4e2107b41a45c33138b0f9358f132cb94a9fbbb453b72908a458",
+      "inventory_sha256": "212c20410232fcd508972d84e4f1006663d3dd2d31cccf01f1388207619fe524",
       "source_discovery_semantics_sha256": "9409723a1077b9d5d5f32d08ea95120dc23f9d5b2ae7d8ba6ee8579fc79c652a",
-      "source_universe_sha256": "628f4e121762c9cc53615b90762d8e87b20b1a0f422b7597cd396b130950c9bc",
+      "source_universe_sha256": "06077b09046f2422298e55f932a5cd0bd81b049ba3f5cdbfc20139d8848b4566",
       "source_count": 4250,
       "source_occurrence_count": 4253,
       "gate_source_count": 4198,
@@ -34,10 +34,10 @@
       "completion_entrypoint_parameter_count": 355
     },
     "operator": {
-      "raw_sha256": "0d9d1a79817596b231e93c27de82e0842fd6d0933961833802144694082c7089",
-      "byte_count": 307041,
-      "line_count": 5082,
-      "latest_entry_timestamp": "2026-09-09T05:02Z",
+      "raw_sha256": "30f17e0e5f42709f57135acabc5dc5df13ad15ad8c5ce357bced0055b2efc89c",
+      "byte_count": 308466,
+      "line_count": 5103,
+      "latest_entry_timestamp": "2026-09-09T05:43Z",
       "reported_ledger_entries": 57,
       "reported_ledger_used_usd": "0.68118684",
       "completed_real_audits": 0,

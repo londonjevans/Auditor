@@ -43,10 +43,13 @@ def no_external_execution(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", forbidden)
 
 
-def cli_case(tmp_path, *, mode="original", claims=1):
+def cli_case(tmp_path, *, mode="original", claims=1, endpoint_snapshot=None):
     case = asyncio.run(
         execution_case(
-            tmp_path, claims=claims, source_files=paired_sources() if mode == "score" else None
+            tmp_path,
+            claims=claims,
+            source_files=paired_sources() if mode == "score" else None,
+            endpoint_snapshot=endpoint_snapshot,
         )
     )
     metadata = tmp_path / "metadata.json"

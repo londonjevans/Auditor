@@ -68,6 +68,7 @@ async def execution_case(
     maximum_run_seconds=600,
     source_files=None,
     policy=None,
+    endpoint_snapshot=None,
 ):
     policy = policy or selected_policy(
         carry=carry, total="250" if count == 64 else "20", per_attempt="4" if count == 64 else "1"
@@ -76,6 +77,7 @@ async def execution_case(
         source_files=selected_sources(count) if source_files is None else source_files,
         policy=policy,
         maximum_run_seconds=maximum_run_seconds,
+        **({"endpoint_snapshot": endpoint_snapshot} if endpoint_snapshot is not None else {}),
     )
     ledger = AtomicCostLedger.initialize(
         tmp_path / "synthetic-ledger.json", cap_usd=policy.total_budget_usd

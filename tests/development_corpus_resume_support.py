@@ -22,9 +22,13 @@ from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from tests.development_corpus_judgment_support import pure_candidate
 
 
-def resume_case(*, count=4, observed_count=2, claims=1, policy=None):
+def resume_case(*, count=4, observed_count=2, claims=1, policy=None, endpoint_snapshot=None):
     prepared, original = pure_candidate(
-        count=count, observed_count=observed_count, claims=claims, policy=policy
+        count=count,
+        observed_count=observed_count,
+        claims=claims,
+        policy=policy,
+        endpoint_snapshot=endpoint_snapshot,
     )
     material = DevelopmentCorpusMaterial(
         manifest=prepared.plan.manifest,

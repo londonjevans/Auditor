@@ -64,6 +64,7 @@ def local_controls(tmp_path: Path) -> tuple[AtomicCostLedger, OperatorSecrets]:
 
 def discovery_review_case(
     *,
+    model_id: str | None = None,
     endpoint_efforts: tuple[ReasoningEffort, ...] | None = None,
     model_efforts: tuple[ReasoningEffort, ...] | None = ("low", "high", "max"),
     model_parameters: tuple[str, ...] | None = None,
@@ -73,6 +74,8 @@ def discovery_review_case(
 
     data = json.loads(FIXTURE.read_text())
     model = json.loads((FIXTURE.parent / "development_reasoning_model.json").read_text())["model"]
+    if model_id is not None:
+        model.update(id=model_id, canonical_slug=model_id + "-20260907")
     if model_parameters is not None:
         model["supported_parameters"] = list(model_parameters)
     endpoint = data["endpoint"]

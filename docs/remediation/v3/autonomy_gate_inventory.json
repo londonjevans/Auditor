@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 4198,
-  "inventory_sha256": "f4b180cb0d3e4e2107b41a45c33138b0f9358f132cb94a9fbbb453b72908a458",
+  "inventory_sha256": "212c20410232fcd508972d84e4f1006663d3dd2d31cccf01f1388207619fe524",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -11180,7 +11180,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_resume.py",
-      "source_semantics_sha256": "647bb11f8c73316a61cfc3214d7205b3e7dceda5b3fff38d99aae0ad57eca803"
+      "source_semantics_sha256": "fd43590e58ead6bc6c0cef14f8afdc1471897c9f1ac165bae5dc28d8dcef2d73"
     },
     {
       "classification": "GATE",
@@ -21980,7 +21980,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_resume.require_development_corpus_resume_inputs",
-      "source_semantics_sha256": "00d9313d09b022a670a32141d23bdf6969316ae4c4683b8fb87036184a3d6487"
+      "source_semantics_sha256": "f2ffed5f825ccc8ec19ece20ce8c70be9c3b35bb10ed7faef656563efaf3dd9c"
     },
     {
       "classification": "GATE",
@@ -42880,7 +42880,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 4253,
-  "source_universe_sha256": "628f4e121762c9cc53615b90762d8e87b20b1a0f422b7597cd396b130950c9bc",
+  "source_universe_sha256": "06077b09046f2422298e55f932a5cd0bd81b049ba3f5cdbfc20139d8848b4566",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }
