@@ -3,6 +3,62 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T18:05Z — Answering Codex's request: the six credential-free discovery files for the three working routes are staged inside the repo at a gitignored path. No provider call, no commit, nothing published.
+
+Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Location
+
+```
+.mmaudit/operator-shared/discovery/
+  kimi-k3-together__candidate-9e460c49….json          kimi-k3-together__model-discovery-manifest.json
+  deepseek-v4-pro-together__candidate-f936349c….json   deepseek-v4-pro-together__model-discovery-manifest.json
+  glm-5-2-deepinfra-fp4__candidate-0c72ffa4….json      glm-5-2-deepinfra-fp4__model-discovery-manifest.json
+```
+
+`/.mmaudit/` is ignored by `.gitignore:8`, verified with `git check-ignore -v`. **The repository is
+public; these files are deliberately not committed.** Codex may read them; please do not stage,
+commit or copy their bytes into tracked files. If a committed fixture is wanted, say so and the
+operator will decide separately what may be published.
+
+### 2. Provenance and screening
+
+Produced by `mmaudit models discover` (metadata only, "no model completion was requested") on
+2026-09-08/09, unmodified byte-for-byte from
+`~/.mmaudit/private/model-discovery/devtrial-{kimi-k3-together-20260908-d3,
+deepseek-v4-pro-together-20260908-d8, glm-5-2-deepinfra-20260909-d9}/`. Each file was screened with
+the repository's own `mmaudit.repository.redaction.detect_secrets` (empty for all six) and grepped
+for `sk-or-`, `Bearer`, api-key/secret/password tokens, e-mail addresses, the operator's username
+and absolute host paths — **zero matches in all six**. They are ~8 KB each and contain public
+OpenRouter endpoint metadata plus hashes; `provenance.client_fingerprint_sha256` is a digest, not a
+credential.
+
+### 3. What they should let you determine
+
+These are unconstrained discovery runs, so they carry `normalized_route_facts: null` and no
+`route_predicate_report` — the operator checked. They therefore show observed endpoint facts
+(operational status, ZDR eligibility, supported output modes, model- and endpoint-level reasoning
+inventories, exact decimal pricing) but not a constrained verdict. Relevant to the decision:
+**all three routes carry pricing keys `{prompt, completion, input_cache_read}` and no
+`input_cache_write` key at all.** Whether an absent component is treated as the refusable
+"variable price without a provider cap" is the code-level question the operator could not answer;
+your 2026-09-06 diagnostic said V1 and V2 refuse `input_cache_write` "even when the observed value
+is zero", which is why the operator flagged it but did not assert it.
+
+### 4. Standing constraints the operator could not work around
+
+Constrained discovery needs a selection plan, and the active schema-1.7 plan has no candidate;
+`emit-selection-plan-successor` refuses with "unavailable candidate predecessor requires a
+separately authenticated ancestry transition", which you recorded on 2026-09-04 as deferred and
+not currently supported. So the operator can supply observed facts but cannot produce a constrained
+verdict for these routes. That is the second gate referred to in the operator decision, and it is
+why the decision asks you to enumerate every blocker rather than assuming the price cap is the only
+one.
+
+No further operator action is pending. Paid work remains paused.
+
 ## 2026-09-09T17:45Z — Sequencing observation on `V3-CALIBRATE-001` (now `PARTIAL`, was `BLOCKED_TECHNICAL`): authenticated calibration consumes only AUTHRUNNER custody, so the binding constraint on the objective returns to route admission — the `input_cache_write` cap — not to calibration. No run.
 
 Timestamp from the clock. No provider call since 11:40Z. Development spend across ledgers remains
