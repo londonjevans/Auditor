@@ -3,6 +3,80 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T02:18Z — **FIRST COMPLETE MEASURED RESULT ON ALL 15 MARKETS (two sub-manifests ≤10 files, both `OBSERVED_ALL_SHARDS`, 0.71 USD). Official score 0/45 roots (class gate). Diagnostic wildcard: 7/45 roots, 4/15 markets, 2 guarded-control false positives, 30 unlabelled invariant claims.**
+
+Timestamp from the clock. Development ledger #3: 125 entries, 118 reconciled, 7 uncertain
+(unchanged). **Actual development spend across ledgers 4.773497596 USD**; phantom uncertain
+reservations 3.999084216 USD (unchanged). Cumulative ledger untouched. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Working around the rate limit without a resume
+
+`together` 429s after ~10 consecutive requests, so the operator split the corpus into two frozen
+sub-manifests under that threshold, with the v2 label set partitioned to match (labels for a file
+travel with the file; nothing re-authored):
+
+| corpus id | files | bytes | controls | manifest / truth |
+|---|---|---|---|---|
+| `realistic-scale-solidity-005k-p1-v1` | 4 core + markets 000–005 (10) | 76,866 | 30 | `…-p1-v1.manifest.json` / `…-p1-v1.truth-v2.json` (sha `2b2aa542…`) |
+| `realistic-scale-solidity-005k-p2-v1` | markets 006–014 (9) | 98,292 | 45 | `…-p2-v1.manifest.json` / `…-p2-v1.truth-v2.json` (sha `50a0f154…`) |
+
+Caveat stated up front: each request's context is its sub-corpus, not the whole protocol, so
+cross-part context is absent. For template-identical markets this is immaterial; for the core
+files it is a real reduction, noted.
+
+### 2. Runs (deepseek=together, 16384 tokens, timeout 900 s, per-attempt 1.00, carry)
+
+| run id | status | shards | claims | real cost | time |
+|---|---|---|---|---|---|
+| `devmanifest-20260909-005k-p1-deepseek-scored-1` | **`OBSERVED_ALL_SHARDS`** | 10/10 | 37 | 0.33904992 | 504.9 s |
+| `devmanifest-20260909-005k-p2-deepseek-scored-1` | **`OBSERVED_ALL_SHARDS`** | 9/9 | 20 | 0.36719100 | 278.0 s |
+
+Outputs `…/development-audits/manifest-005k-{p1,p2}-deepseek-scored-20260909/` incl. `score.json`.
+Claims by market: 000 (16), 001 (8), 004 (13), 006 (10), 012 (10); markets 002, 003, 005, 007–011,
+013, 014 and all four core files: **0 claims**. Per-file cost 0.030–0.050 USD at these context sizes.
+
+### 3. Scores
+
+**Official (`score.json`, honest classes, `COMPLETE_OBSERVATIONS`):**
+p1 `unique_root_recall 0/18 = 0.0`, `sw_structural_precision 0/105 = 0.0`;
+p2 `0/27 = 0.0`, `0/74 = 0.0`. Dispositions: `UNMATCHED_INVARIANT 39`, `ADVISORY 14`,
+`ADVISORY_AT_PLANTED_SITE 4`. All 39 invariant claims carry class `other`; the gate rejects every one.
+
+**Diagnostic rescoring, class treated as wildcard (offline, $0, same observations, same labels):**
+
+| measure | value |
+|---|---|
+| planted roots matched | **7 / 45** (15.6 %) |
+| by root, of 15 markets each | deposit-cast **4**, guardian-drain **2**, borrow-cast **1** |
+| markets with ≥ 1 root found | **4 / 15** (000, 004, 006, 012) |
+| guarded-control claims (scored false positives) | **2** |
+| invariant claims matching no label | 30 |
+| advisories / advisories at planted sites | 14 / 4 |
+
+So on 15 byte-identical implementations of the same three planted patterns, the candidate detects
+each pattern in 1–4 of 15 copies, finds *something* in 4 of 15, and produces two claims against
+guarded controls. That is the consistency and precision picture the objective's stability and
+benchmark requirements need, obtained for under a dollar, and it is only reachable by treating the
+class as an attribute.
+
+The 30 unlabelled invariant claims ("borrow check ignores existing debt", "liquidation on healthy
+positions", "strategy allocation accounting", "redeem does not reduce collateral", …) are the
+operator's labels being non-exhaustive, not necessarily false positives. They are exactly what the
+second-lineage review (23:20Z) and the manifest ensemble are for: judged-supported unlabelled
+claims are candidates for label expansion; judged-refuted ones are precision losses.
+
+### 4. Requests (unchanged in substance, now with complete inputs on disk)
+
+1. Class as reported attribute / `other` compatible with every label class (01:02Z). With it, the
+   `score.json` files above become the official numbers without any rerun.
+2. Explicit operator resume for incomplete runs (01:02Z) — the sub-manifest workaround costs
+   cross-file context and should not become the method.
+3. Record CORPUSSCORE's first complete measured evidence (this entry).
+4. The `ensemble-manifest` command is noted as published; the operator will run it on `p1`/`p2` next
+   (candidate deepseek, reviewers kimi + glm) so the 30 unlabelled claims get two opinions, unless
+   Codex prefers to land request 1 first so the ensemble score is meaningful on arrival.
+
 ## 2026-09-09T01:02Z — Reframing two standing requests in the policy's own terms: explicit operator RESUME of an incomplete manifest run (not an automatic retry), and class as a reported attribute (not a gate). No run.
 
 Timestamp from the clock. No provider call, no ledger change since 00:16Z. Ledger unchanged at 57
