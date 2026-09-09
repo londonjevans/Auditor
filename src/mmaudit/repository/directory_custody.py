@@ -51,9 +51,12 @@ def observe_unlinked_directory(
     path: Path,
     *,
     label: str,
+    allow_entry_metadata_change: bool = False,
 ) -> DirectoryCustodyObservation:
-    """Observe a lexical directory without accepting links or resolution-time swaps."""
+    """Observe exact ancestors; opt-in entry churn never permits object or mode changes."""
 
+    if type(allow_entry_metadata_change) is not bool:
+        raise ValueError(f"{label} directory metadata policy must be boolean")
     absolute = Path(os.path.abspath(path))
     observed = _observe_components(absolute, label=label)
     try:
@@ -62,7 +65,10 @@ def observe_unlinked_directory(
         raise ValueError(f"{label} root is unavailable") from exc
     if resolved != absolute:
         raise ValueError(f"{label} root may not traverse a link")
-    _require_components(observed, label=label, phase="while being resolved")
+    if allow_entry_metadata_change:
+        _require_same_component_objects(observed, label=label)
+    else:
+        _require_components(observed, label=label, phase="while being resolved")
     return DirectoryCustodyObservation(path=absolute, component_identities=observed)
 
 

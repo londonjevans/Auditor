@@ -110,6 +110,7 @@ def _require_file(expected: RegularFileCustodyObservation, *, max_bytes: int) ->
         label="continuation file",
         expected_binding=expected.binding,
         max_bytes=max_bytes,
+        allow_directory_entry_metadata_change=True,
     )
     if (current.root, current.binding, current.identity) != (
         expected.root,
@@ -227,7 +228,9 @@ def read_development_corpus_resume_inputs(
     contents: dict[_InputRole, bytes] = {}
     files = []
     for role, path in selected:
-        directory = observe_unlinked_directory(path.parent, label="continuation input")
+        directory = observe_unlinked_directory(
+            path.parent, label="continuation input", allow_entry_metadata_change=True
+        )
         observed = read_json_evidence(
             evidence_root=path.parent, relative_path=path.name, max_bytes=_input_limit(role)
         )
@@ -237,6 +240,7 @@ def read_development_corpus_resume_inputs(
             expected_binding=observed.binding,
             label="continuation input",
             max_bytes=_input_limit(role),
+            allow_directory_entry_metadata_change=True,
         )
         require_same_unlinked_directory_objects(directory, label="continuation input")
         files.append(DevelopmentCorpusResumeInputFile(role, custody))
@@ -354,6 +358,7 @@ def _write(root: Path, name: str, model: BaseModel) -> RegularFileCustodyObserva
         expected_binding=binding,
         label="continuation output",
         max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_BYTES,
+        allow_directory_entry_metadata_change=True,
     )
 
 

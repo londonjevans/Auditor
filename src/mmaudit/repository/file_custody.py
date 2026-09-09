@@ -12,6 +12,7 @@ from mmaudit.release_io import DEFAULT_MAX_EVIDENCE_BYTES, read_file_evidence
 from mmaudit.repository.directory_custody import (
     DirectoryCustodyObservation,
     observe_unlinked_directory,
+    require_same_unlinked_directory_objects,
     require_unchanged_unlinked_directory,
 )
 
@@ -35,9 +36,12 @@ def observe_regular_file_custody(
     label: str,
     expected_binding: ManifestFileBinding | None = None,
     max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+    allow_directory_entry_metadata_change: bool = False,
 ) -> RegularFileCustodyObservation:
-    """Observe stable bytes and their exact unlinked path authority."""
+    """Keep full file metadata and bytes; explicit directory-entry churn keeps all objects/modes."""
 
+    if type(allow_directory_entry_metadata_change) is not bool:
+        raise ValueError(f"{label} directory metadata policy must be boolean")
     absolute_root = Path(os.path.abspath(root))
     first = read_file_evidence(
         evidence_root=absolute_root,
@@ -49,7 +53,11 @@ def observe_regular_file_custody(
 
     relative = PurePosixPath(first.binding.path)
     parent_path = absolute_root.joinpath(*relative.parent.parts)
-    parent = observe_unlinked_directory(parent_path, label=f"{label} parent")
+    parent = observe_unlinked_directory(
+        parent_path,
+        label=f"{label} parent",
+        allow_entry_metadata_change=allow_directory_entry_metadata_change,
+    )
     leaf = parent.path / relative.name
     before = _observe_regular_file_identity(leaf, label=label)
     second = read_file_evidence(
@@ -58,7 +66,10 @@ def observe_regular_file_custody(
         max_bytes=max_bytes,
     )
     after = _observe_regular_file_identity(leaf, label=label)
-    require_unchanged_unlinked_directory(parent, label=f"{label} parent")
+    if allow_directory_entry_metadata_change:
+        require_same_unlinked_directory_objects(parent, label=f"{label} parent")
+    else:
+        require_unchanged_unlinked_directory(parent, label=f"{label} parent")
     if first != second or before != after:
         raise ValueError(f"{label} changed while its custody was established")
     return RegularFileCustodyObservation(

@@ -432,8 +432,18 @@ Preflight needs headroom only for the unresolved requests, after all existing li
 Cancellation and missing responses retain bounded durable accounting, never invented observations.
 Every selected evidence/metadata file and every directory ancestor remains under custody through
 dispatch and finalization; replacing a file or directory with identical bytes is still refused.
+The continuation explicitly permits unrelated directory-entry metadata to change during a file
+read, while requiring the same complete ancestor objects/modes and exact file inode, metadata
+and bytes. The shared observation adapters retain strict metadata checks by default for all
+other consumers. Local negative controls still reject changed files, modes, directories and links.
 Separate private `prior-history.json`, `plan.json`, per-shard records, `attempt.json` and
 `result.json` use a 64 MB bound without widening older evidence consumers.
+Local execution covers eight explicit stages, retaining up to72accounted requests across the
+original attempt, seven failed continuations and a final64-source/1024-claim completion; an
+unresolved history also refuses a ninth stage. Reader and private-writer boundary tests accept
+exactly64000000bytes and refuse one more byte. These are structural local controls, not a
+claim that every source was correctly audited or that a historical transient failure's cause
+can be reconstructed from missing diagnostics.
 
 The summary is `CUMULATIVE_RESPONSES_NOT_VALIDATED_ANALYSIS`. It separately reports first-attempt
 and cumulative response scope, available claims, all recorded costs and summed run durations;

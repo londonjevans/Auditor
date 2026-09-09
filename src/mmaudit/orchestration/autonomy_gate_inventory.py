@@ -3449,6 +3449,9 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         run_development_corpus_judgment,
     )
     from mmaudit.orchestration.development_corpus_resume import (
+        _require_file as require_continuation_file_objects,
+    )
+    from mmaudit.orchestration.development_corpus_resume import (
         read_development_corpus_resume_inputs,
         require_development_corpus_resume_inputs,
         run_development_corpus_resume,
@@ -3725,6 +3728,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-resume-input-custody",
             require_development_corpus_resume_inputs,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-stable-file-objects",
+            require_continuation_file_objects,
             "gate-release-evidence-pipeline",
         ),
         _explicit_anchor(
