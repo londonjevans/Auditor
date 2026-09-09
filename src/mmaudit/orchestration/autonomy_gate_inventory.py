@@ -66,14 +66,14 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "171c913ab6f3e5c682b01dd51e724b6f736351a2f864ba3fbd4bb3f5a7a2b050"
+    "47d8c5ac52fd558547d5e19529aab817dd4a05d46efdbf77f8f5637a9012ab14"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
+    "6c5916b9bf341e7d45ce39e48718ad887ed29bc9ffbabf26e53177f561a38c13"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "ce5ccb53dd6f24207ee40a60970ef716e39fe2fdae2415b24bebf68a0e4a8bbd"
+    "e620923d264b3c9da491c1e4872eb87bca17e10c289f176c69720361dd166432"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -2982,6 +2982,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "orchestration/context_manifest.py": "gate-full-quality-analysis",
     "orchestration/cost_ledger.py": "gate-cost-ledger-provisioning",
     "orchestration/development_corpus_repeats.py": "gate-release-evidence-pipeline",
+    "orchestration/development_corpus_stability.py": "gate-release-evidence-pipeline",
     "orchestration/learning.py": "gate-managed-output-provisioning",
     "orchestration/manifest.py": "gate-release-evidence-pipeline",
     "orchestration/managed_host_tools.py": "gate-managed-toolchain-bundle",
@@ -3507,6 +3508,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_corpus_stability import (
         measure_development_corpus_stability_files,
         write_development_corpus_stability,
+        write_development_stability_report,
     )
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
@@ -3533,6 +3535,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         write_composed_json_evidence,
     )
     from mmaudit.reporting.client import _finding_detail
+    from mmaudit.reporting.development_stability import render_development_stability_report
     from mmaudit.reporting.markdown import _status_qualification
     from mmaudit.repository.development_corpus import load_development_corpus
     from mmaudit.repository.directory_custody import prepare_owned_empty_directory
@@ -3897,6 +3900,16 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-stability-cli",
             measure_development_stability_command,
             "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-report-renderer",
+            render_development_stability_report,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-stability-report-writer",
+            write_development_stability_report,
+            "gate-release-evidence-pipeline",
         ),
         _explicit_anchor(
             "development-corpus-repeats-cli",

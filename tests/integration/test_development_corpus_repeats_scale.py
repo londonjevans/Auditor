@@ -143,6 +143,15 @@ def test_actual_eight_by_64_repeats_retain_all_claims_scope_and_liabilities(
             observed.release_eligible,
         )
     )
+    report_bytes = (output / "stability.md").read_bytes()
+    assert 0 < len(report_bytes) <= 4_000_000
+    report = report_bytes.decode()
+    assert report.startswith("# Candidate variance report — not an audit\n")
+    assert observed.observation_sha256 in report and prepared.plan.plan_sha256 in report
+    assert "Planned trials: 8" in report and "Selected requests: 512" in report
+    assert "Role measured: CANDIDATE. Other audit roles: NOT MEASURED." in report
+    assert "findings_validated=false; audit_complete=false" in report
+    assert SYNTHETIC_CREDENTIAL not in report
     if kind == "missing_last":
         assert observed.missing_result_trial_indexes == (7,)
         assert observed.trials[-1].observation is None
@@ -151,6 +160,10 @@ def test_actual_eight_by_64_repeats_retain_all_claims_scope_and_liabilities(
         assert len(observed.missing_runtime_request_ids) == 64
         assert observed.measurement_scope == "MISSING_PLANNED_TRIAL_RESULTS"
         assert not (output / "stability.json").exists()
+        assert "## Measurement unavailable" in report
+        assert "| 8 | `MISSING_RESULT` | 64 | 0 |" in report
+        assert "missing accounting: 64; missing runtime: 64" in report
+        assert "## Pairwise overlap" not in report
         return
     assert observed.measurement_scope == "ALL_PREDECLARED_TRIAL_RESULTS_RETAINED"
     measured = read_development_corpus_stability((output / "stability.json").read_bytes())
@@ -162,6 +175,10 @@ def test_actual_eight_by_64_repeats_retain_all_claims_scope_and_liabilities(
     assert measured.uncertain_accounted_cost_usd == observed.uncertain_accounted_cost_usd
     assert measured.trial_independence == measured.root_independence == "NOT_ESTABLISHED"
     assert not measured.audit_complete and not measured.qualification_eligible
+    assert measured.stability_sha256 in report
+    assert sum(line.startswith("| `") for line in report.splitlines()) == 1024
+    assert all(f"| `{c.control_id}` |" in report for c in measured.combined.controls)
+    assert "pairs: 28" in report and "## Measurement unavailable" not in report
     if kind == "complete":
         assert measured.combined.union_assertion_coverage.value == 1
         assert measured.combined.pooled_per_trial_assertion_precision.denominator == 81920
@@ -173,3 +190,6 @@ def test_actual_eight_by_64_repeats_retain_all_claims_scope_and_liabilities(
         assert len(unknown) == 16
         assert all(c.assertion.unobserved_trial_indexes == (7,) for c in unknown)
         assert all(c.assertion.frequency.denominator == 8 for c in unknown)
+        assert "HIGH/CRITICAL OBSERVATION GAPS" in report
+        assert "unavailable (INCOMPLETE\\_SCOPE)" in report
+        assert "unknown actual costs: 1" in report

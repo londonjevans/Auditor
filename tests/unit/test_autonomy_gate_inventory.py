@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4297
-    assert inventory.source_occurrence_count == 4300
+    assert inventory.source_count == 4302
+    assert inventory.source_occurrence_count == 4305
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -66,14 +66,14 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "PIPELINE_INIT_PARAMETER": 29,
         "PIPELINE_RUN_PARAMETER": 16,
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
-        "DIRECT_ENVIRONMENT_INPUT": 549,
+        "DIRECT_ENVIRONMENT_INPUT": 550,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 314,
-        "EXPLICIT_NON_FIELD_GATE": 2340,
+        "AUDITED_MODULE_UNIVERSE": 315,
+        "EXPLICIT_NON_FIELD_GATE": 2343,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4245,
+        SourceCoverageClassification.GATE: 4250,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -105,7 +105,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1824
+        == 1825
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -1617,6 +1617,19 @@ class _InnocuousNestedConfig(StrictModel):
         ("explicit:development-corpus-stability-writer", "gate-release-evidence-pipeline"),
         ("explicit:development-corpus-stability-offline-measurement", "gate-client-audit-scope"),
         ("explicit:development-corpus-stability-cli", "gate-client-audit-scope"),
+        ("audited-module:reporting.development_stability", "gate-runtime-package-integrity"),
+        ("explicit:development-corpus-stability-report-renderer", "gate-client-audit-scope"),
+        ("explicit:development-corpus-stability-report-writer", "gate-release-evidence-pipeline"),
+        (
+            "direct-env-ast:orchestration.development_corpus_stability:"
+            "write_development_stability_report.require_context:host-identity:1",
+            "gate-managed-toolchain-bundle",
+        ),
+        (
+            "filesystem-input:orchestration.development_corpus_stability:"
+            "write_development_stability_report.require_context:1",
+            "gate-release-evidence-pipeline",
+        ),
     ],
 )
 def test_retained_stability_never_promotes_selected_runs_to_independent_audits(

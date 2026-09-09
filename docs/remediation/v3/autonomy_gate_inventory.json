@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4245,
-  "inventory_sha256": "381202cc5974b8d0211302d917870cd34ad07fe5388869bba7da5b3d23e3c02c",
+  "gate_source_count": 4250,
+  "inventory_sha256": "65be51173bb17348e89db06d21bb0f3d20a1729cf65a06a4c6c5db3e9f7beec0",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -929,6 +929,7 @@
         "explicit:development-corpus-selected-source-loader",
         "explicit:development-corpus-stability-cli",
         "explicit:development-corpus-stability-offline-measurement",
+        "explicit:development-corpus-stability-report-renderer",
         "explicit:development-corpus-stability-selection-reader",
         "explicit:development-ensemble-frozen-plan",
         "explicit:development-judgment-frozen-plan",
@@ -2833,6 +2834,7 @@
         "direct-env-ast:isolation.hardhat_loopback_relay:hardhatloopbackrelay.__init__:working-directory:1",
         "direct-env-ast:isolation.managed:_verified_bubblewrap_selection:host-platform:1",
         "direct-env-ast:isolation.managed:_verified_bubblewrap_selection:host-platform:2",
+        "direct-env-ast:orchestration.development_corpus_stability:write_development_stability_report.require_context:host-identity:1",
         "direct-env-ast:orchestration.managed_host_tools:_require_directory_identity:host-identity:1",
         "direct-env-ast:orchestration.managed_host_tools:_require_private_file:host-identity:1",
         "direct-env-ast:orchestration.managed_provisioning_runtime:_privateoutputcustody._publish_or_verify_locked:host-identity:1",
@@ -3372,6 +3374,7 @@
         "explicit:development-corpus-resume-original-history",
         "explicit:development-corpus-resume-stable-file-objects",
         "explicit:development-corpus-stability-reader",
+        "explicit:development-corpus-stability-report-writer",
         "explicit:development-corpus-stability-writer",
         "filesystem-input:adversarial_acceptance:_file_sha256:1",
         "filesystem-input:adversarial_acceptance:load_adversarial_acceptance_manifest:1",
@@ -3556,6 +3559,7 @@
         "filesystem-input:orchestration.development_corpus_repeats:_bind_trial:4",
         "filesystem-input:orchestration.development_corpus_repeats:run_development_corpus_repeats:1",
         "filesystem-input:orchestration.development_corpus_repeats:run_development_corpus_repeats:2",
+        "filesystem-input:orchestration.development_corpus_stability:write_development_stability_report.require_context:1",
         "filesystem-input:orchestration.manifest:_build_run_evidence_manifest:1",
         "filesystem-input:orchestration.manifest:_build_run_evidence_manifest:2",
         "filesystem-input:orchestration.manifest:_build_run_evidence_manifest:3",
@@ -4274,6 +4278,7 @@
         "audited-module:reporting.__init__",
         "audited-module:reporting.bundle",
         "audited-module:reporting.client",
+        "audited-module:reporting.development_stability",
         "audited-module:reporting.json_report",
         "audited-module:reporting.markdown",
         "audited-module:reporting.run_authority",
@@ -4657,7 +4662,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4297,
+  "source_count": 4302,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -11110,7 +11115,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "0c4375b94f59cb48d6e7f2b99eb7570056ff2c2e30b96bbc4313e780af5f5e79"
+      "source_semantics_sha256": "112420d894afcc255fb2bf77e42c8283b72e35ddd3b79e79bc17bf9eb8a1fee9"
     },
     {
       "classification": "GATE",
@@ -11272,7 +11277,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_repeats.py",
-      "source_semantics_sha256": "4bc61c497588dfa26edb4616cdc5716ce910c4d1cb9d5dea705337f33f93053c"
+      "source_semantics_sha256": "b15f7a1610edd50710826b8293eeb0c5af542ab4b8e66a9bcb5d4a1e70f93722"
     },
     {
       "classification": "GATE",
@@ -11308,7 +11313,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_stability.py",
-      "source_semantics_sha256": "5204a11a045206ea49d507d15f1b408ef3c00e8e88e8016a3e9b1838d474bb5a"
+      "source_semantics_sha256": "61fbce382f28a446acff6788b992c583adf407b6742fffb5c29c3403e1c21929"
     },
     {
       "classification": "GATE",
@@ -11876,6 +11881,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/reporting/client.py",
       "source_semantics_sha256": "b3128befa65ac9425f20fa2e2adbf135b9af3c132f4cef45c989a356e3aec3b4"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:reporting.development_stability",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/reporting/development_stability.py",
+      "source_semantics_sha256": "2558954a56de77dd61a5c7ed45319b5ff238e89703cb97564d5cc164ec8d2d64"
     },
     {
       "classification": "GATE",
@@ -18962,6 +18976,15 @@
     },
     {
       "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "direct-env-ast:orchestration.development_corpus_stability:write_development_stability_report.require_context:host-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_corpus_stability.py:write_development_stability_report.require_context:host-identity:1",
+      "source_semantics_sha256": "34b5b12aca7d7b8937fc300441737eb9ec2c6d13d5f252dd8ccc375c8c371bff"
+    },
+    {
+      "classification": "GATE",
       "logical_gate_id": "gate-trusted-time-independent-replay",
       "source_id": "direct-env-ast:orchestration.learning:build_terminal_learning_capture:wall-clock:1",
       "source_kind": "DIRECT_ENVIRONMENT_INPUT",
@@ -22279,7 +22302,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_repeats.run_development_corpus_repeats",
-      "source_semantics_sha256": "8d91c6f2f86c9fd9be8f7fd9a7d6ad8b2a74b7634a763ca4917b690ba2b7fed4"
+      "source_semantics_sha256": "9d43d6fcba6a002c61c54b453601ea28f7e5e0beccd52a370a9695ec9d92749b"
     },
     {
       "classification": "GATE",
@@ -22414,7 +22437,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_stability.measure_development_corpus_stability_files",
-      "source_semantics_sha256": "24001c91528c1116f1499b9e815cc83ff1b0e75be360f19a3c211cce328755e4"
+      "source_semantics_sha256": "c92acb949be0f1dfcbc9b969c02249dd1fe6587d38fdea4868807f4690a54cc6"
     },
     {
       "classification": "GATE",
@@ -22424,6 +22447,24 @@
       "source_occurrence_count": 1,
       "source_path": "mmaudit.benchmark.development_corpus_stability.read_development_corpus_stability",
       "source_semantics_sha256": "e285a10176454238ac3caa41d3911934c2d62dc221b2a8d8807ae8d08eb037dc"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-stability-report-renderer",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.reporting.development_stability.render_development_stability_report",
+      "source_semantics_sha256": "b2be21c3348e208f6db7a0e8896e2465b4b5bb1b4225bc2bd55ced64c789055c"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:development-corpus-stability-report-writer",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_corpus_stability.write_development_stability_report",
+      "source_semantics_sha256": "8cccd73a05c46fdd929509f2325c437bcc863f8353e047d3da8c5c5bcae6c012"
     },
     {
       "classification": "GATE",
@@ -30326,6 +30367,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_repeats.py:run_development_corpus_repeats:metadata-observation:2",
       "source_semantics_sha256": "b46ca01b7373b1aee9f81b7e348f836d2f646f76c2c998e75dd2e232b8cb3818"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "filesystem-input:orchestration.development_corpus_stability:write_development_stability_report.require_context:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_corpus_stability.py:write_development_stability_report.require_context:metadata-observation:1",
+      "source_semantics_sha256": "1e3ce54a3585999ab4fd431bb9adbbc3e825bc634f3c40fdfc159367cfd60f2a"
     },
     {
       "classification": "GATE",
@@ -43333,24 +43383,24 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "a01e43a675f43a87f7ddaed98e14149799c7c1d425ba92c1fc81578b38c7d74c",
+  "source_discovery_semantics_sha256": "fe6a7724299a085e9d919c9a504d16cfaa2124bbfa3d73b97535b5f7b9958bab",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 314,
+    "AUDITED_MODULE_UNIVERSE": 315,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
     "CLI_RUN_PARAMETER": 53,
     "COMPLETION_ENTRYPOINT_PARAMETER": 355,
-    "DIRECT_ENVIRONMENT_INPUT": 549,
+    "DIRECT_ENVIRONMENT_INPUT": 550,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2340,
+    "EXPLICIT_NON_FIELD_GATE": 2343,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4300,
-  "source_universe_sha256": "6b5d6229d7dab2a311516e2f75c1a661e8846af0019a55cdfc237f703ce006b0",
+  "source_occurrence_count": 4305,
+  "source_universe_sha256": "308055fe81dfc01df37363f6b0e0adaf187014bbe24a1723b9341db58723f6a7",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

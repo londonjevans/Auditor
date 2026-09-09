@@ -82,6 +82,22 @@ def test_eight_full_source_trials_keep_maximum_scope_weights_cohorts_and_liabili
         assert len(raw) == binding.size and hashlib.sha256(raw).hexdigest() == binding.sha256
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    report_file = output / "stability.md"
+    report_bytes = report_file.read_bytes()
+    assert stat.S_IMODE(report_file.stat().st_mode) == 0o600
+    assert 0 < len(report_bytes) <= 4_000_000
+    report = report_bytes.decode()
+    assert result.stability_sha256 in report and "pairs: 28" in report
+    assert "Role measured: CANDIDATE. Other audit roles: NOT MEASURED." in report
+    assert "findings_validated=false; audit_complete=false" in report
+    assert sum(line.startswith("| `") for line in report.splitlines()) == (
+        1024 * (8 if kind == "mixed" else 1)
+    )
+    for index, cohort in enumerate(result.cohorts, 1):
+        section = report.split(f"## Cohort {index}:", 1)[1].split("## Cohort", 1)[0]
+        assert all(f"| `{control.control_id}` |" in section for control in cohort.controls)
+    if kind == "mixed":
+        assert report.count("> NO REPEATS:") == 8 and "MIXED COHORTS" in report
     assert len(result.trials) == 8 and len(result.pairs) == 28
     assert len(result.combined.controls) == 1024
     assert result.combined.trial_indexes == tuple(range(8))
@@ -102,6 +118,10 @@ def test_eight_full_source_trials_keep_maximum_scope_weights_cohorts_and_liabili
         )
     )
     if kind == "cumulative":
+        assert "CONTINUATION CHAINS" in report
+        assert report.count("| 576 | 568 | 568 | 8 |") == 8
+        assert all(run_id in report for t in result.trials for run_id in t.run_ids)
+        assert "unavailable (INCOMPLETE\\_SCOPE)" in report
         assert result.combined.total_claim_count == 0
         assert all(t.selected_request_count == 576 for t in result.trials)
         assert sum(len(t.unknown_actual_cost_request_ids) for t in result.trials) == 64

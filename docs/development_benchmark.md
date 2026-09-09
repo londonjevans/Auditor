@@ -630,6 +630,23 @@ per-trial unique-root weights over every retained claim's weight; it is not unio
 `STABLE` means present in every selected observation, not reliable on future audits or proof that
 mixed configurations are equivalent. Unknown observations stay in the selected-trial denominator.
 
+The command also writes a private, deterministic `stability.md` candidate-variance report. It
+shows the declared label provenance, complete selected cohort/control/severity frequencies,
+advisory locations separately from invariant assertions, missing observations, retained costs
+and all pairwise overlaps. Ratios with incomplete scope or empty denominators say unavailable;
+single-trial cohorts do not claim repeated-run variance. High/critical intermittent, single-run
+and unobserved controls are surfaced explicitly. Guarded or unmatched claims are not automatically
+false positives. These are candidate observations, not validated findings or qualified recall,
+precision, independent roots/trials, future detection probabilities or a client `AuditReport`.
+Other audit roles remain explicitly unmeasured.
+
+Report output is bounded at 4,000,000 UTF-8 bytes with a `0700` owned directory and fresh `0600`
+file. Source artifacts and exact joins are revalidated before rendering. The unchanged descriptor
+writer captures report custody before releasing its created inode; input/output bytes, identities,
+permissions and ancestors are checked through the consumer's return. Existing JSON limits are
+unchanged. Digests printed in Markdown identify semantic source artifacts, not raw-file checksums
+or externally anchored seals. The report is a recomputable private derivative, not new authority.
+
 Selection input is bounded at 65,536 bytes, total selected file input at 128,000,000 bytes and
 composed result input/output at 192,000,000 bytes. Existing ordinary evidence limits are unchanged.
 Exact input/output file identity, private output permissions and unchanged ancestors are checked
@@ -676,6 +693,13 @@ and retain null quality where scope is missing. If an entire trial result is una
 withholds full-series measurement instead of selecting only successful trials. A derivative write
 failure raises an error while preserving a valid durable series result where possible; the result's
 measurement-scope field describes input availability, not proof that the derivative file exists.
+The producer automatically writes `stability.md` as well. It validates the exact series-to-
+measurement join and retains every predeclared trial and liability. When a whole trial result is
+missing or evidence identities are reused, the report explicitly says measurement unavailable
+instead of reporting a successful-only subset. A report-render/write/custody failure returns a
+nonzero result while preserving safely finalized original JSON and accounting. Cleanup removes
+only an exactly owned report inode when possible; a later failure can leave a private derivative,
+and file existence alone must never be interpreted as successful finalization or qualification.
 Cancellation preserves available child evidence and costs before propagating the original
 interruption. Exact private file identities, bytes, modes and parent objects are checked; shared
 input custody is also checked before each individual child request.

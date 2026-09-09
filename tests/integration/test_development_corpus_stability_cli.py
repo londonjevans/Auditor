@@ -99,10 +99,18 @@ def test_cli_keeps_exact_selected_measurements_and_private_output_without_provid
     artifact = output / "stability.json"
     measured = read_development_corpus_stability(artifact.read_bytes())
     assert measured.measurements == values
-    assert {p.name for p in output.iterdir()} == {"stability.json"}
+    assert {p.name for p in output.iterdir()} == {"stability.json", "stability.md"}
     assert all(path.read_bytes() == content for path, content in old.items())
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    report = output / "stability.md"
+    assert stat.S_IMODE(report.stat().st_mode) == 0o600
+    text = report.read_text()
+    assert text.startswith("# Candidate variance report — not an audit\n")
+    assert measured.stability_sha256 in text
+    assert "Role measured: CANDIDATE. Other audit roles: NOT MEASURED." in text
+    assert "findings_validated=false; audit_complete=false" in text
+    assert "CONTINUATION CHAINS" in text if cumulative else "CONTINUATION CHAINS" not in text
     assert measured.stability_sha256 in result.stdout
     assert "qualified stability remain unproved" in result.stdout
     assert str(selection) not in result.stdout

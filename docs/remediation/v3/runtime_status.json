@@ -4,7 +4,7 @@
   "current_engineering_state": {
     "schema_version": "1.0",
     "status": "NONAUTHORIZING_COORDINATION",
-    "updated_at": "2026-09-09T14:52:47Z",
+    "updated_at": "2026-09-09T15:45:22Z",
     "current_ticket": null,
     "current_ticket_status": null,
     "last_completed_ticket": "V3-CONTROLMEASURE-001",
@@ -14,7 +14,7 @@
     "queue_statuses_sha256": "2318cc96ed6438813735676f695e56f43933d876b9e6104bf81ac72a414e85c3",
     "artifact_sha256s": {
       "config/models.selection-plan.json": "4e7fff76ffb126a1cdf044cdfc889d79def96a29076aa11e3b42c7ef0ff9a695",
-      "docs/remediation/v3/autonomy_gate_inventory.json": "21bbfd2cc6f831f1af8266f58011a33a1c1f2f7986358a14760b2e5a1609dd29",
+      "docs/remediation/v3/autonomy_gate_inventory.json": "c426655dd0ceddba9961b55d80c8700be149f3a04d8a0dade284ff3b819868f9",
       "docs/remediation/v3/product_completion_goal.txt": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
       "schemas/autonomy_gate_inventory.schema.json": "22cf3095f7def27435cc1c6682a27762f6c2777dd9265371d9cb11f5dff5ed60",
       "schemas/candidate_selection_plan.schema.json": "001fa29df0ccd261fd7b2513cc322109a362498df027597c97d245c898439ba3",
@@ -22,12 +22,12 @@
       "schemas/managed_provisioning_state.schema.json": "dcbd42f3010fcf5b870355bd2dbecec46fbd9e45b869880f0b2229ce52375be0"
     },
     "inventory": {
-      "inventory_sha256": "381202cc5974b8d0211302d917870cd34ad07fe5388869bba7da5b3d23e3c02c",
-      "source_discovery_semantics_sha256": "a01e43a675f43a87f7ddaed98e14149799c7c1d425ba92c1fc81578b38c7d74c",
-      "source_universe_sha256": "6b5d6229d7dab2a311516e2f75c1a661e8846af0019a55cdfc237f703ce006b0",
-      "source_count": 4297,
-      "source_occurrence_count": 4300,
-      "gate_source_count": 4245,
+      "inventory_sha256": "65be51173bb17348e89db06d21bb0f3d20a1729cf65a06a4c6c5db3e9f7beec0",
+      "source_discovery_semantics_sha256": "fe6a7724299a085e9d919c9a504d16cfaa2124bbfa3d73b97535b5f7b9958bab",
+      "source_universe_sha256": "308055fe81dfc01df37363f6b0e0adaf187014bbe24a1723b9341db58723f6a7",
+      "source_count": 4302,
+      "source_occurrence_count": 4305,
+      "gate_source_count": 4250,
       "logical_gate_count": 35,
       "unsatisfied_gate_count": 29,
       "current_manual_gate_count": 15,

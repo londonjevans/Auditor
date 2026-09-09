@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,10 +19,16 @@ from mmaudit.benchmark.development_corpus_stability import (
     read_development_corpus_stability,
     read_development_stability_selection,
 )
+from mmaudit.models.development_corpus_repeats import DevelopmentCorpusRepeatsObservation
 from mmaudit.release_io import (
+    _write_file_content,
     read_composed_file_evidence,
     read_file_evidence,
     write_composed_json_evidence,
+)
+from mmaudit.reporting.development_stability import (
+    MAX_DEVELOPMENT_STABILITY_REPORT_BYTES,
+    render_development_stability_report,
 )
 from mmaudit.repository.directory_custody import (
     observe_unlinked_directory,
@@ -70,6 +78,80 @@ def write_development_corpus_stability(
     )
     revalidate_context()
     return result
+
+
+def write_development_stability_report(
+    output_dir: Path,
+    *,
+    stability: DevelopmentCorpusStability | None = None,
+    series: DevelopmentCorpusRepeatsObservation | None = None,
+    revalidate_context: Callable[[], object],
+) -> RegularFileCustodyObservation:
+    """Write one private derivative while retaining exact source and output custody."""
+
+    if (
+        not isinstance(output_dir, Path)
+        or not output_dir.is_absolute()
+        or ".." in output_dir.parts
+        or not callable(revalidate_context)
+    ):
+        raise ValueError("candidate variance report requires a normalized output and context")
+    revalidate_context()
+    directory = observe_unlinked_directory(
+        output_dir, label="candidate variance output", allow_entry_metadata_change=True
+    )
+
+    def require_context() -> None:
+        revalidate_context()
+        require_same_unlinked_directory_objects(directory, label="candidate variance output")
+        metadata = output_dir.stat()
+        if stat.S_IMODE(metadata.st_mode) != 0o700 or metadata.st_uid != os.geteuid():
+            raise ValueError("candidate variance output must remain private and owned")
+        require_same_unlinked_directory_objects(directory, label="candidate variance output")
+
+    require_context()
+    content = render_development_stability_report(stability=stability, series=series).encode()
+    if not content or len(content) > MAX_DEVELOPMENT_STABILITY_REPORT_BYTES:
+        raise ValueError("candidate variance report exceeds its byte bound")
+    require_context()
+    written: RegularFileCustodyObservation | None = None
+
+    def validate_content(observed: bytes) -> None:
+        nonlocal written
+        require_context()
+        if observed != content:
+            raise ValueError("candidate variance report differs from its rendered evidence")
+        # Capture custody while the descriptor-safe writer still owns the created inode.
+        # Its final checks reject replacement during this callback; our checks cover return.
+        written = observe_regular_file_custody(
+            root=output_dir,
+            relative_path="stability.md",
+            label="candidate variance report",
+            max_bytes=MAX_DEVELOPMENT_STABILITY_REPORT_BYTES,
+            allow_directory_entry_metadata_change=True,
+        )
+        require_context()
+
+    binding = _write_file_content(
+        evidence_root=output_dir,
+        relative_path="stability.md",
+        content=content,
+        max_bytes=MAX_DEVELOPMENT_STABILITY_REPORT_BYTES,
+        validate_content=validate_content,
+        require_private_parent=True,
+    )
+    require_context()
+    if written is None or written.binding != binding or stat.S_IMODE(written.identity[2]) != 0o600:
+        raise ValueError("candidate variance report must remain private")
+    require_context()
+    require_regular_file_custody_unchanged(
+        written,
+        label="candidate variance report",
+        max_bytes=MAX_DEVELOPMENT_STABILITY_REPORT_BYTES,
+        allow_directory_entry_metadata_change=True,
+    )
+    require_context()
+    return written
 
 
 def measure_development_corpus_stability_files(
@@ -161,13 +243,28 @@ def measure_development_corpus_stability_files(
     written = write_development_corpus_stability(
         output_dir, result, revalidate_context=require_context
     )
-    require_context()
+
+    def require_measured_context() -> None:
+        require_context()
+        require_regular_file_custody_unchanged(
+            written,
+            label="stability output",
+            max_bytes=MAX_DEVELOPMENT_STABILITY_BYTES,
+            allow_composed_evidence=True,
+            allow_directory_entry_metadata_change=True,
+        )
+        require_context()
+
+    require_measured_context()
+    report = write_development_stability_report(
+        output_dir, stability=result, revalidate_context=require_measured_context
+    )
+    require_measured_context()
     require_regular_file_custody_unchanged(
-        written,
-        label="stability output",
-        max_bytes=MAX_DEVELOPMENT_STABILITY_BYTES,
-        allow_composed_evidence=True,
+        report,
+        label="candidate variance report",
+        max_bytes=MAX_DEVELOPMENT_STABILITY_REPORT_BYTES,
         allow_directory_entry_metadata_change=True,
     )
-    require_context()
+    require_measured_context()
     return result

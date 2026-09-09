@@ -25,6 +25,7 @@ from mmaudit.benchmark.development_corpus_control_measurement import (
 )
 from mmaudit.benchmark.development_corpus_stability import (
     MAX_DEVELOPMENT_STABILITY_BYTES,
+    DevelopmentCorpusStability,
     measure_development_corpus_stability,
 )
 from mmaudit.models.development_audit import development_ledger_request_id
@@ -59,6 +60,9 @@ from mmaudit.orchestration.development_corpus import (
 )
 from mmaudit.orchestration.development_corpus import (
     _rebuild as rebuild_corpus,
+)
+from mmaudit.orchestration.development_corpus_stability import (
+    write_development_stability_report,
 )
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import (
@@ -515,6 +519,7 @@ async def run_development_corpus_repeats(
         require_outputs()
         retain([_write(output_dir, "result.json", result, MAX_DEVELOPMENT_CORPUS_REPEATS_BYTES)])
         require_outputs()
+        stability: DevelopmentCorpusStability | None = None
         if result.measurement_scope == "ALL_PREDECLARED_TRIAL_RESULTS_RETAINED":
             measured = tuple(
                 measure_development_corpus_controls(
@@ -531,6 +536,13 @@ async def run_development_corpus_repeats(
                 [_write(output_dir, "stability.json", stability, MAX_DEVELOPMENT_STABILITY_BYTES)]
             )
             require_outputs()
+        report = write_development_stability_report(
+            output_dir, stability=stability, series=result, revalidate_context=require_outputs
+        )
+        require_outputs()
+        bindings.append(report.binding)
+        owned_files.append(report)
+        require_outputs()
     except BaseException as exc:
         if interruption is not None:
             raise interruption from None
