@@ -1,0 +1,23 @@
+{
+  "fixture_scope": "Synthetic capacity-only quote, not a real provider price or affordability claim. Prices are one tenth of development_cost_case.json solely to exercise maximum data width under unchanged budget controls; the original quote has a separate over-budget refusal regression.",
+  "endpoint": {
+    "tag": "synthetic-provider",
+    "provider_name": "Synthetic Capacity-Only Provider",
+    "status": 0,
+    "context_length": 300000,
+    "max_prompt_tokens": 280000,
+    "max_completion_tokens": 20000,
+    "supported_parameters": ["max_tokens", "temperature", "response_format", "structured_outputs", "reasoning"],
+    "reasoning": {"supported_efforts": ["high"]},
+    "pricing": {
+      "prompt": "0.0000002",
+      "completion": "0.0000006",
+      "input_cache_read": "0.00000005",
+      "input_cache_write": "0",
+      "request": "0.00001",
+      "web_search": "0.001",
+      "image": "0.001",
+      "overrides": [{"min_prompt_tokens": 200000, "prompt": "0.0000004", "completion": "0.0000012", "input_cache_read": "0.0000001", "input_cache_write": "0"}]
+    }
+  }
+}

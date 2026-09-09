@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import stat
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,7 +43,6 @@ from mmaudit.models.development_corpus_repeats import (
     DevelopmentCorpusRepeatsStop,
     DevelopmentCorpusRepeatTrial,
     PreparedDevelopmentCorpusRepeats,
-    prepare_development_corpus_repeats,
     read_development_corpus_repeats_plan,
     repeat_projection,
 )
@@ -84,6 +84,8 @@ class DevelopmentCorpusRepeatsError(ValueError):
 
 
 def _rebuild(prepared: PreparedDevelopmentCorpusRepeats) -> PreparedDevelopmentCorpusRepeats:
+    """Reconstruct every child once; compare full inputs after normalizing only execution IDs."""
+
     if (
         type(prepared) is not PreparedDevelopmentCorpusRepeats
         or type(prepared.plan) is not DevelopmentCorpusRepeatsPlan
@@ -93,20 +95,24 @@ def _rebuild(prepared: PreparedDevelopmentCorpusRepeats) -> PreparedDevelopmentC
         raise DevelopmentCorpusRepeatsError("candidate repeats require exact prepared trials")
     plan = read_development_corpus_repeats_plan(prepared.plan.model_dump_json().encode())
     trials = tuple(rebuild_corpus(t) for t in prepared.trials)
-    first = trials[0].shards[0]
-    rebuilt = prepare_development_corpus_repeats(
-        policy=plan.policy,
-        endpoint_snapshot=first.discovery or first.endpoint_snapshot,
-        manifest=plan.trials[0].manifest,
-        source_files=first.source_files,
-        run_id=plan.run_id,
-        trial_count=plan.trial_count,
-        truth_content=plan.benchmark.truth_file_content.encode(),
-        expected_truth_sha256=plan.benchmark.truth_file_sha256,
-        maximum_completion_tokens=first.estimate.maximum_completion_tokens,
-        maximum_trial_seconds=plan.trials[0].maximum_run_seconds,
-        maximum_run_seconds=plan.maximum_run_seconds,
-    )
+    if tuple(t.plan for t in trials) != plan.trials:
+        raise DevelopmentCorpusRepeatsError("candidate repeat children differ from the frozen plan")
+    for trial in trials[1:]:
+        for shard, first in zip(trial.shards, trials[0].shards, strict=True):
+            # Only trusted reconstructed values are normalized, and only for comparison.
+            # Full dataclass equality retains raw inputs and any future fields, not just hashes.
+            normalized = replace(
+                shard,
+                run_id=first.run_id,
+                estimate=shard.estimate.model_copy(
+                    update={"request_id": first.estimate.request_id}
+                ),
+            )
+            if normalized != first:
+                raise DevelopmentCorpusRepeatsError(
+                    "candidate repeat trial changes its fixed source, metadata or requests"
+                )
+    rebuilt = PreparedDevelopmentCorpusRepeats(plan, trials)
     if rebuilt != prepared:
         raise DevelopmentCorpusRepeatsError("candidate repeat source, labels or requests changed")
     return rebuilt
@@ -180,6 +186,19 @@ def _preflight(
     for observation in observations:
         if observation is not None:
             validate_development_candidate_accounting(observation, state)
+
+
+def require_development_corpus_repeats_budget(
+    prepared: PreparedDevelopmentCorpusRepeats, ledger: AtomicCostLedger
+) -> None:
+    """Read-only whole-series preflight before credentials; execution rechecks before each trial."""
+
+    if (
+        type(prepared) is not PreparedDevelopmentCorpusRepeats
+        or type(ledger) is not AtomicCostLedger
+    ):
+        raise DevelopmentCorpusRepeatsError("candidate repeats require exact budget handles")
+    _preflight(prepared, ledger, 0, [None] * prepared.plan.trial_count)
 
 
 def _label_binding(
@@ -346,7 +365,7 @@ async def run_development_corpus_repeats(
             "development credential overlaps retained repeat inputs"
         )
     observations: list[DevelopmentCorpusObservation | None] = [None] * prepared.plan.trial_count
-    _preflight(prepared, ledger, 0, observations)
+    require_development_corpus_repeats_budget(prepared, ledger)
     custody = prepare_owned_empty_directory(output_dir, label="candidate repeat output")
     bindings = [
         _write(output_dir, "plan.json", prepared.plan, MAX_DEVELOPMENT_CORPUS_REPEATS_PLAN_BYTES),

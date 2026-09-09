@@ -685,8 +685,58 @@ covers execution and child recovery, excluding final series measurement; bounded
 outlast the active deadline. Plan/result readers have independent 16 MB / 192 MB ceilings, without
 changing existing child or retained-stability limits. Local predeclaration is not independently
 registered/exhaustive campaign selection, external truth, root independence or a predictive law.
-CLI handoff, maximum-width producer acceptance and full actual-audit/per-role/client-report
-integration remain open under `V3-STABILITY-001`; no qualification or release authority changes.
+Local producer/CLI tests execute eight 64-source/1024-claim trials through the real ledger,
+persistence and automatic measurement paths, using only synthetic mock HTTP. Complete scope
+retains all 512 requests and 8192 claims; a failed final response retains its uncertain charge and
+null incomplete quality, while a missing whole final trial withholds full-series measurement.
+These are source/claim-count capacity tests, not every possible maximum-byte combination.
+Preparation and exact revalidation remain expensive at this size. Full actual-audit/per-role/
+client-report integration remains open under `V3-STABILITY-001`; no qualification or release
+authority changes.
+
+The maximum producer regression uses a separately labelled capacity-only synthetic pricing
+fixture. The original fixture's eight-by-64 estimate is USD 1706.079232 and remains refused by
+the unchanged USD 250 limit; the positive capacity profile uses one-tenth those synthetic rates.
+This separates data-handling capacity from price admission. It does not establish real-provider
+pricing, affordability, independent semantic roots or compliance with a provider-enforced budget.
+
+`mmaudit development repeat-manifest --help` describes the explicit CLI handoff. The command
+requires `--trial-count` (2–8), the selected source manifest/root and endpoint metadata, both
+`--truth-manifest` and `--truth-sha256`, an existing shared ledger, run/output identities and
+cost allowance. The existing `--accept-estimate-risk` and `--allow-code-egress` flags are required;
+this interface description does not select or authorize a paid run. Complete discovery evidence,
+discovery payload and endpoint snapshot inputs use the same existing metadata rules.
+
+`--maximum-trial-seconds` bounds each child and `--maximum-run-seconds` bounds the entire active
+series; each defaults to 600 and permits 1–1800 seconds. Optional `--request-timeout-seconds`
+also permits 1–1800 seconds and otherwise preserves the 180-second request default. Neither
+request nor child limits extend the parent deadline. `--carry-uncertain-estimates` retains the
+existing explicit estimated-risk policy; it neither erases unknown charges nor guarantees prices.
+All trials must fit the shared estimated allowance before credential loading and before dispatch.
+Size that allowance against the frozen maximum-output estimate and safety multiplier, not an
+extrapolation from past bills. Previously observed per-request costs are not future price or
+completion-length bounds and do not lower the preflight reservation.
+
+The input adapter freezes only selected local files and rechecks their bytes, file identities,
+modes and parent objects through credential loading and CLI handoff. The runner then uses its
+owned frozen copies; it does not rediscover files or reread changing original source for later
+trials. Output must remain separate from the source root and selected control files. Labels stay
+out of requests. Full original observations, missing trial slots and liabilities remain in the
+private result files; stdout contains only a small `development_corpus_repeats_cli_summary`, not
+a complete observation artifact. Its digest identifies `result.json`; counts, input availability
+and recorded costs grant no audit, independence or qualification authority.
+
+Each handoff reconstructs every selected child once and joins its complete plan back to the frozen
+series. Full reconstructed shards are compared across trials after normalizing only the declared
+run/request identities on temporary comparison copies; those copies are never executed. Exact raw
+source, request and metadata equality remains required alongside the original file-custody checks.
+This removes duplicate whole-series preparation without caching or trusting changing caller inputs.
+
+An incomplete retained series exits with the existing INCOMPLETE code. Cancellation is finalized
+by the runner before the CLI reports interruption with that nonzero code; it never emits a success
+summary. Input/accounting/custody or derivative-write refusal is also nonzero and omits exception
+details. Existing child evidence remains available where safely finalized. No retries, automatic
+ledger initialization, source discovery, model refresh or hosted workflow dispatch are added.
 
 ## Measuring source-manifest candidates against declared labels
 

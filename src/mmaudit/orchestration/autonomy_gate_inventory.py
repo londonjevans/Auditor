@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "7b0d4f4d7980d97a99129e44888c8f09b909f2aec7e13d4fea3dadb42584c9a0"
+    "171c913ab6f3e5c682b01dd51e724b6f736351a2f864ba3fbd4bb3f5a7a2b050"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3400,6 +3400,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         ensemble_development_manifest_command,
         measure_development_controls_command,
         measure_development_stability_command,
+        repeat_development_manifest_command,
         resume_development_manifest_command,
         score_development_history_command,
     )
@@ -3484,7 +3485,12 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _write as write_repeat_series,
     )
     from mmaudit.orchestration.development_corpus_repeats import (
+        require_development_corpus_repeats_budget,
         run_development_corpus_repeats,
+    )
+    from mmaudit.orchestration.development_corpus_repeats_inputs import (
+        read_development_corpus_repeats_inputs,
+        require_development_corpus_repeats_inputs,
     )
     from mmaudit.orchestration.development_corpus_resume import (
         _require_file as require_continuation_file_objects,
@@ -3891,6 +3897,26 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-stability-cli",
             measure_development_stability_command,
             "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-cli",
+            repeat_development_manifest_command,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-input-reader",
+            read_development_corpus_repeats_inputs,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-input-custody",
+            require_development_corpus_repeats_inputs,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-repeats-budget-handoff",
+            require_development_corpus_repeats_budget,
+            "gate-cost-ledger-provisioning",
         ),
         _explicit_anchor(
             "development-corpus-repeats-prepare",

@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4292
-    assert inventory.source_occurrence_count == 4295
+    assert inventory.source_count == 4297
+    assert inventory.source_occurrence_count == 4300
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 313,
-        "EXPLICIT_NON_FIELD_GATE": 2336,
+        "AUDITED_MODULE_UNIVERSE": 314,
+        "EXPLICIT_NON_FIELD_GATE": 2340,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4240,
+        SourceCoverageClassification.GATE: 4245,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1644,6 +1644,14 @@ def test_retained_stability_never_promotes_selected_runs_to_independent_audits(
         ("explicit:development-corpus-repeats-writer", "gate-release-evidence-pipeline"),
         ("explicit:development-corpus-repeats-preflight", "gate-cost-ledger-provisioning"),
         ("explicit:development-corpus-repeats-runner", "gate-provider-secret-transport"),
+        (
+            "audited-module:orchestration.development_corpus_repeats_inputs",
+            "gate-runtime-package-integrity",
+        ),
+        ("explicit:development-corpus-repeats-cli", "gate-client-audit-scope"),
+        ("explicit:development-corpus-repeats-input-reader", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-repeats-input-custody", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-repeats-budget-handoff", "gate-cost-ledger-provisioning"),
     ],
 )
 def test_predeclared_candidate_series_cannot_self_qualify(inventory, source_id, gate_id):

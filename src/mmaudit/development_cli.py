@@ -64,6 +64,14 @@ from mmaudit.orchestration.development_corpus_control_measurement import (
 )
 from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
 from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
+from mmaudit.orchestration.development_corpus_repeats import (
+    require_development_corpus_repeats_budget,
+    run_development_corpus_repeats,
+)
+from mmaudit.orchestration.development_corpus_repeats_inputs import (
+    read_development_corpus_repeats_inputs,
+    require_development_corpus_repeats_inputs,
+)
 from mmaudit.orchestration.development_corpus_resume import (
     read_development_corpus_resume_inputs,
     require_development_corpus_resume_inputs,
@@ -82,6 +90,7 @@ from mmaudit.release_io import (
     read_json_evidence,
     revalidate_evidence_file_binding,
 )
+from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.development_corpus import (
     load_development_corpus,
     revalidate_loaded_development_corpus,
@@ -414,6 +423,159 @@ def judge_development_manifest_command(
         )
         raise typer.Exit(ExitCode.CONFIGURATION) from None
     typer.echo(observation.model_dump_json(indent=2))
+    if observation.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
+
+
+@development_app.command("repeat-manifest")
+def repeat_development_manifest_command(
+    source_manifest: Annotated[Path, typer.Option("--source-manifest")],
+    corpus_root: Annotated[Path, typer.Option("--corpus-root")],
+    endpoint_snapshot: Annotated[Path, typer.Option("--endpoint-snapshot")],
+    truth_manifest: Annotated[Path, typer.Option("--truth-manifest")],
+    truth_sha256: Annotated[str, typer.Option("--truth-sha256")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    trial_count: Annotated[int, typer.Option("--trial-count", min=2, max=8)],
+    budget_usd: Annotated[str, typer.Option("--budget-usd")],
+    per_attempt_usd: Annotated[str, typer.Option("--per-attempt-usd")],
+    maximum_completion_tokens: Annotated[
+        int, typer.Option("--maximum-completion-tokens", min=1, max=65536)
+    ] = 4096,
+    maximum_trial_seconds: Annotated[
+        int, typer.Option("--maximum-trial-seconds", min=1, max=1800)
+    ] = 600,
+    maximum_run_seconds: Annotated[
+        int, typer.Option("--maximum-run-seconds", min=1, max=1800)
+    ] = 600,
+    request_timeout_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--request-timeout-seconds",
+            min=1,
+            max=1800,
+            help="Per-request wait; defaults to 180s and cannot extend either active deadline.",
+        ),
+    ] = None,
+    safety_multiplier: Annotated[str, typer.Option("--safety-multiplier")] = "2",
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+    carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+) -> None:
+    """Run 2-8 predeclared candidate trials with pinned labels and one shared ledger/deadline.
+
+    Paid-capable, no automatic retries. Estimated budgets may be exceeded. Full results remain in
+    result.json; stdout is a compact summary, not a qualified audit or independently selected study.
+    """
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Development repeats require --accept-estimate-risk and --allow-code-egress; "
+            "estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        inputs = (
+            source_manifest,
+            corpus_root,
+            endpoint_snapshot,
+            truth_manifest,
+            cost_ledger,
+            secrets_env_file,
+        )
+        paths = (*inputs, output_dir)
+        if (
+            any(not p.is_absolute() or ".." in p.parts for p in paths)
+            or len(set(paths)) != len(paths)
+            or output_dir.is_relative_to(corpus_root)
+            or any(p.is_relative_to(output_dir) for p in inputs)
+        ):
+            raise DevelopmentCostError("repeat paths overlap or are not absolute and normalized")
+        policy = DevelopmentCostPolicy.model_validate(
+            {
+                "overspend_risk_accepted": accept_estimate_risk,
+                "total_budget_usd": budget_usd,
+                "per_attempt_budget_usd": per_attempt_usd,
+                "safety_multiplier": safety_multiplier,
+                "request_timeout_seconds": request_timeout_seconds,
+                "maximum_attempts": 1,
+                "uncertain_cost_policy": "CARRY_RESERVED_ESTIMATE"
+                if carry_uncertain_estimates
+                else "STOP",
+            }
+        )
+        selected = read_development_corpus_repeats_inputs(
+            source_manifest=source_manifest,
+            corpus_root=corpus_root,
+            endpoint_snapshot=endpoint_snapshot,
+            truth_manifest=truth_manifest,
+            truth_sha256=truth_sha256,
+            policy=policy,
+            run_id=run_id,
+            trial_count=trial_count,
+            maximum_completion_tokens=maximum_completion_tokens,
+            maximum_trial_seconds=float(maximum_trial_seconds),
+            maximum_run_seconds=float(maximum_run_seconds),
+        )
+        ledger = AtomicCostLedger.open_existing(cost_ledger, cap_usd=policy.total_budget_usd)
+        require_development_corpus_repeats_budget(selected.prepared, ledger)
+        require_development_corpus_repeats_inputs(selected)
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            require_development_corpus_repeats_inputs(selected)
+            observation = asyncio.run(
+                run_development_corpus_repeats(
+                    prepared=selected.prepared,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                )
+            )
+    except asyncio.CancelledError:
+        typer.echo(
+            "Development repeats interrupted; retained trial records and liabilities remain "
+            "incomplete, with no qualified audit or stability claim.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.INCOMPLETE) from None
+    except Exception:
+        typer.echo(
+            "Development repeats refused: invalid selected input, labels, allowance/consent, "
+            "shared accounting or file custody. Inspect retained trial records; "
+            "no complete audit or qualified stability is implied.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        stable_json(
+            {
+                "summary_kind": "development_corpus_repeats_cli_summary",
+                "result_sha256": observation.observation_sha256,
+                "status": observation.status,
+                "trial_count": observation.plan.trial_count,
+                "started_trial_count": observation.started_trial_count,
+                "completed_trial_count": observation.completed_trial_count,
+                "missing_result_trial_indexes": observation.missing_result_trial_indexes,
+                "measurement_scope": observation.measurement_scope,
+                "reported_actual_cost_usd": str(observation.reported_actual_cost_usd),
+                "total_accounted_cost_usd": str(observation.total_accounted_cost_usd),
+                "uncertain_accounted_cost_usd": str(observation.uncertain_accounted_cost_usd),
+                "active_reserved_usd": str(observation.active_reserved_usd),
+                "unknown_actual_cost_request_count": len(
+                    observation.unknown_actual_cost_request_ids
+                ),
+                "interpretation": observation.interpretation,
+                "budget_scope": observation.plan.budget_scope,
+                "findings_validated": observation.findings_validated,
+                "audit_complete": observation.audit_complete,
+                "qualification_eligible": observation.qualification_eligible,
+                "release_eligible": observation.release_eligible,
+            }
+        )
+    )
     if observation.status == "INCOMPLETE":
         raise typer.Exit(ExitCode.INCOMPLETE)
 
