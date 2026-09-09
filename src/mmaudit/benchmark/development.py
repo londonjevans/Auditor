@@ -244,8 +244,18 @@ def _contains(site: DevelopmentRootCauseReference, filename: str, start: int, en
 def _control_for_claim(
     truth: DevelopmentBenchmarkTruth, filename: str, finding: DevelopmentScoredFinding
 ) -> DevelopmentTruthControl | None:
+    return match_development_control(truth.controls, filename, finding)
+
+
+def match_development_control(
+    controls: tuple[DevelopmentTruthControl, ...],
+    filename: str,
+    finding: DevelopmentScoredFinding,
+) -> DevelopmentTruthControl | None:
+    """Match supplied source-bound labels, without choosing arbitrarily among ambiguous controls."""
+
     candidates = []
-    for control in truth.controls:
+    for control in controls:
         if not any(
             _contains(site, filename, finding.line_start, finding.line_end)
             for site in control.claim_sites

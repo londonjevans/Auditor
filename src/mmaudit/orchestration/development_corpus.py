@@ -10,6 +10,13 @@ from typing import Literal
 
 import httpx
 
+from mmaudit.benchmark.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_SCORE_BYTES,
+    DevelopmentCorpusBenchmarkBinding,
+    DevelopmentCorpusBenchmarkScore,
+    bind_development_corpus_benchmark,
+    score_development_corpus,
+)
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
@@ -31,7 +38,8 @@ from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
 from mmaudit.orchestration.development_audit import _write
 from mmaudit.orchestration.development_budget import development_uncertain_reservations
-from mmaudit.release_io import revalidate_evidence_file_binding
+from mmaudit.orchestration.manifest import ManifestFileBinding
+from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
     observe_unlinked_directory,
     require_same_unlinked_directory_objects,
@@ -130,6 +138,26 @@ def _report(
     )
 
 
+def _write_score(output_dir: Path, score: DevelopmentCorpusBenchmarkScore) -> ManifestFileBinding:
+    """Bound the composed score without widening the existing candidate writer's contract."""
+
+    expected = score.model_dump(mode="json")
+
+    def validate(content: bytes) -> None:
+        restored = DevelopmentCorpusBenchmarkScore.model_validate_json(content, strict=True)
+        if restored.model_dump(mode="json") != expected:
+            raise DevelopmentCorpusError("manifest score differs from its exact observation")
+
+    return write_json_evidence(
+        evidence_root=output_dir,
+        relative_path="score.json",
+        value=expected,
+        max_bytes=MAX_DEVELOPMENT_CORPUS_SCORE_BYTES,
+        validate_content=validate,
+        require_private_parent=True,
+    )
+
+
 async def run_development_corpus(
     *,
     prepared: PreparedDevelopmentCorpus,
@@ -138,6 +166,7 @@ async def run_development_corpus(
     output_dir: Path,
     allow_code_egress: bool = False,
     mock_transport: httpx.MockTransport | None = None,
+    benchmark_binding: DevelopmentCorpusBenchmarkBinding | None = None,
 ) -> DevelopmentCorpusObservation:
     """Run each selected file once, with exact source retention and no silent retry or scope loss.
 
@@ -157,6 +186,17 @@ async def run_development_corpus(
             "development corpus requires exact ledger and credential handles"
         )
     prepared = _rebuild(prepared)
+    if benchmark_binding is not None:
+        if type(benchmark_binding) is not DevelopmentCorpusBenchmarkBinding:
+            raise DevelopmentCorpusError("manifest scoring requires an exact label binding")
+        rebuilt_binding = bind_development_corpus_benchmark(
+            plan=prepared.plan,
+            truth_content=benchmark_binding.truth_file_content.encode("utf-8"),
+            expected_truth_sha256=benchmark_binding.truth_file_sha256,
+        )
+        if rebuilt_binding != benchmark_binding:
+            raise DevelopmentCorpusError("manifest label binding differs from its candidate")
+        benchmark_binding = rebuilt_binding
     material = DevelopmentCorpusMaterial(
         manifest=prepared.plan.manifest,
         sources=tuple(
@@ -167,6 +207,10 @@ async def run_development_corpus(
     if (
         operator_secrets.openrouter_api_key in prepared.plan.model_dump_json()
         or operator_secrets.openrouter_api_key in material.model_dump_json()
+        or (
+            benchmark_binding is not None
+            and operator_secrets.openrouter_api_key in benchmark_binding.model_dump_json()
+        )
     ):
         raise DevelopmentCorpusError("development credential overlaps the retained corpus inputs")
     state = ledger.snapshot()
@@ -198,6 +242,15 @@ async def run_development_corpus(
         _write(output_dir, "plan.json", prepared.plan),
         _write(output_dir, "sources.json", material),
     ]
+    if benchmark_binding is not None:
+        bindings.append(
+            _write(
+                output_dir,
+                "benchmark-plan.json",
+                benchmark_binding,
+                max_bytes=MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+            )
+        )
 
     def require_outputs() -> None:
         require_same_unlinked_directory_objects(custody, label="development corpus output")
@@ -205,7 +258,9 @@ async def run_development_corpus(
             revalidate_evidence_file_binding(
                 evidence_root=output_dir,
                 binding=binding,
-                max_bytes=MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+                max_bytes=MAX_DEVELOPMENT_CORPUS_SCORE_BYTES
+                if binding.path == "score.json"
+                else MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
             )
 
     started = time.monotonic()
@@ -273,6 +328,10 @@ async def run_development_corpus(
             _write(output_dir, "result.json", result, max_bytes=MAX_DEVELOPMENT_CORPUS_RESULT_BYTES)
         )
         require_outputs()
+        if benchmark_binding is not None:
+            score = score_development_corpus(binding=benchmark_binding, observation=result)
+            bindings.append(_write_score(output_dir, score))
+            require_outputs()
     except Exception:
         if interruption is not None:
             raise interruption from None

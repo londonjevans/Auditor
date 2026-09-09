@@ -1,0 +1,343 @@
+{
+  "$defs": {
+    "DevelopmentCorpusManifest": {
+      "additionalProperties": false,
+      "description": "Declared selected files only; a digest does not authenticate provenance or completeness.",
+      "properties": {
+        "artifact_kind": {
+          "const": "development_corpus_manifest",
+          "default": "development_corpus_manifest",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "audit_complete": {
+          "const": false,
+          "default": false,
+          "title": "Audit Complete",
+          "type": "boolean"
+        },
+        "corpus_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$",
+          "title": "Corpus Id",
+          "type": "string"
+        },
+        "dependency_closure": {
+          "const": "NOT_ESTABLISHED",
+          "default": "NOT_ESTABLISHED",
+          "title": "Dependency Closure",
+          "type": "string"
+        },
+        "findings_validated": {
+          "const": false,
+          "default": false,
+          "title": "Findings Validated",
+          "type": "boolean"
+        },
+        "inventory_scope": {
+          "const": "EXPLICIT_MANIFEST_ONLY",
+          "default": "EXPLICIT_MANIFEST_ONLY",
+          "title": "Inventory Scope",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "provenance": {
+          "const": "DECLARED_NOT_INDEPENDENTLY_AUTHENTICATED",
+          "default": "DECLARED_NOT_INDEPENDENTLY_AUTHENTICATED",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "qualification_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Eligible",
+          "type": "boolean"
+        },
+        "release_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Release Eligible",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_scope": {
+          "$ref": "#/$defs/DevelopmentCorpusScope"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentCorpusSource"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "total_source_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 524288,
+          "title": "Total Source Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "corpus_id",
+        "source_scope",
+        "sources",
+        "total_source_bytes",
+        "manifest_sha256"
+      ],
+      "title": "DevelopmentCorpusManifest",
+      "type": "object"
+    },
+    "DevelopmentCorpusRootCauseReference": {
+      "additionalProperties": false,
+      "description": "An unvalidated origin in the explicitly supplied nested source namespace.",
+      "properties": {
+        "filename": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_end": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "line_start",
+        "line_end"
+      ],
+      "title": "DevelopmentCorpusRootCauseReference",
+      "type": "object"
+    },
+    "DevelopmentCorpusScope": {
+      "enum": [
+        "OPERATOR_SUPPLIED_SYNTHETIC",
+        "OPERATOR_SUPPLIED_PUBLIC"
+      ],
+      "type": "string"
+    },
+    "DevelopmentCorpusSource": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.sol$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "line_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Line Count",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "exclusiveMinimum": 0,
+          "maximum": 65536,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size",
+        "line_count"
+      ],
+      "title": "DevelopmentCorpusSource",
+      "type": "object"
+    },
+    "DevelopmentCorpusTruthControl": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_sites": {
+          "items": {
+            "$ref": "#/$defs/DevelopmentCorpusRootCauseReference"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Claim Sites",
+          "type": "array"
+        },
+        "control_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "title": "Control Id",
+          "type": "string"
+        },
+        "expected": {
+          "enum": [
+            "PLANTED",
+            "GUARDED"
+          ],
+          "title": "Expected",
+          "type": "string"
+        },
+        "invariant": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Invariant",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/DevelopmentCorpusRootCauseReference"
+        },
+        "required_origin_line": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Required Origin Line",
+          "type": "integer"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "vulnerability_class": {
+          "enum": [
+            "access_control",
+            "accounting",
+            "reservation",
+            "pause",
+            "other"
+          ],
+          "title": "Vulnerability Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "control_id",
+        "expected",
+        "vulnerability_class",
+        "severity",
+        "invariant",
+        "origin",
+        "required_origin_line",
+        "claim_sites"
+      ],
+      "title": "DevelopmentCorpusTruthControl",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/development_corpus_truth.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Caller-supplied labels; neither the declaration nor a hash proves external authorship.",
+  "properties": {
+    "artifact_kind": {
+      "const": "development_corpus_truth",
+      "default": "development_corpus_truth",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_complete": {
+      "const": false,
+      "default": false,
+      "title": "Audit Complete",
+      "type": "boolean"
+    },
+    "controls": {
+      "items": {
+        "$ref": "#/$defs/DevelopmentCorpusTruthControl"
+      },
+      "maxItems": 1024,
+      "minItems": 1,
+      "title": "Controls",
+      "type": "array"
+    },
+    "findings_validated": {
+      "const": false,
+      "default": false,
+      "title": "Findings Validated",
+      "type": "boolean"
+    },
+    "manifest": {
+      "$ref": "#/$defs/DevelopmentCorpusManifest"
+    },
+    "provenance": {
+      "enum": [
+        "AGENT_CONSTRUCTED_DEVELOPMENT_CONTROLS",
+        "OPERATOR_SUPPLIED_DEVELOPMENT_LABELS"
+      ],
+      "title": "Provenance",
+      "type": "string"
+    },
+    "qualification_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Eligible",
+      "type": "boolean"
+    },
+    "release_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Release Eligible",
+      "type": "boolean"
+    },
+    "root_independence": {
+      "const": "NOT_ESTABLISHED",
+      "default": "NOT_ESTABLISHED",
+      "title": "Root Independence",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "truth_id": {
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "title": "Truth Id",
+      "type": "string"
+    },
+    "truth_scope": {
+      "const": "DECLARED_LABELS_NOT_VERIFIED_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+      "default": "DECLARED_LABELS_NOT_VERIFIED_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+      "title": "Truth Scope",
+      "type": "string"
+    }
+  },
+  "required": [
+    "truth_id",
+    "provenance",
+    "manifest",
+    "controls"
+  ],
+  "title": "DevelopmentCorpusBenchmarkTruth",
+  "type": "object"
+}

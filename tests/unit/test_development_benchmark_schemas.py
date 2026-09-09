@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from mmaudit.benchmark.development_corpus import score_development_corpus
 from scripts.generate_release_schemas import MODELS, rendered_schema
 from tests.development_benchmark_support import scored_file_response
+from tests.development_corpus_benchmark_support import paired_observation
 from tests.development_corpus_judgment_support import manifest_judgment_response
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_plan.schema.json",
         "development_corpus_shard_observation.schema.json",
         "development_corpus_observation.schema.json",
+        "development_corpus_truth.schema.json",
+        "development_corpus_benchmark_binding.schema.json",
+        "development_corpus_benchmark_score.schema.json",
         "development_corpus_judgment_response.schema.json",
         "development_corpus_judgment_plan.schema.json",
         "development_corpus_judgment_shard_observation.schema.json",
@@ -104,6 +109,10 @@ def test_documentation_retains_exact_metric_and_provenance_limits():
         "judge-manifest",
         "CANDIDATE_INCOMPLETE",
         "64 MB",
+        "--truth-sha256",
+        "DECLARED_LABELS_NOT_VERIFIED_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
+        "10240",
+        "32 MB",
     ):
         assert marker in text
 
@@ -129,3 +138,29 @@ def test_public_manifest_judgment_schema_retains_bounded_nested_reference_contra
     assert validator.is_valid(response) == (references or verdict == "INCONCLUSIVE")
     decision["claim_id"] = "file-0065:16"
     assert not validator.is_valid(response)
+
+
+@pytest.mark.parametrize("field", ["source", "claims", "weight", "authority", "provenance", "root"])
+def test_manifest_score_schema_retains_scale_and_nonqualification_contract(field):
+    schema = json.loads(
+        (ROOT / "schemas/development_corpus_benchmark_score.schema.json").read_text()
+    )
+    binding, observation = paired_observation()
+    data = score_development_corpus(binding=binding, observation=observation).model_dump(
+        mode="json"
+    )
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid(data)
+    if field == "source":
+        data["binding"]["truth"]["controls"][0]["origin"]["line_end"] = 10001
+    elif field == "claims":
+        data["claims"][0]["claim_id"] = "file-0065:01"
+    elif field == "weight":
+        data["summary"]["severity_weighted_structural_precision"]["denominator"] = 10241
+    elif field == "authority":
+        data["findings_validated"] = True
+    elif field == "provenance":
+        data["binding"]["truth"]["provenance"] = "INDEPENDENT_EXTERNAL_TRUTH"
+    else:
+        data["root_independence"] = "ESTABLISHED"
+    assert not validator.is_valid(data)

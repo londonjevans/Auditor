@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "646f25a64fe3375b3c6f56d8694ff7253854abdb9b111f6537277fc98afa0971"
+    "4ccfb64a428ef162d45222d2b4cfc1fabc2a959299e8ed6d709fa10f15090d3e"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3372,6 +3372,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         score_development_judgment,
     )
     from mmaudit.benchmark.development_comparison import compare_development_scores
+    from mmaudit.benchmark.development_corpus import (
+        bind_development_corpus_benchmark,
+        read_development_corpus_truth,
+        score_development_corpus,
+    )
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
     from mmaudit.isolation.container import (
         SingleLoopbackHardhatBackend,
@@ -3588,6 +3593,21 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-judgment-retained-candidate",
             require_development_corpus_judgment_candidate,
             "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-pinned-label-reader",
+            read_development_corpus_truth,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-benchmark-binding",
+            bind_development_corpus_benchmark,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-candidate-measurement",
+            score_development_corpus,
+            "gate-benchmark-evidence-authority",
         ),
         _explicit_anchor(
             "development-corpus-judgment-frozen-plan",

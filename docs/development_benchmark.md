@@ -400,11 +400,64 @@ owned-output drift refuse. Completion means responses were observed for selected
 and release flags remain false, including when every response contains no findings.
 
 General-manifest candidate review is available separately through `judge-manifest` below.
-General-manifest truth scoring and the dual-review ensemble remain unavailable; the existing
-scorer, `judge-audit` and `ensemble-corpus` retain their fixed v2 three-file scope.
+Optional source-manifest candidate scoring is described below. General-manifest review-impact,
+comparison and dual-review ensemble consumers remain unavailable; the existing fixed scorer,
+`judge-audit` and `ensemble-corpus` retain their v2 three-file scope.
 Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
+
+## Measuring source-manifest candidates against declared labels
+
+`development audit-manifest` accepts optional paired `--truth-manifest` and `--truth-sha256`
+options. Supply an absolute, distinct, normalized local JSON path and its explicitly selected
+lowercase SHA-256. Neither option is accepted alone. Omitting both retains the existing
+candidate-only requests and outputs. This interface does not select a paid run.
+
+The separate `DevelopmentCorpusBenchmarkTruth` contract has1–64 exact selected source records
+and1–1024 uniquely sorted PLANTED/GUARDED controls. Each control has an exact nested origin,
+required origin line, class, frozen severity, named invariant and bounded primary claim sites.
+All coordinates must fit the actual source lengths. Provenance must be declared as
+`AGENT_CONSTRUCTED_DEVELOPMENT_CONTROLS` or `OPERATOR_SUPPLIED_DEVELOPMENT_LABELS`;
+neither assertion is independently authenticated. `truth_scope` is always
+`DECLARED_LABELS_NOT_VERIFIED_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH`, and root independence
+remains `NOT_ESTABLISHED`. A source pattern, template, reviewer vote or pre-dispatch hash
+does not prove a reachable defect, independent authorship or exhaustive truth. No runtime
+label generator, external-truth adoption or realistic-scale template labels are supplied.
+
+The bounded reader accepts at most2 MB of exact original UTF-8 JSON bytes and rejects duplicate
+keys, nonfinite values, malformed/secret-like content, incorrect pins and source/plan drift.
+Before any dispatch, `benchmark-plan.json` retains both the raw original JSON text and typed
+labels, their selected file digest, and the candidate plan digest. Original file bindings are
+rechecked before CLI credential handoff, and retained output custody before and after requests.
+Labels, their digest and provenance never enter model prompts. There is no extra provider
+request, retry, cost reset, source discovery or changed candidate response contract.
+
+The runner automatically retains `score.json` alongside the unchanged `result.json`. Each
+original claim keeps its identity and denominator. Matching uses the existing deterministic
+class/primary-site/origin/required-anchor predicates; ambiguous matches receive no arbitrary
+root credit. Only the first invariant claim for a planted root earns root credit; subsequent
+consequences remain duplicates, guarded claims remain unmatched invariants, and advisories
+cannot erase a missed root or improve precision by relabeling. Matched-site weights use
+frozen label severity. Up to1024 claims/roots and10240 weighted units are supported.
+These are `STRUCTURAL_LABEL_MATCHES_NOT_VALIDATED_FINDINGS`, not semantic precision/recall
+or evidence of superiority to professional auditors.
+
+The score embeds the complete original candidate and recomputes every summary and hash.
+Incomplete candidates retain `value: null` for quality ratios, including local finalization
+failure after all responses. Observed misses remain separate from roots with unobserved
+claim sites. Empty denominators never produce a perfect ratio. First-attempt response
+completion is separate from validated analysis coverage. All missing sources, accounting,
+runtime and unknown charges remain visible; earlier carried liabilities remain in the same
+ledger without being falsely attributed to this new run. Cancellation writes available
+incomplete evidence before propagating when output custody permits.
+
+The original candidate is still bounded to16 MB, raw labels to2 MB, and the composed score
+to32 MB through the existing mode0600 writer in its owned mode0700 directory. Older writer
+limits are unchanged. Evidence drift or an oversized composition refuses finalization,
+without erasing dispatched costs or manufacturing a valid score. General-manifest reviewer
+impact, configuration comparison and two-review composition are separate future consumers.
+No opinion filters original claims, and all audit/qualification/release flags remain false.
 
 ## Reviewing retained source-manifest candidates
 

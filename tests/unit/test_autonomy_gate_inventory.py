@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4217
-    assert inventory.source_occurrence_count == 4220
+    assert inventory.source_count == 4221
+    assert inventory.source_occurrence_count == 4224
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 299,
-        "EXPLICIT_NON_FIELD_GATE": 2275,
+        "AUDITED_MODULE_UNIVERSE": 300,
+        "EXPLICIT_NON_FIELD_GATE": 2278,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4165,
+        SourceCoverageClassification.GATE: 4169,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1443,6 +1443,25 @@ def test_selected_development_deadline_is_a_nonauthorizing_transport_input(inven
     ],
 )
 def test_manifest_candidate_review_preserves_all_nonauthorizing_gates(
+    inventory, source_id, gate_id
+):
+    source = next(item for item in inventory.source_coverage if item.source_id == source_id)
+    assert source.logical_gate_id == gate_id
+    assert source.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize(
+    "source_id,gate_id",
+    [
+        ("audited-module:benchmark.development_corpus", "gate-runtime-package-integrity"),
+        ("explicit:development-corpus-pinned-label-reader", "gate-client-audit-scope"),
+        ("explicit:development-corpus-benchmark-binding", "gate-client-audit-scope"),
+        ("explicit:development-corpus-candidate-measurement", "gate-benchmark-evidence-authority"),
+    ],
+)
+def test_manifest_candidate_measurement_does_not_promote_development_labels(
     inventory, source_id, gate_id
 ):
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)

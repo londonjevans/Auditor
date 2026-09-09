@@ -14,6 +14,10 @@ from mmaudit.benchmark.development import (
     bind_development_benchmark,
     read_development_benchmark_truth,
 )
+from mmaudit.benchmark.development_corpus import (
+    MAX_DEVELOPMENT_CORPUS_TRUTH_BYTES,
+    bind_development_corpus_benchmark,
+)
 from mmaudit.constants import ExitCode
 from mmaudit.models.development_audit import (
     DEVELOPMENT_AUDIT_SOURCE_PINS,
@@ -242,6 +246,8 @@ def audit_development_manifest_command(
     accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
     carry_uncertain_estimates: Annotated[bool, typer.Option("--carry-uncertain-estimates")] = False,
+    truth_manifest: Annotated[Path | None, typer.Option("--truth-manifest")] = None,
+    truth_sha256: Annotated[str | None, typer.Option("--truth-sha256")] = None,
 ) -> None:
     """Review only a frozen local source manifest; no discovery or qualified audit completion.
 
@@ -256,7 +262,17 @@ def audit_development_manifest_command(
         )
         raise typer.Exit(ExitCode.CONFIGURATION)
     try:
-        inputs = (source_manifest, corpus_root, endpoint_snapshot, cost_ledger, secrets_env_file)
+        if (truth_manifest is None) != (truth_sha256 is None):
+            raise DevelopmentCostError("manifest scoring requires both truth file and SHA-256")
+        inputs: tuple[Path, ...] = (
+            source_manifest,
+            corpus_root,
+            endpoint_snapshot,
+            cost_ledger,
+            secrets_env_file,
+        )
+        if truth_manifest is not None:
+            inputs += (truth_manifest,)
         paths = (*inputs, output_dir)
         if any(not p.is_absolute() or ".." in p.parts for p in paths) or len(set(paths)) != len(
             paths
@@ -271,6 +287,15 @@ def audit_development_manifest_command(
                 "development corpus output overlaps selected inputs or controls"
             )
         loaded = load_development_corpus(manifest_file=source_manifest, corpus_root=corpus_root)
+        truth_input = (
+            read_json_evidence(
+                evidence_root=truth_manifest.parent,
+                relative_path=truth_manifest.name,
+                max_bytes=MAX_DEVELOPMENT_CORPUS_TRUTH_BYTES,
+            )
+            if truth_manifest is not None
+            else None
+        )
         metadata_input = read_json_evidence(
             evidence_root=endpoint_snapshot.parent,
             relative_path=endpoint_snapshot.name,
@@ -301,12 +326,26 @@ def audit_development_manifest_command(
             maximum_completion_tokens=maximum_completion_tokens,
             maximum_run_seconds=float(maximum_run_seconds),
         )
+        benchmark_binding = None
+        if truth_input is not None:
+            assert truth_sha256 is not None
+            benchmark_binding = bind_development_corpus_benchmark(
+                plan=prepared.plan,
+                truth_content=truth_input.content,
+                expected_truth_sha256=truth_sha256,
+            )
         revalidate_loaded_development_corpus(loaded)
         revalidate_evidence_file_binding(
             evidence_root=endpoint_snapshot.parent,
             binding=metadata_input.binding,
             max_bytes=2_000_000,
         )
+        if truth_manifest is not None and truth_input is not None:
+            revalidate_evidence_file_binding(
+                evidence_root=truth_manifest.parent,
+                binding=truth_input.binding,
+                max_bytes=MAX_DEVELOPMENT_CORPUS_TRUTH_BYTES,
+            )
         ledger = AtomicCostLedger.open_existing(cost_ledger, cap_usd=policy.total_budget_usd)
         with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
             observation = asyncio.run(
@@ -316,6 +355,7 @@ def audit_development_manifest_command(
                     operator_secrets=secrets,
                     output_dir=output_dir,
                     allow_code_egress=allow_code_egress,
+                    benchmark_binding=benchmark_binding,
                 )
             )
     except Exception:
