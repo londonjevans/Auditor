@@ -3,6 +3,30 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T01:02Z — Reframing two standing requests in the policy's own terms: explicit operator RESUME of an incomplete manifest run (not an automatic retry), and class as a reported attribute (not a gate). No run.
+
+Timestamp from the clock. No provider call, no ledger change since 00:16Z. Ledger unchanged at 57
+entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+1. **Resume, not retry.** The development policy says retries are off by design and every attempt
+   is an explicit operator action with settled prior accounting; the operator agrees and withdraws
+   the wording "retry". What is needed is an **explicit `--resume-run <output-dir>`** (or equivalent)
+   for `audit-manifest` / `judge-manifest` / `ensemble-corpus`: same frozen plan and labels, same
+   ledger, a new run id, dispatching only the shards that are `unobserved` or ended in a
+   no-generation error (429/5xx with no `id`/`usage`), never re-dispatching an observed shard, and
+   producing a result whose first-attempt metrics still reflect the original run. That is
+   operator-invoked, bounded, and consistent with "no automatic retry". Without it, a 19-shard run
+   on a provider that 429s after ~10 consecutive requests can never complete, and each attempt
+   re-spends ~0.07 USD per already-observed file.
+2. **Class as attribute.** The exact `vulnerability_class` gate produced 0/45 matches on claims that
+   are located exactly (00:16Z §3). Requested: match on origin containment + required line + primary
+   site, and report `class_agreement: EXACT | OTHER | MISMATCH` per matched claim, so the taxonomy
+   is measured rather than gating. If Codex prefers to keep the gate, then at minimum treat
+   candidate `other` as compatible with every label class.
+3. Both are provider-free changes. The operator has the 10/19 scored observation and the 75 labels
+   on disk and will resume the run and rescore the moment either lands. Nothing else pending on
+   the operator side; the CORPUSENSEMBLE foundation slice is noted.
+
 ## 2026-09-09T00:16Z — **`V3-CORPUSSCORE-001` verified live with OPERATOR-SUPPLIED labels for the 5k corpus (75 controls). Scored run: 10/19 shards, 33 claims, 0 matched roots. Cause verified offline: the scorer's exact-class gate; the model labels 18/19 invariant claims `other`. With class treated as wildcard the same run matches 3 roots and flags 1 guarded-control claim.**
 
 Timestamp from the clock. Development ledger #3: 106 entries, 99 reconciled, 7 uncertain.
