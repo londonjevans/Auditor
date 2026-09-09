@@ -77,6 +77,11 @@ from mmaudit.models.development_corpus_judgment import (
     DevelopmentCorpusJudgmentResponse,
     DevelopmentCorpusJudgmentShardObservation,
 )
+from mmaudit.models.development_corpus_resume import (
+    DevelopmentCorpusResumeAttempt,
+    DevelopmentCorpusResumeHistory,
+    DevelopmentCorpusResumePlan,
+)
 from mmaudit.models.development_costs import DevelopmentCostEstimate, DevelopmentCostPolicy
 from mmaudit.models.development_diagnostics import (
     DevelopmentCompletionTelemetry,
@@ -285,6 +290,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_corpus_plan.schema.json": DevelopmentCorpusPlan,
     "development_corpus_shard_observation.schema.json": DevelopmentCorpusShardObservation,
     "development_corpus_observation.schema.json": DevelopmentCorpusObservation,
+    "development_corpus_resume_plan.schema.json": DevelopmentCorpusResumePlan,
+    "development_corpus_resume_attempt.schema.json": DevelopmentCorpusResumeAttempt,
+    "development_corpus_resume_history.schema.json": DevelopmentCorpusResumeHistory,
     "development_corpus_ensemble_plan.schema.json": DevelopmentCorpusEnsemblePlan,
     "development_corpus_ensemble_observation.schema.json": DevelopmentCorpusEnsembleObservation,
     "development_corpus_ensemble_score.schema.json": DevelopmentCorpusEnsembleScore,

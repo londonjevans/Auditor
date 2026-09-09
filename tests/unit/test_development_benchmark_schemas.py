@@ -34,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_plan.schema.json",
         "development_corpus_shard_observation.schema.json",
         "development_corpus_observation.schema.json",
+        "development_corpus_resume_plan.schema.json",
+        "development_corpus_resume_attempt.schema.json",
+        "development_corpus_resume_history.schema.json",
         "development_corpus_ensemble_plan.schema.json",
         "development_corpus_ensemble_observation.schema.json",
         "development_corpus_ensemble_score.schema.json",
@@ -116,6 +119,9 @@ def test_documentation_retains_exact_metric_and_provenance_limits():
         "DECLARED_LABELS_NOT_VERIFIED_EXTERNAL_OR_EXHAUSTIVE_GROUND_TRUTH",
         "10240",
         "32 MB",
+        "resume-manifest",
+        "CUMULATIVE_RESPONSES_NOT_VALIDATED_ANALYSIS",
+        "eight explicit continuation stages",
     ):
         assert marker in text
 

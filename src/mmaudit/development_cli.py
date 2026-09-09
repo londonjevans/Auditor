@@ -34,6 +34,7 @@ from mmaudit.models.development_corpus import (
 )
 from mmaudit.models.development_corpus_ensemble import prepare_development_corpus_ensemble
 from mmaudit.models.development_corpus_judgment import prepare_development_corpus_judgment
+from mmaudit.models.development_corpus_resume import prepare_development_corpus_resume
 from mmaudit.models.development_costs import (
     MAX_DEVELOPMENT_REQUEST_BYTES,
     DevelopmentCostError,
@@ -60,6 +61,11 @@ from mmaudit.orchestration.development_comparison import compare_development_sco
 from mmaudit.orchestration.development_corpus import run_development_corpus
 from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
 from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
+from mmaudit.orchestration.development_corpus_resume import (
+    read_development_corpus_resume_inputs,
+    require_development_corpus_resume_inputs,
+    run_development_corpus_resume,
+)
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
@@ -73,6 +79,111 @@ from mmaudit.repository.development_corpus import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("resume-manifest")
+def resume_development_manifest_command(
+    endpoint_snapshot: Annotated[Path, typer.Option("--endpoint-snapshot")],
+    cost_ledger: Annotated[Path, typer.Option("--cost-ledger")],
+    secrets_env_file: Annotated[Path, typer.Option("--secrets-env-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    candidate_audit_file: Annotated[Path | None, typer.Option("--candidate-audit-file")] = None,
+    source_material_file: Annotated[Path | None, typer.Option("--source-material-file")] = None,
+    original_score_file: Annotated[Path | None, typer.Option("--original-score-file")] = None,
+    history_file: Annotated[Path | None, typer.Option("--history-file")] = None,
+    accept_estimate_risk: Annotated[bool, typer.Option("--accept-estimate-risk")] = False,
+    allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
+) -> None:
+    """Continue only unresolved candidate sources without replacing original first-attempt metrics.
+
+    Supply the original candidate/material and optional original score, or a prior continuation
+    history. Route, full source context, budget/carry policy, tokens and deadlines stay unchanged.
+    """
+
+    if not accept_estimate_risk or not allow_code_egress:
+        typer.echo(
+            "Development continuation requires --accept-estimate-risk and --allow-code-egress; "
+            "estimated budgets can be exceeded.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    try:
+        if (
+            history_file is not None
+            and any(
+                p is not None
+                for p in (candidate_audit_file, source_material_file, original_score_file)
+            )
+        ) or (
+            history_file is None and (candidate_audit_file is None or source_material_file is None)
+        ):
+            raise DevelopmentCostError(
+                "continuation requires either original paired inputs or history"
+            )
+        evidence = tuple(
+            p
+            for p in (
+                candidate_audit_file,
+                source_material_file,
+                original_score_file,
+                history_file,
+                endpoint_snapshot,
+            )
+            if p is not None
+        )
+        paths = (*evidence, cost_ledger, secrets_env_file, output_dir)
+        if (
+            any(not p.is_absolute() or ".." in p.parts for p in paths)
+            or len(set(paths)) != len(paths)
+            or any(
+                a != b and (a.is_relative_to(b) or b.is_relative_to(a))
+                for a in paths
+                for b in paths
+            )
+        ):
+            raise DevelopmentCostError(
+                "continuation paths must be absolute, distinct and non-overlapping"
+            )
+        inputs = read_development_corpus_resume_inputs(
+            history_file=history_file,
+            candidate_file=candidate_audit_file,
+            material_file=source_material_file,
+            original_score_file=original_score_file,
+            metadata_file=endpoint_snapshot,
+        )
+        assert inputs.metadata is not None
+        prepared = prepare_development_corpus_resume(
+            history=inputs.history,
+            endpoint_snapshot=inputs.metadata,
+            run_id=run_id,
+        )
+        require_development_corpus_resume_inputs(inputs)
+        ledger = AtomicCostLedger.open_existing(
+            cost_ledger, cap_usd=prepared.plan.candidate.policy.total_budget_usd
+        )
+        with load_operator_secrets(secrets_env_file, environ={}, required=True) as secrets:
+            observation = asyncio.run(
+                run_development_corpus_resume(
+                    prepared=prepared,
+                    ledger=ledger,
+                    operator_secrets=secrets,
+                    output_dir=output_dir,
+                    allow_code_egress=allow_code_egress,
+                    inputs=inputs,
+                )
+            )
+    except Exception:
+        typer.echo(
+            "Development continuation refused: invalid original/history inputs, unchanged role "
+            "metadata, source/score custody, explicit consent, cumulative accounting or output. "
+            "Original first-attempt results and uncertain costs are not replaced or cleared.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(observation.model_dump_json(indent=2))
+    if observation.summary.status == "INCOMPLETE":
+        raise typer.Exit(ExitCode.INCOMPLETE)
 
 
 @development_app.command("judge-manifest")

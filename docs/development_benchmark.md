@@ -407,6 +407,42 @@ Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
 
+### Continuing an incomplete candidate without repeating observed sources
+
+`development resume-manifest` runs one separately identified continuation of an incomplete
+candidate. Supply either `--candidate-audit-file` plus its original `--source-material-file`
+and optional `--original-score-file`, or a previous continuation's `--history-file`.
+Also select `--endpoint-snapshot`, the same `--cost-ledger`, `--secrets-env-file`, a new
+`--run-id` and fresh `--output-dir`. Paths must be absolute, distinct and non-overlapping.
+Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
+These interface details are not a selected paid command or authorization to inspect private files.
+
+Only sources without a retained `OBSERVED` response are requested. Every request still carries
+the entire original source context and exactly the original model/route, request body, token
+allowance, estimated-cost policy and deadlines. There are no configuration overrides or
+automatic retries. Each continuation has a new request identity and one bounded stage deadline;
+it stops at the first incomplete response. At most eight explicit continuation stages may be
+retained in a flat, hash-bound history. Reordered/missing ancestry, replayed identities and reused
+successful generations are refused. Original first-attempt observations, source bytes and optional
+declared-label score remain unchanged; labels and previous scores never enter new model requests.
+
+The same cumulative ledger must retain every original and earlier-stage charge. Existing
+STOP/CARRY rules apply unchanged: unknown costs are not free, reconciled by inference or cleared.
+Preflight needs headroom only for the unresolved requests, after all existing liabilities.
+Cancellation and missing responses retain bounded durable accounting, never invented observations.
+Every selected evidence/metadata file and every directory ancestor remains under custody through
+dispatch and finalization; replacing a file or directory with identical bytes is still refused.
+Separate private `prior-history.json`, `plan.json`, per-shard records, `attempt.json` and
+`result.json` use a 64 MB bound without widening older evidence consumers.
+
+The summary is `CUMULATIVE_RESPONSES_NOT_VALIDATED_ANALYSIS`. It separately reports first-attempt
+and cumulative response scope, available claims, all recorded costs and summed run durations;
+unobserved between-run waiting time is not invented. It does not fabricate a merged first-attempt
+candidate or improve its original score. Resume-aware scoring/review/configuration consumers and
+recovery of an already complete candidate's missing ensemble review stages are not implemented
+by this command. Full response coverage, model agreement and carried estimates do not establish
+semantic correctness, independent roots, a hard budget ceiling or a qualified autonomous audit.
+
 ### Full-manifest development ensemble
 
 `development ensemble-manifest` executes a development-only full-manifest candidate and two

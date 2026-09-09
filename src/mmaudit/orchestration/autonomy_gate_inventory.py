@@ -66,7 +66,7 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "e7984ebb1875396cb25bbc7263f830edd7e506ce9eab0b36b2af31b8b9960211"
+    "ccf5aa95ea5e141176c1c01db2ac41b2cc8f8d15605284f8f8bec99b26dab32a"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
@@ -3380,7 +3380,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.benchmark.development_corpus_ensemble import score_development_corpus_ensemble
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
-    from mmaudit.development_cli import ensemble_development_manifest_command
+    from mmaudit.development_cli import (
+        ensemble_development_manifest_command,
+        resume_development_manifest_command,
+    )
     from mmaudit.isolation.container import (
         SingleLoopbackHardhatBackend,
         rootless_runtime_environment,
@@ -3396,6 +3399,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.models.development_corpus_judgment import (
         prepare_development_corpus_judgment,
         require_development_corpus_judgment_candidate,
+    )
+    from mmaudit.models.development_corpus_resume import (
+        freeze_development_corpus_resume_history,
+        prepare_development_corpus_resume,
     )
     from mmaudit.models.development_diagnostics import project_development_completion_telemetry
     from mmaudit.models.development_ensemble import prepare_development_ensemble
@@ -3440,6 +3447,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_corpus_judgment import (
         require_development_corpus_upstream,
         run_development_corpus_judgment,
+    )
+    from mmaudit.orchestration.development_corpus_resume import (
+        read_development_corpus_resume_inputs,
+        require_development_corpus_resume_inputs,
+        run_development_corpus_resume,
     )
     from mmaudit.orchestration.development_ensemble import _report as ensemble_accounting_report
     from mmaudit.orchestration.development_ensemble import run_development_ensemble
@@ -3693,6 +3705,36 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _explicit_anchor(
             "development-corpus-candidate-upstream-custody",
             require_candidate_upstream,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-original-history",
+            freeze_development_corpus_resume_history,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-frozen-plan",
+            prepare_development_corpus_resume,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-input-loader",
+            read_development_corpus_resume_inputs,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-input-custody",
+            require_development_corpus_resume_inputs,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-sequential-run",
+            run_development_corpus_resume,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "development-corpus-resume-cli",
+            resume_development_manifest_command,
             "gate-client-audit-scope",
         ),
         _explicit_anchor(

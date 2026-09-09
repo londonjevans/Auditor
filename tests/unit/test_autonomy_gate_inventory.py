@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4241
-    assert inventory.source_occurrence_count == 4244
+    assert inventory.source_count == 4249
+    assert inventory.source_occurrence_count == 4252
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 303,
-        "EXPLICIT_NON_FIELD_GATE": 2295,
+        "AUDITED_MODULE_UNIVERSE": 305,
+        "EXPLICIT_NON_FIELD_GATE": 2301,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4189,
+        SourceCoverageClassification.GATE: 4197,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -1517,6 +1517,32 @@ def test_manifest_ensemble_foundation_does_not_claim_an_executed_parent_or_autho
     ],
 )
 def test_manifest_parent_checkpoint_does_not_promote_development_execution(
+    inventory, source_id, gate_id
+):
+    source = next(item for item in inventory.source_coverage if item.source_id == source_id)
+    assert source.logical_gate_id == gate_id
+    assert source.classification is SourceCoverageClassification.GATE
+    assert inventory.logical_gate_count == 35 and inventory.unsatisfied_gate_count == 29
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
+
+
+@pytest.mark.parametrize(
+    "source_id,gate_id",
+    [
+        ("audited-module:models.development_corpus_resume", "gate-runtime-package-integrity"),
+        (
+            "audited-module:orchestration.development_corpus_resume",
+            "gate-runtime-package-integrity",
+        ),
+        ("explicit:development-corpus-resume-original-history", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-resume-frozen-plan", "gate-client-audit-scope"),
+        ("explicit:development-corpus-resume-input-loader", "gate-client-audit-scope"),
+        ("explicit:development-corpus-resume-input-custody", "gate-release-evidence-pipeline"),
+        ("explicit:development-corpus-resume-sequential-run", "gate-full-quality-analysis"),
+        ("explicit:development-corpus-resume-cli", "gate-client-audit-scope"),
+    ],
+)
+def test_manifest_continuation_does_not_promote_response_coverage_to_audit_authority(
     inventory, source_id, gate_id
 ):
     source = next(item for item in inventory.source_coverage if item.source_id == source_id)
