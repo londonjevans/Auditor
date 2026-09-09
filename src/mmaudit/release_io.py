@@ -27,6 +27,7 @@ type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 type JsonWritable = BaseModel | dict[str, Any] | list[Any]
 
 DEFAULT_MAX_EVIDENCE_BYTES = 100_000_000
+MAX_COMPOSED_EVIDENCE_BYTES = 256_000_000
 MAX_STREAMED_EVIDENCE_BYTES = 4 * 1024**3
 MAX_STREAMED_EVIDENCE_SECONDS = 600.0
 _READ_CHUNK_BYTES = 1024 * 1024
@@ -325,6 +326,56 @@ def write_file_evidence(
         content=content,
         max_bytes=bound,
     )
+
+
+def write_composed_json_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    value: JsonWritable,
+    max_bytes: int,
+    validate_content: Callable[[bytes], None],
+) -> ManifestFileBinding:
+    """Opt-in bounded composition using the same descriptor writer; ordinary I/O caps are unchanged."""
+
+    if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_COMPOSED_EVIDENCE_BYTES:
+        raise ValueError("composed evidence byte bound is invalid")
+    if not callable(validate_content):
+        raise ValueError("composed evidence requires a trusted content validator")
+    normalized = _normalize_evidence_path(relative_path)
+    try:
+        serialized = stable_json(value).encode("utf-8")
+        _decode_json(serialized)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("composed evidence value is not finite JSON") from exc
+    if not serialized or len(serialized) > max_bytes:
+        raise ValueError("composed evidence JSON exceeds its output bound")
+    return _write_file_content(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        content=serialized,
+        max_bytes=max_bytes,
+        validate_content=validate_content,
+        require_private_parent=True,
+    )
+
+
+def revalidate_composed_evidence_file_binding(
+    *, evidence_root: Path, binding: ManifestFileBinding
+) -> ManifestFileBinding:
+    """Recheck a composed file at its original size; growth is refused before allocating its bytes."""
+
+    expected = ManifestFileBinding.model_validate(binding.model_dump(mode="json"))
+    if not 0 < expected.size <= MAX_COMPOSED_EVIDENCE_BYTES:
+        raise ValueError("composed evidence binding exceeds its byte bound")
+    normalized = _normalize_evidence_path(expected.path)
+    observed = _observe_file_twice(
+        evidence_root=evidence_root, relative_path=normalized, max_bytes=expected.size
+    )
+    actual = _binding(normalized, observed.content)
+    if actual != expected:
+        raise ValueError("composed evidence file differs from its manifest binding")
+    return actual
 
 
 def copy_file_evidence(

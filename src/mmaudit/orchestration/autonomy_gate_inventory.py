@@ -66,14 +66,14 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "caff2691d6dbd22153d13988483037433fbb233cfcc7298b7e79883ffe27d211"
+    "e7984ebb1875396cb25bbc7263f830edd7e506ce9eab0b36b2af31b8b9960211"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "e83c10834b2d3c7a6f854ea3cc15f93d1e05624a4c72c6922f371e05a43dab2b"
+    "96b3b5f33dd47ccdc8e19cd20597e34d606d2a308f68907da2482fe527198715"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -2933,6 +2933,7 @@ def _external_input_occurrences(
 
 
 _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
+    "orchestration/development_corpus_ensemble.py": "gate-release-evidence-pipeline",
     "adversarial_acceptance.py": "gate-release-evidence-pipeline",
     "agents/base.py": "gate-runtime-package-integrity",
     "benchmark/certificate.py": "gate-benchmark-evidence-authority",
@@ -3377,7 +3378,9 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_development_corpus_truth,
         score_development_corpus,
     )
+    from mmaudit.benchmark.development_corpus_ensemble import score_development_corpus_ensemble
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
+    from mmaudit.development_cli import ensemble_development_manifest_command
     from mmaudit.isolation.container import (
         SingleLoopbackHardhatBackend,
         rootless_runtime_environment,
@@ -3417,7 +3420,14 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.orchestration.development_budget import development_uncertain_reservations
     from mmaudit.orchestration.development_comparison import compare_development_score_files
     from mmaudit.orchestration.development_corpus import _report as corpus_accounting_report
+    from mmaudit.orchestration.development_corpus import (
+        require_development_corpus_upstream as require_candidate_upstream,
+    )
     from mmaudit.orchestration.development_corpus import run_development_corpus
+    from mmaudit.orchestration.development_corpus_ensemble import (
+        _report as corpus_ensemble_accounting_report,
+    )
+    from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
     from mmaudit.orchestration.development_corpus_judgment import (
         _report as corpus_judgment_accounting_report,
     )
@@ -3443,10 +3453,15 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         _enforce_post_judge_execution_severity_accounting,
     )
     from mmaudit.privacy import load_privacy_retention_consent
-    from mmaudit.release_io import stream_file_evidence
+    from mmaudit.release_io import (
+        revalidate_composed_evidence_file_binding,
+        stream_file_evidence,
+        write_composed_json_evidence,
+    )
     from mmaudit.reporting.client import _finding_detail
     from mmaudit.reporting.markdown import _status_qualification
     from mmaudit.repository.development_corpus import load_development_corpus
+    from mmaudit.repository.directory_custody import prepare_owned_empty_directory
     from mmaudit.scanners.base import sanitized_scanner_environment
     from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
     from mmaudit.scanners.codeql import CodeQLScanner
@@ -3638,6 +3653,46 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "development-corpus-ensemble-frozen-plan",
             prepare_development_corpus_ensemble,
             "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-sequential-run",
+            run_development_corpus_ensemble,
+            "gate-full-quality-analysis",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-accounting",
+            corpus_ensemble_accounting_report,
+            "gate-cost-ledger-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-original-measurement",
+            score_development_corpus_ensemble,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-corpus-ensemble-cli",
+            ensemble_development_manifest_command,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-candidate-upstream-custody",
+            require_candidate_upstream,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "precreated-private-directory-custody",
+            prepare_owned_empty_directory,
+            "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "bounded-composed-json-writer",
+            write_composed_json_evidence,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "composed-evidence-original-size-custody",
+            revalidate_composed_evidence_file_binding,
+            "gate-release-evidence-pipeline",
         ),
         _explicit_anchor(
             "development-corpus-judgment-upstream-custody",

@@ -407,10 +407,11 @@ Local tests use the larger paired synthetic source fixture and a64-file
 boundary with exact MockTransport and real network/process traps; they do not demonstrate
 real-model quality, whole-protocol coverage, independent roots or a completed autonomous audit.
 
-### Partial manifest-ensemble foundation
+### Full-manifest development ensemble (partial acceptance)
 
-`V3-CORPUSENSEMBLE-001` has development-only frozen plan and observation contracts,
-not an automated full-manifest ensemble runner. The plan binds one candidate and two
+`development ensemble-manifest` executes a development-only full-manifest candidate and two
+separately prompted reviews. `V3-CORPUSENSEMBLE-001` retains partial acceptance until its
+expanded whole-run boundary checks are complete. The plan binds one candidate and two
 known-distinct reviewer selections, separate token allowances, exact source scope and a
 common estimated-cost policy. Candidate estimates plus two future per-file review allowances
 must fit the shared target; this is neither reserved portfolio capacity nor a hard cost cap.
@@ -423,13 +424,37 @@ cannot complete an incomplete candidate; an empty candidate earns no review-comp
 The existing manifest review API optionally accepts an exact local upstream-custody bundle.
 It rechecks retained parent/candidate/previous-review files, directory objects and prior ledger
 entries before and after each request, and automatically excludes prior-review generation IDs.
-Without this explicit bundle, standalone review behavior is unchanged. Existing evidence-reader
-and writer limits are unchanged; the new composed-record ceiling does not widen child artifacts.
+Without this explicit bundle, standalone review behavior is unchanged. The parent creates and
+binds each private child directory before dispatch. One absolute deadline can shorten, never
+extend, child limits; bounded cleanup/finalization follows. Verified durable child observations
+are retained before cancellation propagates; an unreturned attempt remains only an accounting
+liability, not a fabricated observation. A failed current reviewer stops later dispatch.
 
-Tests directly execute the existing child runners using synthetic MockTransport, fake credentials
-and disposable local ledgers, then construct an aggregate model-test observation. They do not
-exercise a production parent runner or establish a whole-run deadline. The parent executor,
-measurement adapter, `ensemble-manifest` CLI and their whole-run acceptance remain unimplemented.
+Use explicit absolute, distinct `--source-manifest`, `--corpus-root`, three
+`--candidate-endpoint-snapshot` / `--first-reviewer-endpoint-snapshot` /
+`--second-reviewer-endpoint-snapshot` selections and the existing ledger, secrets and fresh output
+controls. Both `--accept-estimate-risk` and `--allow-code-egress` are required before input reads.
+Each role has its own `--*-maximum-completion-tokens` allowance (default4096); shared
+`--maximum-run-seconds` and optional `--request-timeout-seconds` do not authorize retries.
+Optional paired `--truth-manifest` / `--truth-sha256` bind caller-selected labels before dispatch.
+No labels, original score or other-review opinions enter prompts. This interface is not a
+selected paid command or permission to read private inputs.
+
+The parent retains original `candidate/score.json` and a separate composed `score.json` when
+labels are supplied. It preserves every strict structural candidate measurement; descriptive
+disagreement and one/two-refutation counts never filter claims or establish reviewer accuracy.
+`available_claim_opinion_observation_fraction` measures only available-opinion completion: it
+can be1.0 with incomplete original source scope. Original incomplete quality remains null.
+Parent result/score artifacts use a separate256MB bounded descriptor-safe writer. Ordinary100MB
+evidence APIs and child16MB candidate/32MB score/64MB review ceilings remain unchanged.
+
+Local tests execute the real parent and CLI using synthetic MockTransport, fake credentials,
+disposable local ledgers and actual network/process traps. Maximum structural execution covers
+64sources/1024original claims/2048opinions/192first-attempt requests, not maximum artifact bytes
+or semantic audit quality. Paired, partial, empty, failure and cancellation cases retain original
+scope/costs; separate I/O tests really cross100MB while ordinary readers still refuse that size.
+Expanded deadline, custody/recovery and realistic19-file acceptance remain pending for this
+checkpoint; passing scoped tests do not imply a completed unattended qualified audit.
 All qualification/release flags remain false and genuine root independence is not established.
 
 ## Measuring source-manifest candidates against declared labels

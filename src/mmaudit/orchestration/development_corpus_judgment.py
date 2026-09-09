@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +51,7 @@ from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
     DirectoryCustodyObservation,
-    observe_unlinked_directory,
+    prepare_owned_empty_directory,
     require_same_unlinked_directory_objects,
 )
 from mmaudit.repository.redaction import detect_secrets
@@ -281,6 +282,8 @@ async def run_development_corpus_judgment(
     mock_transport: httpx.MockTransport | None = None,
     excluded_generation_ids: tuple[str, ...] = (),
     upstream: DevelopmentCorpusJudgmentUpstream | None = None,
+    output_custody: DirectoryCustodyObservation | None = None,
+    parent_deadline: float | None = None,
 ) -> DevelopmentCorpusJudgmentObservation:
     """Review observed claims once; preserve incomplete source scope, all charges and cancellation.
 
@@ -292,6 +295,12 @@ async def run_development_corpus_judgment(
         raise DevelopmentCorpusJudgmentError(
             "manifest judgment requires explicit source egress consent"
         )
+    if parent_deadline is not None and (
+        type(parent_deadline) is not float
+        or not math.isfinite(parent_deadline)
+        or parent_deadline <= 0
+    ):
+        raise DevelopmentCorpusJudgmentError("manifest judgment parent deadline is invalid")
     if (
         type(ledger) is not AtomicCostLedger
         or type(operator_secrets) is not OperatorSecrets
@@ -363,10 +372,9 @@ async def run_development_corpus_judgment(
         raise DevelopmentCorpusJudgmentError(
             "manifest judgment output must be absolute and normalized"
         )
-    parent = observe_unlinked_directory(output_dir.parent, label="manifest judgment output parent")
-    output_dir.mkdir(mode=0o700)
-    require_same_unlinked_directory_objects(parent, label="manifest judgment output parent")
-    custody = observe_unlinked_directory(output_dir, label="manifest judgment output")
+    custody = prepare_owned_empty_directory(
+        output_dir, label="manifest judgment output", precreated=output_custody
+    )
     material = DevelopmentCorpusMaterial(
         manifest=prepared.plan.candidate.plan.manifest,
         sources=tuple(
@@ -392,6 +400,8 @@ async def run_development_corpus_judgment(
 
     start = time.monotonic()
     deadline = start + prepared.plan.maximum_run_seconds
+    if parent_deadline is not None:
+        deadline = min(deadline, parent_deadline)
     observations: list[DevelopmentCorpusJudgmentShardObservation] = []
     reason: _StopReason | None = None
     interruption: BaseException | None = None
@@ -413,7 +423,7 @@ async def run_development_corpus_judgment(
         ),
     }
     try:
-        async with asyncio.timeout(prepared.plan.maximum_run_seconds):
+        async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
             for shard in prepared.shards:
                 require_outputs()
                 if time.monotonic() >= deadline:

@@ -22,6 +22,7 @@ from mmaudit.benchmark.development_corpus import (
     DevelopmentCorpusBenchmarkScore,
     DevelopmentCorpusBenchmarkTruth,
 )
+from mmaudit.benchmark.development_corpus_ensemble import DevelopmentCorpusEnsembleScore
 from mmaudit.benchmark.development_ensemble import DevelopmentEnsembleScore
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
@@ -286,6 +287,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "development_corpus_observation.schema.json": DevelopmentCorpusObservation,
     "development_corpus_ensemble_plan.schema.json": DevelopmentCorpusEnsemblePlan,
     "development_corpus_ensemble_observation.schema.json": DevelopmentCorpusEnsembleObservation,
+    "development_corpus_ensemble_score.schema.json": DevelopmentCorpusEnsembleScore,
     "development_corpus_truth.schema.json": DevelopmentCorpusBenchmarkTruth,
     "development_corpus_benchmark_binding.schema.json": DevelopmentCorpusBenchmarkBinding,
     "development_corpus_benchmark_score.schema.json": DevelopmentCorpusBenchmarkScore,

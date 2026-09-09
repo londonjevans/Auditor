@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -41,7 +43,8 @@ from mmaudit.orchestration.development_budget import development_uncertain_reser
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
-    observe_unlinked_directory,
+    DirectoryCustodyObservation,
+    prepare_owned_empty_directory,
     require_same_unlinked_directory_objects,
 )
 
@@ -50,6 +53,39 @@ type _StopReason = Literal["SHARD_INCOMPLETE", "LOCAL_FAILURE", "INTERRUPTED"]
 
 class DevelopmentCorpusError(ValueError):
     """Controlled refusal; never disclose source excerpts, secret values or private file paths."""
+
+
+@dataclass(frozen=True)
+class DevelopmentCorpusUpstream:
+    """Exact parent inputs; custody is local evidence, not a callback or provider authority."""
+
+    directory: DirectoryCustodyObservation
+    files: tuple[ManifestFileBinding, ...]
+
+
+def require_development_corpus_upstream(upstream: DevelopmentCorpusUpstream) -> None:
+    """Recheck original parent plan/material/optional labels before any next candidate request."""
+
+    if (
+        type(upstream) is not DevelopmentCorpusUpstream
+        or type(upstream.directory) is not DirectoryCustodyObservation
+        or type(upstream.files) is not tuple
+        or not 2 <= len(upstream.files) <= 3
+        or any(type(f) is not ManifestFileBinding for f in upstream.files)
+        or tuple(f.path for f in upstream.files)
+        not in {("plan.json", "sources.json"), ("plan.json", "sources.json", "benchmark-plan.json")}
+        or any(not 0 < f.size <= MAX_DEVELOPMENT_CORPUS_RESULT_BYTES for f in upstream.files)
+        or not upstream.directory.path.is_absolute()
+        or ".." in upstream.directory.path.parts
+        or not upstream.directory.component_identities
+        or upstream.directory.component_identities[-1][0] != upstream.directory.path
+    ):
+        raise DevelopmentCorpusError("manifest candidate upstream custody is invalid")
+    require_same_unlinked_directory_objects(upstream.directory, label="manifest candidate upstream")
+    for binding in upstream.files:
+        revalidate_evidence_file_binding(
+            evidence_root=upstream.directory.path, binding=binding, max_bytes=binding.size
+        )
 
 
 def _rebuild(prepared: PreparedDevelopmentCorpus) -> PreparedDevelopmentCorpus:
@@ -167,6 +203,9 @@ async def run_development_corpus(
     allow_code_egress: bool = False,
     mock_transport: httpx.MockTransport | None = None,
     benchmark_binding: DevelopmentCorpusBenchmarkBinding | None = None,
+    upstream: DevelopmentCorpusUpstream | None = None,
+    output_custody: DirectoryCustodyObservation | None = None,
+    parent_deadline: float | None = None,
 ) -> DevelopmentCorpusObservation:
     """Run each selected file once, with exact source retention and no silent retry or scope loss.
 
@@ -176,6 +215,12 @@ async def run_development_corpus(
 
     if allow_code_egress is not True:
         raise DevelopmentCorpusError("development corpus requires explicit source egress consent")
+    if parent_deadline is not None and (
+        type(parent_deadline) is not float
+        or not math.isfinite(parent_deadline)
+        or parent_deadline <= 0
+    ):
+        raise DevelopmentCorpusError("development corpus parent deadline is invalid")
     if (
         type(ledger) is not AtomicCostLedger
         or type(operator_secrets) is not OperatorSecrets
@@ -213,6 +258,8 @@ async def run_development_corpus(
         )
     ):
         raise DevelopmentCorpusError("development credential overlaps the retained corpus inputs")
+    if upstream is not None:
+        require_development_corpus_upstream(upstream)
     state = ledger.snapshot()
     carried = {
         a.request_id
@@ -234,10 +281,9 @@ async def run_development_corpus(
         raise DevelopmentCorpusError("development corpus preflight refuses cumulative accounting")
     if not output_dir.is_absolute() or ".." in output_dir.parts:
         raise DevelopmentCorpusError("development corpus output must be absolute and normalized")
-    parent = observe_unlinked_directory(output_dir.parent, label="development corpus output parent")
-    output_dir.mkdir(mode=0o700)
-    require_same_unlinked_directory_objects(parent, label="development corpus output parent")
-    custody = observe_unlinked_directory(output_dir, label="development corpus output")
+    custody = prepare_owned_empty_directory(
+        output_dir, label="development corpus output", precreated=output_custody
+    )
     bindings = [
         _write(output_dir, "plan.json", prepared.plan),
         _write(output_dir, "sources.json", material),
@@ -253,6 +299,8 @@ async def run_development_corpus(
         )
 
     def require_outputs() -> None:
+        if upstream is not None:
+            require_development_corpus_upstream(upstream)
         require_same_unlinked_directory_objects(custody, label="development corpus output")
         for binding in bindings:
             revalidate_evidence_file_binding(
@@ -265,11 +313,13 @@ async def run_development_corpus(
 
     started = time.monotonic()
     deadline = started + prepared.plan.maximum_run_seconds
+    if parent_deadline is not None:
+        deadline = min(deadline, parent_deadline)
     observations: list[DevelopmentCorpusShardObservation] = []
     reason: _StopReason | None = None
     interruption: BaseException | None = None
     try:
-        async with asyncio.timeout(prepared.plan.maximum_run_seconds):
+        async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
             for shard in prepared.shards:
                 require_outputs()
                 if time.monotonic() >= deadline:

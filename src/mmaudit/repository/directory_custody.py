@@ -18,6 +18,35 @@ class DirectoryCustodyObservation:
     component_identities: tuple[tuple[Path, DirectoryComponentIdentity], ...]
 
 
+def prepare_owned_empty_directory(
+    path: Path,
+    *,
+    label: str,
+    precreated: DirectoryCustodyObservation | None = None,
+) -> DirectoryCustodyObservation:
+    """Create a private output or claim an exact empty directory already owned by its parent."""
+
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{label} must be absolute and normalized")
+    if precreated is not None:
+        if (
+            type(precreated) is not DirectoryCustodyObservation
+            or precreated.path != path
+            or tuple(p for p, _identity in precreated.component_identities)
+            != (*reversed(path.parents), path)
+        ):
+            raise ValueError(f"{label} precreated directory selection differs")
+        require_same_unlinked_directory_objects(precreated, label=label)
+        if stat.S_IMODE(path.stat().st_mode) != 0o700 or any(path.iterdir()):
+            raise ValueError(f"{label} precreated directory must be private and empty")
+        require_same_unlinked_directory_objects(precreated, label=label)
+        return precreated
+    parent = observe_unlinked_directory(path.parent, label=label)
+    path.mkdir(mode=0o700)
+    require_same_unlinked_directory_objects(parent, label=label)
+    return observe_unlinked_directory(path, label=label)
+
+
 def observe_unlinked_directory(
     path: Path,
     *,
