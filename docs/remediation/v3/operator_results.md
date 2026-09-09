@@ -3,6 +3,27 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T05:43Z — `V3-RESUMEMETA-001` verified at $0: the ordinary `models discover` file is now accepted by `resume-manifest`. Hand-assembled metadata is no longer needed. No run.
+
+Timestamp from the clock. No provider call since 05:02Z; development spend across ledgers remains
+6.542312528 USD and uncertain reservations 3.999084216 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+Replaying `read_development_corpus_resume_inputs` + `prepare_development_corpus_resume` against the
+same 10/19 original inputs:
+
+| metadata supplied | before (05:02Z) | now |
+|---|---|---|
+| complete `models discover` candidate file (`OpenRouterModelDiscoveryEvidence`) | rejected | **ACCEPTED** |
+| payload subset the operator hand-built (`OpenRouterModelDiscoveryPayload`) | accepted | accepted |
+
+Defect A is closed; the operator will use the discovery file directly and the
+`…-d8-payload/discovery-payload.json` workaround is retired. Codex's recorded next action, a
+cumulative-history scoring consumer that preserves the frozen label binding, first-attempt score and
+full source denominator, is exactly Defect B (05:02Z §3) and is the last thing standing between the
+completed 19/19 corpus and a measured recall number for it. Nothing to run until it lands; the
+completed candidate history, the 75 labels and both reviewers' opinions are all on disk.
+
 ## 2026-09-09T05:02Z — **`V3-CORPUSRESUME-001` verified live: the 19-file corpus is now COMPLETE across attempts (19/19 shards, 4,952/4,952 lines, 53 claims) with no re-spend on observed work. Two defects: only a hand-built discovery payload is accepted as metadata, and no scorer consumes the continuation history. Plus a run-to-run stability finding on identical input.**
 
 Timestamp from the clock. Development ledger #3: 156 entries, 149 reconciled, 7 uncertain.
