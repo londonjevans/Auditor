@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Never, SupportsIndex
+from typing import Any, Literal, Never, Protocol, SupportsIndex
 
 from pydantic import Field, TypeAdapter, field_validator, model_validator
 
@@ -477,6 +477,16 @@ class ModelCalibrationArtifact(StrictModel):
         return self
 
 
+class _CalibrationMeasurements(Protocol):
+    """Read-only distribution inputs; this interface carries no runtime authority."""
+
+    @property
+    def candidates(self) -> tuple[ModelCalibrationCandidateObservation, ...]: ...
+
+    @property
+    def distributions(self) -> tuple[ModelCalibrationDimensionDistribution, ...]: ...
+
+
 def build_model_calibration_artifact(
     *,
     created_at: datetime,
@@ -721,6 +731,29 @@ def derive_calibrated_qualification_policy(
         raise ValueError("calibrated policy derivation requires live calibration verification")
     trusted_calibration_verification.require_for(artifact)
 
+    thresholds, role_policies, global_overall_score = _derive_calibration_policy_components(
+        artifact
+    )
+    return seal_calibrated_qualification_policy(
+        calibration=artifact,
+        trusted_calibration_verification=trusted_calibration_verification,
+        created_at=artifact.created_at,
+        thresholds=thresholds,
+        role_policies=role_policies,
+        tier_a_minimum_overall_score=global_overall_score,
+        tier_a_overall_rationale=_AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE,
+        maximum_validity_days=_CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS,
+        maximum_benchmark_evidence_age_days=(
+            _CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS
+        ),
+    )
+
+
+def _derive_calibration_policy_components(
+    artifact: _CalibrationMeasurements,
+) -> tuple[tuple[QualificationDimensionThreshold, ...], tuple[RoleQualificationPolicy, ...], float]:
+    """Project the fixed empirical rule, independently of its evidence-authority path."""
+
     distributions = {item.dimension: item for item in artifact.distributions}
     thresholds = tuple(
         _derive_dimension_threshold(
@@ -760,19 +793,7 @@ def derive_calibrated_qualification_policy(
         required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
         label="global",
     )
-    return seal_calibrated_qualification_policy(
-        calibration=artifact,
-        trusted_calibration_verification=trusted_calibration_verification,
-        created_at=artifact.created_at,
-        thresholds=thresholds,
-        role_policies=role_policies,
-        tier_a_minimum_overall_score=global_overall_score,
-        tier_a_overall_rationale=_AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE,
-        maximum_validity_days=_CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS,
-        maximum_benchmark_evidence_age_days=(
-            _CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS
-        ),
-    )
+    return thresholds, role_policies, global_overall_score
 
 
 def _derive_dimension_threshold(
@@ -944,7 +965,7 @@ def verify_calibrated_qualification_policy_structure(
 
 def _verify_policy_threshold_bindings(
     *,
-    calibration: ModelCalibrationArtifact,
+    calibration: _CalibrationMeasurements,
     thresholds: tuple[QualificationDimensionThreshold, ...],
     role_policies: tuple[RoleQualificationPolicy, ...],
     tier_a_minimum_overall_score: float,
@@ -1316,7 +1337,7 @@ def _greatest_supported_nonabsolute_score(
 
 def _require_overall_threshold_binding(
     *,
-    calibration: ModelCalibrationArtifact,
+    calibration: _CalibrationMeasurements,
     dimensions: tuple[ModelBenchmarkDimension, ...],
     supplied_score: float,
     required_candidate_count: int | None,
@@ -1339,7 +1360,7 @@ def _require_overall_threshold_binding(
 
 def _derived_supported_overall_score(
     *,
-    calibration: ModelCalibrationArtifact,
+    calibration: _CalibrationMeasurements,
     dimensions: tuple[ModelBenchmarkDimension, ...],
     required_candidate_count: int | None,
     required_root_count: int,
@@ -1396,7 +1417,7 @@ def _derived_supported_overall_score(
 
 def _require_joint_policy_support(
     *,
-    calibration: ModelCalibrationArtifact,
+    calibration: _CalibrationMeasurements,
     thresholds: tuple[QualificationDimensionThreshold, ...],
     role_policies: tuple[RoleQualificationPolicy, ...],
     tier_a_minimum_overall_score: float,
