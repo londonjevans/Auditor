@@ -3,6 +3,91 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T09:40Z — **`V3-CONTROLMEASURE-001` verified at $0. THE BUILD HAS ITS FIRST REAL QUALITY NUMBERS.** On the 19-file / 4,952-line corpus with 45 planted roots, one deepseek pass **locates 6/45 (13.3 %)** and **asserts a violation at 3/45 (6.7 %)**; structural precision 16/171. Two independent campaigns over the same corpus locate **13/45 (28.9 %) in union**, sharing only 3. Category agreement with the labels is **0 of 8**, which is why every prior official score read zero.
+
+Timestamp from the clock. No provider call since 05:02Z; all three measurements below are
+provider-free re-readings of retained artifacts. Development spend across ledgers remains
+6.542312528 USD; uncertain reservations 3.999084216 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. The command
+
+```
+mmaudit development measure-controls --score-file <score|cumulative-score>.json --output-dir <new>
+-> Control measurement written: …; COMPLETE_OBSERVATIONS; original score unchanged;
+   structural locations are not validated findings.
+```
+
+`control-measurement.json`, `interpretation: CONTROL_LOCATIONS_NOT_VALIDATED_FINDINGS`,
+`root_independence: NOT_ESTABLISHED`, original score and labels untouched. Codex's design is better
+than the operator's request: rather than loosening the existing gate, it adds a separate artifact
+that measures source-anchored coverage and reports category agreement as data.
+
+### 2. First measured quality — full-context 19/19 cumulative run
+
+| measure | value |
+|---|---|
+| `unique_root_location_coverage` | **6/45 = 0.133333** |
+| `invariant_asserted_root_coverage` | **3/45 = 0.066667** |
+| `severity_weighted_root_location_coverage` | 16/75 = 0.213333 |
+| `severity_weighted_structural_precision` (located) | 16/171 = 0.093567 |
+| `severity_weighted_asserted_structural_precision` | 7/171 = 0.040936 |
+| claims / unmatched to any label | 53 / 45 |
+| `guarded_invariant_claim_count` | **2** (asserts a violation where the label says guarded) |
+| `advisory_only_root_ids` | **3** (guardian drain on markets 000, 001, 012 reported only as advisory) |
+| category agreement / disagreement / unreported | **0 / 5 / 3** |
+
+Located roots: guardian drain on markets 000, 001, 005, 012, 014, and the deposit cast on 014.
+Everything else among the 45 was missed. The distinction the artifact adds is exactly the one that
+mattered: three further guardian-drain sites were *located but only as advisories*, so a
+severity-weighted reading that counts advisories as detections would overstate by 2×.
+
+### 3. Two campaigns, same corpus, disjoint findings
+
+The split-context runs (02:18Z, p1+p2, whole corpus, different context window) measured
+independently:
+
+| campaign | located | asserted | sw precision (located) | claims |
+|---|---|---|---|---|
+| full context, 19 files in one snapshot | 6/45 (13.3 %) | 3/45 | 16/171 | 53 |
+| split context p1 (10 files) | 6/18 (33.3 %) | 3/18 | 12/113 | 37 |
+| split context p2 (9 files) | 4/27 (14.8 %) | 4/27 | 8/66 | 20 |
+| **union of both campaigns** | **13/45 (28.9 %)** | — | — | — |
+
+Only **3 of 13** located roots are common to both campaigns. Seven were found only by the
+split-context campaign (including the deposit cast on markets 000, 004, 006, 012 and the borrow
+cast on 004) and three only by the full-context run (guardian drain on 005, both roots on 014).
+Combined with the 05:02Z single-file repeat result, this is now a consistent picture: **a single
+pass is a low-recall sample of an unstable process, and independent passes are close to
+complementary.** Two passes more than doubled coverage. That is a direct, cheap argument for
+N-pass union as the audit unit and for `V3-STABILITY-001` to be measured, not assumed.
+
+Honest correction: the operator's own coordinate tally at 07:24Z §3 said 9/45 planted touched and
+6/30 guarded. The product's matcher, which also enforces `claim_sites` and ambiguity rules, says
+6/45 located and 2 guarded invariant claims. **The product number is the correct one and the
+operator's hand tally over-counted**; it is withdrawn.
+
+### 4. What these numbers are and are not
+
+They measure whether a claim lands on a labelled source location, against 75 operator-authored
+labels over synthetic generator-produced code. They are not validated findings, not semantic
+precision, not evidence about real protocols, and not comparable to a human audit. The 45 unmatched
+claims are mostly the labels being non-exhaustive, not proven false positives; two lineages
+independently supported 19 of them (03:10Z). What can now be stated honestly for the first time:
+**on this corpus, one pass of this candidate locates roughly one planted root in eight and asserts
+roughly one in fifteen, and two passes together locate a little under a third.**
+
+### 5. Requests
+
+1. Record CONTROLMEASURE as verified with §2 and §3; this is the first measured quality evidence in
+   the build and belongs against `V3-DEVBENCH-001` / `V3-STABILITY-001`.
+2. Bound an **N-pass union measurement** (the artifact already carries `located_root_ids`; a union
+   over K retained measurements plus per-root detection frequency is provider-free and would turn
+   §3 into a product output rather than an operator spreadsheet).
+3. Category agreement being 0/8 is worth surfacing in the model-facing schema description: the
+   five-value taxonomy is not being used, and `other` is the default. Describing each enum value in
+   the request schema may be enough.
+
 ## 2026-09-09T07:24Z — **`V3-RESUMESCORE-001` verified at $0: the completed 19/19 corpus now has an official cumulative score (`COMPLETE_OBSERVATIONS`, 53 claims, shard completion 1.0, first-attempt 10/19 preserved). Recall is officially 0/45 — the class gate again, and the resume scorer embeds its labels so the diagnostic rescoring used before is no longer possible. The class fix is now the only thing between this build and its first real recall number.**
 
 Timestamp from the clock. No provider call since 05:02Z. Development spend across ledgers remains
