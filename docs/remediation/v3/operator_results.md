@@ -3,6 +3,80 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T03:10Z — **`V3-CORPUSENSEMBLE-001` exercised live: candidate stage complete (48 claims), then `LOCAL_FAILURE` before any review because the kimi reviewer plan fails the per-attempt target after the candidate has already spent. Two-reviewer opinions obtained instead via `judge-manifest`: 38 unanimous support, 3 unanimous refute, 7 split. glm is reliable on `deepinfra/fp4`, not on `together`.**
+
+Timestamp from the clock. Development ledger #3: 147 entries, 140 reconciled, 7 uncertain.
+**Actual development spend across ledgers 5.906692928 USD**; phantom uncertain reservations
+3.999084216 USD (unchanged). Cumulative ledger untouched. Ledger unchanged at 57 entries /
+`0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. `ensemble-manifest` on `p1` (labels bound)
+
+`devensemblemanifest-20260909-005k-p1-1`: candidate deepseek=together (16384), reviewers
+kimi=together (16384) and glm=together (16384), per-attempt **1.00**, timeout 900 s, carry.
+Result: `INCOMPLETE / LOCAL_FAILURE`, `completed_stage_count 1`, candidate `OBSERVED_ALL_SHARDS`
+10/10 with **48 claims** (0.34904100 USD, 627 s), `judgment_plans: []`,
+`unobserved_stage_ids: [review-01, review-02]`, no review directory created, no reason retained.
+
+Cause, replayed offline ($0): `prepare_development_corpus_judgment` for the kimi reviewer at
+per-attempt 1.00 raises "manifest judgment shard changes original claims, identity or request"
+(its estimate is 1.14–1.22 USD per shard at 16384 tokens with the 77 KB snapshot); at 2.50 it
+prepares 5 shards. glm prepares at 1.00 (0.47–0.51). **The ensemble validates reviewer plans only
+after the candidate stage has run and spent**, and surfaces the refusal as an unexplained
+`LOCAL_FAILURE`. Requests: validate every stage's estimate before the first request; retain the
+local failure reason; and the per-role allowance/target coupling from 19:30Z now has its third
+concrete cost (0.35 USD of candidate work that cannot be resumed).
+
+### 2. Two-reviewer opinions on the same 48 claims (`judge-manifest`, candidate result reused)
+
+| reviewer=route | status | judgments | cost | time | notes |
+|---|---|---|---|---|---|
+| kimi-k3=together (per-attempt 2.50) | `OBSERVED_ALL_JUDGMENTS` | 48/48 | 0.5574786 | 248 s | |
+| glm-5.2=together (1.00) | `JUDGMENT_INCOMPLETE` | 4/48 | 0.14396552 | 163 s | shard 2 `length` at 16384 completion, 0 reasoning — 5th glm-on-together runaway today |
+| **glm-5.2=deepinfra/fp4** (1.00; discovery `devtrial-glm-5-2-deepinfra-20260909-d9`) | **`OBSERVED_ALL_JUDGMENTS`** | 48/48 | **0.0827102** | 241 s | reasoning 654–2242 tokens per shard; completes cleanly |
+
+So the glm runaways were the `together` route (which reports `reasoning_tokens 0` for glm and then
+generates to the cap), not the model. On `deepinfra/fp4` glm reasons, completes, and is the cheapest
+reviewer by 7×. The operator will use `glm-5.2=deepinfra/fp4` from now on.
+
+### 3. Agreement, crossed with the label dispositions (class-wildcard diagnostic from 02:18Z)
+
+| kimi × glm | count |
+|---|---|
+| SUPPORTED × SUPPORTED | 38 |
+| REFUTED × REFUTED | 3 |
+| SUPPORTED × REFUTED | 3 |
+| SUPPORTED × INCONCLUSIVE | 4 |
+
+| label disposition | both support | both refute | split |
+|---|---|---|---|
+| MATCHED_ROOT (3) | 2 | 0 | **1** — `file-0010:01` deposit `uint128` truncation: glm refutes on the same false "narrowing conversions revert" rule kimi used yesterday |
+| GUARDED_CONTROL_CLAIM (2) | **1** (`file-0008:01`, checked-arithmetic — both wrong) | **1** (`file-0008:08` reinitialization — both right, citing `_initializeSyntheticAccess`) | 0 |
+| UNMATCHED_INVARIANT (26) | 19 | 1 | 6 |
+| ADVISORY (13) / at planted site (4) | 12 / 4 | 1 / 0 | 0 / 0 |
+
+Reading: unanimous refutation caught one of the two scored false positives and missed the other;
+one true planted root drew a split because one reviewer holds a wrong belief about Solidity casts;
+and the 26 unlabelled invariant claims include 19 that two lineages independently support ("borrow
+check ignores existing debt", "liquidation on healthy positions", strategy accounting, proxy
+initialization) — those are the strongest candidates for label expansion, subject to a human or a
+truth-backed adjudication, not model consensus. Split claims (7) are exactly where "refuted by one
+≠ removed" matters.
+
+### 4. Requests
+
+1. Ensemble: pre-validate all stage plans before dispatch; retain the local failure reason;
+   per-role targets or decoupled reviewer allowance (19:30Z, 23:20Z, 00:16Z).
+2. Scorer: class as reported attribute (01:02Z) — the tables above are only possible offline.
+3. `V3-CORPUSRESUME-001` (in progress) is noted with thanks; the 0.35 USD candidate stage above is
+   the case it should cover for ensembles too (resume reviews over a retained candidate).
+4. Record: CORPUSENSEMBLE exercised (candidate stage verified live; review stages blocked by the
+   plan-order defect), CORPUSJUDGE second live evidence (96 judgments, two lineages), glm route note.
+
+Files: `…/development-audits/ensemble-manifest-005k-p1-20260909/` (candidate + score),
+`…/judge-manifest-005k-p1-by-kimi-20260909/`, `…/judge-manifest-005k-p1-by-glm-20260909/`
+(incomplete), `…/judge-manifest-005k-p1-by-glm-deepinfra-20260909/`.
+
 ## 2026-09-09T02:18Z — **FIRST COMPLETE MEASURED RESULT ON ALL 15 MARKETS (two sub-manifests ≤10 files, both `OBSERVED_ALL_SHARDS`, 0.71 USD). Official score 0/45 roots (class gate). Diagnostic wildcard: 7/45 roots, 4/15 markets, 2 guarded-control false positives, 30 unlabelled invariant claims.**
 
 Timestamp from the clock. Development ledger #3: 125 entries, 118 reconciled, 7 uncertain
