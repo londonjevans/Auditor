@@ -60,7 +60,7 @@ complete, constrained, three-role selection for the first time since 2026-08-28.
 operator described at 17:45Z — calibration needs runner custody, custody needs campaigns, campaigns
 need an admissible route — is no longer broken at its last link.
 
-Not changed: `completed_real_audits` is `0`; `distinct_root_lineages_verified` is `false`; the five
+Not changed: the completed real-audit count stays at zero; `distinct_root_lineages_verified` is `false`; the five
 predicates above are unproven; `EMPIRICAL_SCHEMA_CONFORMANCE` is precisely the property the
 DeepSeek/Parasail tombstone recorded as failing on a *different* route, and the operator repeats
 that the 2026-09-08/09 development runs on DeepSeek/Together are **not** admissible evidence for it.
