@@ -3,6 +3,104 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T05:02Z — **`V3-CORPUSRESUME-001` verified live: the 19-file corpus is now COMPLETE across attempts (19/19 shards, 4,952/4,952 lines, 53 claims) with no re-spend on observed work. Two defects: only a hand-built discovery payload is accepted as metadata, and no scorer consumes the continuation history. Plus a run-to-run stability finding on identical input.**
+
+Timestamp from the clock. Development ledger #3: 156 entries, 149 reconciled, 7 uncertain.
+**Actual development spend across ledgers 6.542312528 USD**; phantom uncertain reservations
+3.999084216 USD (unchanged). Cumulative ledger untouched. Ledger unchanged at 57 entries /
+`0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. Resume works, and does exactly what was asked for
+
+`devresume-20260909-005k-deepseek-2` continued the truth-bound 10/19 run
+(`manifest-005k-deepseek-together-scored-20260909`) with no other input changed:
+
+```
+status OBSERVED_ALL_SOURCES_ACROSS_RECORDED_ATTEMPTS
+cumulative_completed_shard_count 19   unobserved_shard_ids []   continuation_count 1
+primary_lines_with_observed_responses 4952 / 4952   candidate_claim_count 53
+original_first_attempt_completed_shard_count 10   original_first_attempt_status INCOMPLETE   (both preserved)
+reported_actual_cost_usd 1.34830212 cumulative (continuation itself 0.63625356, 9 shards, 344 s)
+accounted_request_count 20   uncertain 0.74143798 carried, not cleared
+```
+
+Nine shards dispatched, ten reused, first-attempt metrics untouched, original uncertain liability
+carried. This is the behaviour requested at 01:02Z and it removes the rate-limit dead end: the full
+19-file corpus with full-protocol context is now complete without the sub-manifest workaround.
+
+### 2. Defect A — metadata type allowlist rejects the artifact every other command takes
+
+`resume-manifest` refused with the redacted line; replayed offline, the typed cause is
+`continuation input selection is invalid` from
+`development_corpus_resume.py:149`, whose allowlist is
+`{OpenRouterEndpointSnapshotEvidence, OpenRouterModelDiscoveryPayload}`. Consequences:
+
+| metadata supplied | result |
+|---|---|
+| complete `models discover` candidate file (`OpenRouterModelDiscoveryEvidence`) — what `audit-manifest`, `judge-manifest`, `ensemble-*` all accept | **rejected** by the allowlist |
+| bare extracted `endpoint_snapshot` | accepted by the allowlist, then **fails** `development review requires native JSON schema and high reasoning` (model-level efforts live only in the discovery wrapper — the DEVREASON finding of 2026-09-08) |
+| hand-built payload = the payload-field subset of the discovery evidence | **works** |
+
+The operator wrote that subset to
+`~/.mmaudit/private/model-discovery/devtrial-deepseek-v4-pro-together-20260908-d8-payload/discovery-payload.json`
+and the run proceeded. Request: add `OpenRouterModelDiscoveryEvidence` to the resume allowlist so the
+same discovery file works everywhere; hand-assembling provider metadata to satisfy a type check is
+exactly the sort of operator step the frozen objective wants eliminated.
+
+### 3. Defect B — the completed corpus has no official score
+
+The continuation writes `development_corpus_resume_attempt` / `development_corpus_resume_plan`
+inside a history artifact; `score_development_corpus` accepts only
+`DevelopmentCorpusObservation`, and `resume-manifest` has no `--truth-manifest`. So the first
+complete 19/19 result cannot be scored by the product: `score.json` exists only for the original
+10-shard attempt. Request: either accept the history in the scorer (cumulative score, first-attempt
+ratios kept separate — the history already carries `original_first_attempt_*`), or accept
+`--truth-manifest`/`--truth-sha256` on `resume-manifest`. Until then the operator can report
+coverage but not measured recall for the complete corpus, which is the whole point of the run.
+
+### 4. Stability finding on identical input ($0, from comparing two runs)
+
+`src/markets/SyntheticMarket012.sol` was audited twice by the same model, route, prompt shape and
+allowance (22:18Z run, and this continuation). Both returned exactly 10 claims. The claims differ:
+
+| claim | 22:18Z run | 05:02Z run |
+|---|---|---|
+| unchecked `uint128` deposit cast (a labelled planted root) | present, high | **absent** |
+| market re-initialization (labelled guarded control) | present, high | **absent** |
+| guardian emergency drain (labelled planted root) | present, `advisory` | present, `advisory` |
+| liquidation overpayment not refunded | present | present |
+| strategy allocation / recall accounting | present | present (reworded) |
+| deposit to zero address locks assets | absent | **present, high** |
+| borrow check ignores existing debt | absent | **present, high** |
+| redemption ignores outstanding debt | absent | **present, high** |
+
+So on one file, one model, two runs, detection of a given planted defect is not stable: the cast
+root was found once and missed once. This compounds the 4-of-15 cross-file consistency from 22:18Z —
+that figure is itself a sample of an unstable process, so per-pattern recall on a single pass
+understates and overstates unpredictably. It is direct evidence for `V3-STABILITY-001` and an
+argument that a single candidate pass is not a defensible audit unit; N-pass union or ensemble is.
+Also note the same defect is emitted as `invariant_violation` on one file and `advisory` on another
+(guardian drain, file-0019 vs file-0017), so `kind` is unstable too, which bears on the class/kind
+gating discussion at 00:16Z and 01:02Z.
+
+### 5. New coverage from the completed shards
+
+Markets 013 and the 6 previously-unobserved non-market files: 0 claims. Market 012: 10 claims (above).
+**Market 014: 10 claims including all three labelled planted patterns on one file** — deposit
+`uint128` cast (83), guardian `emergencyAssetReturn` drain (203–208) and market re-initialization
+(41–57) — the first single file where the candidate names every planted root. Full detail in
+`…/development-audits/resume-005k-deepseek-20260909-b/`.
+
+### 6. Requests
+
+1. Accept `OpenRouterModelDiscoveryEvidence` in the resume metadata allowlist (§2).
+2. Score the continuation history, or accept truth on `resume-manifest` (§3). Highest value: it
+   turns the completed corpus into the first fully-measured multi-root result.
+3. Class/kind as reported attributes rather than gates (01:02Z) — §4 shows `kind` is unstable too.
+4. Record CORPUSRESUME's first live evidence and the stability finding; the latter is worth its own
+   ticket against `V3-STABILITY-001` (repeat-N passes on one corpus, report per-root detection
+   frequency rather than a single-pass boolean).
+
 ## 2026-09-09T03:10Z — **`V3-CORPUSENSEMBLE-001` exercised live: candidate stage complete (48 claims), then `LOCAL_FAILURE` before any review because the kimi reviewer plan fails the per-attempt target after the candidate has already spent. Two-reviewer opinions obtained instead via `judge-manifest`: 38 unanimous support, 3 unanimous refute, 7 split. glm is reliable on `deepinfra/fp4`, not on `together`.**
 
 Timestamp from the clock. Development ledger #3: 147 entries, 140 reconciled, 7 uncertain.
