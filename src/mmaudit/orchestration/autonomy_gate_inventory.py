@@ -66,14 +66,14 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "5d4763f9838d3d5b27b3e4f27af2cd09276fbaa70f04de934ac220ef42bd4851"
+    "e10e5b5a153b9153056b0a9f16cc86f99d400a1e96387809df86ee82a6bfb1cf"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
     "9cb8b25140d5e2d4da60801b6e51ada6fa931631f8db0f69a2d9a8f08e08da14"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "96b3b5f33dd47ccdc8e19cd20597e34d606d2a308f68907da2482fe527198715"
+    "049d61732f08341e66d1ae6b935d723dfde10820e91ae943dc617bab1fe573b9"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -3379,6 +3379,11 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         read_development_corpus_truth,
         score_development_corpus,
     )
+    from mmaudit.benchmark.development_corpus_control_measurement import (
+        measure_development_corpus_controls,
+        read_development_corpus_control_measurement,
+        read_development_corpus_control_source,
+    )
     from mmaudit.benchmark.development_corpus_ensemble import score_development_corpus_ensemble
     from mmaudit.benchmark.development_corpus_resume import (
         read_development_corpus_resume_score,
@@ -3387,6 +3392,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.benchmark.development_ensemble import score_development_ensemble
     from mmaudit.development_cli import (
         ensemble_development_manifest_command,
+        measure_development_controls_command,
         resume_development_manifest_command,
         score_development_history_command,
     )
@@ -3437,6 +3443,10 @@ def _default_explicit_sources() -> list[_SourceDraft]:
         require_development_corpus_upstream as require_candidate_upstream,
     )
     from mmaudit.orchestration.development_corpus import run_development_corpus
+    from mmaudit.orchestration.development_corpus_control_measurement import (
+        measure_development_corpus_score_file,
+        write_development_corpus_control_measurement,
+    )
     from mmaudit.orchestration.development_corpus_ensemble import (
         _bind_child as bind_corpus_ensemble_child,
     )
@@ -3485,6 +3495,7 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.privacy import load_privacy_retention_consent
     from mmaudit.release_io import (
+        read_composed_file_evidence,
         revalidate_composed_evidence_file_binding,
         stream_file_evidence,
         write_composed_json_evidence,
@@ -3789,6 +3800,41 @@ def _default_explicit_sources() -> list[_SourceDraft]:
             "precreated-private-directory-custody",
             prepare_owned_empty_directory,
             "gate-managed-output-provisioning",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-measurement",
+            measure_development_corpus_controls,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-source-reader",
+            read_development_corpus_control_source,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-measurement-reader",
+            read_development_corpus_control_measurement,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-measurement-writer",
+            write_development_corpus_control_measurement,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-offline-measurement",
+            measure_development_corpus_score_file,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "development-corpus-control-measurement-cli",
+            measure_development_controls_command,
+            "gate-client-audit-scope",
+        ),
+        _explicit_anchor(
+            "bounded-prebound-composed-reader",
+            read_composed_file_evidence,
+            "gate-release-evidence-pipeline",
         ),
         _explicit_anchor(
             "bounded-composed-json-writer",

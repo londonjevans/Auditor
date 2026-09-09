@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4258
-    assert inventory.source_occurrence_count == 4261
+    assert inventory.source_count == 4268
+    assert inventory.source_occurrence_count == 4271
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -68,12 +68,12 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
         "DIRECT_ENVIRONMENT_INPUT": 549,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 307,
-        "EXPLICIT_NON_FIELD_GATE": 2308,
+        "AUDITED_MODULE_UNIVERSE": 309,
+        "EXPLICIT_NON_FIELD_GATE": 2316,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4206,
+        SourceCoverageClassification.GATE: 4216,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -105,7 +105,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1816
+        == 1817
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -1558,6 +1558,31 @@ def test_manifest_parent_checkpoint_does_not_promote_development_execution(
         ("explicit:development-corpus-cumulative-score-writer", "gate-release-evidence-pipeline"),
         ("explicit:development-corpus-cumulative-offline-scoring", "gate-client-audit-scope"),
         ("explicit:development-corpus-cumulative-score-cli", "gate-client-audit-scope"),
+        (
+            "audited-module:benchmark.development_corpus_control_measurement",
+            "gate-runtime-package-integrity",
+        ),
+        (
+            "audited-module:orchestration.development_corpus_control_measurement",
+            "gate-runtime-package-integrity",
+        ),
+        ("explicit:development-corpus-control-measurement", "gate-benchmark-evidence-authority"),
+        ("explicit:development-corpus-control-source-reader", "gate-release-evidence-pipeline"),
+        (
+            "explicit:development-corpus-control-measurement-reader",
+            "gate-release-evidence-pipeline",
+        ),
+        (
+            "explicit:development-corpus-control-measurement-writer",
+            "gate-release-evidence-pipeline",
+        ),
+        ("explicit:development-corpus-control-offline-measurement", "gate-client-audit-scope"),
+        ("explicit:development-corpus-control-measurement-cli", "gate-client-audit-scope"),
+        ("explicit:bounded-prebound-composed-reader", "gate-release-evidence-pipeline"),
+        (
+            "filesystem-input:orchestration.development_corpus_ensemble:_bind_child:2",
+            "gate-release-evidence-pipeline",
+        ),
     ],
 )
 def test_manifest_continuation_does_not_promote_response_coverage_to_audit_authority(

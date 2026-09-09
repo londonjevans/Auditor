@@ -498,6 +498,43 @@ Invalid inputs, custody drift or scoring failures never return scoring success. 
 history and charges are retained if a derivative cannot be written; original cancellation takes
 precedence over a secondary scoring failure. Such failure is not an audit pass or cost clearance.
 
+### Annotation-independent control locations
+
+The separately versioned `control-measurement.json` embeds an unchanged retained original or
+cumulative score. Candidate, continuation and offline history-scoring finalization emit it beside
+their existing score when original labels are present. Unlabelled runs do not acquire labels or
+measurement credit. The legacy class/kind scorer, first-attempt metrics, cost liabilities and
+timing scope remain unchanged; this sidecar is not a replacement score or semantic verdict.
+
+For a previously retained score, `development measure-controls --score-file <absolute-score-path>
+--output-dir <absolute-fresh-directory>` produces the same sidecar without a provider request.
+Only these two inputs are accepted: no replacement labels, observations, policy, credentials or
+ledger. This interface description does not select private files or authorize provider execution.
+
+Category and kind are reported annotations, not location predicates. A match still requires
+primary-site containment and exactly one control satisfying its origin and required-anchor checks.
+Only a missing root reference may use a primary span in the same origin file that independently
+satisfies those origin/anchor constraints. A contradictory explicit reference never falls back;
+ambiguous locations receive no root credit.
+
+All-kind location coverage and invariant-asserted coverage have independent global duplicate
+sets, so earlier advice cannot erase a later asserted violation. Advisory-only roots, guarded
+advice versus guarded assertions, category disagreements, all original claims and incomplete
+source scope remain visible. Both precision denominators include every claim: matched controls use
+their frozen label severity; ambiguous claims use the largest candidate label weight; unmatched
+claims use reported severity. Incomplete ratios remain null and an empty denominator is not a
+perfect result. Original or cumulative stage/run/request provenance and all retained accounting
+remain in the artifact; no cost settlement or end-to-end timing is inferred.
+
+The new composed output is capped at 128 MB. Original score input remains capped at 32 MB,
+cumulative score input at 96 MB, and ordinary evidence I/O at 100 MB. Composed reads require an
+explicit original size/hash binding. Private output and unchanged file/ancestor objects are
+rechecked throughout; durable old evidence and liabilities survive derivative failures, with
+original cancellation taking precedence. Expanded new-artifact maximum-bound acceptance remains
+pending in `V3-CONTROLMEASURE-001`; this tested checkpoint is PARTIAL. Review-impact/comparison
+policies and repeated-run stability are separate work. Location coverage establishes neither
+validated findings, independent/exhaustive truth, root independence nor audit/release eligibility.
+
 ### Full-manifest development ensemble
 
 `development ensemble-manifest` executes a development-only full-manifest candidate and two

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,10 @@ from mmaudit.benchmark.development_corpus import (
     DevelopmentCorpusBenchmarkBinding,
     bind_development_corpus_benchmark,
     score_development_corpus,
+)
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+    measure_development_corpus_controls,
 )
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
@@ -65,6 +70,7 @@ from mmaudit.orchestration.development_corpus_judgment import (
 )
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import (
+    read_composed_file_evidence,
     read_json_evidence,
     revalidate_composed_evidence_file_binding,
     write_composed_json_evidence,
@@ -265,17 +271,35 @@ def _bind_child(
             raise DevelopmentCorpusEnsembleError("manifest candidate result type changed")
         expected["benchmark-plan.json"] = benchmark_binding
         if not recovered or (root / stage / "score.json").exists():
-            expected["score.json"] = score_development_corpus(
-                binding=benchmark_binding, observation=observation
-            )
+            score = score_development_corpus(binding=benchmark_binding, observation=observation)
+            expected["score.json"] = score
+            if not recovered or (root / stage / "control-measurement.json").exists():
+                expected["control-measurement.json"] = measure_development_corpus_controls(
+                    score=score
+                )
     bindings = []
     for name, model in expected.items():
+        expected_value = model.model_dump(mode="json")
+        if name == "control-measurement.json":
+            content = stable_json(expected_value).encode("utf-8")
+            bound = ManifestFileBinding(
+                path=stage + "/" + name,
+                sha256=hashlib.sha256(content).hexdigest(),
+                size=len(content),
+            )
+            measured = read_composed_file_evidence(
+                evidence_root=root,
+                relative_path=bound.path,
+                expected_binding=bound,
+                max_bytes=MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+            )
+            bindings.append(measured.binding)
+            continue
         actual = read_json_evidence(
             evidence_root=root,
             relative_path=stage + "/" + name,
             max_bytes=MAX_DEVELOPMENT_CORPUS_SCORE_BYTES if name == "score.json" else maximum,
         )
-        expected_value = model.model_dump(mode="json")
         if actual.value != expected_value or actual.content != stable_json(expected_value).encode(
             "utf-8"
         ):

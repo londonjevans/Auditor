@@ -16,6 +16,10 @@ from mmaudit.benchmark.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_SCORE_BYTES,
     DevelopmentCorpusBenchmarkScore,
 )
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+    measure_development_corpus_controls,
+)
 from mmaudit.benchmark.development_corpus_resume import (
     MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
     DevelopmentCorpusResumeBenchmarkScore,
@@ -53,6 +57,9 @@ from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus, CostLedgerSnapshot
 from mmaudit.orchestration.development_budget import development_uncertain_reservations
+from mmaudit.orchestration.development_corpus_control_measurement import (
+    write_development_corpus_control_measurement,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import (
     read_json_evidence,
@@ -67,6 +74,7 @@ from mmaudit.repository.directory_custody import (
 from mmaudit.repository.file_custody import (
     RegularFileCustodyObservation,
     observe_regular_file_custody,
+    require_regular_file_custody_unchanged,
 )
 
 type _InputRole = Literal["history", "candidate", "material", "score", "metadata"]
@@ -502,6 +510,7 @@ async def run_development_corpus_resume(
     ]
     current: tuple[DevelopmentCorpusAccountingEntry, ...] = ()
     score_binding: RegularFileCustodyObservation | None = None
+    measurement_binding: RegularFileCustodyObservation | None = None
 
     def require_context() -> CostLedgerSnapshot:
         if inputs is not None:
@@ -511,6 +520,14 @@ async def run_development_corpus_resume(
             _require_file(binding, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_BYTES)
         if score_binding is not None:
             _require_file(score_binding, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES)
+        if measurement_binding is not None:
+            require_regular_file_custody_unchanged(
+                measurement_binding,
+                label="continuation control measurement",
+                max_bytes=MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+                allow_directory_entry_metadata_change=True,
+                allow_composed_evidence=True,
+            )
         snapshot = ledger.snapshot()
         validate_development_accounting_entries(
             (*prior, *current), snapshot, budget_usd=policy.total_budget_usd
@@ -603,6 +620,12 @@ async def run_development_corpus_resume(
             score = score_development_corpus_resume(history=result)
             score_binding = _write_cumulative_score(
                 output_dir, score, revalidate_context=require_context
+            )
+            require_context()
+            measured = measure_development_corpus_controls(score=score)
+            require_context()
+            measurement_binding = write_development_corpus_control_measurement(
+                output_dir, measured, revalidate_context=require_context
             )
             require_context()
     except BaseException as exc:

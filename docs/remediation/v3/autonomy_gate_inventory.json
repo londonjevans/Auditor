@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4206,
-  "inventory_sha256": "da1ac2cb9fcb1db305868fbe4911f9a193bc30d99552c56f597cf09181402962",
+  "gate_source_count": 4216,
+  "inventory_sha256": "765c4c4c8e682c69683ed3fce0afa79b12391546c43a41d2ccef7219fbb58b0a",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -571,6 +571,7 @@
         "explicit:development-benchmark-score",
         "explicit:development-benchmark-truth",
         "explicit:development-corpus-candidate-measurement",
+        "explicit:development-corpus-control-measurement",
         "explicit:development-corpus-cumulative-measurement",
         "explicit:development-corpus-ensemble-original-measurement",
         "explicit:development-corpus-shared-claim-measurement",
@@ -906,6 +907,8 @@
         "explicit:development-comparison-files",
         "explicit:development-corpus-benchmark-binding",
         "explicit:development-corpus-candidate-upstream-custody",
+        "explicit:development-corpus-control-measurement-cli",
+        "explicit:development-corpus-control-offline-measurement",
         "explicit:development-corpus-cumulative-offline-scoring",
         "explicit:development-corpus-cumulative-score-cli",
         "explicit:development-corpus-ensemble-cli",
@@ -3341,7 +3344,11 @@
         "direct-env-ast:repository.file_custody:observe_regular_file_custody:working-directory:1",
         "explicit:bound-read-only-evidence-stream",
         "explicit:bounded-composed-json-writer",
+        "explicit:bounded-prebound-composed-reader",
         "explicit:composed-evidence-original-size-custody",
+        "explicit:development-corpus-control-measurement-reader",
+        "explicit:development-corpus-control-measurement-writer",
+        "explicit:development-corpus-control-source-reader",
         "explicit:development-corpus-cumulative-score-reader",
         "explicit:development-corpus-cumulative-score-writer",
         "explicit:development-corpus-ensemble-child-adoption",
@@ -3523,6 +3530,7 @@
         "filesystem-input:orchestration.ci:ci_producer_sha256:6",
         "filesystem-input:orchestration.ci:ci_producer_sha256:7",
         "filesystem-input:orchestration.development_corpus_ensemble:_bind_child:1",
+        "filesystem-input:orchestration.development_corpus_ensemble:_bind_child:2",
         "filesystem-input:orchestration.development_corpus_ensemble:_recover_child:1",
         "filesystem-input:orchestration.manifest:_build_run_evidence_manifest:1",
         "filesystem-input:orchestration.manifest:_build_run_evidence_manifest:2",
@@ -4042,6 +4050,7 @@
         "audited-module:benchmark.development",
         "audited-module:benchmark.development_comparison",
         "audited-module:benchmark.development_corpus",
+        "audited-module:benchmark.development_corpus_control_measurement",
         "audited-module:benchmark.development_corpus_ensemble",
         "audited-module:benchmark.development_corpus_resume",
         "audited-module:benchmark.development_ensemble",
@@ -4168,6 +4177,7 @@
         "audited-module:orchestration.development_budget",
         "audited-module:orchestration.development_comparison",
         "audited-module:orchestration.development_corpus",
+        "audited-module:orchestration.development_corpus_control_measurement",
         "audited-module:orchestration.development_corpus_ensemble",
         "audited-module:orchestration.development_corpus_judgment",
         "audited-module:orchestration.development_corpus_resume",
@@ -4618,7 +4628,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4258,
+  "source_count": 4268,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -10041,6 +10051,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:benchmark.development_corpus_control_measurement",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/benchmark/development_corpus_control_measurement.py",
+      "source_semantics_sha256": "d2d96f3f8ae13b917236e5c5514e03f591db1c1f4c640b12a9d39fbb8cee372e"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
       "source_id": "audited-module:benchmark.development_corpus_ensemble",
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
@@ -10144,7 +10163,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/development_cli.py",
-      "source_semantics_sha256": "92dd667144de5998a36be73d0b3aa3fb8258b45c0ba180c7c7be9b67a1e0a321"
+      "source_semantics_sha256": "700aee4d8e12c318a555216154a8f4811666138a4814130daf0842d14f237c6b"
     },
     {
       "classification": "GATE",
@@ -11044,7 +11063,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "39741311ec21672c01b7912eac43d2298dfb9da29055de33900b9000dde15f9e"
+      "source_semantics_sha256": "c7c4912cfed51f241f389b78a284642e2f88c1a43017981ff804622a1f415a38"
     },
     {
       "classification": "GATE",
@@ -11170,7 +11189,16 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus.py",
-      "source_semantics_sha256": "7e93fa9c4c0cf39c64086577572d106423e8d002f58648f7c54c1bae903ce186"
+      "source_semantics_sha256": "0e3a03ff3118699fbdb37ca90f9700e1f2e42b9478d350753bf0dfa3ec058bac"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:orchestration.development_corpus_control_measurement",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_corpus_control_measurement.py",
+      "source_semantics_sha256": "1a184c0654c13b77b493d723ce66bfc928179bef2f2b5ebe38b7955ff3b130c4"
     },
     {
       "classification": "GATE",
@@ -11179,7 +11207,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_ensemble.py",
-      "source_semantics_sha256": "b70193240c53d6671f124b230abd72fbc4e0fe49ff220620f253ac8b25c3f350"
+      "source_semantics_sha256": "620df7f1b187765fae31e69b8bcee589d01701e384668f964c0f1ee0c05264a2"
     },
     {
       "classification": "GATE",
@@ -11197,7 +11225,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_resume.py",
-      "source_semantics_sha256": "e026f703743103f707330f0ca4a876d11cc2f227450deaf39587e49d0456ab78"
+      "source_semantics_sha256": "b895c2f7a32f06307f89a6bee92449bae223383c8dd14a00fef5873375bb8cb7"
     },
     {
       "classification": "GATE",
@@ -11206,7 +11234,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_resume_score.py",
-      "source_semantics_sha256": "8c78f1dc43f3a1c864975400430a740f885752cfa523e9a02d4d3a434aff0439"
+      "source_semantics_sha256": "bbbc513e1b32d55abe48ca904e885309c2c8b78385770b4ebaf2dc6112839f71"
     },
     {
       "classification": "GATE",
@@ -11683,7 +11711,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/release_io.py",
-      "source_semantics_sha256": "12d8ded8d9f67d4bca11fb4cbd518bd0b1c76fe10ee3882a01ecdd13a5819b27"
+      "source_semantics_sha256": "db6ddba67bbfb96ca3dbc7f1170af7d34a9c4f1e77ee5b54f97bd7e9123a24a9"
     },
     {
       "classification": "GATE",
@@ -11881,7 +11909,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/repository/file_custody.py",
-      "source_semantics_sha256": "60a3fb91ffa0fbdcd54cccce607d466671442464f7816da9d6672fac220f00bf"
+      "source_semantics_sha256": "0785cd027561c65074dfd76832abad8bdc3a3bec45db557a9cd896d03e74d2df"
     },
     {
       "classification": "GATE",
@@ -21668,6 +21696,15 @@
     },
     {
       "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:bounded-prebound-composed-reader",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.release_io.read_composed_file_evidence",
+      "source_semantics_sha256": "e41006eb521206dd5b44ed211008814493f8b48a513cd041163516bad2858fbe"
+    },
+    {
+      "classification": "GATE",
       "logical_gate_id": "gate-unresolved-finding-disposition",
       "source_id": "explicit:client-report-human-resolution",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
@@ -21840,6 +21877,60 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "explicit:development-corpus-control-measurement",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.benchmark.development_corpus_control_measurement.measure_development_corpus_controls",
+      "source_semantics_sha256": "0be7236426f916a406caef1436d18e864e76371a6d31006ef70f5d07b4440e64"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-control-measurement-cli",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.development_cli.measure_development_controls_command",
+      "source_semantics_sha256": "d6e03d1053ab168c89ad6f43e2fe6cd8529c8e0fa4069fd6565d9b4904366019"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:development-corpus-control-measurement-reader",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.benchmark.development_corpus_control_measurement.read_development_corpus_control_measurement",
+      "source_semantics_sha256": "574ddf6e2f49313064d05e3570fc8779e1a6ee6d9855a18f579bbd627923607e"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:development-corpus-control-measurement-writer",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_corpus_control_measurement.write_development_corpus_control_measurement",
+      "source_semantics_sha256": "fdc723111459da9b305dff5ef27c39d3348e3fef85d36e3efae7c537989e864d"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-client-audit-scope",
+      "source_id": "explicit:development-corpus-control-offline-measurement",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.orchestration.development_corpus_control_measurement.measure_development_corpus_score_file",
+      "source_semantics_sha256": "9f7a74a95a185390fab5d15667290eb349a1ae958785d815a422680589076e6f"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:development-corpus-control-source-reader",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.benchmark.development_corpus_control_measurement.read_development_corpus_control_source",
+      "source_semantics_sha256": "6ff271edb55b02f4e79063da6428017687e80b16dcdb9eb0a77576538f352efa"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
       "source_id": "explicit:development-corpus-cumulative-measurement",
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
@@ -21853,7 +21944,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_resume_score.score_development_corpus_history_file",
-      "source_semantics_sha256": "2e74067d8a30df625580077178d9d0b3738487d16de8531cde49bc19439563b3"
+      "source_semantics_sha256": "069e52ebba3f12e286dd264ccc6d6110cbc81d835de6f2164dd291c02195e9f7"
     },
     {
       "classification": "GATE",
@@ -21898,7 +21989,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_ensemble._bind_child",
-      "source_semantics_sha256": "b2eeea544b36cca38e12a94af00a157be2e078648c5e5204d2302636c2a803ac"
+      "source_semantics_sha256": "d5f7fd4ef205bcf29369337a67f2b7fa4c636eb9a87b4a77343d14d9f8660c95"
     },
     {
       "classification": "GATE",
@@ -22078,7 +22169,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus_resume.run_development_corpus_resume",
-      "source_semantics_sha256": "2eb883c47b559ff6ecb2223b55f3190adb36e4ab032b7c7c02714c0d80e3bc29"
+      "source_semantics_sha256": "9b07cc68b245d8e2e5a71a979f82c7adff3588747173fd912b9bcb30bff20828"
     },
     {
       "classification": "GATE",
@@ -22105,7 +22196,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.development_corpus.run_development_corpus",
-      "source_semantics_sha256": "12b1c98b7cd48546ca408eb54944d55d42f89e81d23e7172ebfedee4e64d841d"
+      "source_semantics_sha256": "b804f6ec828ff88fff89079f27f85605f594e28563456bf37206f63cb21ff105"
     },
     {
       "classification": "GATE",
@@ -29927,6 +30018,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/development_corpus_ensemble.py:_bind_child:metadata-observation:1",
       "source_semantics_sha256": "f5d2ff6f2ea24a1abe770dbdd3c989736e185dda40d00f9de13689fc8d079c5a"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "filesystem-input:orchestration.development_corpus_ensemble:_bind_child:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/development_corpus_ensemble.py:_bind_child:metadata-observation:2",
+      "source_semantics_sha256": "e743abfcf392191bdfc6f88c807b1e61ccfc34df43ac452d22fb8a41db60242e"
     },
     {
       "classification": "GATE",
@@ -42943,9 +43043,9 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "f00abe7b39963aebc536f67012e95028dbb49fe7095c0ef0ad3280b51c3c513a",
+  "source_discovery_semantics_sha256": "b4f5919f6aa6cd383c122dc8bcf323ca714254f959c66625f9dbe6d124077dde",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 307,
+    "AUDITED_MODULE_UNIVERSE": 309,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
@@ -42954,13 +43054,13 @@
     "DIRECT_ENVIRONMENT_INPUT": 549,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2308,
+    "EXPLICIT_NON_FIELD_GATE": 2316,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4261,
-  "source_universe_sha256": "2dfe65553d90c51c3f44a10089f2f775809f73b23698d4d9ad7f6b2079edf53b",
+  "source_occurrence_count": 4271,
+  "source_universe_sha256": "f8927406f8f47856defd5ecbad92da724689a5ca6af7cfb26f451e636c65e84d",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

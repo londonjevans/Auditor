@@ -100,7 +100,8 @@ async def test_labels_are_retained_before_dispatch_never_prompted_and_add_no_req
     )
     assert score.summary.reported_actual_cost_usd == Decimal("0.06")
     assert score.summary.accounted_cost_usd == result.total_accounted_cost_usd
-    assert len(list((tmp_path / "run").iterdir())) == 11
+    assert len(list((tmp_path / "run").iterdir())) == 12
+    assert (tmp_path / "run/control-measurement.json").is_file()
     assert (tmp_path / "run").stat().st_mode & 0o777 == 0o700
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in (tmp_path / "run").iterdir())
     assert score.findings_validated is score.audit_complete is score.qualification_eligible is False

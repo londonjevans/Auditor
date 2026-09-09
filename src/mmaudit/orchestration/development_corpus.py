@@ -19,6 +19,10 @@ from mmaudit.benchmark.development_corpus import (
     bind_development_corpus_benchmark,
     score_development_corpus,
 )
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+    measure_development_corpus_controls,
+)
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
@@ -40,12 +44,19 @@ from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
 from mmaudit.orchestration.development_audit import _write
 from mmaudit.orchestration.development_budget import development_uncertain_reservations
+from mmaudit.orchestration.development_corpus_control_measurement import (
+    write_development_corpus_control_measurement,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import revalidate_evidence_file_binding, write_json_evidence
 from mmaudit.repository.directory_custody import (
     DirectoryCustodyObservation,
     prepare_owned_empty_directory,
     require_same_unlinked_directory_objects,
+)
+from mmaudit.repository.file_custody import (
+    RegularFileCustodyObservation,
+    require_regular_file_custody_unchanged,
 )
 
 type _StopReason = Literal["SHARD_INCOMPLETE", "LOCAL_FAILURE", "INTERRUPTED"]
@@ -298,6 +309,8 @@ async def run_development_corpus(
             )
         )
 
+    measurement_binding: RegularFileCustodyObservation | None = None
+
     def require_outputs() -> None:
         if upstream is not None:
             require_development_corpus_upstream(upstream)
@@ -309,6 +322,14 @@ async def run_development_corpus(
                 max_bytes=MAX_DEVELOPMENT_CORPUS_SCORE_BYTES
                 if binding.path == "score.json"
                 else MAX_DEVELOPMENT_CORPUS_RESULT_BYTES,
+            )
+        if measurement_binding is not None:
+            require_regular_file_custody_unchanged(
+                measurement_binding,
+                label="candidate control measurement",
+                max_bytes=MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+                allow_directory_entry_metadata_change=True,
+                allow_composed_evidence=True,
             )
 
     started = time.monotonic()
@@ -382,9 +403,17 @@ async def run_development_corpus(
             score = score_development_corpus(binding=benchmark_binding, observation=result)
             bindings.append(_write_score(output_dir, score))
             require_outputs()
-    except Exception:
+            measured = measure_development_corpus_controls(score=score)
+            require_outputs()
+            measurement_binding = write_development_corpus_control_measurement(
+                output_dir, measured, revalidate_context=require_outputs
+            )
+            require_outputs()
+    except BaseException as exc:
         if interruption is not None:
             raise interruption from None
+        if not isinstance(exc, Exception):
+            raise
         raise DevelopmentCorpusError(
             "development corpus output/accounting could not be finalized"
         ) from None

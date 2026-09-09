@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+    measure_development_corpus_controls,
+)
 from mmaudit.benchmark.development_corpus_resume import (
     MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
     DevelopmentCorpusResumeBenchmarkScore,
     score_development_corpus_resume,
+)
+from mmaudit.orchestration.development_corpus_control_measurement import (
+    write_development_corpus_control_measurement,
 )
 from mmaudit.orchestration.development_corpus_resume import (
     _require_file,
@@ -19,6 +26,10 @@ from mmaudit.repository.directory_custody import (
     observe_unlinked_directory,
     prepare_owned_empty_directory,
     require_same_unlinked_directory_objects,
+)
+from mmaudit.repository.file_custody import (
+    RegularFileCustodyObservation,
+    require_regular_file_custody_unchanged,
 )
 
 
@@ -44,15 +55,32 @@ def score_development_corpus_history_file(
     require_development_corpus_resume_inputs(inputs)
     require_same_unlinked_directory_objects(parent, label="cumulative scoring output parent")
     output = prepare_owned_empty_directory(output_dir, label="cumulative scoring output")
+    bound: RegularFileCustodyObservation | None = None
+    measurement_binding: RegularFileCustodyObservation | None = None
 
     def require_context() -> None:
         require_development_corpus_resume_inputs(inputs)
         require_same_unlinked_directory_objects(parent, label="cumulative scoring output parent")
         require_same_unlinked_directory_objects(output, label="cumulative scoring output")
+        if bound is not None:
+            _require_file(bound, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES)
+        if measurement_binding is not None:
+            require_regular_file_custody_unchanged(
+                measurement_binding,
+                label="cumulative control measurement",
+                max_bytes=MAX_DEVELOPMENT_CORPUS_CONTROL_MEASUREMENT_BYTES,
+                allow_directory_entry_metadata_change=True,
+                allow_composed_evidence=True,
+            )
 
     require_context()
     bound = _write_cumulative_score(output_dir, score, revalidate_context=require_context)
     require_context()
     _require_file(bound, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES)
+    measured = measure_development_corpus_controls(score=score)
+    require_context()
+    measurement_binding = write_development_corpus_control_measurement(
+        output_dir, measured, revalidate_context=require_context
+    )
     require_context()
     return score

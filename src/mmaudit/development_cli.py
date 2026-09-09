@@ -59,6 +59,9 @@ from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.development_audit import run_development_audit
 from mmaudit.orchestration.development_comparison import compare_development_score_files
 from mmaudit.orchestration.development_corpus import run_development_corpus
+from mmaudit.orchestration.development_corpus_control_measurement import (
+    measure_development_corpus_score_file,
+)
 from mmaudit.orchestration.development_corpus_ensemble import run_development_corpus_ensemble
 from mmaudit.orchestration.development_corpus_judgment import run_development_corpus_judgment
 from mmaudit.orchestration.development_corpus_resume import (
@@ -82,6 +85,31 @@ from mmaudit.repository.development_corpus import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("measure-controls")
+def measure_development_controls_command(
+    score_file: Annotated[Path, typer.Option("--score-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+) -> None:
+    """Measure source-anchored controls from an unchanged retained score without provider access."""
+
+    try:
+        result = measure_development_corpus_score_file(score_file=score_file, output_dir=output_dir)
+    except Exception:
+        typer.echo(
+            "Control measurement refused: invalid or oversized retained score, unsafe output "
+            "or changed evidence custody. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Control measurement written: "
+        + result.measurement_sha256
+        + "; "
+        + result.summary.quality_scope
+        + "; original score unchanged; structural locations are not validated findings."
+    )
 
 
 @development_app.command("score-history")

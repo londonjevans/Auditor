@@ -13,6 +13,9 @@ from typer.testing import CliRunner
 
 import mmaudit.development_cli as cli
 import mmaudit.orchestration.development_corpus_resume_score as scoring_io
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    read_development_corpus_control_measurement,
+)
 from mmaudit.benchmark.development_corpus_resume import read_development_corpus_resume_score
 from mmaudit.cli import app
 from mmaudit.constants import ExitCode
@@ -79,7 +82,15 @@ def test_existing_history_cli_scores_offline_with_original_binding_and_private_o
     assert score.score_sha256 in result.stdout and str(path) not in result.stdout
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     assert stat.S_IMODE((output / "cumulative-score.json").stat().st_mode) == 0o600
-    assert {p.name for p in output.iterdir()} == {"cumulative-score.json"}
+    assert {p.name for p in output.iterdir()} == {
+        "cumulative-score.json",
+        "control-measurement.json",
+    }
+    measured = read_development_corpus_control_measurement(
+        (output / "control-measurement.json").read_bytes()
+    )
+    assert measured.source_score == score
+    assert stat.S_IMODE((output / "control-measurement.json").stat().st_mode) == 0o600
     assert not score.audit_complete and not score.qualification_eligible
 
 

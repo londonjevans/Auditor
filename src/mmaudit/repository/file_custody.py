@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from mmaudit.orchestration.manifest import ManifestFileBinding
-from mmaudit.release_io import DEFAULT_MAX_EVIDENCE_BYTES, read_file_evidence
+from mmaudit.release_io import (
+    DEFAULT_MAX_EVIDENCE_BYTES,
+    FileEvidenceObservation,
+    read_composed_file_evidence,
+    read_file_evidence,
+)
 from mmaudit.repository.directory_custody import (
     DirectoryCustodyObservation,
     observe_unlinked_directory,
@@ -37,17 +42,33 @@ def observe_regular_file_custody(
     expected_binding: ManifestFileBinding | None = None,
     max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
     allow_directory_entry_metadata_change: bool = False,
+    allow_composed_evidence: bool = False,
 ) -> RegularFileCustodyObservation:
     """Keep full file metadata and bytes; explicit directory-entry churn keeps all objects/modes."""
 
     if type(allow_directory_entry_metadata_change) is not bool:
         raise ValueError(f"{label} directory metadata policy must be boolean")
+    if type(allow_composed_evidence) is not bool:
+        raise ValueError(f"{label} composed evidence policy must be boolean")
     absolute_root = Path(os.path.abspath(root))
-    first = read_file_evidence(
-        evidence_root=absolute_root,
-        relative_path=relative_path,
-        max_bytes=max_bytes,
-    )
+
+    def read(selected_path: str | Path) -> FileEvidenceObservation:
+        if allow_composed_evidence:
+            if expected_binding is None:
+                raise ValueError(f"{label} composed custody requires an exact binding")
+            return read_composed_file_evidence(
+                evidence_root=absolute_root,
+                relative_path=selected_path,
+                expected_binding=expected_binding,
+                max_bytes=max_bytes,
+            )
+        return read_file_evidence(
+            evidence_root=absolute_root,
+            relative_path=selected_path,
+            max_bytes=max_bytes,
+        )
+
+    first = read(relative_path)
     if expected_binding is not None and first.binding != expected_binding:
         raise ValueError(f"{label} differs from its expected binding")
 
@@ -60,11 +81,7 @@ def observe_regular_file_custody(
     )
     leaf = parent.path / relative.name
     before = _observe_regular_file_identity(leaf, label=label)
-    second = read_file_evidence(
-        evidence_root=absolute_root,
-        relative_path=first.binding.path,
-        max_bytes=max_bytes,
-    )
+    second = read(first.binding.path)
     after = _observe_regular_file_identity(leaf, label=label)
     if allow_directory_entry_metadata_change:
         require_same_unlinked_directory_objects(parent, label=f"{label} parent")
@@ -85,20 +102,37 @@ def require_regular_file_custody_unchanged(
     *,
     label: str,
     max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+    allow_directory_entry_metadata_change: bool = False,
+    allow_composed_evidence: bool = False,
 ) -> None:
-    """Require the same bytes, inode metadata, parent, and ancestor lineage."""
+    """Keep strict defaults; explicit entry churn never permits changed files or ancestor objects."""
 
+    if type(allow_directory_entry_metadata_change) is not bool:
+        raise ValueError(f"{label} directory metadata policy must be boolean")
+    if type(allow_composed_evidence) is not bool:
+        raise ValueError(f"{label} composed evidence policy must be boolean")
     try:
+        if allow_directory_entry_metadata_change:
+            require_same_unlinked_directory_objects(expected.parent, label=f"{label} parent")
         current = observe_regular_file_custody(
             root=expected.root,
             relative_path=expected.binding.path,
             label=label,
             expected_binding=expected.binding,
             max_bytes=max_bytes,
+            allow_directory_entry_metadata_change=allow_directory_entry_metadata_change,
+            allow_composed_evidence=allow_composed_evidence,
         )
+        if allow_directory_entry_metadata_change:
+            require_same_unlinked_directory_objects(expected.parent, label=f"{label} parent")
     except ValueError as exc:
         raise ValueError(f"{label} changed during custody") from exc
-    if current != expected:
+    same_file = (current.root, current.binding, current.identity) == (
+        expected.root,
+        expected.binding,
+        expected.identity,
+    )
+    if not same_file or (not allow_directory_entry_metadata_change and current != expected):
         raise ValueError(f"{label} changed during custody")
 
 

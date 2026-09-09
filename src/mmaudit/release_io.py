@@ -268,6 +268,36 @@ def read_file_evidence(
     )
 
 
+def read_composed_file_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    expected_binding: ManifestFileBinding,
+    max_bytes: int,
+) -> FileEvidenceObservation:
+    """Explicit composed read at an exact prebound size; ordinary reader limits remain unchanged."""
+
+    if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_COMPOSED_EVIDENCE_BYTES:
+        raise ValueError("composed evidence byte bound is invalid")
+    if type(expected_binding) is not ManifestFileBinding:
+        raise ValueError("composed evidence requires an exact original binding")
+    expected = ManifestFileBinding.model_validate(
+        expected_binding.model_dump(mode="json"), strict=True
+    )
+    normalized = _normalize_evidence_path(relative_path)
+    if normalized != expected.path or not 0 < expected.size <= max_bytes:
+        raise ValueError("composed evidence differs from its selected path or byte bound")
+    observed = _observe_file_twice(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        max_bytes=expected.size,
+    )
+    binding = _binding(normalized, observed.content)
+    if binding != expected:
+        raise ValueError("composed evidence file differs from its original binding")
+    return FileEvidenceObservation(content=observed.content, binding=binding)
+
+
 def write_json_evidence(
     *,
     evidence_root: Path,

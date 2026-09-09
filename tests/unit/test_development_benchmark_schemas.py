@@ -9,10 +9,14 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from mmaudit.benchmark.development_corpus import score_development_corpus
+from mmaudit.benchmark.development_corpus_control_measurement import (
+    measure_development_corpus_controls,
+)
 from mmaudit.benchmark.development_corpus_resume import score_development_corpus_resume
 from scripts.generate_release_schemas import MODELS, rendered_schema
 from tests.development_benchmark_support import scored_file_response
 from tests.development_corpus_benchmark_support import paired_observation
+from tests.development_corpus_control_measurement_support import retained_score
 from tests.development_corpus_judgment_support import manifest_judgment_response
 from tests.development_corpus_resume_score_support import labelled_history
 
@@ -40,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_resume_attempt.schema.json",
         "development_corpus_resume_history.schema.json",
         "development_corpus_resume_benchmark_score.schema.json",
+        "development_corpus_control_measurement.schema.json",
         "development_corpus_ensemble_plan.schema.json",
         "development_corpus_ensemble_observation.schema.json",
         "development_corpus_ensemble_score.schema.json",
@@ -205,4 +210,34 @@ def test_cumulative_score_schema_requires_original_binding_and_bounded_nonqualif
         data["qualification_eligible"] = True
     else:
         data["root_independence"] = "ESTABLISHED"
+    assert not validator.is_valid(data)
+
+
+@pytest.mark.parametrize("cumulative", [False, True])
+@pytest.mark.parametrize(
+    "field", ["source", "stage", "claims", "authority", "root", "annotation_policy"]
+)
+def test_control_measurement_schema_retains_typed_source_and_nonqualifying_bounds(
+    cumulative, field
+):
+    schema = json.loads(
+        (ROOT / "schemas/development_corpus_control_measurement.schema.json").read_text()
+    )
+    data = measure_development_corpus_controls(
+        score=retained_score(cumulative=cumulative)
+    ).model_dump(mode="json")
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid(data)
+    if field == "source":
+        data["source_score"] = None
+    elif field == "stage":
+        data["claims"][0]["stage_index"] = 9
+    elif field == "claims":
+        data["claims"] = data["claims"][:1] * 1025
+    elif field == "authority":
+        data["qualification_eligible"] = True
+    elif field == "root":
+        data["root_independence"] = "ESTABLISHED"
+    else:
+        data["annotation_policy"] = "EXACT_CLASS_REQUIRED"
     assert not validator.is_valid(data)
