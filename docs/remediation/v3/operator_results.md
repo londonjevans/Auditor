@@ -70,7 +70,11 @@ Calibration still requires 8 candidates across 6 independent roots; this set pro
 
 The natural next action is a live authenticated smoke on this selection: it is the only thing that
 can convert the five `UNAVAILABLE` predicates, and the historical cost of a 1-case smoke is
-≈ 0.04 USD, with 21 indices consumed and **22 the next free index**. The operator will not launch it
+≈ 0.04 USD. **Index correction:** the operator initially wrote that index 22 was free; it is not.
+The cumulative ledger shows smoke indices 1–19, 21 and 22 consumed (20 was gated and never
+launched), index 22 having been the 2026-08-27 run whose bundle `29702a02…` verified
+`VALID / NONCREDITING / NONAUTHORIZING` before the 24-case campaign failed closed. **The next free
+index is 23.** The operator will not launch it
 without an explicit instruction, because it is the first authenticated-runner execution since
 2026-08-27 and it consumes a run index permanently.
 
