@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,12 @@ from pydantic import BaseModel, TypeAdapter
 from mmaudit.benchmark.development_corpus import (
     MAX_DEVELOPMENT_CORPUS_SCORE_BYTES,
     DevelopmentCorpusBenchmarkScore,
+)
+from mmaudit.benchmark.development_corpus_resume import (
+    MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
+    DevelopmentCorpusResumeBenchmarkScore,
+    read_development_corpus_resume_score,
+    score_development_corpus_resume,
 )
 from mmaudit.models.development_audit import development_ledger_request_id
 from mmaudit.models.development_corpus import (
@@ -369,6 +376,42 @@ def _write(root: Path, name: str, model: BaseModel) -> RegularFileCustodyObserva
     )
 
 
+def _write_cumulative_score(
+    root: Path,
+    score: DevelopmentCorpusResumeBenchmarkScore,
+    *,
+    revalidate_context: Callable[[], object],
+) -> RegularFileCustodyObservation:
+    """Keep the composed score's separate 96 MB cap; no older history/output bound is widened."""
+
+    if type(score) is not DevelopmentCorpusResumeBenchmarkScore:
+        raise DevelopmentCorpusResumeError("cumulative output requires its exact score type")
+
+    def validate(content: bytes) -> None:
+        revalidate_context()
+        if read_development_corpus_resume_score(content) != score:
+            raise DevelopmentCorpusResumeError("cumulative output differs from retained evidence")
+        revalidate_context()
+
+    revalidate_context()
+    binding = write_json_evidence(
+        evidence_root=root,
+        relative_path="cumulative-score.json",
+        value=score.model_dump(mode="json"),
+        max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
+        validate_content=validate,
+        require_private_parent=True,
+    )
+    return observe_regular_file_custody(
+        root=root,
+        relative_path="cumulative-score.json",
+        expected_binding=binding,
+        label="cumulative score output",
+        max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES,
+        allow_directory_entry_metadata_change=True,
+    )
+
+
 async def run_development_corpus_resume(
     *,
     prepared: PreparedDevelopmentCorpusResume,
@@ -458,6 +501,7 @@ async def run_development_corpus_resume(
         _write(output_dir, "plan.json", prepared.plan),
     ]
     current: tuple[DevelopmentCorpusAccountingEntry, ...] = ()
+    score_binding: RegularFileCustodyObservation | None = None
 
     def require_context() -> CostLedgerSnapshot:
         if inputs is not None:
@@ -465,6 +509,8 @@ async def run_development_corpus_resume(
         require_same_unlinked_directory_objects(custody, label="continuation output")
         for binding in bindings:
             _require_file(binding, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_BYTES)
+        if score_binding is not None:
+            _require_file(score_binding, max_bytes=MAX_DEVELOPMENT_CORPUS_RESUME_SCORE_BYTES)
         snapshot = ledger.snapshot()
         validate_development_accounting_entries(
             (*prior, *current), snapshot, budget_usd=policy.total_budget_usd
@@ -553,9 +599,17 @@ async def run_development_corpus_resume(
         require_context()
         bindings.append(_write(output_dir, "result.json", result))
         require_context()
-    except Exception:
+        if result.original_score is not None:
+            score = score_development_corpus_resume(history=result)
+            score_binding = _write_cumulative_score(
+                output_dir, score, revalidate_context=require_context
+            )
+            require_context()
+    except BaseException as exc:
         if interruption is not None:
             raise interruption from None
+        if not isinstance(exc, Exception):
+            raise
         raise DevelopmentCorpusResumeError(
             "continuation output or accounting could not be finalized"
         ) from None

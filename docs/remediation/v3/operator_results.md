@@ -3,6 +3,80 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-09T07:24Z — **`V3-RESUMESCORE-001` verified at $0: the completed 19/19 corpus now has an official cumulative score (`COMPLETE_OBSERVATIONS`, 53 claims, shard completion 1.0, first-attempt 10/19 preserved). Recall is officially 0/45 — the class gate again, and the resume scorer embeds its labels so the diagnostic rescoring used before is no longer possible. The class fix is now the only thing between this build and its first real recall number.**
+
+Timestamp from the clock. No provider call since 05:02Z. Development spend across ledgers remains
+6.542312528 USD; uncertain reservations 3.999084216 USD. Cumulative ledger untouched. Ledger
+unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. `score-history` works
+
+```
+mmaudit development score-history --history-file <resume result.json> --output-dir <new>
+-> Cumulative score written: e4d5787b…; COMPLETE_OBSERVATIONS; original first-attempt score unchanged
+```
+
+`cumulative-score.json` under
+`…/development-audits/score-history-005k-deepseek-20260909/`. Provider-free, no ledger access.
+
+| | cumulative | first attempt (preserved) |
+|---|---|---|
+| scope | `COMPLETE_OBSERVATIONS` | `INCOMPLETE_OBSERVATIONS` |
+| shard completion | **19/19 = 1.0** | 10/19 = 0.526316 |
+| claims | 53 (34 invariant, 19 advisory, 3 at planted sites) | 33 |
+| `unique_root_recall` | **0.0 (0/45)** | null (0/45, incomplete) |
+| `severity_weighted_root_recall` | 0.0 (0/75) | null |
+| `severity_weighted_structural_precision` | 0.0 (0/177) | null |
+| `observed_missed_root_ids` | 45 | 18 |
+| `unobserved_root_ids` | **0** | 27 |
+| reported actual cost | 1.34830212 (sum across attempts) | 0.71268252 |
+| uncertain carried | 0.74143798 | same, not cleared |
+
+`interpretation: CUMULATIVE_STRUCTURAL_LABEL_MATCHES_NOT_VALIDATED_FINDINGS`,
+`root_independence: NOT_ESTABLISHED`, `actual_cost_scope: SUM_REPORTED_ACTUAL_NOT_TOTAL_BILL`.
+Defect B from 05:02Z is closed and the artifact is exactly what was asked for: cumulative quality,
+first-attempt ratios kept separate, full denominator, all liabilities visible.
+
+### 2. But the official recall is still 0, and the workaround is now unavailable
+
+All 34 invariant claims carry `vulnerability_class: other`, so the exact-class gate rejects every
+one, as at 00:16Z and 02:18Z. Previously the operator could rescore an observation offline against
+class-wildcard labels to show what the detector actually did. **That is no longer possible for a
+continuation:** `score_development_corpus_resume(*, history)` takes only the history, and the labels
+are embedded in the history's original score, so substituting labels would mean rebuilding the
+evidence chain, which the operator will not do. Net effect: the build's most complete measurement is
+reported as zero, and the honest diagnostic is now blocked by the same gate.
+
+### 3. Operator-computed coordinate tally — explicitly not a product score
+
+To keep a number available, the operator counted directly over the 53 retained claims and the 75
+labelled controls: a control counts as touched when an invariant claim on the control's own file has
+a primary span containing the control's `required_origin_line`. No class comparison, no product code.
+
+| | value |
+|---|---|
+| controls touched | 15 / 75 |
+| planted roots touched | **9 / 45** |
+| guarded controls touched (would-be false positives) | **6 / 30** |
+| by pattern (of 15 each) | checked-arithmetic (guarded) 5, deposit cast 4, borrow cast 3, guardian drain 2, re-initialization (guarded) 1 |
+| markets with ≥1 touch | 5 / 15 (000, 001, 005, 012, 014) |
+
+This is coarser than the product's matcher (it ignores class, `claim_sites` and duplicate handling)
+and must not be recorded as a score; it is offered so the run is not left looking like a total miss.
+Note the guarded side: 6 of 30 guarded controls drew invariant claims, i.e. the candidate asserts a
+violation where the label says the code is protected. That is a real precision signal and it is
+invisible in the official 0/177.
+
+### 4. Requests
+
+1. **Class/kind as reported attributes, not gates** (01:02Z §2, 00:16Z, 02:18Z). Every measured
+   artifact this build now produces is zeroed by it, and after RESUMESCORE the offline workaround is
+   gone. With it, `cumulative-score.json` becomes the first real recall/precision number for a
+   19-file, 45-root corpus, with no rerun and no further spend.
+2. Repeat-N stability work (05:02Z §4) remains queued in the operator's view; the cumulative
+   history artifact is the natural container for it (N attempts, per-root detection frequency).
+3. Record RESUMESCORE as verified with the table in §1.
+
 ## 2026-09-09T05:43Z — `V3-RESUMEMETA-001` verified at $0: the ordinary `models discover` file is now accepted by `resume-manifest`. Hand-assembled metadata is no longer needed. No run.
 
 Timestamp from the clock. No provider call since 05:02Z; development spend across ledgers remains

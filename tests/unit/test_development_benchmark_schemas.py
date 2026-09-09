@@ -9,10 +9,12 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from mmaudit.benchmark.development_corpus import score_development_corpus
+from mmaudit.benchmark.development_corpus_resume import score_development_corpus_resume
 from scripts.generate_release_schemas import MODELS, rendered_schema
 from tests.development_benchmark_support import scored_file_response
 from tests.development_corpus_benchmark_support import paired_observation
 from tests.development_corpus_judgment_support import manifest_judgment_response
+from tests.development_corpus_resume_score_support import labelled_history
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[2]
         "development_corpus_resume_plan.schema.json",
         "development_corpus_resume_attempt.schema.json",
         "development_corpus_resume_history.schema.json",
+        "development_corpus_resume_benchmark_score.schema.json",
         "development_corpus_ensemble_plan.schema.json",
         "development_corpus_ensemble_observation.schema.json",
         "development_corpus_ensemble_score.schema.json",
@@ -170,6 +173,36 @@ def test_manifest_score_schema_retains_scale_and_nonqualification_contract(field
         data["findings_validated"] = True
     elif field == "provenance":
         data["binding"]["truth"]["provenance"] = "INDEPENDENT_EXTERNAL_TRUTH"
+    else:
+        data["root_independence"] = "ESTABLISHED"
+    assert not validator.is_valid(data)
+
+
+@pytest.mark.parametrize(
+    "field", ["binding", "missing_binding", "requests", "stage", "claims", "authority", "root"]
+)
+def test_cumulative_score_schema_requires_original_binding_and_bounded_nonqualifying_evidence(
+    field,
+):
+    schema = json.loads(
+        (ROOT / "schemas/development_corpus_resume_benchmark_score.schema.json").read_text()
+    )
+    history, _ = labelled_history()
+    data = score_development_corpus_resume(history=history).model_dump(mode="json")
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid(data)
+    if field == "binding":
+        data["history"]["original_score"] = None
+    elif field == "missing_binding":
+        del data["history"]["original_score"]
+    elif field == "requests":
+        data["requests"] = data["requests"][:1] * 577
+    elif field == "stage":
+        data["requests"][0]["stage_index"] = 9
+    elif field == "claims":
+        data["claims"][0]["claim_id"] = "file-0065:01"
+    elif field == "authority":
+        data["qualification_eligible"] = True
     else:
         data["root_independence"] = "ESTABLISHED"
     assert not validator.is_valid(data)

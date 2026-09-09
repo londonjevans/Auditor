@@ -23,7 +23,9 @@ from mmaudit.models.development_corpus import (
     DevelopmentCorpusObservation,
     DevelopmentCorpusPlan,
     DevelopmentCorpusRootCauseReference,
+    DevelopmentCorpusShardObservation,
 )
+from mmaudit.models.development_review import _DevelopmentModel
 from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import _decode_json
@@ -188,27 +190,46 @@ class DevelopmentCorpusBenchmarkSummary(DevelopmentBenchmarkSummary):
     missing_shard_runtime_ids: tuple[str, ...] = Field(max_length=64)
 
 
-def _measure(
-    binding: DevelopmentCorpusBenchmarkBinding, observation: DevelopmentCorpusObservation
-) -> tuple[tuple[DevelopmentCorpusClaimMeasurement, ...], DevelopmentCorpusBenchmarkSummary]:
-    if binding != bind_development_corpus_benchmark(
-        plan=observation.plan,
-        truth_content=binding.truth_file_content.encode("utf-8"),
-        expected_truth_sha256=binding.truth_file_sha256,
-    ):
-        raise ValueError("manifest score differs from its pre-dispatch binding")
+class DevelopmentCorpusClaimSummary(_DevelopmentModel):
+    """Shared structural measurements, independent of first-attempt or cumulative accounting."""
+
+    quality_scope: Literal["COMPLETE_OBSERVATIONS", "INCOMPLETE_OBSERVATIONS"]
+    total_claim_count: int = Field(ge=0, le=1024)
+    invariant_claim_count: int = Field(ge=0, le=1024)
+    advisory_claim_count: int = Field(ge=0, le=1024)
+    advisories_at_planted_sites_count: int = Field(ge=0, le=1024)
+    duplicate_claim_count: int = Field(ge=0, le=1024)
+    unmatched_invariant_claim_count: int = Field(ge=0, le=1024)
+    guarded_control_claim_count: int = Field(ge=0, le=1024)
+    expected_root_ids: tuple[str, ...] = Field(max_length=1024)
+    matched_root_ids: tuple[str, ...] = Field(max_length=1024)
+    unmatched_expected_root_ids: tuple[str, ...] = Field(max_length=1024)
+    observed_missed_root_ids: tuple[str, ...] = Field(max_length=1024)
+    unobserved_root_ids: tuple[str, ...] = Field(max_length=1024)
+    unique_root_recall: DevelopmentCorpusMeasurementRatio
+    severity_weighted_root_recall: DevelopmentCorpusMeasurementRatio
+    all_claim_unique_root_fraction: DevelopmentCorpusMeasurementRatio
+    severity_weighted_structural_precision: DevelopmentCorpusMeasurementRatio
+
+
+def _measure_corpus_claims(
+    truth: DevelopmentCorpusBenchmarkTruth,
+    observations: tuple[DevelopmentCorpusShardObservation, ...],
+    *,
+    complete: bool,
+) -> tuple[tuple[DevelopmentCorpusClaimMeasurement, ...], DevelopmentCorpusClaimSummary]:
+    """Keep one exact label-matching policy for original and cumulative measurements."""
+
     claims: list[DevelopmentCorpusClaimMeasurement] = []
     matched: set[str] = set()
     observed_files: set[str] = set()
-    for shard in observation.observations:
+    for shard in observations:
         if shard.status != "OBSERVED":
             continue
         observed_files.add(shard.source_filename)
         assert shard.response is not None
         for index, finding in enumerate(shard.response.findings, 1):
-            control = match_development_control(
-                binding.truth.controls, shard.source_filename, finding
-            )
+            control = match_development_control(truth.controls, shard.source_filename, finding)
             disposition: Literal[
                 "MATCHED_ROOT",
                 "DUPLICATE_OR_CONSEQUENCE",
@@ -236,15 +257,11 @@ def _measure(
                     weight=_WEIGHTS[control.severity if control is not None else finding.severity],
                 )
             )
-    roots = tuple(c for c in binding.truth.controls if c.expected == "PLANTED")
+    roots = tuple(c for c in truth.controls if c.expected == "PLANTED")
     misses = tuple(c for c in roots if c.control_id not in matched)
-    complete = observation.status == "OBSERVED_ALL_SHARDS"
     matched_weight = sum(_WEIGHTS[c.severity] for c in roots if c.control_id in matched)
-    expected = tuple(s.shard_id for s in observation.plan.shards)
-    accounted = {a.shard_id for a in observation.accounting}
-    timed = {s.shard_id for s in observation.observations}
     advisories = sum(c.disposition in {"ADVISORY", "ADVISORY_AT_PLANTED_SITE"} for c in claims)
-    summary = DevelopmentCorpusBenchmarkSummary(
+    summary = DevelopmentCorpusClaimSummary(
         quality_scope="COMPLETE_OBSERVATIONS" if complete else "INCOMPLETE_OBSERVATIONS",
         total_claim_count=len(claims),
         invariant_claim_count=len(claims) - advisories,
@@ -276,6 +293,29 @@ def _measure(
         severity_weighted_structural_precision=_ratio(
             matched_weight, sum(c.weight for c in claims), complete=complete
         ),
+    )
+    return tuple(claims), summary
+
+
+def _measure(
+    binding: DevelopmentCorpusBenchmarkBinding, observation: DevelopmentCorpusObservation
+) -> tuple[tuple[DevelopmentCorpusClaimMeasurement, ...], DevelopmentCorpusBenchmarkSummary]:
+    if binding != bind_development_corpus_benchmark(
+        plan=observation.plan,
+        truth_content=binding.truth_file_content.encode("utf-8"),
+        expected_truth_sha256=binding.truth_file_sha256,
+    ):
+        raise ValueError("manifest score differs from its pre-dispatch binding")
+    claims, quality = _measure_corpus_claims(
+        binding.truth,
+        observation.observations,
+        complete=observation.status == "OBSERVED_ALL_SHARDS",
+    )
+    expected = tuple(s.shard_id for s in observation.plan.shards)
+    accounted = {a.shard_id for a in observation.accounting}
+    timed = {s.shard_id for s in observation.observations}
+    summary = DevelopmentCorpusBenchmarkSummary(
+        **quality.model_dump(),
         first_attempt_shard_completion=_ratio(
             observation.completed_shard_count, len(expected), complete=True
         ),

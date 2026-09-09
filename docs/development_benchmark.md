@@ -422,8 +422,8 @@ as well as the existing discovery payload and endpoint snapshot formats. No manu
 is needed. The complete file stays byte-bound under the existing 2 MB metadata limit, including
 its validated provenance and model-level reasoning facts. An endpoint-only snapshot still needs
 enough reasoning evidence of its own; accepting the wrapper does not relax that requirement.
-Serialized provenance is not execution authority, and this compatibility does not add cumulative
-history scoring or change original model, route, request, cost or first-attempt measurements.
+Serialized provenance is not execution authority, and metadata format support does not change
+original model, route, request, cost or first-attempt measurements.
 
 Only sources without a retained `OBSERVED` response are requested. Every request still carries
 the entire original source context and exactly the original model/route, request body, token
@@ -456,10 +456,47 @@ can be reconstructed from missing diagnostics.
 The summary is `CUMULATIVE_RESPONSES_NOT_VALIDATED_ANALYSIS`. It separately reports first-attempt
 and cumulative response scope, available claims, all recorded costs and summed run durations;
 unobserved between-run waiting time is not invented. It does not fabricate a merged first-attempt
-candidate or improve its original score. Resume-aware scoring/review/configuration consumers and
-recovery of an already complete candidate's missing ensemble review stages are not implemented
-by this command. Full response coverage, model agreement and carried estimates do not establish
+candidate or improve its original score. Cumulative scoring is described below; resume-aware
+review/configuration and recovery of an already complete candidate's missing ensemble review
+stages remain unavailable. Full response coverage, model agreement and carried estimates do not establish
 semantic correctness, independent roots, a hard budget ceiling or a qualified autonomous audit.
+
+### Cumulative scoring under the original retained labels
+
+When a continuation history retains `original_score`, `resume-manifest` automatically writes
+`cumulative-score.json` after its durable `result.json`. The original score, raw label binding and
+history remain unchanged. Scoring adds no provider request or charge and does not supply labels
+to model requests. Unlabelled histories remain unscored; missing labels are not inferred.
+
+For an already produced history, `development score-history --history-file <absolute-history-path>
+--output-dir <absolute-fresh-directory>` performs the same measurement offline. It accepts no
+replacement labels, original-score override, model metadata, credentials or ledger arguments.
+A history without its retained original score is refused, without creating the output directory.
+This interface description does not select private files or authorize a paid command.
+
+`first_attempt_summary` is exactly the original measurement. `cumulative_quality` applies the
+same class/kind/origin/anchor matcher and frozen severity weights to each accepted source response
+once, in original manifest order. Claims keep stable IDs and explicit originating stage, run and
+request IDs. Global duplicate roots, advisories and guarded/unmatched claims stay in the appropriate
+denominators. All expected roots and selected source lines remain; incomplete histories keep null
+quality ratios, even where observed claims match labels. Complete structural recall is not validated
+semantic correctness, exhaustive external truth, independence, qualification or a completed audit.
+
+`requests` lists every selected planned request, including old unobserved requests, but excludes
+reused-source placeholders from subsequent full-context plans. Each accounting index refers to the
+exact retained stage's accounting array (`0` means the original stage). Missing accounting is not
+proof of zero cost. Missing per-shard runtime, unknown actual cost, active reservations, failed
+attempts and all known charges remain visible after a later successful response. `cumulative_summary`
+retains exact history totals; reported actual-cost sums are not a settled total bill. Recorded run
+durations exclude unobserved between-run waits and scoring/finalization work, not end-to-end time.
+
+The separate composed score has a 96 MB byte cap; the history reader/writer stays at 64 MB and older
+consumers keep their limits. Source/claim/stage/request bounds remain 64/1024/8/72 accounted requests;
+up to 576 selected planned requests can remain visible across nine entirely incomplete stages.
+Outputs require a fresh private directory and exact input/output file and ancestor custody.
+Invalid inputs, custody drift or scoring failures never return scoring success. Already durable
+history and charges are retained if a derivative cannot be written; original cancellation takes
+precedence over a secondary scoring failure. Such failure is not an audit pass or cost clearance.
 
 ### Full-manifest development ensemble
 

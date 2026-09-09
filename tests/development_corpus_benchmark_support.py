@@ -93,12 +93,13 @@ def paired_case(**changes):
     return corpus_case(source_files=paired_sources(), **changes)
 
 
-def paired_observation(*, observed_count=6, responses=None, both_planted=False):
+def paired_observation(*, observed_count=6, responses=None, both_planted=False, policy=None):
     responses = tuple(paired_response(i) for i in range(1, 7)) if responses is None else responses
     prepared, candidate = pure_candidate(
         source_files=paired_sources(),
         observed_count=observed_count,
         claims=tuple(len(r["findings"]) for r in responses),
+        policy=policy,
     )
     data = candidate.model_dump()
     shards = []

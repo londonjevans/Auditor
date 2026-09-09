@@ -66,6 +66,9 @@ from mmaudit.orchestration.development_corpus_resume import (
     require_development_corpus_resume_inputs,
     run_development_corpus_resume,
 )
+from mmaudit.orchestration.development_corpus_resume_score import (
+    score_development_corpus_history_file,
+)
 from mmaudit.orchestration.development_ensemble import run_development_ensemble
 from mmaudit.orchestration.development_judgment import run_development_judgment
 from mmaudit.release_io import (
@@ -79,6 +82,33 @@ from mmaudit.repository.development_corpus import (
 )
 
 development_app = typer.Typer(help="Explicitly non-qualifying development utilities.")
+
+
+@development_app.command("score-history")
+def score_development_history_command(
+    history_file: Annotated[Path, typer.Option("--history-file")],
+    output_dir: Annotated[Path, typer.Option("--output-dir")],
+) -> None:
+    """Score a retained continuation history against its original labels, with no provider access."""
+
+    try:
+        result = score_development_corpus_history_file(
+            history_file=history_file, output_dir=output_dir
+        )
+    except Exception:
+        typer.echo(
+            "Cumulative scoring refused: missing original label binding, invalid or oversized "
+            "history, unsafe output or changed evidence custody. No provider call was selected.",
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION) from None
+    typer.echo(
+        "Cumulative score written: "
+        + result.score_sha256
+        + "; "
+        + result.cumulative_quality.quality_scope
+        + "; original first-attempt score unchanged; no audit or qualification credit."
+    )
 
 
 @development_app.command("resume-manifest")
