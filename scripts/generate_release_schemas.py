@@ -36,6 +36,7 @@ from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
 from mmaudit.models.actor_model import ActorModel, ActorModelEvaluation
+from mmaudit.models.authenticated_calibration import AuthenticatedModelCalibrationArtifact
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
 from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
 from mmaudit.models.authenticated_runner_durable_bundle import (
@@ -250,6 +251,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "authenticated_cross_lineage_runner_evidence.schema.json": (
         AuthenticatedCrossLineageRunnerEvidence
     ),
+    "authenticated_model_calibration.schema.json": AuthenticatedModelCalibrationArtifact,
     "authenticated_runner_durable_evidence_bundle.schema.json": (
         AuthenticatedRunnerDurableEvidenceBundle
     ),
@@ -2117,6 +2119,22 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
 
     schema = model.model_json_schema()
     _strengthen_minimum_floor_recovery_contract(schema)
+    if filename == "authenticated_model_calibration.schema.json":
+        runner = schema["$defs"]["AuthenticatedCrossLineageRunnerEvidence"]
+        runner["properties"]["schema_version"] = {"const": "1.1", "type": "string"}
+        runner["properties"]["effective_config_sha256"] = {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string",
+        }
+        runner["required"] = sorted(
+            set(runner["required"]) | {"schema_version", "effective_config_sha256"}
+        )
+        schema["$comment"] = (
+            "Non-authorizing measurements only. Runtime validation additionally reconstructs "
+            "every source/selection/score/hash/cost join. Policy derivation requires original "
+            "live PID-local custody; JSON cannot recreate it. Campaign registration, external "
+            "anchoring, successor-release admission and independent qualification remain separate."
+        )
     if filename == "models_config.schema.json":
         lineage = schema["$defs"]["ModelLineageConfig"]
         measured_quality = lineage["properties"]["measured_quality"]

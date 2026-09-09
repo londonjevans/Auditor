@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 4250,
-  "inventory_sha256": "2e21d6b0e3f4442c4205f6c8f3b775c3565acebadefec75c541eacb44efaa66e",
+  "gate_source_count": 4261,
+  "inventory_sha256": "6696267d130bcef160e90f263d7b972ed0cd1ce0c2b324335a7ee5db089e8eb8",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -565,8 +565,16 @@
         "direct-env-ast:cli:_preflight_model_calibration_output:working-directory:2",
         "direct-env-ast:cli:_preflight_model_calibration_output:working-directory:3",
         "direct-env-ast:cli:_preflight_model_calibration_output:working-directory:4",
+        "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.observe.discard:process-identity:1",
+        "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.pristine:process-identity:1",
+        "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.revoke:process-identity:1",
+        "direct-env-ast:models.authenticated_calibration:_build_calibration_authority:process-identity-binding:1",
+        "direct-env-ast:models.authenticated_calibration:_build_calibration_authority:process-identity:1",
         "direct-env-ast:models.calibration:_open_private_json_parent:working-directory:1",
         "entropy-ast:cli:models_benchmark.execute:uuid-uuid4:1",
+        "explicit:authenticated-calibration-observation",
+        "explicit:authenticated-calibration-policy-proposal",
+        "explicit:authenticated-calibration-revocation",
         "explicit:development-benchmark-comparison",
         "explicit:development-benchmark-score",
         "explicit:development-benchmark-truth",
@@ -3354,6 +3362,8 @@
         "direct-env-ast:release_validation:_observe_unlinked_regular_file:working-directory:1",
         "direct-env-ast:repository.directory_custody:observe_unlinked_directory:working-directory:1",
         "direct-env-ast:repository.file_custody:observe_regular_file_custody:working-directory:1",
+        "explicit:authenticated-calibration-canonical-bytes",
+        "explicit:authenticated-calibration-reader",
         "explicit:bound-read-only-evidence-stream",
         "explicit:bounded-composed-json-writer",
         "explicit:bounded-prebound-composed-reader",
@@ -4109,6 +4119,7 @@
         "audited-module:logging",
         "audited-module:models.__init__",
         "audited-module:models.actor_model",
+        "audited-module:models.authenticated_calibration",
         "audited-module:models.authenticated_runner",
         "audited-module:models.authenticated_runner_cost_plan",
         "audited-module:models.authenticated_runner_durable_bundle",
@@ -4662,7 +4673,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 4302,
+  "source_count": 4313,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -10364,6 +10375,15 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:models.authenticated_calibration",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py",
+      "source_semantics_sha256": "9697e30bf2c51fd1f36b6c62d21c0feb2a3c6e3efd5ba7405bbc173e01e8ab85"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
       "source_id": "audited-module:models.authenticated_runner",
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
@@ -10845,7 +10865,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/qualification.py",
-      "source_semantics_sha256": "c86725933a34d2fe8c33103c15334f58943220e636b6376f43e092e8de4c6ed8"
+      "source_semantics_sha256": "40994709c1644a2d944cf5c7b00400375ab5be9f83ae8f47b4737470ae68733c"
     },
     {
       "classification": "GATE",
@@ -11115,7 +11135,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "112420d894afcc255fb2bf77e42c8283b72e35ddd3b79e79bc17bf9eb8a1fee9"
+      "source_semantics_sha256": "e06819fb0a161502b557d2867ed431d14703d934675fb743a835f910c20abcf5"
     },
     {
       "classification": "GATE",
@@ -17554,6 +17574,51 @@
     },
     {
       "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.observe.discard:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py:_build_calibration_authority.observe.discard:process-identity:1",
+      "source_semantics_sha256": "6930245e0dd9377a7339ae2d094143031e556ef43505da5c213660a867830c88"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.pristine:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py:_build_calibration_authority.pristine:process-identity:1",
+      "source_semantics_sha256": "b5ca8291d95c3ba200c5d29cd25c0916338a010dce6726d28f04cdd8cc88fbb9"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "direct-env-ast:models.authenticated_calibration:_build_calibration_authority.revoke:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py:_build_calibration_authority.revoke:process-identity:1",
+      "source_semantics_sha256": "1d12425c6b38cbd5ec3074b4818fcd3bc7ca1358ce7df1d5bc515435cae7c02e"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "direct-env-ast:models.authenticated_calibration:_build_calibration_authority:process-identity-binding:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py:_build_calibration_authority:process-identity-binding:1",
+      "source_semantics_sha256": "ff01b0d1f2c412ac5f4b30afa5348c7f22056cbded455edc1f676479167821c9"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "direct-env-ast:models.authenticated_calibration:_build_calibration_authority:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/authenticated_calibration.py:_build_calibration_authority:process-identity:1",
+      "source_semantics_sha256": "ebb3c4d029b189b3b9af5fbc089b8e85c7e3758ed8f3058b60ff8aa4f6ad2c7c"
+    },
+    {
+      "classification": "GATE",
       "logical_gate_id": "gate-authenticated-real-campaign",
       "source_id": "direct-env-ast:models.authenticated_runner:_build_authenticated_cross_lineage_runner_authority.issue:process-identity:1",
       "source_kind": "DIRECT_ENVIRONMENT_INPUT",
@@ -21772,6 +21837,51 @@
       "source_occurrence_count": 1,
       "source_path": "mmaudit.models.schemas.AuditReport",
       "source_semantics_sha256": "71be5251bd20755f5c0df519e6e39ff48907c5e3992d6532b720a0500d042d74"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:authenticated-calibration-canonical-bytes",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.authenticated_calibration.authenticated_model_calibration_bytes",
+      "source_semantics_sha256": "5caa5f48c36ac5c2496fb902cdfa7958a5596027eee1333ed4be99cc3bacad1e"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "explicit:authenticated-calibration-observation",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.authenticated_calibration._build_calibration_authority.<locals>.observe",
+      "source_semantics_sha256": "10cde781978e2ca4966e94f9d76f00520c72e3b0a0a6663d328150e7dc7f83e1"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "explicit:authenticated-calibration-policy-proposal",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.authenticated_calibration._build_calibration_authority.<locals>.derive",
+      "source_semantics_sha256": "1dc53e8f0e799484dd27b617c11c52e8f4874ab7e36e5e9914be17c31eb6137c"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "explicit:authenticated-calibration-reader",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.authenticated_calibration.read_authenticated_model_calibration",
+      "source_semantics_sha256": "70b7b690f7dca6978dbdacb6a11e91637da5ba984b54440e87a08693c04c0e50"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-benchmark-evidence-authority",
+      "source_id": "explicit:authenticated-calibration-revocation",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "mmaudit.models.authenticated_calibration._build_calibration_authority.<locals>.revoke",
+      "source_semantics_sha256": "4e3d69684d4be562a8b06a7e3116bfa2cc4013c5a8effac34f17a03ea940607e"
     },
     {
       "classification": "GATE",
@@ -43383,24 +43493,24 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "fe6a7724299a085e9d919c9a504d16cfaa2124bbfa3d73b97535b5f7b9958bab",
+  "source_discovery_semantics_sha256": "85ed75b626936d142cec8cb75f4fff071587e2a1572b8755dc0043fa2f215214",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 315,
+    "AUDITED_MODULE_UNIVERSE": 316,
     "AUDIT_CONFIG_LEAF": 513,
     "AUDIT_OVERRIDE_PATH": 51,
     "AUDIT_RUN_OPTION_LEAF": 16,
     "CLI_RUN_PARAMETER": 53,
     "COMPLETION_ENTRYPOINT_PARAMETER": 355,
-    "DIRECT_ENVIRONMENT_INPUT": 550,
+    "DIRECT_ENVIRONMENT_INPUT": 555,
     "ENTROPY_INPUT": 19,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 2343,
+    "EXPLICIT_NON_FIELD_GATE": 2348,
     "PIPELINE_INIT_PARAMETER": 29,
     "PIPELINE_RUN_PARAMETER": 16,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 4305,
-  "source_universe_sha256": "247dbca2fa7693b80003a50d5fc8b15f3651223725a05dac22aecc7e9b8477a4",
+  "source_occurrence_count": 4316,
+  "source_universe_sha256": "347f7b714d13ee8fdefceca53a8470a0ecb21745078174d30899c651fbe4e2df",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

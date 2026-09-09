@@ -66,10 +66,10 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "d2480ffff787e69bdad9bb0ce39127beaada77cf84e971d9dd43cd586a2808c4"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "47d8c5ac52fd558547d5e19529aab817dd4a05d46efdbf77f8f5637a9012ab14"
+    "e43b2161e74b2994accb9d3dc6479daf0c3fec3985115f39e624cac56da3f752"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "6c5916b9bf341e7d45ce39e48718ad887ed29bc9ffbabf26e53177f561a38c13"
+    "e7b2e29296448adc36ccbe145f89dd7e75d16579db21fa40068783ef52e916d9"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
@@ -2477,6 +2477,7 @@ def _direct_environment_gate(
             "benchmark/foundry_mutation_executor.py",
             "benchmark/model_portfolio.py",
             "benchmark/mutations.py",
+            "models/authenticated_calibration.py",
         }:
             return "gate-benchmark-evidence-authority"
         if relative_path == "orchestration/budgets.py":
@@ -3411,6 +3412,13 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     )
     from mmaudit.isolation.container_cleanup import cleanup_rootless_container
     from mmaudit.isolation.dependencies import prepare_dependencies
+    from mmaudit.models.authenticated_calibration import (
+        authenticated_model_calibration_bytes,
+        derive_authenticated_calibration_policy,
+        observe_authenticated_model_calibration,
+        read_authenticated_model_calibration,
+        revoke_verified_authenticated_model_calibration,
+    )
     from mmaudit.models.development_audit import prepare_development_audit
     from mmaudit.models.development_corpus import (
         freeze_development_corpus,
@@ -3560,6 +3568,31 @@ def _default_explicit_sources() -> list[_SourceDraft]:
     from mmaudit.solidity.reproduction import ForkReproductionRunner
 
     sources = [
+        _explicit_anchor(
+            "authenticated-calibration-observation",
+            observe_authenticated_model_calibration,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "authenticated-calibration-policy-proposal",
+            derive_authenticated_calibration_policy,
+            "gate-benchmark-evidence-authority",
+        ),
+        _explicit_anchor(
+            "authenticated-calibration-reader",
+            read_authenticated_model_calibration,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "authenticated-calibration-canonical-bytes",
+            authenticated_model_calibration_bytes,
+            "gate-release-evidence-pipeline",
+        ),
+        _explicit_anchor(
+            "authenticated-calibration-revocation",
+            revoke_verified_authenticated_model_calibration,
+            "gate-benchmark-evidence-authority",
+        ),
         _explicit_anchor(
             "development-benchmark-truth",
             read_development_benchmark_truth,

@@ -45,8 +45,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 4302
-    assert inventory.source_occurrence_count == 4305
+    assert inventory.source_count == 4313
+    assert inventory.source_occurrence_count == 4316
     assert inventory.audit_config_leaf_locator_count == 513
     assert inventory.audit_config_leaf_occurrence_count == 516
     assert inventory.audit_config_shared_locator_count == 3
@@ -66,14 +66,14 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "PIPELINE_INIT_PARAMETER": 29,
         "PIPELINE_RUN_PARAMETER": 16,
         "COMPLETION_ENTRYPOINT_PARAMETER": 355,
-        "DIRECT_ENVIRONMENT_INPUT": 550,
+        "DIRECT_ENVIRONMENT_INPUT": 555,
         "ENTROPY_INPUT": 19,
-        "AUDITED_MODULE_UNIVERSE": 315,
-        "EXPLICIT_NON_FIELD_GATE": 2343,
+        "AUDITED_MODULE_UNIVERSE": 316,
+        "EXPLICIT_NON_FIELD_GATE": 2348,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 4250,
+        SourceCoverageClassification.GATE: 4261,
         SourceCoverageClassification.NON_GATING_CONTROL: 52,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -87,7 +87,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     )
     assert (
         sum(":process-identity" in source.source_path for source in inventory.source_coverage)
-        == 108
+        == 113
     )
     assert (
         sum(
@@ -124,6 +124,33 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
             CompletionInputSourceKind.REQUIRED_MISSING_GATE,
         }
     )
+
+
+def test_authenticated_calibration_retains_unverified_benchmark_and_custody_gates(
+    inventory: AutonomyGateInventory,
+) -> None:
+    by_id = {source.source_id: source for source in inventory.source_coverage}
+    for source_id, gate_id in {
+        "audited-module:models.authenticated_calibration": "gate-runtime-package-integrity",
+        "explicit:authenticated-calibration-observation": "gate-benchmark-evidence-authority",
+        "explicit:authenticated-calibration-policy-proposal": "gate-benchmark-evidence-authority",
+        "explicit:authenticated-calibration-reader": "gate-release-evidence-pipeline",
+        "explicit:authenticated-calibration-canonical-bytes": "gate-release-evidence-pipeline",
+        "explicit:authenticated-calibration-revocation": "gate-benchmark-evidence-authority",
+    }.items():
+        assert by_id[source_id].logical_gate_id == gate_id
+        assert by_id[source_id].classification is SourceCoverageClassification.GATE
+    process_inputs = [
+        source
+        for source in inventory.source_coverage
+        if "models/authenticated_calibration.py:" in source.source_path
+    ]
+    assert len(process_inputs) == 5
+    assert all(
+        source.logical_gate_id == "gate-benchmark-evidence-authority" for source in process_inputs
+    )
+    assert inventory.unsatisfied_gate_count == 29 and inventory.current_manual_gate_count == 15
+    assert inventory.runtime_authority is inventory.managed_run_ready is False
 
 
 def test_development_routing_observation_confers_no_transport_authority(

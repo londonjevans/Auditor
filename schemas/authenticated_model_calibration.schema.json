@@ -1,0 +1,1522 @@
+{
+  "$comment": "Non-authorizing measurements only. Runtime validation additionally reconstructs every source/selection/score/hash/cost join. Policy derivation requires original live PID-local custody; JSON cannot recreate it. Campaign registration, external anchoring, successor-release admission and independent qualification remain separate.",
+  "$defs": {
+    "AuthenticatedCalibrationCandidateSource": {
+      "additionalProperties": false,
+      "description": "All primary/replay identities and liabilities, not a serialized capability.",
+      "properties": {
+        "collision_map": {
+          "$ref": "#/$defs/EvidenceSealCollisionMap"
+        },
+        "runner_evidence": {
+          "$ref": "#/$defs/AuthenticatedCrossLineageRunnerEvidence"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCalibrationRun"
+          },
+          "maxItems": 32,
+          "minItems": 2,
+          "title": "Runs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "runner_evidence",
+        "collision_map",
+        "runs"
+      ],
+      "title": "AuthenticatedCalibrationCandidateSource",
+      "type": "object"
+    },
+    "AuthenticatedCalibrationRun": {
+      "additionalProperties": false,
+      "description": "Exact source dimensions joined to one retained authenticated decision.",
+      "properties": {
+        "campaign_journal_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Campaign Journal Sha256",
+          "type": "string"
+        },
+        "candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Registry Sha256",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/EvidenceSealDecisionProjection"
+        },
+        "diagnostic": {
+          "$ref": "#/$defs/CandidateBenchmarkDiagnostic"
+        },
+        "dimensions": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimensionScore"
+          },
+          "maxItems": 17,
+          "minItems": 17,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "discovery_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Manifest Sha256",
+          "type": "string"
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Config Sha256",
+          "type": "string"
+        },
+        "ended_at": {
+          "format": "date-time",
+          "title": "Ended At",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "portfolio_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Portfolio Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "diagnostic",
+        "dimensions",
+        "candidate_registry_sha256",
+        "discovery_manifest_sha256",
+        "campaign_journal_sha256",
+        "portfolio_sha256",
+        "policy_sha256",
+        "effective_config_sha256",
+        "ended_at"
+      ],
+      "title": "AuthenticatedCalibrationRun",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageCaseExecutionEvidence": {
+      "additionalProperties": false,
+      "description": "Exact non-secret identity and cost joins for one authenticated model response.",
+      "properties": {
+        "accounted_cost_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Accounted Cost Usd",
+          "type": "string"
+        },
+        "attempt_count": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Attempt Count",
+          "type": "integer"
+        },
+        "attempt_request_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Attempt Request Ids",
+          "type": "array"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "generation_attestation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Generation Attestation Sha256",
+          "type": "string"
+        },
+        "generation_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Generation Id",
+          "type": "string"
+        },
+        "request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Body Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "validated_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Validated Response Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "request_id",
+        "attempt_count",
+        "attempt_request_ids",
+        "generation_id",
+        "request_body_sha256",
+        "validated_response_sha256",
+        "generation_attestation_sha256",
+        "accounted_cost_usd"
+      ],
+      "title": "AuthenticatedCrossLineageCaseExecutionEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageLedgerEntryEvidence": {
+      "additionalProperties": false,
+      "description": "Durable, non-authorizing binding for one known-cost interval entry.",
+      "properties": {
+        "actual_cost_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Actual Cost Usd",
+          "type": "string"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reserved_usd": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reserved Usd"
+        }
+      },
+      "required": [
+        "request_id",
+        "entry_sha256",
+        "actual_cost_usd"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerEntryEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageLedgerIntervalEvidence": {
+      "additionalProperties": false,
+      "description": "Durable evidence for a closed interval; it cannot recreate live custody.",
+      "properties": {
+        "cap_usd": {
+          "const": "250",
+          "default": "250",
+          "title": "Cap Usd",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageLedgerEntryEvidence"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Entries",
+          "type": "array"
+        },
+        "final_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Final Snapshot Sha256",
+          "type": "string"
+        },
+        "final_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Final Spent Usd",
+          "type": "string"
+        },
+        "initial_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Initial Snapshot Sha256",
+          "type": "string"
+        },
+        "initial_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Initial Spent Usd",
+          "type": "string"
+        },
+        "interval_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Interval Spent Usd",
+          "type": "string"
+        },
+        "ledger_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Identity Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ledger_identity_sha256",
+        "initial_snapshot_sha256",
+        "final_snapshot_sha256",
+        "initial_spent_usd",
+        "interval_spent_usd",
+        "final_spent_usd",
+        "entries"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerIntervalEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageRunnerEvidence": {
+      "additionalProperties": false,
+      "description": "Serializable runner evidence that deliberately grants no runtime authority.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "benchmark_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Corpus Sha256",
+          "type": "string"
+        },
+        "benchmark_ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Ground Truth Sha256",
+          "type": "string"
+        },
+        "case_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Case Ids",
+          "type": "array"
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "frozen_ground_truth_provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Frozen Ground Truth Provenance Sha256",
+          "type": "string"
+        },
+        "frozen_source_revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Frozen Source Revision",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "ground_truth_case_binding_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Case Binding Set Sha256",
+          "type": "string"
+        },
+        "ledger_interval": {
+          "$ref": "#/$defs/AuthenticatedCrossLineageLedgerIntervalEvidence"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "objective_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Objective Sha256",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "public_lineage_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Public Lineage Bundle Sha256",
+          "type": "string"
+        },
+        "public_lineage_manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Public Lineage Manifest File Sha256",
+          "type": "string"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "runner_custody_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Custody Authorized",
+          "type": "boolean"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageRunnerRunEvidence"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Runs",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.1",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "benchmark_corpus_sha256",
+        "benchmark_ground_truth_sha256",
+        "case_ids",
+        "effective_config_sha256",
+        "evidence_sha256",
+        "frozen_ground_truth_provenance_sha256",
+        "frozen_source_revision",
+        "ground_truth_case_binding_set_sha256",
+        "ledger_interval",
+        "objective_sha256",
+        "public_lineage_bundle_sha256",
+        "public_lineage_manifest_file_sha256",
+        "runs",
+        "schema_version"
+      ],
+      "title": "AuthenticatedCrossLineageRunnerEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageRunnerRunEvidence": {
+      "additionalProperties": false,
+      "description": "Durable non-authorizing joins for one candidate/judge execution pair.",
+      "properties": {
+        "adjudication_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Adjudication Report Sha256",
+          "type": "string"
+        },
+        "candidate_campaign_report_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Candidate Campaign Report Sha256S",
+          "type": "array"
+        },
+        "candidate_cases": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageCaseExecutionEvidence"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Candidate Cases",
+          "type": "array"
+        },
+        "candidate_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "candidate_portfolio_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Portfolio Sha256",
+          "type": "string"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "candidate_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Candidate Root Lineage",
+          "type": "string"
+        },
+        "judge_cases": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageCaseExecutionEvidence"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Judge Cases",
+          "type": "array"
+        },
+        "judge_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Judge Model Id",
+          "type": "string"
+        },
+        "judge_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Judge Root Lineage",
+          "type": "string"
+        },
+        "prepared_run_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Run Sha256",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        }
+      },
+      "required": [
+        "run_kind",
+        "candidate_model_id",
+        "candidate_root_lineage",
+        "judge_model_id",
+        "judge_root_lineage",
+        "candidate_report_sha256",
+        "candidate_portfolio_sha256",
+        "candidate_campaign_report_sha256s",
+        "prepared_run_sha256",
+        "adjudication_report_sha256",
+        "candidate_cases",
+        "judge_cases"
+      ],
+      "title": "AuthenticatedCrossLineageRunnerRunEvidence",
+      "type": "object"
+    },
+    "CalibrationExclusionReason": {
+      "description": "Why one exact candidate contributes no calibration distribution values.",
+      "enum": [
+        "candidate_run_not_complete",
+        "report_cases_incomplete",
+        "report_not_real",
+        "root_lineage_not_approved"
+      ],
+      "title": "CalibrationExclusionReason",
+      "type": "string"
+    },
+    "CandidateBenchmarkDiagnostic": {
+      "additionalProperties": false,
+      "description": "Non-secret execution summary for exactly one candidate report.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "corpus_cases": {
+          "minimum": 1,
+          "title": "Corpus Cases",
+          "type": "integer"
+        },
+        "cost_ledger_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateCostLedgerSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_ledger_before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateCostLedgerSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "error_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Error Kinds",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "failed_cases": {
+          "minimum": 0,
+          "title": "Failed Cases",
+          "type": "integer"
+        },
+        "failed_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failed Request Count",
+          "type": "integer"
+        },
+        "failure_stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateBenchmarkFailureStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "logical_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Logical Request Count",
+          "type": "integer"
+        },
+        "observed_usage_sha256": {
+          "default": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observed Usage Sha256",
+          "type": "string"
+        },
+        "provider_attempt_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Provider Attempt Count",
+          "type": "integer"
+        },
+        "reasoning_suppressed": {
+          "title": "Reasoning Suppressed",
+          "type": "boolean"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "requests_observed": {
+          "minimum": 0,
+          "title": "Requests Observed",
+          "type": "integer"
+        },
+        "retry_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/CandidateBenchmarkRunState"
+        },
+        "successful_cases": {
+          "minimum": 0,
+          "title": "Successful Cases",
+          "type": "integer"
+        },
+        "successful_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Successful Request Count",
+          "type": "integer"
+        },
+        "unresolved_cost_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Unresolved Cost Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "approved_provider_endpoint",
+        "endpoint_snapshot_sha256",
+        "report_sha256",
+        "execution_evidence",
+        "state",
+        "reasoning_suppressed",
+        "corpus_cases",
+        "requests_observed",
+        "successful_cases",
+        "failed_cases",
+        "error_kinds"
+      ],
+      "title": "CandidateBenchmarkDiagnostic",
+      "type": "object"
+    },
+    "CandidateBenchmarkFailureStage": {
+      "description": "Sanitized candidate-local stage that prevented a complete benchmark.",
+      "enum": [
+        "client_initialization",
+        "authentication",
+        "endpoint_registration",
+        "benchmark_execution"
+      ],
+      "title": "CandidateBenchmarkFailureStage",
+      "type": "string"
+    },
+    "CandidateBenchmarkRunState": {
+      "enum": [
+        "complete",
+        "complete_with_failures",
+        "unverified_failure"
+      ],
+      "title": "CandidateBenchmarkRunState",
+      "type": "string"
+    },
+    "CandidateCostLedgerSnapshot": {
+      "additionalProperties": false,
+      "description": "Secret-free, self-hashed projection of one atomic cost-ledger snapshot.",
+      "properties": {
+        "active_reserved_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Active Reserved Usd",
+          "type": "string"
+        },
+        "cap_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Cap Usd",
+          "type": "string"
+        },
+        "entries_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entries Sha256",
+          "type": "string"
+        },
+        "entry_count": {
+          "minimum": 0,
+          "title": "Entry Count",
+          "type": "integer"
+        },
+        "has_reservation_overrun": {
+          "title": "Has Reservation Overrun",
+          "type": "boolean"
+        },
+        "over_cap": {
+          "title": "Over Cap",
+          "type": "boolean"
+        },
+        "reconciled_count": {
+          "minimum": 0,
+          "title": "Reconciled Count",
+          "type": "integer"
+        },
+        "released_count": {
+          "minimum": 0,
+          "title": "Released Count",
+          "type": "integer"
+        },
+        "remaining_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Remaining Usd",
+          "type": "string"
+        },
+        "reservation_overrun_count": {
+          "minimum": 0,
+          "title": "Reservation Overrun Count",
+          "type": "integer"
+        },
+        "reserved_count": {
+          "minimum": 0,
+          "title": "Reserved Count",
+          "type": "integer"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Spent Usd",
+          "type": "string"
+        },
+        "uncertain_accounted_count": {
+          "minimum": 0,
+          "title": "Uncertain Accounted Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cap_usd",
+        "spent_usd",
+        "active_reserved_usd",
+        "remaining_usd",
+        "over_cap",
+        "has_reservation_overrun",
+        "entry_count",
+        "reserved_count",
+        "reconciled_count",
+        "released_count",
+        "uncertain_accounted_count",
+        "reservation_overrun_count",
+        "entries_sha256",
+        "snapshot_sha256"
+      ],
+      "title": "CandidateCostLedgerSnapshot",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationRunKind": {
+      "description": "Closed campaign identity used for distinct primary and replay evidence.",
+      "enum": [
+        "PRIMARY",
+        "REPLAY"
+      ],
+      "title": "CrossLineageAdjudicationRunKind",
+      "type": "string"
+    },
+    "EvidenceSealCollisionMap": {
+      "additionalProperties": false,
+      "description": "Exact candidate-by-judge lineage collision inventory.",
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/EvidenceSealLineageBinding"
+        },
+        "collision_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Collision Map Sha256",
+          "type": "string"
+        },
+        "judges": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSealLineageBinding"
+          },
+          "maxItems": 64,
+          "minItems": 2,
+          "title": "Judges",
+          "type": "array"
+        },
+        "pairs": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSealLineagePair"
+          },
+          "maxItems": 64,
+          "minItems": 2,
+          "title": "Pairs",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate",
+        "judges",
+        "pairs",
+        "collision_map_sha256"
+      ],
+      "title": "EvidenceSealCollisionMap",
+      "type": "object"
+    },
+    "EvidenceSealDecisionProjection": {
+      "additionalProperties": false,
+      "description": "Deterministic scoring output from one candidate benchmark execution.",
+      "properties": {
+        "benchmark_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Corpus Sha256",
+          "type": "string"
+        },
+        "benchmark_ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Ground Truth Sha256",
+          "type": "string"
+        },
+        "benchmark_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Report Sha256",
+          "type": "string"
+        },
+        "candidate": {
+          "$ref": "#/$defs/EvidenceSealLineageBinding"
+        },
+        "case_dimension_outcome_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Case Dimension Outcome Set Sha256",
+          "type": "string"
+        },
+        "case_outcome_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Case Outcome Sha256S",
+          "type": "array"
+        },
+        "deterministic_output_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Deterministic Output Sha256",
+          "type": "string"
+        },
+        "dimension_score_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Dimension Score Sha256S",
+          "type": "array"
+        },
+        "execution_evidence": {
+          "enum": [
+            "mock",
+            "real",
+            "unverified"
+          ],
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "ground_truth_provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Provenance Sha256",
+          "type": "string"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "overall_score_micros": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Overall Score Micros",
+          "type": "integer"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projection Sha256",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/EvidenceSealRunKind"
+        },
+        "runner": {
+          "$ref": "#/$defs/EvidenceSealLineageBinding"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_kind",
+        "candidate",
+        "runner",
+        "benchmark_report_sha256",
+        "benchmark_corpus_sha256",
+        "benchmark_ground_truth_sha256",
+        "ground_truth_provenance_sha256",
+        "case_outcome_sha256s",
+        "case_dimension_outcome_set_sha256",
+        "dimension_score_sha256s",
+        "overall_score_micros",
+        "execution_evidence",
+        "deterministic_output_sha256",
+        "projection_sha256"
+      ],
+      "title": "EvidenceSealDecisionProjection",
+      "type": "object"
+    },
+    "EvidenceSealLineageBinding": {
+      "additionalProperties": false,
+      "description": "One exact candidate or judge identity and its independently assigned root.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/EvidenceSealLineageRole"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "root_lineage",
+        "role",
+        "binding_sha256"
+      ],
+      "title": "EvidenceSealLineageBinding",
+      "type": "object"
+    },
+    "EvidenceSealLineagePair": {
+      "additionalProperties": false,
+      "description": "Explicit same-root predicate for one candidate/judge pair.",
+      "properties": {
+        "candidate_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "candidate_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Candidate Root Lineage",
+          "type": "string"
+        },
+        "judge_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Judge Model Id",
+          "type": "string"
+        },
+        "judge_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Judge Root Lineage",
+          "type": "string"
+        },
+        "pair_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pair Sha256",
+          "type": "string"
+        },
+        "same_root": {
+          "title": "Same Root",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "candidate_model_id",
+        "candidate_root_lineage",
+        "judge_model_id",
+        "judge_root_lineage",
+        "same_root",
+        "pair_sha256"
+      ],
+      "title": "EvidenceSealLineagePair",
+      "type": "object"
+    },
+    "EvidenceSealLineageRole": {
+      "enum": [
+        "CANDIDATE",
+        "JUDGE"
+      ],
+      "title": "EvidenceSealLineageRole",
+      "type": "string"
+    },
+    "EvidenceSealRunKind": {
+      "enum": [
+        "PRIMARY",
+        "REPLAY"
+      ],
+      "title": "EvidenceSealRunKind",
+      "type": "string"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "ModelBenchmarkDimensionScore": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "evaluated": {
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "evaluated",
+        "score"
+      ],
+      "title": "ModelBenchmarkDimensionScore",
+      "type": "object"
+    },
+    "ModelCalibrationCandidateObservation": {
+      "additionalProperties": false,
+      "description": "One exact candidate retained whether or not its report is creditable.",
+      "properties": {
+        "diagnostic": {
+          "$ref": "#/$defs/CandidateBenchmarkDiagnostic"
+        },
+        "dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimensionScore"
+          },
+          "maxItems": 17,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "exclusion_reasons": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CalibrationExclusionReason"
+          },
+          "title": "Exclusion Reasons",
+          "type": "array"
+        },
+        "included_in_distribution": {
+          "title": "Included In Distribution",
+          "type": "boolean"
+        },
+        "lineage_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lineage Binding Sha256",
+          "type": "string"
+        },
+        "overall_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Overall Score"
+        },
+        "report_execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "lineage_binding_sha256",
+        "report_sha256",
+        "report_execution_evidence",
+        "diagnostic",
+        "included_in_distribution"
+      ],
+      "title": "ModelCalibrationCandidateObservation",
+      "type": "object"
+    },
+    "ModelCalibrationDimensionDistribution": {
+      "additionalProperties": false,
+      "description": "Observed per-model scores for one dimension; no pass threshold is implied.",
+      "properties": {
+        "candidate_count": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "excluded_candidate_count": {
+          "maximum": 128,
+          "minimum": 0,
+          "title": "Excluded Candidate Count",
+          "type": "integer"
+        },
+        "included_candidate_count": {
+          "maximum": 128,
+          "minimum": 0,
+          "title": "Included Candidate Count",
+          "type": "integer"
+        },
+        "mean_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Score"
+        },
+        "observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelCalibrationDimensionObservation"
+          },
+          "maxItems": 128,
+          "title": "Observations",
+          "type": "array"
+        },
+        "score_frequencies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelCalibrationScoreFrequency"
+          },
+          "maxItems": 128,
+          "title": "Score Frequencies",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dimension",
+        "candidate_count",
+        "included_candidate_count",
+        "excluded_candidate_count"
+      ],
+      "title": "ModelCalibrationDimensionDistribution",
+      "type": "object"
+    },
+    "ModelCalibrationDimensionObservation": {
+      "additionalProperties": false,
+      "description": "One exact candidate's deterministic score for one dimension.",
+      "properties": {
+        "evaluated": {
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "root_lineage",
+        "passed",
+        "evaluated",
+        "score"
+      ],
+      "title": "ModelCalibrationDimensionObservation",
+      "type": "object"
+    },
+    "ModelCalibrationScoreFrequency": {
+      "additionalProperties": false,
+      "description": "Exact empirical frequency, without an inferred quality threshold.",
+      "properties": {
+        "candidate_count": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "score",
+        "candidate_count"
+      ],
+      "title": "ModelCalibrationScoreFrequency",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/authenticated_model_calibration.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-dispositive measurements; loading them never recreates live verification.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ModelCalibrationCandidateObservation"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Candidates",
+      "type": "array"
+    },
+    "cost_scope": {
+      "const": "CLOSED_LEDGER_CHAINS_INCLUDING_PRIOR_SPEND_NOT_GLOBAL_ADMISSION",
+      "default": "CLOSED_LEDGER_CHAINS_INCLUDING_PRIOR_SPEND_NOT_GLOBAL_ADMISSION",
+      "title": "Cost Scope",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "distributions": {
+      "items": {
+        "$ref": "#/$defs/ModelCalibrationDimensionDistribution"
+      },
+      "maxItems": 17,
+      "minItems": 17,
+      "title": "Distributions",
+      "type": "array"
+    },
+    "evidence_basis": {
+      "const": "AUTHENTICATED_CROSS_LINEAGE_RUNNER",
+      "default": "AUTHENTICATED_CROSS_LINEAGE_RUNNER",
+      "title": "Evidence Basis",
+      "type": "string"
+    },
+    "external_seal_required": {
+      "const": true,
+      "default": true,
+      "title": "External Seal Required",
+      "type": "boolean"
+    },
+    "included_root_lineage_count": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Included Root Lineage Count",
+      "type": "integer"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "policy_adoption_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Adoption Authorized",
+      "type": "boolean"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "retained_cost_usd": {
+      "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+      "title": "Retained Cost Usd",
+      "type": "string"
+    },
+    "sampling_rule": {
+      "const": "PRIMARY_ONCE_ALL_REPLAYS_RETAINED",
+      "default": "PRIMARY_ONCE_ALL_REPLAYS_RETAINED",
+      "title": "Sampling Rule",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Selected Model Ids",
+      "type": "array"
+    },
+    "selection_scope": {
+      "const": "EXACT_SELECTED_POPULATION_NOT_CAMPAIGN_REGISTRATION",
+      "default": "EXACT_SELECTED_POPULATION_NOT_CAMPAIGN_REGISTRATION",
+      "title": "Selection Scope",
+      "type": "string"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/AuthenticatedCalibrationCandidateSource"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "selected_model_ids",
+    "sources",
+    "created_at",
+    "candidates",
+    "distributions",
+    "included_root_lineage_count",
+    "retained_cost_usd",
+    "artifact_sha256"
+  ],
+  "title": "AuthenticatedModelCalibrationArtifact",
+  "type": "object"
+}

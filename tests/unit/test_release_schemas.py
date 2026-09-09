@@ -9,6 +9,7 @@ import pytest
 import scripts.generate_release_schemas as release_schema_generator
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
 from mmaudit.config import ModelLineageConfig
+from mmaudit.models.authenticated_calibration import AuthenticatedModelCalibrationArtifact
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
 from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
 from mmaudit.models.autonomous_benchmark_verdict import (
@@ -60,6 +61,30 @@ from mmaudit.orchestration.managed_toolchain import (
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_native_calibration_schema_preserves_no_authority_and_config_bound_sources() -> None:
+    filename = "authenticated_model_calibration.schema.json"
+    assert MODELS[filename] is AuthenticatedModelCalibrationArtifact
+    schema = json.loads(rendered_schema(filename, MODELS[filename]))
+    for name in (
+        "serialized_authority",
+        "policy_adoption_authorized",
+        "model_qualification_authorized",
+        "production_selection_authorized",
+        "provider_call_authorized",
+        "release_authorized",
+    ):
+        assert schema["properties"][name]["const"] is False
+        assert schema["properties"][name]["type"] == "boolean"
+    assert schema["properties"]["external_seal_required"]["const"] is True
+    assert schema["properties"]["selected_model_ids"]["maxItems"] == 128
+    assert schema["properties"]["sources"]["maxItems"] == 128
+    runner = schema["$defs"]["AuthenticatedCrossLineageRunnerEvidence"]
+    assert runner["properties"]["schema_version"]["const"] == "1.1"
+    assert {"schema_version", "effective_config_sha256"} <= set(runner["required"])
+    assert runner["properties"]["effective_config_sha256"]["type"] == "string"
+    assert "lineage_review_artifact_sha256" not in schema["properties"]
 
 
 def test_one_write_pass_updates_managed_resource_before_autonomy_inventory(

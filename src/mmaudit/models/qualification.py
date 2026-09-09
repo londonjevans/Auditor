@@ -1205,8 +1205,10 @@ class QualificationPolicy(StrictModel):
                     raise ValueError(
                         "calibrated role aggregate threshold must be between zero and one"
                     )
-                if role_policy.minimum_overall_score < self.tier_a_minimum_overall_score:
-                    raise ValueError("role aggregate threshold cannot weaken the Tier A baseline")
+                # These means cover different dimension sets and are not ordered scalars.
+                # Role admission independently requires the complete global Tier A result
+                # in evaluate_role_qualification_results, then its own aggregate/dimensions.
+                # Keep the comparable per-dimension baseline checks below unchanged.
                 for threshold in role_policy.thresholds:
                     _validate_calibrated_threshold(threshold)
                     global_threshold = global_thresholds[threshold.dimension]

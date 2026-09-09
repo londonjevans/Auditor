@@ -218,6 +218,39 @@ def test_v2_role_policy_is_complete_strict_and_self_hashed() -> None:
         QualificationPolicy.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "disposition",
+    [QualificationDisposition.NOT_QUALIFIED, QualificationDisposition.INCONCLUSIVE],
+)
+def test_distinct_aggregate_dimension_sets_do_not_bypass_the_global_tier_a_gate(
+    disposition: QualificationDisposition,
+) -> None:
+    policy = seal_qualification_policy(
+        created_at=_NOW,
+        thresholds=_global_thresholds(calibrated=True),
+        role_policies=_role_policies(calibrated=True),
+        calibration_artifact_sha256="8" * 64,
+        calibration_included_candidate_count=8,
+        calibration_included_root_lineage_count=6,
+        tier_a_minimum_overall_score=0.98,
+        tier_a_overall_rationale="Synthetic supported aggregate over all seventeen dimensions.",
+        maximum_validity_days=30,
+    )
+    assert all(
+        role.minimum_overall_score < policy.tier_a_minimum_overall_score
+        for role in policy.role_policies
+    )
+    perfect = tuple(
+        item.model_copy(update={"passed": item.evaluated, "score": 1.0}) for item in _dimensions()
+    )
+    results = evaluate_role_qualification_results(
+        global_disposition=disposition, dimensions=perfect, role_policies=policy.role_policies
+    )
+    assert all(
+        result.disposition is not RoleQualificationDisposition.QUALIFIED for result in results
+    )
+
+
 def test_legacy_result_keeps_role_v2_fields_out_of_its_sealed_shape() -> None:
     result = _sealed_result(
         disposition=QualificationDisposition.TIER_A,
