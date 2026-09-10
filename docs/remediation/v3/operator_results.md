@@ -3,6 +3,83 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T02:04Z — **The v1.10 cost-successor adoption is verified clean from the operator side, at $0. I re-froze all three roles against the new plan and every route reproduces 24 SATISFIED / 5 UNAVAILABLE / 0 refused, with the same five predicate names. The durable preflight under v1.10 still reports exactly the two known failures and no others. Adoption regressed nothing.**
+
+Timestamp read from the clock at 02:04:06Z. Metadata-only discovery and one provider-free preflight;
+no completion requested, nothing spent. Development spend across ledgers remains 12.093483578 USD;
+uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries / `0.68229168` USD.
+`completed_real_audits` remains `0`.
+
+### 1. The plan settled, and I re-froze unasked
+
+I had a watch waiting for the selection block to hold still for three consecutive minutes with the
+slice no longer marked in progress. It fired at `02:02:27Z` on selection hash `a27c984c…`, schema
+`1.10`, `plan_sha256 55c79770ac0255e7…`, predecessor `58700428…`.
+
+Before re-freezing I checked that the plan's two `source_bindings` were unchanged, because those two
+files exist only in the August handoff pack and a changed binding would have meant hunting for
+replacements. Both matched exactly: `model-ranking.py` at `09a36743…` / 6455 bytes and
+`V3-LINEAGE-001-operator-review.md` at `e967de35…` / 8184 bytes. Worth checking before rather than
+discovering at re-freeze time.
+
+New runs at `~/.mmaudit/private/model-discovery/v110-{candidate,primary-judge,replay-judge}-20260910-0203Z/`
+with registries `c5`. Every registry binds `selection_plan_sha256 55c79770ac0255e7…`, which is the
+active plan.
+
+### 2. Route admission is unchanged under v1.10
+
+```
+deepseek/deepseek-v4-pro-0813=together   24 SATISFIED / 5 UNAVAILABLE / 0 refused
+z-ai/glm-5.2=deepinfra/fp4               24 SATISFIED / 5 UNAVAILABLE / 0 refused
+moonshotai/kimi-k3=together              24 SATISFIED / 5 UNAVAILABLE / 0 refused
+```
+
+The same five in every case: `FROZEN_LIVE_EQUIVALENCE`, `REGISTRY_SELECTION_HASH_CUSTODY`,
+`REGISTRY_CONSTRAINT_HASH_CUSTODY`, `EMPIRICAL_SCHEMA_CONFORMANCE`,
+`TOKEN_DETAIL_REPORTING_CONVENTION`.
+
+The constraint and profile digests moved with the adoption exactly as the plan says they should:
+profile `00b33f3e…` to `563f49d5…` for all three roles, and candidate constraint `7c4d3c77…` to
+`b744a032…`, primary judge to `49c5a1b1…`, replay judge to `1bc9ac5a…`. The fresh reports carry the
+new values, so the freeze is bound to the adopted plan rather than the predecessor.
+
+### 3. The durable preflight agrees
+
+`models authenticated-runner --preflight-only --allow-code-egress` against the `c5` set:
+
+```
+route predicate report does not satisfy its closed purpose:
+purpose=FULL_CAMPAIGN_ADMISSION;
+failures=EMPIRICAL_SCHEMA_CONFORMANCE=EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,
+         TOKEN_DETAIL_REPORTING_CONVENTION=TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+```
+
+Byte-for-byte the same two failures and no others as the v1.9 run at 00:37Z. Ledger read 58 entries
+before and after. So the cost-successor adoption preserved full campaign admission exactly, and the
+build's position is unchanged: one working smoke bundle away from the durable run.
+
+This is offered as independent operator-side verification of Codex's own just-completed slice. It is
+not a claim about the correctness of the cost enforcement itself, which I have not inspected; it is
+the narrower statement that adoption did not regress route admission or the durable preflight.
+
+### 4. What is still true and still blocked
+
+`required_output_mode NATIVE_JSON_SCHEMA` and `required_reasoning_effort high` are identical under
+v1.10, so the adoption does not touch the condition that made the index-23 candidate leg refuse. The
+same route would refuse the same way.
+
+The endpoint probes still require a direct confirmation to Codex that only Jos can give, and Codex's
+own `NEXT_ACTION` repeats that. I note with approval that the same next action now selects
+provider-free diagnosis and precise `TOKEN_PLAN_ROUTING` refusal evidence, which is the item I argued
+was the highest-value work available and the only part of the critical path gated on nobody. I had
+said earlier tonight that Codex had prioritised otherwise; that was premature and I withdraw it.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only. The active plan is now `v1.10`
+and remains `NONAUTHORIZING`, with candidate `together` unchanged. The unresolved 0.000633960 USD
+displayed-cost discrepancy stands. No paid run is authorized or requested by this entry.
+
 ## 2026-09-10T01:37Z — **Sequencing note for the cost-successor adoption: it will invalidate every operator-side frozen artifact I hold. Both my fresh registries and my constrained discovery bind `selection_plan_sha256 58700428…`, which is the current plan. Re-freezing is free and I will do it unasked, but if a route change is ever confirmed it should ride in the same plan change, because one adoption then costs one re-freeze instead of two.**
 
 Timestamp read from the clock at 01:37:20Z. Reading local artifacts only, no command against a
