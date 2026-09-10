@@ -3,6 +3,80 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:20Z — **Impasse recorded, and a decision I am deliberately not making. Codex is right to preserve the current routes on my say-so. Testing any alternative endpoint needs the plan to list it, the plan is Codex's to write, and authorizing a route change is Jos's, not mine. I drafted an operator decision to add `fireworks` and then withdrew it. The blocker now sits with Jos, with the evidence assembled.**
+
+Timestamp read from the clock. No command run, nothing spent. Development spend across ledgers
+remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries /
+`0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. The impasse, stated plainly
+
+Codex's current `NEXT_ACTION` reads "Preserve current routes and all noncost gates; reported
+alternatives and the index23 refusal grant no new paid permission." That is correct and I am not
+disputing it.
+
+The structure is that a smoke needs constrained discovery evidence, constrained discovery only
+produces evidence for a route the plan constrains, and the plan constrains `together`, which refused
+once at a real cost. So no alternative endpoint is testable until the plan lists one. The plan is
+product configuration and Codex writes it. Nothing further can be learned about this blocker by any
+means available to me.
+
+### 2. What I drafted and why I withdrew it
+
+I wrote an operator decision, `OP-CANDROUTE-2026-09-10`, directing that
+`deepseek/deepseek-v4-pro-0813=fireworks` be added to the candidate `route_constraints`, on the
+grounds that it is the same model at byte-identical prices and the change is narrow. I did not file
+it.
+
+The reason is a distinction I had blurred. Jos deferred the live run to my judgement, and
+`OP-SMOKE-2026-09-10` was a fair use of that. He did not defer the selection plan. `OP-COST-2026-09-09`
+was his decision, not mine. Route selection determines which models will eventually audit a client's
+contracts, and self-authorizing a change to it after Codex had explicitly declined would have been me
+using a mechanism built for his decisions to overrule the engineering agent on my own initiative. The
+narrowness of the change does not alter who owns it.
+
+So the draft is withdrawn rather than filed, and this entry records that it existed and why it did
+not proceed, so the reasoning is inspectable rather than invisible.
+
+### 3. The evidence Jos needs, in one place
+
+The current candidate route `together` was billed `0.00110484` USD and refused with
+`TOKEN_PLAN_ROUTING`. Token-weighted volume was 21.2 percent of the August passing run, bounding
+completion at 279 tokens against 1241 and reasoning at 279 against 1222. The failing sub-branch is
+not isolated, as Codex correctly insists.
+
+Three candidate endpoints are live, untested, and satisfy every requirement checkable for free:
+`fireworks` and `sail-research/fp4` at prices byte-identical to `together`, and `phala` about 10
+percent dearer. `digitalocean` is eliminated on metadata, offering `JSON_OBJECT` only.
+`parasail/fp8`, the only endpoint ever observed to emit reasoning for this model, is revoked for
+`EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`. No endpoint metadata anywhere distinguishes a
+reasoning-emitting route, so each probe costs about a tenth of a cent and a run index.
+
+The narrow question is whether one of those three emits observable reasoning. Three probes settle it
+for roughly three tenths of a cent, once the plan lists them.
+
+The wider question only arises if all three refuse: whether requiring native JSON schema and
+observable reasoning jointly, from one model on one provider, is satisfiable for this candidate at
+all, and if not whether the requirement or the model gives way. That one is Jos's regardless of how
+the probes go, and it is worth knowing that three cheap probes may make it moot.
+
+### 4. One request that needs no permission from anyone
+
+`TOKEN_PLAN_ROUTING` covers several distinct conditions and reports none of them. Every probe on this
+path therefore costs money and a run index and returns one bit. Naming the failing condition, using
+constant field and condition names only and no prompt or completion content, in the manner of the
+existing `rejection_evidence` pattern from DEVDECODE, would make the next paid probe diagnostic
+instead of merely negative. That is local product work with no route change, no spend and no new
+authority, and I would put it ahead of the remaining COSTRECON slice on the grounds that everything
+downstream depends on probes that are currently uninformative.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`.
+`OP-SMOKE-2026-09-10` is spent and no further run is authorized by this or any entry of mine.
+
 ## 2026-09-10T01:17Z — **Codex is right and I withdraw "proven". My exact-integer argument was fallacious: the completion price is exactly three times the prompt price, so 280 integer solutions fit the bill, not one. I did not isolate the failing sub-branch and should not have said I had. What survives is a strong bound, not a proof.**
 
 Timestamp read from the clock, which read 01:17Z; an earlier draft of this heading said 01:18Z and
