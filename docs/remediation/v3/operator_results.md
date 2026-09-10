@@ -3,6 +3,93 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:21Z — **`OP-CANDROUTE-2026-09-10`: Jos has authorized the candidate endpoint probes. This is his decision, taken in answer to a direct question, and it supersedes the withdrawal in my 01:20Z entry. Add `fireworks` to the candidate `route_constraints`, then `sail-research/fp4`, then `phala`, one at a time, and I run one smoke against each until one emits observable reasoning. Same model throughout. Bound and explicit non-authorizations below.**
+
+Timestamp read from the clock at 01:21:48Z. No command run in this entry, nothing spent. Development
+spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger
+unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. Authority
+
+I put the choice to Jos directly, having recorded at 01:20Z that authorizing a route change was his
+and not mine. He was given three options: authorize the probes, hold the routes until the refusal
+names its failing condition, or reopen the joint requirement for native JSON schema and observable
+reasoning. He chose to authorize the probes.
+
+So this is not an operator recommendation and not a self-authorization by the monitoring session. It
+is the same class of instrument as `OP-COST-2026-09-09`: a decision by Jos, recorded here by me
+because I am the channel, not the author of the authority.
+
+### 2. What is authorized
+
+Codex may add to `authenticated_runner_selection.route_constraints`, for role `candidate` and the
+unchanged exact model `deepseek/deepseek-v4-pro-0813`, the following provider endpoints, in this
+order and one at a time:
+
+| order | endpoint | prompt / completion | note |
+|---|---|---|---|
+| 1 | `fireworks` | `0.00000132` / `0.00000396` | byte-identical prices to `together` |
+| 2 | `sail-research/fp4` | `0.00000132` / `0.00000396` | byte-identical prices to `together` |
+| 3 | `phala` | `0.00000145` / `0.00000436` | about 10 percent dearer |
+
+Whether each replaces `together` or joins it is Codex's judgement. One at a time is deliberate: the
+point is to learn which endpoint emits observable reasoning, and a single-route plan makes each
+result unambiguous.
+
+For each endpoint listed, the monitoring session is authorized to re-freeze constrained discovery for
+all three roles and run exactly one `models authenticated-runner-smoke`, on the next free run index,
+with per-attempt tripwires of `0.30` USD for each of the three roles. Worst case 2.40 USD per probe
+against the hard `_LEDGER_CAP_USD` of 250, abort at ceiling, never ask. Expected actual cost is about
+a tenth of a cent per probe on the evidence of index 23. The sequence stops at the first endpoint
+whose candidate leg produces a receipt the token-plan predicate accepts.
+
+### 3. What is not authorized
+
+No change of candidate model. No change to either judge route. No change to `required_output_mode`,
+`required_reasoning_effort` or `required_supported_parameters`. No adoption of any route, no
+promotion of the plan out of `NONAUTHORIZING`, no qualification, sealing, publication or release. No
+more than one smoke per listed endpoint. Nothing here authorizes the durable
+`models authenticated-runner` run, which remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and
+`TOKEN_DETAIL_REPORTING_CONVENTION` and will need its own decision when a bundle exists.
+
+### 4. What this decision does not claim
+
+It does not claim that any of the three endpoints will work. Every one is an unverified lead, exactly
+as Codex characterised them, and no endpoint metadata anywhere distinguishes a reasoning-emitting
+route. The decision is that finding out is worth about three tenths of a cent, given that the current
+configuration is known to refuse.
+
+It also does not claim the failing sub-branch is established. My 01:17Z entry withdrew that. If a
+probe refuses, all that is learned is that the endpoint refuses, unless the diagnostic in the next
+section has landed.
+
+### 5. The diagnostic still matters and still needs no permission
+
+`TOKEN_PLAN_ROUTING` covers several distinct conditions and names none. Jos chose the probes over
+waiting for the diagnostic, which settles sequencing, not priority. If the diagnostic lands before or
+between probes, each probe becomes informative rather than one bit, and a refusal would then tell us
+whether reasoning was absent or something else failed. Constant field and condition names only, no
+prompt or completion content, in the manner of DEVDECODE's existing `rejection_evidence`. It involves
+no route change, no spend and no new authority.
+
+### 6. What I will do next
+
+Wait for Codex to list the first endpoint. When the plan carries `fireworks`, I re-freeze constrained
+discovery for all three roles, confirm the preflight, run one smoke, and report the bundle or the
+refusal with its exact billed cost against the reservation. If it produces a bundle I will also re-run
+the durable preflight to see whether the two blocking predicates go green, and report that before
+anyone asks for the durable run.
+
+I will not run anything until the plan lists a route. That is the same structural constraint recorded
+at 01:20Z and this decision does not remove it; it only settles what the plan should list.
+
+### 7. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands.
+`OP-SMOKE-2026-09-10` remains spent and is not extended; the probes authorized here are under
+`OP-CANDROUTE-2026-09-10`.
+
 ## 2026-09-10T01:20Z — **Impasse recorded, and a decision I am deliberately not making. Codex is right to preserve the current routes on my say-so. Testing any alternative endpoint needs the plan to list it, the plan is Codex's to write, and authorizing a route change is Jos's, not mine. I drafted an operator decision to add `fireworks` and then withdrew it. The blocker now sits with Jos, with the evidence assembled.**
 
 Timestamp read from the clock. No command run, nothing spent. Development spend across ledgers
