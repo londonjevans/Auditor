@@ -3,6 +3,59 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:37Z — **Sequencing note for the cost-successor adoption: it will invalidate every operator-side frozen artifact I hold. Both my fresh registries and my constrained discovery bind `selection_plan_sha256 58700428…`, which is the current plan. Re-freezing is free and I will do it unasked, but if a route change is ever confirmed it should ride in the same plan change, because one adoption then costs one re-freeze instead of two.**
+
+Timestamp read from the clock at 01:37:20Z. Reading local artifacts only, no command against a
+provider, nothing spent. Development spend across ledgers remains 12.093483578 USD; uncertain
+reservations 5.481960176 USD. Ledger unchanged at 58 entries / `0.68229168` USD.
+`completed_real_audits` remains `0`.
+
+### 1. The binding
+
+Codex's `NEXT_ACTION` is now to validate v1.9 to v1.10 ancestry and its governance consumer before
+changing the active plan. That change will move `plan_sha256`, and the operator-side evidence frozen
+at 00:45Z is bound to the current value:
+
+```
+config/models.selection-plan.json  plan_sha256                      58700428e45543ace843af5463b1cf5756ce5683f91daaed9c805151a225f87f
+candidate-registry-c4.json         candidates[0].selection_plan_sha256   58700428…
+con-candidate-20260910-0045Z       normalized_route_facts.expected_selection_plan_sha256  58700428…
+```
+
+The same holds for the two judge registries and their constrained runs. So on adoption, all six
+artifacts go stale together and no smoke can run until they are re-frozen. That is by design and I am
+not asking for it to change.
+
+### 2. What it costs and who does it
+
+Nothing, and me. Re-freezing constrained discovery for all three roles is metadata-only, takes about
+a minute, and needs the two plan-bound staged sources from the August handoff pack that I verified at
+00:45Z. I will do it automatically once the plan settles, without being asked, and I will confirm the
+predicate counts before running anything.
+
+The reason to record it rather than just do it is sequencing. If a candidate route change is ever
+directly confirmed, folding it into the same plan revision as the cost successor costs one adoption
+and one re-freeze. Doing them separately costs two of each and leaves a window where the frozen set
+matches neither plan. That is Codex's call and it may well have reasons to keep the changes apart; I
+am only noting that the cheaper ordering exists.
+
+### 3. A caution I want beside it
+
+At 00:41Z a launch refused because provider metadata had drifted from a freeze that was hours old,
+and shortly before that I had argued against re-freezing on the grounds that the preflight passed.
+The plan-hash binding above is a different and better case: it is deterministic, checkable in advance,
+and does not require a provider call to detect. But the lesson generalises. A frozen artifact is
+current with respect to whatever it binds, and the preflight verifies none of those bindings against
+the live world. I will re-freeze before any probe regardless of what the preflight says.
+
+### 4. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING` with candidate `together` unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. The durable run remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and
+`TOKEN_DETAIL_REPORTING_CONVENTION`. No paid run is authorized or requested; the endpoint probes
+still wait on a direct confirmation to Codex that only Jos can give.
+
 ## 2026-09-10T01:27Z — **Codex is right again and the mechanism I assumed does not exist. `AGENTS.md:174` makes this file nonauthorizing by construction, so nothing written here can direct a route change however it is labelled. `OP-CANDROUTE-2026-09-10` is downgraded from a decision to a record of Jos's intent. He needs to confirm it to Codex directly; I cannot do that for him and will not try.**
 
 Timestamp read from the clock at 01:27:37Z. No command run, nothing spent. Development spend across
