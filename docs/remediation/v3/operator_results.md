@@ -3,6 +3,62 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:04Z — **Narrowing one claim I made at 00:57Z and repeated at 01:00Z. I said `models list-endpoints` is stricter than the admission path. I did not verify that the two read the same inventory, and there is evidence they do not. The symptom stands; the explanation was unsupported.**
+
+Timestamp read from the clock. Source reading only, no command run, nothing spent. Development spend
+across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at
+58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. What is verified
+
+`models list-endpoints` fails deterministically for `deepseek/deepseek-v4-pro-0813` and
+`z-ai/glm-5.2` with `endpoint inventory contains duplicate exact routes`, raised at
+`endpoint_inventory.py:435` when two normalized records share an `identity_key`, which is built at
+line 653 from the endpoint tag and slug. It succeeds for `moonshotai/kimi-k3` with 19 endpoints.
+`models discover` succeeded for both failing models at 00:45Z, producing valid constrained discovery
+with 24 SATISFIED and 0 refused.
+
+### 2. What I asserted without verifying
+
+I framed that contrast as the admission path accepting data the survey command refuses, and called
+the survey command stricter. That framing assumed both read the whole endpoint inventory for the
+model. The fresh constrained discovery artifact for the candidate reports
+`configured_provider_endpoints: ["together"]` and exactly one entry in `endpoints`, so discovery
+narrows to the single requested route. If that narrowing happens before any inventory-wide
+uniqueness check, then discovery never sees the duplicate and there is no strictness difference at
+all, only a difference in how much data each command looks at.
+
+I could not settle which it is without either replicating the guarded metadata client myself, which
+would mean writing code that steps around the integrity checks this codebase exists to enforce, or
+tracing further into the snapshot builder than the value of the answer justifies. So I am recording
+the limit instead of guessing past it.
+
+### 3. What this changes for the recommendation
+
+Less than it might appear. The blocking symptom is unchanged and still on the critical path: the
+candidate model needs a third endpoint, finding one requires enumerating that model's endpoints, and
+the only command that enumerates refuses that exact model. That remains true whatever the
+explanation.
+
+What changes is the likely fix. If discovery genuinely never evaluates the duplicate, then
+`list-endpoints` refusing the whole inventory over one duplicated pair is the narrow defect, and
+reporting the duplicated identity while enumerating the rest would be enough. If instead both paths
+see the same records, there is a second question about why admission passes, and that one would
+matter more. Codex can tell which from the fetch path directly; I would rather it check than accept
+my reading of it.
+
+The provider data itself is worth a note either way. Two of three exact models currently return
+duplicate tag and slug pairs from OpenRouter. That is upstream, not ours, and it will presumably
+recur.
+
+### 4. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`. The
+candidate squeeze recorded at 01:00Z stands unchanged: `parasail/fp8` revoked for structured output,
+`together` emitting no reasoning. `OP-SMOKE-2026-09-10` is spent and no further smoke is authorized.
+
 ## 2026-09-10T01:00Z — **Correcting my own 00:57Z recommendation. `parasail/fp8` is not available to swap to: it is REVOKED for `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`, effective two hours after the bundle that proves it emits reasoning. The candidate model is therefore in a genuine squeeze, and `models list-endpoints` being broken for that exact model is now on the critical path rather than a nicety.**
 
 Timestamp read from the clock. Three metadata-only probes, no provider completion, nothing spent.
