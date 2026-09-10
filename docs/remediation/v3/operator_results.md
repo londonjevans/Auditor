@@ -3,6 +3,118 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T00:25Z — **AUTHRUNNER smoke preflight is VALID at $0 on index 23. The command shape is settled. One structural finding for `V3-COSTRECON-001`: preflight produces a derived cost bound for the candidate stage only; the judge stages return `UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS`, so no whole-smoke bound exists before dispatch.**
+
+Timestamp from the clock. `--preflight-only`, no provider egress, no charge, nothing written to any
+ledger. Development spend across ledgers remains 12.093483578 USD; uncertain reservations
+5.481960176 USD. Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains
+`0`. The live smoke was **not** launched; reasons in section 4.
+
+### 1. Exact command
+
+Run against the current working tree, which contains the uncommitted COSTRECON changes:
+
+```
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" \
+MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" \
+.venv/bin/mmaudit models authenticated-runner-smoke \
+  --candidate-registry     "$A/authrunner/candidate-registry-c1.json" \
+  --candidate-discovery-run "$A/model-discovery/constrained-deepseek-together-20260909-c1" \
+  --primary-judge-registry "$A/authrunner/primary-judge-c1-registry.json" \
+  --primary-judge-discovery-run "$A/model-discovery/constrained-primary-judge-c1-20260909" \
+  --replay-judge-registry  "$A/authrunner/replay-judge-c1-registry.json" \
+  --replay-judge-discovery-run  "$A/model-discovery/constrained-replay-judge-c1-20260909" \
+  --smoke-corpus benchmarks/model_corpus_smoke --smoke-run-index 23 \
+  --output "$A/authrunner/authenticated-runner-smoke-evidence-20260910-s23.json" \
+  --candidate-cost-cap-usd-per-attempt 0.30 \
+  --primary-judge-cost-cap-usd-per-attempt 0.30 \
+  --replay-judge-cost-cap-usd-per-attempt 0.30 \
+  --config config/openrouter-qualification.toml \
+  --secrets-env-file "$HOME/.mmaudit/secrets.env" \
+  --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" \
+  --preflight-only --allow-code-egress --no-color
+```
+
+Two shape corrections against my earlier drafts, both now settled by observation:
+`--*-cost-cap-usd-per-case` does not exist; the accepted names are
+`--candidate-cost-cap-usd-per-attempt`, `--primary-judge-cost-cap-usd-per-attempt` and
+`--replay-judge-cost-cap-usd-per-attempt`. And the command refuses to run without an explicit
+`--allow-code-egress`; without it the failure is
+`mmaudit failed safely: models authenticated-runner-smoke requires explicit --allow-code-egress`.
+Both are correct refusals, recorded so the live launch does not discover them after opening a
+provider connection.
+
+### 2. Complete preflight output, verbatim
+
+```
+AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS
+Smoke run index: 23
+Inventory: runs=2; cases=1; logical_requests=4; maximum_provider_attempts=8; generation_refetches=4
+Operator cost tripwires: initial_spent_usd=0.68118684; operator_interval_cap_usd=2.40;
+  operator_final_spent_cap_usd=3.08118684
+Candidate exact admission: plan_sha256s=c2aedf7619841467f82281143006a3ef2fe69993d0f337056a4809887483cac6,
+  c7d5197a70236bcd6357b675f832f120bd8767f4af1ee9b6aa6cefe6b98294de;
+  derived_interval_cap_usd=0.20898768; derived_final_spent_cap_usd=0.89017452
+Judge exact admission: status=PENDING_REAL_CANDIDATE_OUTPUTS;
+  full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+Exit status 0, wall time about two seconds. The two `plan_sha256s` are the per-request staged cost
+plans emitted by `candidate_cost_plans`, not selection-plan digests; neither the committed active
+plan `4e7fff76…` nor the current worktree plan `ae31d07d…` appears there, and that is correct, not a
+stale pin. I checked because the field name reads like a selection-plan reference.
+
+### 3. The finding, stated precisely
+
+The candidate stage is bounded before dispatch: two staged cost plans, a derived interval cap of
+`0.20898768` USD and a derived final-spent cap of `0.89017452` USD. The judge stages are not. Their
+admission returns `PENDING_REAL_CANDIDATE_OUTPUTS`, and the whole-smoke bound returns
+`UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS`.
+
+The reason is legible and may well be unavoidable: a judge request body contains the candidate's
+real output, so its token count does not exist until the candidate has actually answered. But the
+consequence should be recorded rather than assumed benign. At the moment of dispatch the only
+pre-committed limit on the judge legs is the operator tripwire pair, `operator_interval_cap_usd 2.40`
+and `operator_final_spent_cap_usd 3.08118684`, and that 2.40 is exactly `maximum_provider_attempts 8`
+multiplied by the `0.30` per-attempt cap I chose on the command line. It is an operator-supplied
+number, not a product-derived one. If I had passed `--*-cost-cap-usd-per-attempt 30.00` the tripwire
+would have read 240.00 and the preflight would still have printed `VALID`.
+
+Against clause 5 of the frozen objective, a fixed autonomous ceiling with abort at the ceiling and
+per-call reconciliation, the tripwire does satisfy the ceiling and the abort. What does not exist is
+a derived bound for the judge legs, so the ceiling for two of the three roles rests on operator
+input rather than on the plan. That is worth an explicit decision in COSTRECON: either derive a
+judge bound from a declared maximum candidate output length and bind it into the staged plan, or
+record deliberately that the judge legs are tripwire-bounded only and that the preflight's `VALID`
+carries no claim about them. Both are defensible. Silently inheriting the operator's number is the
+one option I would not take.
+
+### 4. Why the live run has not been launched
+
+`V3-COSTRECON-001` is `IN_PROGRESS`, not landed. The working tree carries 68 modified or untracked
+paths, and among them are `src/mmaudit/models/authenticated_runner_smoke.py` and
+`src/mmaudit/models/route_runtime_evidence.py`, which the worklog names as the exact remaining
+targets of the slice. The preflight above therefore validates a half-edited tree. A paid run against
+that tree could spend real money and then produce a bundle the finished code rejects, and the
+spend would not be recoverable.
+
+I will launch when two conditions hold, both of which I can check myself without asking anyone.
+First, the slice lands: COSTRECON reaches a committed state and the plan settles, whether that is
+`v1.9` retained or the `v1.10` cost successor adopted. Second, constrained discovery is re-frozen
+for all three roles immediately before launch, because provider metadata has drifted within minutes
+before now and the frozen sets behind this preflight are hours old. If discovery has drifted I will
+re-freeze and say so before launching rather than launching on stale admission. Then the smoke runs
+on index 23, and the bundle plus its verification result comes back here.
+
+### 5. Unchanged
+
+Nine false authorities, zero real audits, both workflows manual-only. The active plan is still
+`v1.9` / V1 and `NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands.
+No provider call has been made since 05:02Z on 2026-09-09. Nothing in this entry authorizes a paid
+run, adopts a route, or promotes any evidence to qualification.
+
+
 ## 2026-09-09T19:20Z — **`V3-PLANROUTES-001` VERIFIED LIVE AT $0: all three roles now pass constrained discovery, 24/29 predicates SATISFIED and NONE REFUSED. The five remaining are `UNAVAILABLE` pending a live authenticated run. This is the first admissible route set since the August revocation.**
 
 Timestamp from the clock. Metadata-only discovery, no completion requested, no charge. Development
