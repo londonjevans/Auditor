@@ -3,6 +3,111 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T02:38Z — **I withdraw "REGRESSION" from my 02:35Z entry. It is not a bug. The `v1.10` profile declares `"unknown_billing_blocks_new_work": true`, bound to `operator_decision_id OP-COST-2026-09-09`. The block is the cost policy Jos approved, working exactly as written. What remains is a real consequence needing an operator decision, not a code fix: two August entries with genuinely unknowable cost now block AUTHRUNNER permanently.**
+
+Timestamp read from the clock at 02:38:42Z. Reading local artifacts only, nothing spent.
+Development spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD.
+Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. The chain, now fully established
+
+I checked what I had asserted, and the answer inverted my conclusion twice. Recording the whole
+chain because the intermediate steps matter.
+
+First, the file timestamps. `budgets.py` and `cost_ledger.py` were last modified at
+`2026-09-09T23:23:46Z` and `22:24:23Z` respectively, both before the index-23 run at `00:50Z`. I had
+read those mtimes as UTC when they are local, an hour ahead. So the guard code predates index 23 and
+was not added after it. My 02:35Z claim that it was "new tonight" relative to that run is wrong.
+
+Then, why index 23 succeeded and index 24 did not, with identical code. `require_known_prior_costs`
+is passed only when `bound.operator_reservation is not None`. That reservation exists only when the
+route profile carries an operator reservation policy. Comparing the two profiles I froze tonight:
+
+| | v1.9 profile `00b33f3e…` | v1.10 profile `563f49d5…` |
+|---|---|---|
+| `schema_version` | `1.0` | `1.3` |
+| `operator_reservation_policy` | absent | present |
+
+Exactly one key differs between them, and it is that one. So under v1.9 the operator path was
+dormant, the strict check never ran, and index 23 reserved and billed normally. The v1.10 adoption at
+`01:46Z` activated it.
+
+Finally, and decisively, the policy itself:
+
+```
+operator_decision_id            OP-COST-2026-09-09
+enforcement_basis               MMAUDIT_OPERATOR_RESERVE_THEN_RECONCILE_V1
+unknown_billing_blocks_new_work true
+require_actual_billed_cost      true
+reservation_overrun_blocks_new_work true
+ledger_ceiling_usd_exact        250
+policy_sha256                   2c5580e2bf08a047…
+```
+
+`unknown_billing_blocks_new_work: true` is a declared clause of the cost decision Jos approved on
+2026-09-09. The refusal is that clause being enforced.
+
+### 2. What I withdraw
+
+The heading "REGRESSION" is wrong and I withdraw it. So is my claim that the defect is "a one-line
+asymmetry" in which the new check fails to honour `allowed_uncertain_reservations`. Given
+`unknown_billing_blocks_new_work: true`, refusing regardless of allowances is coherent with the
+declared policy rather than an oversight in it. I proposed a code change to Codex on the strength of
+a reading I had not checked against the policy the code implements. That is the same error I named at
+01:27Z and it is now the sixth tonight.
+
+I also want to be precise that Codex did nothing wrong here. It implemented a policy clause, adopted
+it under a recorded operator decision, and the enforcement fired correctly on first contact with real
+conditions.
+
+### 3. What genuinely remains
+
+The consequence is real even though the cause is not a bug. The cumulative ledger holds two entries
+whose actual cost is not merely unrecorded but unknowable: they were reconciled with a null actual
+cost after provider rate limiting in August, and their accounted value equals their reservation
+rather than any observed bill.
+
+| request | reserved | accounted | created |
+|---|---|---|---|
+| `authrunner.smoke.r17.judge.replay` | `0.18105` | `0.18105` | 2026-08-24 |
+| `authrunner.smoke.r2.candidate.primary` | `0.05225616` | `0.05225616` | 2026-08-23 |
+
+Under `unknown_billing_blocks_new_work` these block every operator reservation against this ledger,
+now and permanently, because nothing can retroactively make an unobserved August bill known. No
+settle or reconcile subcommand exists and the smoke exposes no carry flag, both of which I checked.
+
+So AUTHRUNNER is blocked by a policy clause working correctly, and the block cannot clear itself.
+That needs a decision, and it is Jos's rather than Codex's or mine. The shapes I can see are:
+accepting `accounted == reserved` as final settlement for these two specific entries and recording
+that as an operator decision; adding an explicit legacy allowance to the policy for entries predating
+it; or starting a fresh cumulative ledger, which I would argue against because it breaks the custody
+continuity the ledger exists to provide.
+
+I am not choosing among those and I am not writing any of them into this file as a decision, for the
+reason recorded at 01:27Z.
+
+### 4. What still stands from 02:35Z
+
+The two diagnosability points are unaffected by any of the above and I do not withdraw them.
+
+The message says `request for model_benchmark exceeds the persistent model-cost budget` when spend is
+`0.68229168` against a ceiling of 250 and the actual clause is `unknown_billing_blocks_new_work`.
+`cost_ledger.py` raises `CostBudgetExceededError` for a non-budget condition and `budgets.py` renders
+it as budget exhaustion. An operator reading that message investigates the wrong thing, as I did for
+several minutes.
+
+It also surfaced as a raw Python traceback rather than the `mmaudit failed safely: ...` line every
+other refusal tonight produced.
+
+Both are small and both would have saved real time here.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. Nothing was spent on the attempted index-24 probe and no ledger entry was
+created.
+
 ## 2026-09-10T02:35Z — **REGRESSION, and it blocks every AUTHRUNNER run on the cumulative ledger. Index 24 refused before any provider contact with `BudgetExhaustedError`. The cause is the new `require_known_prior_costs` check, which ignores the `allowed_uncertain_reservations` allowance that the adjacent `require_settled_prior_costs` check honours. Two August entries the ledger has carried since 08-23 now block all reservations permanently. Zero spend; ledger still 58.**
 
 Timestamp read from the clock at 02:35:44Z. The probe refused before any provider call. Development
