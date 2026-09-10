@@ -3,6 +3,119 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T00:52Z — **LIVE RUN EXECUTED under `OP-SMOKE-2026-09-10`. The candidate route accepted the request and was billed 0.00110484 USD, then the smoke refused its own receipt: `NONCREDITING_SMOKE identity binding lacks exact completion receipts (usage_diagnostics=TOKEN_PLAN_ROUTING)`. No bundle was written. This is the first cumulative-ledger change since 05:02Z on 2026-09-09 and the first live result on the post-revocation route set.**
+
+Timestamp read from the clock. Development spend across ledgers remains 12.093483578 USD; uncertain
+reservations 5.481960176 USD, both unchanged because this run used the cumulative ledger, not a
+development ledger. Ledger now at 58 entries / `0.68229168` USD. `completed_real_audits` remains
+`0`.
+
+### 1. Accounting, exactly
+
+One new cumulative-ledger entry, `authrunner.smoke.r23.candidate.primary`, reservation
+`55ed9be1f26541718f1385d0e1a75dee`, created `00:50:04.576491Z`, updated `00:50:12.645269Z`.
+
+| field | value |
+|---|---|
+| reserved | `0.05224824` |
+| actual | `0.00110484` |
+| accounted | `0.00110484` |
+| released | `0.05114340` |
+| status | `reconciled` |
+
+Cumulative moved from `0.68118684` to `0.68229168`, a delta of exactly `0.00110484`. Ledger
+statuses are now 56 `reconciled` and the two pre-existing `uncertain_accounted`; this run added no
+uncertainty and caused no lockout. Total authorized exposure was 2.40 USD and actual spend was
+0.046 percent of it. Only the candidate leg ever dispatched; neither judge was reached, which is
+consistent with the ordering I described in the 00:32Z correction.
+
+### 2. What had to happen first, and one thing I got wrong
+
+The first launch attempt at `00:41:07Z` refused before any provider contact:
+`smoke candidate current OpenRouter endpoint exact-model identity inventory differs from frozen
+discovery`. Zero spend, ledger still 57. Provider metadata had drifted since the 09-09 freeze, which
+is what I had been predicting, so the check worked.
+
+I had argued shortly before that re-freezing risked breaking a working configuration and that the
+09-09 freeze was demonstrably still admissible. That was wrong, and wrong in an instructive way: the
+preflight makes no provider contact, so a passing preflight says nothing about whether the frozen
+metadata still matches live. I read a provider-free check as evidence about provider state.
+
+Re-freezing then needed the plan's two operator-staged sources, which are not on disk anywhere under
+`~/.mmaudit` or the repository. I located them in the August handoff pack at
+`~/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/` and verified both against the plan's
+`source_bindings` before use: `model-ranking.py` at `09a36743…`, 6455 bytes, and
+`V3-LINEAGE-001-operator-review.md` at `e967de35…`, 8184 bytes. Both matched exactly. Note for the
+record that `--candidate-registry-template` and `--candidate-selection-plan` are mutually exclusive,
+so a re-freeze bootstraps a fresh registry from the plan rather than inheriting the old one.
+
+Fresh constrained discovery, all three roles, metadata-only and free, reproduced the 09-09 result
+exactly:
+
+```
+deepseek/deepseek-v4-pro-0813=together   24 SATISFIED / 5 UNAVAILABLE / 0 refused
+z-ai/glm-5.2=deepinfra/fp4               24 SATISFIED / 5 UNAVAILABLE / 0 refused
+moonshotai/kimi-k3=together              24 SATISFIED / 5 UNAVAILABLE / 0 refused
+```
+
+New runs at `~/.mmaudit/private/model-discovery/con-{candidate,primary-judge,replay-judge}-20260910-0045Z/`
+with fresh registries `c4`. The five `UNAVAILABLE` are named for the first time in this file:
+`FROZEN_LIVE_EQUIVALENCE`, `REGISTRY_SELECTION_HASH_CUSTODY`, `REGISTRY_CONSTRAINT_HASH_CUSTODY`,
+`EMPIRICAL_SCHEMA_CONFORMANCE`, `TOKEN_DETAIL_REPORTING_CONVENTION`. The last two are the pair that
+blocks `FULL_CAMPAIGN_ADMISSION`.
+
+### 3. The failure, and where it is
+
+The refusal is `usage_diagnostics=TOKEN_PLAN_ROUTING`, a single code. Reading
+`src/mmaudit/models/usage.py`, that code is returned only after `ROUTER_IDENTITY`,
+`PRIVACY_ROUTING` and the structured-output failure codes have all passed, so the request routed
+correctly, the privacy policy held and the native JSON schema was honoured. The failure is inside
+`_has_valid_token_plan_routing` and nowhere else.
+
+My leading hypothesis, stated as a hypothesis because the failing sub-branch is not reported
+separately and no bundle survived to inspect, is the emitted-reasoning branch. That branch fails
+when the plan's control profile is not `disabled` and reserves reasoning tokens, but the record has
+no `active_observed` reasoning state with a positive observed token count. Three things point at it.
+
+The plan requires `required_reasoning_effort: high`. All three routes are admitted on
+`model_supported_reasoning_efforts`, `['low','high','max']` for the two Together routes and
+`['high','xhigh']` for GLM, while every one of the three reports endpoint-level
+`supported_reasoning_efforts: None`. Admission resolves the effective value by falling back from
+endpoint to model, which was already noted in this file for `list-endpoints`. And the billed cost
+implies a very short completion: `0.00110484` at this route's `prompt 0.00000132` and
+`completion 0.00000396` is satisfied by roughly 500 prompt and 112 completion tokens, which sums to
+`0.00110352`. A 112-token completion is not what `reasoning_effort: high` produces when reasoning is
+actually emitted and billed.
+
+If that is right, the shape of the problem is worth stating plainly. The route passes constrained
+discovery on a model-level reasoning inventory, and the endpoint then does not emit observable
+reasoning, so the runtime predicate refuses after the call has been billed. The gap is only
+discoverable by paying, which is exactly the class of thing the preflight is supposed to prevent.
+Whether the right fix is to refuse admission when the endpoint-level inventory is absent, or to
+report the sub-branch so a single billed call is diagnostic rather than merely negative, is a
+product decision I am not making here.
+
+### 4. What this does and does not change
+
+It does not satisfy `EMPIRICAL_SCHEMA_CONFORMANCE` or `TOKEN_DETAIL_REPORTING_CONVENTION`. No bundle
+was written, so the durable run remains blocked on exactly the pair identified at 00:37Z, and I have
+not re-run the durable preflight because there is nothing new to feed it.
+
+It does establish, live and for the first time since the August revocation, that the candidate route
+authenticates, routes, honours the native JSON schema and bills correctly against its reservation.
+That is real progress on 24 of the 29 predicates being more than metadata.
+
+`OP-SMOKE-2026-09-10` authorized exactly one smoke and that authorization is now spent. I am not
+launching another under it. A second attempt should follow a decision about the reasoning-effort
+question above, because repeating the same configuration would repeat the same refusal at the same
+cost and teach nothing.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. Nothing here
+adopts a route, promotes evidence to qualification, or authorizes the durable run.
+
 ## 2026-09-10T00:37Z — **The durable AUTHRUNNER run is gated on exactly two predicates, and both are satisfiable only by a fresh smoke bundle on the current three routes. Everything else in `FULL_CAMPAIGN_ADMISSION` already passes. Proven at $0 by three `models authenticated-runner --preflight-only` invocations. Operator decision `OP-SMOKE-2026-09-10` is recorded in section 5.**
 
 Timestamp read from the clock. No provider contact, no ledger write, nothing spent, no output
