@@ -3,6 +3,114 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T13:10Z — **`V3-CALIBRATE-001` unblocked: the OpenTimestamps protocol specification is now staged locally at `.mmaudit/operator-shared/opentimestamps-spec/`, pinned to commit `3af46432…`. No standalone spec document exists anywhere in the project; the reference implementation's four core modules ARE the normative format definition, so those are what I supplied. Constants table below. LGPL-3.0 — read-only reference, must NOT be copied into this repository.**
+
+Timestamp read from the clock at 13:10:46Z. Public source reads only, no credential, no submission,
+no publication, nothing installed and nothing adopted. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries /
+`0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. What was asked and what I did
+
+Codex asked for the OpenTimestamps protocol specification supplied locally, or authorization to read
+its official documentation, noting correctly that neither would authorize publication, node
+installation or spending. Jos relayed that request. Supplying it is the operator half of the split,
+so I fetched it rather than granting a browsing permission.
+
+I first looked for a specification document and there is not one. The `opentimestamps` GitHub
+organisation has 14 repositories; searching every tree for paths matching `doc`, `spec` or `format`
+returns exactly one file, `opentimestamps-client/doc/git-integration.md`, which is about git
+integration and not the wire format. So the normative definition is the reference implementation, and
+that is what I staged.
+
+### 2. What is staged
+
+Path `.mmaudit/operator-shared/opentimestamps-spec/`, which is gitignored at `.gitignore:8`
+(`/.mmaudit/`), verified with `git check-ignore -v`. Pinned to
+`python-opentimestamps` commit `3af46432efc4a4c4e7bba439c1f49bce808eb3e5`, recorded in
+`PINNED_COMMIT.txt`.
+
+| file | bytes | role |
+|---|---|---|
+| `opentimestamps_core_serialize.py` | 7617 | varuint / varbytes / bool / uint8 wire primitives |
+| `opentimestamps_core_op.py` | 10936 | operation tags and length limits |
+| `opentimestamps_core_notary.py` | 12558 | attestation tags and payloads |
+| `opentimestamps_core_timestamp.py` | 14932 | proof structure, header magic, versioning |
+| `README.md` | 988 | project README |
+| `LICENSE` | 8167 | GNU LGPL v3 |
+
+**Licence constraint, please read before use.** These files are LGPL-3.0 and this repository is MIT
+and public. They are a read-only reference for deriving an independent implementation. Do not copy
+them, or substantial portions of them, into tracked source or fixtures. That is the same handling
+rule as the shared discovery snapshots.
+
+### 3. The normative constants, extracted
+
+Recorded here so the format facts are in the reconcilable record and not only in an ignored
+directory.
+
+Proof envelope, from `timestamp.py`:
+
+```
+HEADER_MAGIC            b'\x00OpenTimestamps\x00\x00Proof\x00\xbf\x89\xe2\xe8\x84\xe8\x92\x94'
+MAJOR_VERSION           1
+MAX_FILE_DIGEST_LENGTH  32          (256-bit hash)
+```
+
+Serialization order on write is magic, then `write_varuint(MAJOR_VERSION)` followed by
+`write_uint8(MAJOR_VERSION)` at `timestamp.py:317-319`; deserialization asserts the magic at `:329`.
+Primitives available are `bool`, `varuint`, `uint8`, `bytes` and `varbytes`.
+
+Operation tags, from `op.py`:
+
+| tag | operation | kind |
+|---|---|---|
+| `0x02` | SHA1 | crypt |
+| `0x03` | RIPEMD160 | crypt |
+| `0x08` | SHA256 | crypt |
+| `0x67` | KECCAK256 | unary |
+| `0xf0` | append | binary |
+| `0xf1` | prepend | binary |
+| `0xf2` | reverse | unary |
+| `0xf3` | hexlify | unary |
+
+with `MAX_RESULT_LENGTH = 4096` and `MAX_MSG_LENGTH = 4096`.
+
+Attestation tags, from `notary.py`, where `TAG_SIZE = 8` and `MAX_PAYLOAD_SIZE = 8192`:
+
+| tag | attestation |
+|---|---|
+| `83dfe30d2ef90c8e` | Pending (calendar URI) |
+| `0588960d73d71901` | Bitcoin block header |
+
+An unrecognised 8-byte tag deserializes to `UnknownAttestation` carrying its opaque payload, so
+forward compatibility is defined rather than fatal.
+
+### 4. How this bears on clauses 8 and 10
+
+Restating the 11:20Z finding now that the format is in hand. The Bitcoin block header attestation is
+the piece that satisfies clause 8's "append-only transparency log … inclusion proof": the proof is a
+chain of the operations above from the document digest to a block header, and verification replays
+those operations and checks the result against that block. No signature and no key appears anywhere
+in the format, which is what makes it compatible with clause 10's "No signer" where Rekor is not.
+
+The two prerequisites from 11:20Z stand unchanged: hours of latency before a Bitcoin attestation
+exists, and a local pruned Bitcoin Core node for genuinely independent verification, which this
+machine does not have. Neither is affected by having the spec.
+
+### 5. What I am still not doing
+
+Not submitting anything to a calendar, not installing a node or client, not choosing this protocol on
+anyone's behalf, and not proposing it be pinned in the objective or the plan. Clause 8 names no
+specific log. This is a requested reference, supplied.
+
+### 6. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. Every authenticated reservation remains blocked by the unknown-billing stop and
+the candidate route change remains unconfirmed; both still need Jos directly.
+
 ## 2026-09-10T11:20Z — **Answering Codex's pending documentation request myself, since browsing is the operator's job and Codex cannot do it. On the frozen objective's clause 8 and clause 10 together: Rekor cannot satisfy them, because every documented entry type mandates a signature and public key and no hash-only type exists. OpenTimestamps can, requiring no account, key or signature. Two real prerequisites come with it, one of which this machine does not have.**
 
 Timestamp read from the clock at 11:20:33Z. Public documentation reads only. No credential, no
