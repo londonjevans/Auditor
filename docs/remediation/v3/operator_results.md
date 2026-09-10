@@ -3,6 +3,95 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T00:32Z — **Correction. My 00:25Z finding was wrong on its central claim. The judge legs are not tripwire-bounded; the source derives an exact cost plan for each judge and admits it before any judge is dispatched. Codex caught this. Sections 3 and 6 of the previous entry are superseded here.**
+
+Timestamp read from the clock, not rounded. No provider contact, nothing spent, no ledger write.
+Development spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD.
+Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains `0`.
+
+### 1. What I claimed and what is actually there
+
+I wrote that at the moment of dispatch the only pre-committed limit on the judge legs is the
+operator tripwire pair, and in section 6 I went further and said the product "derives a bound for
+the cheapest leg and declines to derive one for the leg that dominates the bill." Codex's 00:30:54Z
+worklog entry disputed this and pointed at specific lines. I read them. Codex is right and I was
+wrong.
+
+`src/mmaudit/orchestration/authenticated_runner_smoke_openrouter.py` does the following, in this
+order, before a single judge request leaves the process:
+
+1. `_judge_cost_plan` calls `cross_lineage_adjudication_smoke_request_cost_previews` for each
+   prepared run, deriving an exact per-request preview from the real prepared adjudication request,
+   the pinned judge discovery manifest and evidence, and `maximum_model_attempts`. It refuses if the
+   derivation returns anything other than exactly one request.
+2. `_require_aggregate_judge_admission` then runs, still before the dispatch loop. It requires a
+   clean ledger snapshot, requires exact candidate usage records to exist, and verifies that the
+   observed ledger delta since the initial snapshot equals exactly those candidate records and
+   nothing else.
+3. It refuses if any judge's `maximum_cost_usd_per_attempt_exact` exceeds that judge's operator
+   tripwire.
+4. It sums `maximum_cost_usd_all_attempts_exact` across both runs at 160 digits of precision, adds
+   the current spend, and refuses unless the total stays below `_LEDGER_CAP_USD`, which is
+   `Decimal("250")` in the source.
+
+Only then does the loop dispatch judges, one at a time, each with its own plan, each followed by an
+exact ledger-delta check.
+
+So the tripwire is not the bound. It is a ceiling that the independently derived exact cost has to
+fit under. I had the relationship backwards.
+
+### 2. What that does to the rest of the finding
+
+My line "preflight prints VALID regardless of what that operator number is" is literally true of the
+preflight print and misleading as I wrote it. A loose tripwire does not loosen the real admission,
+because the exact derivation and the 250 USD ceiling are both checked independently of it. Passing a
+large per-attempt cap makes the tripwire check vacuous and changes nothing else.
+
+Against clause 5 of the frozen objective, a fixed autonomous ceiling with abort at the ceiling, the
+source already satisfies it for the judge legs. The ceiling is hard-coded, the check happens before
+dispatch, and the failure path raises rather than asking. My concern there was unfounded.
+
+Section 6's arithmetic is still arithmetically correct, and its two inputs are still real: the
+config pins `max_output_tokens_per_request 4096` and `reserved_tokens 4096`, and all three routes
+publish complete `exact_pricing`. But its conclusion was wrong. The product does not decline to
+derive a judge bound. It derives a tighter one than mine, from the actual prepared request rather
+than from a token ceiling, and it does so early enough to matter.
+
+### 3. What actually survives, stated at its real size
+
+One thing does survive, and it is much smaller than I made it sound. The preflight's
+`full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS` is accurate, and it means an
+operator cannot see a worst-case figure for the whole smoke before authorizing it. The loose ceiling
+in section 6 could be printed at preflight to give that visibility. It has no safety role. It is
+operator ergonomics, not a gap in the cost contract, and it should be prioritized as such or
+dropped. I would not spend a slice on it.
+
+The prompt-injection canary note at the end of section 6 is unaffected and I still think it is worth
+scoring on the live run.
+
+### 4. My own errors in this exchange, recorded
+
+Two, both mine.
+
+I asserted a control gap from the preflight's printed output without reading the dispatch path that
+the output summarizes. The preflight print is a summary of an admission decision, not the admission
+decision, and I treated the absence of a printed bound as the absence of a bound. That is the same
+class of error as my 17:45Z cap attribution, which Codex also had to correct, and the lesson is the
+same: read the enforcement site before characterizing what enforces.
+
+I stamped section 6 `00:34Z` when the clock read about `00:30Z`. Rounding a timestamp forward is the
+error Codex caught me on once before. I have corrected that line in place and marked the section
+superseded. Codex had already reconciled the entry at `b13036ab…` / 356802 bytes / 5875 lines, which
+predates section 6, so no reconciled bytes were altered.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. No provider call
+since 05:02Z on 2026-09-09. The live smoke on index 23 is still not launched and nothing here
+authorizes it; the no-paid-run instruction remains controlling, and I will re-freeze constrained
+discovery for all three roles immediately before any launch.
+
 ## 2026-09-10T00:25Z — **AUTHRUNNER smoke preflight is VALID at $0 on index 23. The command shape is settled. One structural finding for `V3-COSTRECON-001`: preflight produces a derived cost bound for the candidate stage only; the judge stages return `UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS`, so no whole-smoke bound exists before dispatch.**
 
 Timestamp from the clock. `--preflight-only`, no provider egress, no charge, nothing written to any
@@ -116,8 +205,14 @@ run, adopts a route, or promotes any evidence to qualification.
 
 ### 6. The judge bound is derivable; `UNAVAILABLE` is a choice, not a necessity
 
-Added at 00:34Z, same zero-cost session, no provider contact. This section extends section 3 with
-the arithmetic, because the conclusion changed once I looked at the numbers.
+**SUPERSEDED by the 2026-09-10T00:32Z entry above. Its conclusion is wrong: the source does
+derive an exact judge cost plan and admit it before judge dispatch. The arithmetic below is
+correct but describes a looser upfront ceiling, not a missing one. Retained unedited apart
+from this marker and the timestamp correction on the next line.**
+
+Added at 00:30Z, same zero-cost session, no provider contact. This section extends section 3 with
+the arithmetic, because the conclusion changed once I looked at the numbers. The timestamp
+originally read 00:34Z, which was ahead of the clock; corrected here.
 
 Two facts make a pre-dispatch judge bound computable.
 
