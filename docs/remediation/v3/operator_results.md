@@ -3,6 +3,107 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:00Z — **Correcting my own 00:57Z recommendation. `parasail/fp8` is not available to swap to: it is REVOKED for `EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE`, effective two hours after the bundle that proves it emits reasoning. The candidate model is therefore in a genuine squeeze, and `models list-endpoints` being broken for that exact model is now on the critical path rather than a nicety.**
+
+Timestamp read from the clock. Three metadata-only probes, no provider completion, nothing spent.
+Development spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD.
+Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. I probed the three August-proven endpoints. Only one is usable.
+
+```
+deepseek/deepseek-v4-pro-0813=parasail/fp8
+  candidate selection assignment is revoked: role=candidate;
+  reason=EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE
+
+z-ai/glm-5.2=sail-research/fp8
+  mmaudit failed safely: configured endpoint tag or slug is unavailable: sail-research/fp8
+
+moonshotai/kimi-k3=modal/mxfp4
+  frozen; operational true, zdr true, pricing {prompt 0.000003, completion 0.000015,
+  input_cache_read 0.0000003}
+```
+
+I misread the third of those at first. It reports `operational_status: "0"`, which is a status code
+and not a boolean, while `operational` is `true`. `modal/mxfp4` is available today. Checking the
+field saved me from reporting the opposite.
+
+### 2. The revocation, and its date
+
+`src/mmaudit/resources/candidate-selection-revocations.json` holds exactly one entry:
+
+```
+exact_model_id     deepseek/deepseek-v4-pro-0813
+provider_endpoint  parasail/fp8
+role               candidate
+disposition        REVOKED
+reason             EMPIRICAL_STRUCTURED_OUTPUT_NONCONFORMANCE
+effective_at       2026-08-27T17:22:00Z
+entry_sha256       67eb2be8bb4d51d8223c2893736c0adeea60bd73d7671ee22f39cc6f4dee6ec4
+```
+
+The `s22` bundle whose usage records I quoted at 00:57Z was created around `15:15Z` on 2026-08-27.
+The revocation is effective `17:22Z` the same day, about two hours later. So `parasail/fp8` produced
+a valid smoke bundle with 1222 candidate reasoning tokens, and was then revoked for failing
+structured output empirically. Both facts are true and they are two hours apart.
+
+### 3. The squeeze, stated exactly
+
+For the candidate model `deepseek/deepseek-v4-pro-0813`, two endpoints have been tested live and
+each fails a different mandatory predicate:
+
+| endpoint | native structured output | emitted reasoning | status |
+|---|---|---|---|
+| `parasail/fp8` | fails empirically | 1222 tokens observed | REVOKED 08-27 |
+| `together` | passes | none, 201 completion tokens total | refused 09-10 |
+
+The plan requires both. Each of those two facts cost a real provider call to learn, and neither was
+predictable from metadata. No third endpoint for this model has been tested.
+
+The judges are in a different and better position, because neither judge was ever dispatched today.
+Their endpoints are simply untested rather than known-bad. And for the replay judge there is a
+proven alternative: `moonshotai/kimi-k3=modal/mxfp4` emitted 1804 reasoning tokens in the August
+bundle and is operational and ZDR-eligible today. For the primary judge there is none, since
+`sail-research/fp8` no longer exists as an endpoint and the current `deepinfra/fp4` has never been
+reached.
+
+### 4. Why the `list-endpoints` bug now matters more than I said
+
+The obvious next move on the candidate is to find a third endpoint that passes structured output and
+emits reasoning. That requires enumerating the endpoints for
+`deepseek/deepseek-v4-pro-0813`, and `models list-endpoints` refuses that exact model with
+`endpoint inventory contains duplicate exact routes`. The same is true of `z-ai/glm-5.2`. So the two
+roles that need a search are the two the search tool cannot enumerate, while `models discover`
+handles both fine.
+
+At 00:57Z I filed that as a usability inconsistency. It is not. It is the blocker on the only
+obvious path forward, and I would put it ahead of the remaining COSTRECON work on that basis.
+
+### 5. What I withdraw and what I now think
+
+I withdraw the 00:57Z recommendation to swap the candidate to `parasail/fp8`. It is revoked, and I
+should have checked the revocation list before recommending it rather than after. That is the second
+time today I have recommended something before reading the enforcement record, after the tripwire
+error Codex corrected at 00:30Z, and the pattern is worth naming: I have been reasoning from
+observed behaviour and skipping the declared state that governs it.
+
+What I think now, offered as analysis rather than instruction. The narrow question is whether any
+endpoint for this candidate model satisfies native structured output and emitted reasoning together;
+that is answerable, one paid probe at a time, once enumeration works. The wider question is whether
+requiring both jointly, from a single model on a single provider, is a sound requirement, given the
+first two attempts each failed a different half. Those are separate decisions and the second one is
+Jos's, not mine. I am not making either, and nothing here changes the plan.
+
+The replay-judge swap to `modal/mxfp4` is the one change supported by proven evidence today, and it
+is still a plan change.
+
+### 6. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`.
+`OP-SMOKE-2026-09-10` is spent and I am not launching another smoke.
+
 ## 2026-09-10T00:57Z — **Root cause of the index-23 refusal is now proven, not hypothesised: `together` returned exactly 201 completion tokens and emitted no reasoning, while the same model and prompt on `parasail/fp8` emitted 1222 reasoning tokens in August. Two further findings: no endpoint metadata anywhere distinguishes a reasoning-emitting route, and `models list-endpoints` is broken for two of the three roles.**
 
 Timestamp read from the clock. Everything in this entry is free: reading a retained bundle, arithmetic,
