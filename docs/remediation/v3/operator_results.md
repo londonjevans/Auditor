@@ -3,6 +3,100 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:08Z — **The candidate model is not in a squeeze. I worked around the broken enumeration by probing endpoints one at a time through `models discover`, which works for this model. There are five live endpoints, and three of them satisfy every metadata requirement and have never been tested. Each costs about a tenth of a cent to test. This supersedes the dead-end framing in my 01:00Z entry.**
+
+Timestamp read from the clock. Twenty-four metadata-only probes, no provider completion requested,
+nothing spent. Development spend across ledgers remains 12.093483578 USD; uncertain reservations
+5.481960176 USD. Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains
+`0`.
+
+### 1. The workaround
+
+`models list-endpoints` refuses this model, but `models discover` accepts an explicit
+`MODEL=ENDPOINT` pair and reports whether that pair exists. So the enumeration the broken command
+would have given can be reconstructed by probing candidate provider tags individually. I took the
+19 tags that `list-endpoints` returned for `moonshotai/kimi-k3`, added the quantization variants
+seen in the August bundles and two common providers, and probed all 24 against
+`deepseek/deepseek-v4-pro-0813`. All free, no completion.
+
+```
+OK       together              OK       fireworks           OK       digitalocean
+OK       phala                 OK       sail-research/fp4
+REVOKED  parasail/fp8
+OTHER    alibaba :: endpoint pricing override condition is unsupported: utc_end
+ABSENT   parasail/fp4, parasail/bf16, modal/mxfp4, baseten/fp8, deepinfra/bf16, deepinfra/fp4,
+         fireworks/fast, fireworks/us, chutes/mxfp4, makora, morph/fast, morph/fp4, relace/fp4,
+         sail-research/fp8, wafer, novita, nebius
+```
+
+### 2. The screening result
+
+The plan requires `required_output_mode NATIVE_JSON_SCHEMA` and `required_supported_parameters
+["structured_outputs"]`. Screening the five live endpoints on that alone eliminates one of them for
+free:
+
+| endpoint | output mode | `structured_outputs` | prompt / completion | ZDR | status |
+|---|---|---|---|---|---|
+| `together` | `NATIVE_JSON_SCHEMA` | yes | `0.00000132` / `0.00000396` | yes | tested, emits no reasoning |
+| `fireworks` | `NATIVE_JSON_SCHEMA` | yes | `0.00000132` / `0.00000396` | yes | **untested** |
+| `sail-research/fp4` | `NATIVE_JSON_SCHEMA` | yes | `0.00000132` / `0.00000396` | yes | **untested** |
+| `phala` | `NATIVE_JSON_SCHEMA` | yes | `0.00000145` / `0.00000436` | yes | **untested** |
+| `digitalocean` | `JSON_OBJECT` only | no | `0.00000132` / `0.00000396` | yes | eliminated on metadata |
+
+All five report `operational: true`, `reasoning_supported: true`, reasoning parameters
+`['include_reasoning','reasoning','reasoning_effort']`, and endpoint-level
+`supported_reasoning_efforts: None`, which is the same blind spot as before: metadata cannot tell
+which will actually emit reasoning.
+
+So three untested endpoints satisfy every requirement that can be checked without paying, and two of
+the three are priced identically to `together`. `fireworks` and `sail-research/fp4` match its prices
+exactly; `phala` is about 10 percent dearer.
+
+One weak prior worth naming, not relied on: `sail-research/fp8` was the August primary-judge
+provider for GLM and emitted 667 reasoning tokens then. That is a different model and a different
+quantization, so it is suggestive at best, but it is the only endpoint in the untested three with any
+prior evidence of emitting reasoning at all.
+
+### 3. Correcting my 01:00Z framing
+
+At 01:00Z I described the candidate model as caught between two endpoints that each fail a different
+mandatory predicate, and treated finding a third as blocked by the enumeration bug. Both halves were
+wrong in the same way: I accepted the tool's failure as the boundary of what was knowable instead of
+looking for another route to the same information. The enumeration was never actually unavailable,
+only inconvenient, and the answer took a few minutes and cost nothing.
+
+That is the third time today I have stated something more confidently than the evidence supported,
+after the tripwire claim and the parasail recommendation. The common thread is asserting a limit
+rather than testing it.
+
+### 4. What I recommend, and the one thing I cannot do
+
+The next step is narrow, cheap and well posed. Point the plan's
+`authenticated_runner_selection.route_constraints` candidate entry at `fireworks`, re-freeze
+constrained discovery, and run one smoke. If the candidate leg emits reasoning the two blocking
+predicates should go green and the durable run becomes reachable. If it does not, repeat with
+`sail-research/fp4` and then `phala`. Worst case that is three probes at roughly a tenth of a cent
+each, and the first one that emits reasoning ends the search.
+
+I cannot do this myself, and the reason is structural rather than a matter of permission. The smoke
+requires constrained discovery evidence, constrained discovery requires the route to appear in the
+plan's `route_constraints`, and the plan currently pins `together`. So no alternative endpoint can be
+tested at all until the plan lists it. That is a plan change and it is Codex's, not mine.
+
+Two smaller items while the plan is open. `alibaba` fails with `endpoint pricing override condition
+is unsupported: utc_end`, so a time-bounded provider pricing override is currently unhandled and that
+endpoint cannot be evaluated at all. And the enumeration bug is now less urgent than I said at
+01:00Z, because this probing method substitutes for it, but it is still worth fixing since the
+method is tedious and depends on guessing tag names.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`.
+`OP-SMOKE-2026-09-10` is spent; the probes recommended above would need a fresh operator decision,
+which I will record here when the plan is ready rather than assume.
+
 ## 2026-09-10T01:04Z — **Narrowing one claim I made at 00:57Z and repeated at 01:00Z. I said `models list-endpoints` is stricter than the admission path. I did not verify that the two read the same inventory, and there is evidence they do not. The symptom stands; the explanation was unsupported.**
 
 Timestamp read from the clock. Source reading only, no command run, nothing spent. Development spend
