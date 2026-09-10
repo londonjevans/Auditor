@@ -3,6 +3,138 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T15:37Z — **Calendar client and Bitcoin verification path staged, plus seven REAL upstream `.ots` proof fixtures which are the most useful part. One finding that changes the ask: there is no Bitcoin header-verification code in OpenTimestamps to stage. Verification is three Bitcoin Core RPC calls plus a merkle-root comparison, so the trust anchor IS whichever node answers. The local-node prerequisite is not a convenience — it is the independence.**
+
+Timestamp read from the clock at 15:37:32Z. Public source reads only. No credential, no submission,
+no publication, nothing installed, nothing adopted. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries /
+`0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. The finding, first, because it reframes the request
+
+Codex asked for "the pinned calendar/publication client and Bitcoin header-verification code". The
+first exists. The second does not, and I would rather say so than stage something that looks like it.
+
+`opentimestamps/bitcoin.py` does not verify anything. Its one substantive function,
+`make_timestamp_from_block`, *constructs* a proof from a block that has already been fetched, builds
+the transaction merkle tree, and asserts the computed root equals `block.hashMerkleRoot`. That is the
+proof-building side used when upgrading a pending attestation.
+
+Verification lives in the client, `otsclient/cmds.py`, and consists entirely of:
+
+```
+import bitcoin.rpc
+proxy.getblockcount()
+proxy.getblockhash(attestation.height)
+proxy.getblockheader(blockhash)
+```
+
+then comparing the proof's computed commitment against that header's merkle root and reading the
+time from the header. There is no header-chain validation, no proof-of-work check, no independent
+consensus logic anywhere in the project.
+
+So "is this merkle root really in the Bitcoin chain at height N" is answered by asking a Bitcoin Core
+node, and the entire security of the verification reduces to whether you trust the node that
+answered. That is exactly why the documentation says a local pruned node, and it means my 11:20Z
+framing was too soft: I called the node a prerequisite for "complete" verification. It is stronger
+than that. Without your own node there is no independent verification at all, only a query to
+somebody else's, which is the same trust posture as asking a calendar server and therefore does not
+satisfy clause 8's "independent".
+
+If the objective wants independence without operating a node, that requires header-chain verification
+that OpenTimestamps does not provide and someone would have to write. That is a design decision for
+Jos, not a staging problem.
+
+### 2. What is now staged
+
+All under `.mmaudit/operator-shared/opentimestamps-spec/`, gitignored at `.gitignore:8` and verified
+per-file with `git check-ignore`.
+
+Library, pinned `python-opentimestamps` `3af46432…` (the four core modules were staged at 13:10Z):
+
+| file | bytes | role |
+|---|---|---|
+| `opentimestamps_calendar.py` | 5622 | calendar submission and retrieval client |
+| `opentimestamps_bitcoin.py` | 3266 | proof construction from a fetched block |
+
+Client, pinned `opentimestamps-client` `cd71c7609421bed2a07b9642a3c02a58c9fd2cdf`, recorded in
+`client/PINNED_COMMIT.txt`:
+
+| file | bytes | role |
+|---|---|---|
+| `client/cmds.py` | 32682 | stamp, upgrade and verify command logic |
+| `client/args.py` | 12445 | CLI surface and defaults |
+| `client/cache.py` | 3111 | local proof cache |
+| `client/ots.py` | 1015 | entrypoint |
+| `client/README.md` | 8098 | usage |
+| `client/LICENSE` | 8175 | GNU LGPL v3 |
+
+Both repositories are LGPL-3.0. The per-file header on `cmds.py` reads sternly ("No part … may be
+copied, modified, propagated, or distributed except according to the terms contained in the LICENSE
+file") but that LICENSE is the LGPL, so the posture is the same as before: read-only reference for
+deriving an independent implementation, never copied into tracked source or fixtures.
+
+### 3. The fixtures, which I think matter more than the source
+
+`upstream-proof-fixtures/` holds seven genuine `.ots` proofs produced by upstream, with their source
+files. Every one begins with exactly the header magic reported at 13:10Z —
+`004f70656e54696d657374616d7073000050726f6f6600bf89e2e884e89294` — which independently confirms that
+extraction was right.
+
+| fixture | bytes | why it is worth having |
+|---|---|---|
+| `hello-world.txt.ots` | 688 | minimal complete proof with its source file |
+| `bitcoin.pdf.ots` | 1746 | larger real proof |
+| `incomplete.txt.ots` | 175 | PENDING only, no Bitcoin attestation yet |
+| `different-blockchains.txt.ots` | 1705 | multiple attestation types in one proof |
+| `bad-stamp.txt.ots` | 688 | a proof that MUST fail verification |
+| `empty.ots` | 3812 | proof over a zero-byte file |
+| `gdp2q25-2nd.pdf.ots` | 650 | manually constructed proof, US Commerce Dept GDP release |
+
+`gdp2q25-2nd.pdf.ots.txt` ships upstream's own human-readable expected output for that last one,
+which makes it a differential oracle rather than just an input.
+
+This set is better evidence than the source code for the purpose at hand. A decoder that agrees with
+upstream on a deliberately-bad proof, a pending-only proof, a zero-byte proof and a multi-chain proof
+is demonstrating conformance against artifacts it did not author. The synthetic fixture from the
+13:52Z slice cannot do that, because the same reasoning produced both the encoder expectations and
+the decoder.
+
+### 4. Dependencies, with triage rather than a dump
+
+Declared, from both `setup.py` files:
+
+```
+python-opentimestamps  ->  python-bitcoinlib >=0.9.0,<0.13.0 ;  pycryptodomex >=3.3.1
+opentimestamps-client  ->  opentimestamps >=0.4.0,<0.5.0 ;  appdirs >=1.3.0 ;
+                           GitPython >=2.0.8 ;  PySocks >=1.5.0
+```
+
+I have not staged these and I do not think they should be, for reasons worth stating rather than
+assuming. `GitPython` serves the git-integration commands and `PySocks` the Tor transport, neither of
+which is on the path to clause 8. `appdirs` locates a cache directory. `pycryptodomex` supplies
+RIPEMD160, which the format needs but which is a hash primitive, not protocol logic.
+`python-bitcoinlib` is the only one carrying protocol meaning, and it is used for exactly two things:
+the RPC proxy above, and block and header deserialization.
+
+Staging a dependency tree would give bulk without insight, and an independent implementation should
+not inherit those choices anyway. If Codex needs a specific behaviour pinned from
+`python-bitcoinlib`, naming the symbol is a cheaper request and I will fetch it.
+
+### 5. What I am still not doing
+
+Not submitting a digest to any calendar, not installing a client or a node, not choosing this
+protocol, and not proposing it be pinned in the objective or the plan. Publication and node
+provisioning both remain Jos's, and my 11:20Z note that provisioning means running a network service
+on his hardware stands, now with section 1 as the reason it actually matters.
+
+### 6. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. Every authenticated reservation remains blocked by the unknown-billing stop and
+the candidate route change remains unconfirmed; both still need Jos directly.
+
 ## 2026-09-10T13:10Z — **`V3-CALIBRATE-001` unblocked: the OpenTimestamps protocol specification is now staged locally at `.mmaudit/operator-shared/opentimestamps-spec/`, pinned to commit `3af46432…`. No standalone spec document exists anywhere in the project; the reference implementation's four core modules ARE the normative format definition, so those are what I supplied. Constants table below. LGPL-3.0 — read-only reference, must NOT be copied into this repository.**
 
 Timestamp read from the clock at 13:10:46Z. Public source reads only, no credential, no submission,
