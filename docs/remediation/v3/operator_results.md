@@ -3,6 +3,111 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T11:20Z — **Answering Codex's pending documentation request myself, since browsing is the operator's job and Codex cannot do it. On the frozen objective's clause 8 and clause 10 together: Rekor cannot satisfy them, because every documented entry type mandates a signature and public key and no hash-only type exists. OpenTimestamps can, requiring no account, key or signature. Two real prerequisites come with it, one of which this machine does not have.**
+
+Timestamp read from the clock at 11:20:33Z. Public documentation reads only. No credential, no
+account, no submission, no publication, and nothing adopted. Development spend across ledgers remains
+12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries /
+`0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. Why I did this
+
+Codex's record states that official-public-documentation-only permission "was requested
+asynchronously and remains unanswered", and that "no approved external log origin/protocol/trust
+profile exists locally". Reading public documentation is exactly the operator half of the author and
+executor split, so rather than leave that request pending I read the documentation and am supplying
+the findings as evidence. This grants Codex no browsing permission and adopts nothing.
+
+The requirement being tested is the frozen objective, clause 8: "authority_sha256 over the frozen
+inputs, published to an append-only transparency log, verified by independent re-run + inclusion
+proof", together with clause 10: "No signer".
+
+### 2. Rekor is ruled out by its own documented types
+
+Rekor is the closest match to the words "transparency log" and "inclusion proof": an append-only
+verifiable log over a Merkle structure, with queryable inclusion proofs and third-party auditability.
+
+But every documented entry type requires both a signature and a public key:
+
+| entry type | signature | public key |
+|---|---|---|
+| Minisign | required | required |
+| SSH | required | required |
+| PKIX/X509 | required | required |
+| TUF | required | required |
+| HashedRekord | required | required |
+
+`HashedRekord` is the one that sounded promising, because it "allows hashed data instead of supplying
+the full content that was signed". It still mandates both: the documented invocation is
+`--artifact-hash … --signature … --public-key`. The type list records no entry type accepting a bare
+hash with no signature or key, and OpenPGP, RPM, Alpine and TSR are marked TODO with requirements
+unspecified.
+
+So publishing `authority_sha256` to Rekor would require introducing a key and a signature, which is
+what clause 10 forbids. Whether an ephemeral machine-generated key counts as a "signer" for the
+purposes of clause 10 is a judgement I am not making; I am reporting that a key is unavoidable there.
+
+### 3. OpenTimestamps satisfies the no-signer constraint
+
+Per its own documentation: no account, no API key and no signature at any step, anonymous by design,
+with nonces protecting file contents. `ots stamp` submits the digest to public calendar servers and
+produces a `.ots` proof. `ots upgrade` completes that proof with the path to the Bitcoin blockchain.
+The anchor is Bitcoin, which is public and append-only, and the completed proof is a Merkle path,
+which is an inclusion proof in the required sense.
+
+The documentation is explicit that verification does not depend on trusting the calendars: the design
+leverages a permissionless blockchain so that "users need not rely on any single authority for proof
+validity", and the protocol defines operations for "creating provable timestamps and later
+independently verifying them".
+
+### 4. Two prerequisites, stated plainly
+
+Both are real and neither is a blocker I can clear.
+
+**Latency.** The documentation states "it takes a few hours for the timestamp to get confirmed by the
+Bitcoin blockchain". So sealing cannot be synchronous with a run. The seal would be issued, then
+upgraded to a complete proof hours later, and only then independently verifiable. That is a workflow
+consequence for whatever produces the seal, not a defect.
+
+**A local Bitcoin node.** For complete independent verification `ots verify` wants "a local Bitcoin
+Core node (a pruned node is fine)". Without one it queries remote calendars for attestation paths,
+which reintroduces exactly the third-party dependency that clause 8's "independent" is there to
+exclude. So a genuinely independent verification needs a node.
+
+This machine has neither `bitcoind` nor `bitcoin-cli` on `PATH`; I checked. Provisioning a pruned
+Bitcoin Core node is therefore a new operator prerequisite, and it is Jos's to decide on rather than
+mine, since it means running a network service on his hardware.
+
+### 5. Limits of this survey, which are significant
+
+I checked two candidates, not the field. The web search tool was unavailable and returned an error,
+so I fetched official documentation directly rather than surveying. I did not examine Certificate
+Transparency, which is scoped to X.509 certificates and looks inapplicable but which I have not
+verified; the Go checksum database; Trillian operated directly; or any newer log.
+
+I did not find a signer-free public transparency log other than blockchain anchoring, and I want to be
+clear that this is a not-found rather than a proof of absence. If one exists, my search would not
+necessarily have surfaced it.
+
+Sources: `https://opentimestamps.org/`, the OpenTimestamps client README at
+`https://github.com/opentimestamps/opentimestamps-client/blob/master/README.md`,
+`https://docs.sigstore.dev/logging/overview/`, and Rekor's type list at
+`https://github.com/sigstore/rekor/blob/main/types.md`.
+
+### 6. What I am not doing
+
+Not submitting anything to any log, not creating an account, not installing a node, not adopting a
+trust root, and not proposing that any of the above be pinned in the objective or the plan. Clause 8
+names no specific log and I am not choosing one on anyone's behalf. This entry is documentation
+findings offered against a stated requirement.
+
+### 7. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. Every authenticated reservation remains blocked by the unknown-billing stop, and
+the candidate route change remains unconfirmed; both still need Jos directly.
+
 ## 2026-09-10T05:43Z — **Closing the question I left open at 05:41Z. I searched rather than assumed, and the two blocking request identities appear nowhere except the ledger row itself: 824 private files, zero other matches, and no artifact anywhere carrying run index 17 or 2. The bills are unrecoverable from local evidence. Still an inference Codex cannot verify, but now a searched one.**
 
 Timestamp read from the clock at 05:43:46Z. Local search only, no command against a provider,
