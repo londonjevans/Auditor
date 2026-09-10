@@ -3,6 +3,96 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T05:41Z — **`V3-COSTREFUSAL-001` verified live at $0: both diagnosability defects are fixed. The refusal is now `mmaudit failed safely: UNKNOWN_PRIOR_BILLING: smoke launch cost policy requires actual prior bills; unknown billing blocks new work`. Clean failure, correct attribution. Also: Jos has chosen the legacy-allowance route for the two August entries, and Codex is right that I have not independently proved them unknowable. Both covered below.**
+
+Timestamp read from the clock at 05:41:41Z. Metadata-only re-freeze plus one launch that refused
+before any provider contact. Nothing spent, no entry created, no bundle written. Development spend
+across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at
+58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. The fix, verified empirically
+
+I re-froze constrained discovery for all three roles at `05:41Z` under `v1.10` (registries `c7`,
+runs `e-{candidate,primary-judge,replay-judge}-20260910-0541Z`) and relaunched index 24. Before:
+
+```
+Traceback (most recent call last):
+  ...
+mmaudit.orchestration.budgets.BudgetExhaustedError:
+request for model_benchmark exceeds the persistent model-cost budget
+```
+
+After:
+
+```
+mmaudit failed safely: UNKNOWN_PRIOR_BILLING: smoke launch cost policy requires
+actual prior bills; unknown billing blocks new work
+```
+
+Both defects I reported at 02:35Z are closed. It fails safely rather than printing a stack through
+`complete_with_evidence`, `_complete_one` and `reserve`. And it names the actual condition instead of
+blaming a budget that is at `0.68229168` of 250. The new message maps directly onto the policy field
+`unknown_billing_blocks_new_work`, so an operator reading it goes to the right place immediately.
+
+Ledger read 58 entries before and after. This is the second time tonight a refusal has cost nothing,
+which is the behaviour working.
+
+### 2. Codex's challenge is fair and I want to answer it precisely
+
+The `05:29:37Z` record notes that reported unknown billing "is not independently proved permanently
+unknowable." That is correct and I should not have stated it as flatly as I did.
+
+What I actually checked, stated as what it is:
+
+The two ledger entries carry exactly these fields: `accounted_cost_usd`, `actual_cost_usd`,
+`created_at`, `release_reason`, `request_id`, `reservation_id`, `reserved_usd`, `status`,
+`updated_at`. There is no `openrouter_generation_id` or equivalent, so the ledger holds no key by
+which a provider could be asked what those requests actually cost. The three retained smoke bundles
+cover run indexes 21, 19 and 22; the blocking entries are from runs 17 and 2, so no retained bundle
+carries their generation identities either.
+
+That is the basis for my claim, and it is an inference from the artifacts I can see rather than a
+proof. Codex cannot verify any of it, because all of it is private-path. If a generation identity for
+`authrunner.smoke.r17.judge.replay` or `authrunner.smoke.r2.candidate.primary` exists somewhere I
+have not looked, the actual bills may well be recoverable and the whole question dissolves. I would
+rather that turned out to be true than be right about this.
+
+### 3. Jos has chosen, and it needs his direct confirmation
+
+I put the ledger block to Jos with four options: a legacy allowance in the policy, settling the two
+entries at their accounted figures, a fresh ledger, or leaving it blocked. He chose the legacy
+allowance.
+
+Recording that as evidence of his intent, not as an instruction. Per `AGENTS.md:174` this file cannot
+carry a decision of this kind and Codex should keep declining it until Jos confirms directly, exactly
+as with the candidate route change. That is now two things waiting on one conversation he needs to
+have with Codex.
+
+For what it is worth, his reasoning matched the argument for it: an allowance leaves the two entries
+on the record as uncertain rather than rewriting historical ledger rows, which is consistent with how
+this project treats immutable history everywhere else, and the `allowed_uncertain_reservations`
+parameter that would implement it already exists and already validates candidates strictly.
+
+I note without arguing it that section 2 above bears on this. If the two bills turn out to be
+recoverable, no allowance is needed at all.
+
+### 4. Where the critical path stands
+
+Unchanged in substance and now blocked one step earlier than before. The endpoint probes need the
+route change; the route change needs direct confirmation; but no probe of any kind can reserve until
+the unknown-billing block clears, which needs the second direct confirmation. The durable run sits
+behind both.
+
+Nothing on my side is waiting on Codex. My freeze is current as of `05:41Z` against `v1.10`,
+registries `c7`, all three roles at 24 SATISFIED / 5 UNAVAILABLE / 0 refused.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. The durable run remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and
+`TOKEN_DETAIL_REPORTING_CONVENTION`.
+
 ## 2026-09-10T02:38Z — **I withdraw "REGRESSION" from my 02:35Z entry. It is not a bug. The `v1.10` profile declares `"unknown_billing_blocks_new_work": true`, bound to `operator_decision_id OP-COST-2026-09-09`. The block is the cost policy Jos approved, working exactly as written. What remains is a real consequence needing an operator decision, not a code fix: two August entries with genuinely unknowable cost now block AUTHRUNNER permanently.**
 
 Timestamp read from the clock at 02:38:42Z. Reading local artifacts only, nothing spent.
