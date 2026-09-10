@@ -3,6 +3,119 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T02:35Z — **REGRESSION, and it blocks every AUTHRUNNER run on the cumulative ledger. Index 24 refused before any provider contact with `BudgetExhaustedError`. The cause is the new `require_known_prior_costs` check, which ignores the `allowed_uncertain_reservations` allowance that the adjacent `require_settled_prior_costs` check honours. Two August entries the ledger has carried since 08-23 now block all reservations permanently. Zero spend; ledger still 58.**
+
+Timestamp read from the clock at 02:35:44Z. The probe refused before any provider call. Development
+spend across ledgers remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger
+unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. What I ran and what happened
+
+With the diagnostics slice verified at `02:32:54Z`, I re-froze constrained discovery for all three
+roles against `v1.10` at `02:33Z` (24 SATISFIED / 5 UNAVAILABLE / 0 refused on each, registries
+`c6`), confirmed the smoke preflight VALID on index 24, and launched. It failed in about six seconds:
+
+```
+mmaudit.orchestration.budgets.BudgetExhaustedError:
+request for model_benchmark exceeds the persistent model-cost budget
+```
+
+No ledger entry was created, no bundle was written, nothing was spent. Ledger reads 58 entries and
+`0.68229168` USD, unchanged.
+
+The purpose of this probe was diagnostic. With the new condition reporting in place I wanted the
+current route to name why it refuses, before spending anything on alternative endpoints, because if
+the condition were a token bound or a join failure rather than reasoning then swapping endpoints
+would be aimed at the wrong thing. I never got that far.
+
+### 2. The cause, exactly
+
+`src/mmaudit/orchestration/cost_ledger.py`, in `reserve`:
+
+```python
+if require_known_prior_costs and any(
+    entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED for entry in snapshot.entries
+):
+    raise CostBudgetExceededError("unknown prior billing blocks new reservations")
+```
+
+`budgets.py` passes `require_known_prior_costs=True` on the operator path, in four places. The
+cumulative ledger holds exactly two `UNCERTAIN_ACCOUNTED` entries and has since August:
+
+| request | reserved | accounted | created |
+|---|---|---|---|
+| `authrunner.smoke.r17.judge.replay` | `0.18105` | `0.18105` | 2026-08-24 |
+| `authrunner.smoke.r2.candidate.primary` | `0.05225616` | `0.05225616` | 2026-08-23 |
+
+So every operator reservation against this ledger is now refused, unconditionally and permanently.
+
+This is new tonight. `require_known_prior_costs` appears zero times at HEAD and four times in the
+working tree, all additions. The string `unknown prior billing blocks new reservations` likewise did
+not exist at HEAD. Index 23 reserved and billed successfully at `00:50Z` with these same two entries
+present.
+
+### 3. The defect is a one-line asymmetry, not the policy
+
+I do not think the intent is wrong. Refusing to reserve while prior billing is unknown is a
+reasonable rule. The defect is that the new check ignores the allowance mechanism that already exists
+for exactly this case, which the adjacent check honours:
+
+```python
+if require_known_prior_costs and any(
+    entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED for entry in snapshot.entries
+):                                          # <- no carried_request_ids exclusion
+
+if require_settled_prior_costs and (
+    ...
+    entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    and entry.request_id not in carried_request_ids     # <- honours the allowance
+```
+
+`reserve` already accepts `allowed_uncertain_reservations` and validates each one strictly at lines
+495 to 504: the prior entry must still be `UNCERTAIN_ACCOUNTED`, must have `actual_cost_usd is None`,
+and must have `accounted_cost_usd == reserved_usd`. Both August entries satisfy all three, so both
+are eligible allowances. But because the new check has no `carried_request_ids` exclusion, passing
+an allowance cannot rescue the call. The two parameters are mutually unsatisfiable as written.
+
+Adding the same exclusion the settled check already has would restore the operator path while keeping
+the rule. That is my reading of it, offered as a lead rather than a patch, and it is Codex's code to
+change.
+
+### 4. Two smaller defects observed alongside
+
+The message misattributes the cause. `BudgetExhaustedError: request for model_benchmark exceeds the
+persistent model-cost budget` describes a budget ceiling. Spend is `0.68229168` USD against a cap of
+250, so no budget was exceeded. `budgets.py` maps `CostBudgetExceededError` to a budget-exhaustion
+message, but `cost_ledger.py` raises that same exception type for a condition that is not a budget
+condition at all. An operator reading the message would go looking at budgets and find nothing wrong.
+
+It also surfaced as a raw Python traceback rather than the usual `mmaudit failed safely: ...` line.
+Every other refusal I have hit tonight failed cleanly. This one printed the stack through
+`complete_with_evidence`, `_complete_one` and `reserve`. That is a diagnosability regression on a
+path that is meant to fail safely.
+
+### 5. What this blocks
+
+Everything on the AUTHRUNNER critical path. The candidate endpoint probes, the diagnostic re-probe I
+was attempting, and the durable run all reserve against this ledger and all now refuse. The build was
+one working smoke from the durable run at `00:37Z` and is currently zero smokes from anything.
+
+There is no operator workaround. `models authenticated-runner-smoke` exposes no
+`--carry-uncertain-estimates` or equivalent, unlike the development commands, and no settle or
+reconcile subcommand exists to clear the two August entries. I checked both.
+
+I am not proposing to point the AUTHRUNNER path at a development ledger to get around this. That
+would be development evidence masquerading as production custody and it would poison the bundle the
+durable run depends on.
+
+### 6. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. The durable run remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and
+`TOKEN_DETAIL_REPORTING_CONVENTION`, and now on this as well. Nothing here authorizes a paid run; the
+one I attempted cost nothing and reached no provider.
+
 ## 2026-09-10T02:04Z — **The v1.10 cost-successor adoption is verified clean from the operator side, at $0. I re-froze all three roles against the new plan and every route reproduces 24 SATISFIED / 5 UNAVAILABLE / 0 refused, with the same five predicate names. The durable preflight under v1.10 still reports exactly the two known failures and no others. Adoption regressed nothing.**
 
 Timestamp read from the clock at 02:04:06Z. Metadata-only discovery and one provider-free preflight;
