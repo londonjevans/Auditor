@@ -3,6 +3,111 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T00:57Z — **Root cause of the index-23 refusal is now proven, not hypothesised: `together` returned exactly 201 completion tokens and emitted no reasoning, while the same model and prompt on `parasail/fp8` emitted 1222 reasoning tokens in August. Two further findings: no endpoint metadata anywhere distinguishes a reasoning-emitting route, and `models list-endpoints` is broken for two of the three roles.**
+
+Timestamp read from the clock. Everything in this entry is free: reading a retained bundle, arithmetic,
+and metadata-only enumeration. No provider completion was requested. Development spend across ledgers
+remains 12.093483578 USD; uncertain reservations 5.481960176 USD. Ledger unchanged at 58 entries /
+`0.68229168` USD. `completed_real_audits` remains `0`.
+
+### 1. The proof
+
+The retained 08-27 bundle `s22` has `disposition TRANSPORT_SCHEMA_IDENTITY_COST_VALID`, so it is a
+record of the predicate passing. Its four usage records:
+
+| leg | model | endpoint | prompt | completion | reasoning | state |
+|---|---|---|---|---|---|---|
+| run0 candidate | `deepseek-v4-pro-20260813` | `parasail/fp8` | 234 | 1241 | 1222 | `active_observed` |
+| run0 judge | `glm-5.2-20260616` | `sail-research/fp8` | 1305 | 891 | 667 | `active_observed` |
+| run1 candidate | `deepseek-v4-pro-20260813` | `parasail/fp8` | 234 | 1303 | 1303 | `active_observed` |
+| run1 judge | `kimi-k3-20260715` | `modal/mxfp4` | 1731 | 1641 | 1804 | `active_observed` |
+
+Every one carries `observation_available: true` and a positive `observed_reasoning_tokens`. Every one
+carries `accounted_completion_tokens: 8192`, which is the product's own accounting envelope and is
+exactly the ceiling I derived independently in the superseded section 6 of the 00:25Z entry. That
+derivation was right about the number even though it was wrong about the conclusion.
+
+Now today's run. The prompt is the same single case from the same frozen corpus, so prompt tokens are
+234. At this route's pinned prices, `prompt 0.00000132` and `completion 0.00000396`:
+
+```
+billed                     0.00110484
+prompt 234 x 0.00000132  = 0.00030888
+remainder                = 0.00079596
+remainder / 0.00000396   = 201 completion tokens, exactly
+```
+
+An exact integer is a strong check that the 234-token prompt assumption is right. So `together`
+returned 201 completion tokens where `parasail/fp8` returned 1241, of which 1222 were reasoning. Had
+reasoning been emitted at anything like that rate the bill would have been about `0.00522324`, not
+`0.00110484`. It was 21.2 percent of that.
+
+`_has_valid_token_plan_routing` refuses when the plan reserves reasoning tokens and the record has no
+`active_observed` reasoning state with a positive observed count. That is what happened. The
+hypothesis in the 00:52Z entry is now established: `together` does not emit observable reasoning for
+`deepseek/deepseek-v4-pro-0813`, the request was billed anyway, and `TOKEN_PLAN_ROUTING` is the
+correct refusal.
+
+### 2. Second finding: nothing in the metadata could have predicted this
+
+`models list-endpoints` on `moonshotai/kimi-k3` enumerates 19 operational endpoints. Every single one
+reports endpoint-level `supported_reasoning_efforts: None`. The same is true of the endpoint-level
+field for all three routes in the fresh constrained discovery. Admission resolves reasoning effort by
+falling back to the model-level inventory, which says `['low','high','max']` and is true of the model
+but says nothing about a given endpoint's emission behaviour.
+
+So there is no metadata path, free or paid, to choose an endpoint that will actually emit reasoning.
+The only evidence that any endpoint emits it is a prior successful call. That is why the August
+bundle is valuable beyond its expired route bindings: it is the only record of which endpoints
+emitted reasoning for these three models.
+
+This makes the cost structure of route selection worse than it looks. Each candidate endpoint costs
+about one tenth of a cent to test, which is cheap, but the test is destructive of a run index and
+each failure teaches only one bit. Reporting the failing sub-branch of
+`_has_valid_token_plan_routing` would at least make each paid attempt diagnostic rather than merely
+negative.
+
+### 3. Third finding: `models list-endpoints` is broken for two of the three roles
+
+```
+deepseek/deepseek-v4-pro-0813 -> mmaudit failed safely: endpoint inventory contains duplicate exact routes
+z-ai/glm-5.2                  -> mmaudit failed safely: endpoint inventory contains duplicate exact routes
+moonshotai/kimi-k3            -> 19 endpoints enumerated
+```
+
+Deterministic on repeat. The raise is `endpoint_inventory.py:435`, which rejects the entire inventory
+when any two normalized records share an `identity_key`.
+
+The part that matters is the inconsistency. `models discover` succeeded for both of those exact
+models twelve minutes earlier, at 00:45Z, producing valid constrained discovery with 24 SATISFIED and
+0 refused. So the admission path accepts provider data that the survey command refuses outright. The
+enumeration tool is unusable for precisely the two roles for which alternatives now need surveying,
+and it is stricter than the path that grants admission. Reporting the duplicate identity and
+continuing, or at minimum naming which route duplicated, would make it usable again.
+
+### 4. What I recommend, and what I am not doing
+
+The route set needs endpoints proven to emit reasoning. The only proven ones are in the August
+bundle: `parasail/fp8` for the candidate, `sail-research/fp8` for the primary judge, `modal/mxfp4`
+for the replay judge. Whether those are admissible today is a separate question, and note that
+today's kimi enumeration shows `parasail/fp4` and `sail-research/fp4` rather than the `fp8` tags,
+so quantization labels have moved.
+
+Changing the route set means changing `authenticated_runner_selection.route_constraints` in the
+plan. That is a plan change and I am not making it. The alternative, relaxing the reasoning
+requirement, would weaken a real gate to make a route pass, and I would not recommend it.
+
+I am also not launching another smoke. `OP-SMOKE-2026-09-10` authorized one and it is spent, and
+until the reasoning question is decided a second attempt on the same routes would reproduce this
+exact refusal for the same tenth of a cent.
+
+### 5. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`, unchanged
+since 00:37Z. Nothing here adopts a route or promotes any evidence to qualification.
+
 ## 2026-09-10T00:52Z — **LIVE RUN EXECUTED under `OP-SMOKE-2026-09-10`. The candidate route accepted the request and was billed 0.00110484 USD, then the smoke refused its own receipt: `NONCREDITING_SMOKE identity binding lacks exact completion receipts (usage_diagnostics=TOKEN_PLAN_ROUTING)`. No bundle was written. This is the first cumulative-ledger change since 05:02Z on 2026-09-09 and the first live result on the post-revocation route set.**
 
 Timestamp read from the clock. Development spend across ledgers remains 12.093483578 USD; uncertain
