@@ -3,6 +3,86 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T01:11Z — **Primary judge screened the same way: four live endpoints, three passing every metadata gate. And the ambiguity errors settle the question I left open at 01:04Z. `models discover` does see the duplicated provider data; it localizes the failure to the affected route, while `models list-endpoints` refuses the whole inventory. The fix is to localize.**
+
+Timestamp read from the clock. Twenty-three metadata-only probes, no provider completion requested,
+nothing spent. Development spend across ledgers remains 12.093483578 USD; uncertain reservations
+5.481960176 USD. Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains
+`0`.
+
+### 1. `z-ai/glm-5.2` endpoints
+
+```
+OK       deepinfra/fp4 (current)   OK  together   OK  digitalocean   OK  parasail/fp4
+OTHER    fireworks       :: configured endpoint provider display name is ambiguous in exact-model metadata
+OTHER    fireworks/fast  :: configured endpoint provider display name is ambiguous in exact-model metadata
+OTHER    baseten/fp8     :: configured endpoint tag or slug is ambiguous: baseten/fp8
+ABSENT   the remaining 16 probed tags
+```
+
+Screened against the plan's `NATIVE_JSON_SCHEMA` and `structured_outputs` requirements:
+
+| endpoint | output mode | prompt / completion | output limit | status |
+|---|---|---|---|---|
+| `deepinfra/fp4` | `NATIVE_JSON_SCHEMA` | `0.0000004875` / `0.00000156` | 163840 | current, never dispatched |
+| `together` | `NATIVE_JSON_SCHEMA` | `0.0000014` / `0.0000044` | 460800 | untested |
+| `parasail/fp4` | `NATIVE_JSON_SCHEMA` | `0.0000014` / `0.0000044` | 235929 | untested |
+| `digitalocean` | `JSON_OBJECT` only | `0.0000007` / `0.0000022` | 235929 | eliminated on metadata |
+
+All four are operational and ZDR-eligible, all report `model_supported_reasoning_efforts
+['high','xhigh']`, and every one has endpoint-level `supported_reasoning_efforts: None`. The current
+`deepinfra/fp4` is by some distance the cheapest, roughly a third of the other two on both
+components, so there is no cost reason to move off it. It has simply never been reached, because the
+candidate leg has always failed first.
+
+Worth noting for whoever sequences the probes: `together` appears as a live endpoint for both the
+candidate model and this one, and it is the endpoint just shown not to emit reasoning for the
+candidate. That is one model on one provider and does not generalise, but if `together` also declines
+to emit reasoning for GLM then two of the three current plan routes share a single point of failure.
+
+### 2. The 01:04Z question is answered
+
+At 01:04Z I said I could not tell whether `discover` and `list-endpoints` read the same inventory,
+and that I would not guess past it. The ambiguity errors above answer it without any further
+tracing.
+
+`discover` refused `fireworks`, `fireworks/fast` and `baseten/fp8` for this model with explicit
+ambiguity errors, one naming an ambiguous provider display name and one an ambiguous tag or slug.
+That is the same upstream duplication that makes `list-endpoints` raise
+`endpoint inventory contains duplicate exact routes` for this model. So both commands do see the
+duplicated records. The difference is scope of failure, not scope of data: `discover` fails only when
+you ask for a route that is actually ambiguous, and returns four other endpoints cleanly, while
+`list-endpoints` refuses to report anything at all.
+
+So my original 00:57Z instinct was closer to right than my 01:04Z narrowing implied, but neither was
+stated correctly. The accurate statement is that `list-endpoints` globalizes a per-route defect. The
+fix follows directly and is small: report the ambiguous identities and enumerate the rest, which is
+what `discover` already does for a single route. That also makes the command usable again for exactly
+the two models that need it.
+
+I would rather record that I got there by a second probe than leave the earlier hedge standing as if
+the question were unanswerable. It was answerable and cost nothing.
+
+### 3. Where this leaves the sequence
+
+The candidate remains the only role with a proven failure. Untested endpoints passing all metadata
+gates now stand at three for the candidate and two for the primary judge, with the current cheap
+`deepinfra/fp4` among them. The replay judge has `modal/mxfp4` proven to emit reasoning in August and
+operational today.
+
+The recommended first probe is unchanged from 01:08Z: point the candidate at `fireworks`, re-freeze,
+run one smoke, and see whether the candidate leg emits reasoning. Nothing else can be learned until
+the plan lists an alternative route, because constrained discovery will not produce evidence for a
+route the plan does not constrain.
+
+### 4. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. The durable run
+remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`.
+`OP-SMOKE-2026-09-10` is spent; further probes need a fresh operator decision, which I will record
+here when the plan is ready.
+
 ## 2026-09-10T01:08Z — **The candidate model is not in a squeeze. I worked around the broken enumeration by probing endpoints one at a time through `models discover`, which works for this model. There are five live endpoints, and three of them satisfy every metadata requirement and have never been tested. Each costs about a tenth of a cent to test. This supersedes the dead-end framing in my 01:00Z entry.**
 
 Timestamp read from the clock. Twenty-four metadata-only probes, no provider completion requested,
