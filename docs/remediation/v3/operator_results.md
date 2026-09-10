@@ -3,6 +3,67 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T05:43Z — **Closing the question I left open at 05:41Z. I searched rather than assumed, and the two blocking request identities appear nowhere except the ledger row itself: 824 private files, zero other matches, and no artifact anywhere carrying run index 17 or 2. The bills are unrecoverable from local evidence. Still an inference Codex cannot verify, but now a searched one.**
+
+Timestamp read from the clock at 05:43:46Z. Local search only, no command against a provider,
+nothing spent. Development spend across ledgers remains 12.093483578 USD; uncertain reservations
+5.481960176 USD. Ledger unchanged at 58 entries / `0.68229168` USD. `completed_real_audits` remains
+`0`.
+
+### 1. What I searched and what came back
+
+Codex was right at `05:29:37Z` that I had asserted permanent unknowability without proving it. I said
+I would rather the bills be recoverable than be right about that, so I went and looked instead of
+leaving it as a sentiment.
+
+Scope: 780 files under `~/.mmaudit` totalling 63 MB, plus 44 under the repository's gitignored
+`.mmaudit/`.
+
+Searching for the two blocking request identities, `authrunner.smoke.r17.judge.replay` and
+`authrunner.smoke.r2.candidate.primary`, returns exactly one file: the cost ledger itself. Searching
+for any artifact recording `smoke_run_index` 17 or 2 returns nothing at all. The three retained smoke
+bundles cover indexes 21, 19 and 22, as recorded earlier.
+
+One incidental correction while I was in there. I previously described the hex suffix on those
+request identities as possibly a lookup key. It is not. The suffix `721f0587…` on
+`authrunner.smoke.r2.candidate.primary` is byte-identical to the suffix on the index-23 entry from
+tonight, so it is a corpus or case digest shared across runs, not a per-request generation identity.
+That removes the last candidate key I had.
+
+### 2. What this does and does not establish
+
+It establishes that no local artifact holds a generation identity for either request, so there is
+nothing to ask a provider with. Combined with the entry schema carrying no generation field among its
+nine, the actual August bills cannot be recovered from anything on this machine.
+
+It does not establish that they are unrecoverable in principle. A provider-side account export keyed
+by date rather than by generation identity might still show them, and I have not tried that and am
+not going to without being asked, since it is an external query about billing history rather than
+anything the product does.
+
+And it remains private-path evidence that Codex cannot verify. I am recording the search scope and
+the result so that the claim is at least falsifiable by anyone who can see those files, rather than
+resting on my say-so.
+
+### 3. Why it matters for the pending decision
+
+If the bills were recoverable, no policy change would be needed: reconciling the two entries with
+their actual costs would clear `unknown_billing_blocks_new_work` on its own and the block would
+dissolve. That was the cheapest possible resolution and it is the one I was hoping for. It is not
+available.
+
+So the legacy allowance Jos chose is, as far as I can determine, the least invasive option that
+actually works. That does not change what I said at 05:41Z: it still needs his direct confirmation to
+Codex, and nothing in this file authorizes it.
+
+### 4. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.10`
+`NONAUTHORIZING` with all three routes unchanged. The unresolved 0.000633960 USD displayed-cost
+discrepancy stands. The durable run remains blocked on `EMPIRICAL_SCHEMA_CONFORMANCE` and
+`TOKEN_DETAIL_REPORTING_CONVENTION`, and every reservation remains blocked by the unknown-billing
+stop ahead of them.
+
 ## 2026-09-10T05:41Z — **`V3-COSTREFUSAL-001` verified live at $0: both diagnosability defects are fixed. The refusal is now `mmaudit failed safely: UNKNOWN_PRIOR_BILLING: smoke launch cost policy requires actual prior bills; unknown billing blocks new work`. Clean failure, correct attribution. Also: Jos has chosen the legacy-allowance route for the two August entries, and Codex is right that I have not independently proved them unknowable. Both covered below.**
 
 Timestamp read from the clock at 05:41:41Z. Metadata-only re-freeze plus one launch that refused
