@@ -3,6 +3,130 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-09-10T00:37Z — **The durable AUTHRUNNER run is gated on exactly two predicates, and both are satisfiable only by a fresh smoke bundle on the current three routes. Everything else in `FULL_CAMPAIGN_ADMISSION` already passes. Proven at $0 by three `models authenticated-runner --preflight-only` invocations. Operator decision `OP-SMOKE-2026-09-10` is recorded in section 5.**
+
+Timestamp read from the clock. No provider contact, no ledger write, nothing spent, no output
+published. Development spend across ledgers remains 12.093483578 USD; uncertain reservations
+5.481960176 USD. Ledger unchanged at 57 entries / `0.68118684` USD. `completed_real_audits` remains
+`0`.
+
+### 1. What I ran
+
+`mmaudit models authenticated-runner --preflight-only --allow-code-egress`, three times, varying
+only `--runtime-evidence-smoke-bundle`. Same current inputs each time: the three `c1` registries and
+their `20260909` constrained discovery runs, `~/.mmaudit/private/qualification-policy.json`, fresh
+empty campaign and portfolio directories, `config/openrouter-qualification.toml`, per-attempt
+tripwires of `0.30` for all three roles. The ledger read 57 entries before and after all three.
+
+I had not previously exercised this command. I had been treating the smoke as a validation step of
+uncertain necessity. It is not; it is the last gate.
+
+### 2. The three results
+
+```
+no --runtime-evidence-smoke-bundle
+  route predicate report does not satisfy its closed purpose:
+  purpose=FULL_CAMPAIGN_ADMISSION;
+  failures=EMPIRICAL_SCHEMA_CONFORMANCE=EMPIRICAL_SCHEMA_EVIDENCE_UNAVAILABLE,
+           TOKEN_DETAIL_REPORTING_CONVENTION=TOKEN_DETAIL_CONVENTION_UNAVAILABLE
+
+--runtime-evidence-smoke-bundle …-20260827-s22.json
+  route predicate report does not satisfy its closed purpose:
+  purpose=FULL_CAMPAIGN_ADMISSION;
+  failures=EMPIRICAL_SCHEMA_CONFORMANCE=RUNTIME_EVIDENCE_BINDING_MISMATCH,
+           TOKEN_DETAIL_REPORTING_CONVENTION=RUNTIME_EVIDENCE_BINDING_MISMATCH
+
+--runtime-evidence-smoke-bundle …-20260824-s19.json
+  authenticated runner smoke evidence cannot prove exact runtime predicates
+```
+
+### 3. What that establishes
+
+With no smoke bundle at all, `FULL_CAMPAIGN_ADMISSION` reports exactly two failures and no others.
+Every other predicate in the closed purpose is satisfied by what is already on disk: the registries,
+the constrained discovery runs, the qualification policy, the frozen corpus and ground-truth
+provenance, the plan and the config. That is a much better position than the queue's five
+`UNAVAILABLE` predicates suggested to me, because two of those five are the ones below and the
+remaining three evidently are not blocking this purpose.
+
+The two that fail are `EMPIRICAL_SCHEMA_CONFORMANCE` and `TOKEN_DETAIL_REPORTING_CONVENTION`. Both
+report `UNAVAILABLE` with no bundle and `RUNTIME_EVIDENCE_BINDING_MISMATCH` with the August bundle.
+The difference between those two statuses is the whole answer: the evidence type is right, the
+binding is wrong. A smoke bundle satisfies these predicates, and only a smoke bundle bound to the
+routes actually being admitted will do it.
+
+Three prior bundles exist. `s19` from 08-24 is rejected outright as unable to prove exact runtime
+predicates. `s22` from 08-27 is a genuinely valid bundle, `disposition
+TRANSPORT_SCHEMA_IDENTITY_COST_VALID`, `bundle_sha256 29702a02…`, and its
+`effective_config_sha256 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54` is
+byte-identical to the one today's smoke preflight printed. It still fails, because it binds the
+August routes: it carries `deepseek/deepseek-v4-pro-0813` and `moonshotai/kimi-k3` on
+`modal/mxfp4`, `parasail/fp8` and `sail-research/fp8`, and contains no `z-ai/glm-5.2` at all. Two of
+the three model identities survived the revocation; none of the endpoints did.
+
+So the smoke is not a precursor of uncertain value. It is the single remaining external dependency
+of the durable run, and the durable run is what mints custody.
+
+### 4. A correction to how I have been describing the smoke
+
+I have been calling the smoke the thing that unblocks AUTHRUNNER. That was imprecise in a way worth
+fixing. The smoke bundle carries every authorization flag as `const false`, including
+`runner_custody_authorized` and `calibration_authorized`, and its `artifact_kind` is
+`authenticated_runner_noncrediting_smoke_evidence`. It mints nothing.
+`VerifiedCrossLineageRunnerCustody` is a PID-local, non-constructible, non-serializable capability;
+it cannot be written to disk or carried between processes at all. The smoke's role is narrower and
+is stated exactly in the option's own help text: existing canonical noncrediting smoke evidence
+`used only for exact runtime-route admission`. It admits the routes. `models authenticated-runner`
+then does the work in a single process, and custody exists only inside it.
+
+### 5. Operator decision `OP-SMOKE-2026-09-10`
+
+Jos authorized the monitoring session to decide the timing and conduct of the live smoke, in
+response to a direct question about whether to run it, and separately instructed the session to act
+without referring decisions back. This records that decision so it is not inferred from report
+wording, which Codex correctly refuses to treat as permission.
+
+Authorized: exactly one execution of `models authenticated-runner-smoke` on smoke run index 23,
+against the three `c1` registries and their constrained discovery runs, with per-attempt tripwires
+of `0.30` USD for each of the three roles, writing its bundle to
+`~/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260910-s23.json`.
+
+Bound: worst case 2.40 USD, being `maximum_provider_attempts 8` at the `0.30` tripwire, against a
+prior cumulative spend of `0.68118684` USD and the hard `_LEDGER_CAP_USD` of 250. The candidate
+stage additionally carries the derived caps `0.20898768` interval and `0.89017452` final. Abort at
+ceiling, never ask.
+
+Not authorized by this decision: the durable `models authenticated-runner` run, any second smoke,
+any change to the active plan, any adoption, qualification or seal. Those remain separate and I will
+not treat a successful smoke as implying any of them.
+
+### 6. When I will launch, and why not yet
+
+Two conditions, both of which I check myself.
+
+The COSTRECON readback lands. Codex's 00:30:54Z entry records the slice as PARTIAL with final
+record readback pending, and the working tree still carries 68 modified or untracked paths.
+`schemas/authenticated_runner_smoke_evidence_bundle.schema.json` is among them, which is the
+specific reason to wait rather than a general caution: the bundle I would produce now is written
+against a schema that is being edited, and a bundle the finished code rejects would waste the spend
+and the index. Run indexes are not scarce, but a rejected bundle proves nothing and would have to be
+redone anyway.
+
+Constrained discovery is re-frozen for all three roles immediately before launch. The current freeze
+is from 09-09 and provider metadata has drifted within minutes before. If it has drifted I re-freeze
+and say so in this file before launching rather than launching on stale admission.
+
+I expect both inside the next few hours. If the readback lands and discovery holds, I launch and
+report the bundle, its disposition, its exact billed cost against the reservation, and the result of
+re-running the durable preflight with the new bundle in place. That last step is the one that
+matters: it is what will show whether the two failing predicates go green.
+
+### 7. Unchanged
+
+Nine false authorities, real audits zero, both workflows manual-only, active plan `v1.9` / V1 and
+`NONAUTHORIZING`. The unresolved 0.000633960 USD displayed-cost discrepancy stands. No provider call
+has been made since 05:02Z on 2026-09-09; all three preflights in this entry were provider-free.
+
 ## 2026-09-10T00:32Z — **Correction. My 00:25Z finding was wrong on its central claim. The judge legs are not tripwire-bounded; the source derives an exact cost plan for each judge and admits it before any judge is dispatched. Codex caught this. Sections 3 and 6 of the previous entry are superseded here.**
 
 Timestamp read from the clock, not rounded. No provider contact, nothing spent, no ledger write.
