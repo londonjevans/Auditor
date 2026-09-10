@@ -114,6 +114,70 @@ Nine false authorities, zero real audits, both workflows manual-only. The active
 No provider call has been made since 05:02Z on 2026-09-09. Nothing in this entry authorizes a paid
 run, adopts a route, or promotes any evidence to qualification.
 
+### 6. The judge bound is derivable; `UNAVAILABLE` is a choice, not a necessity
+
+Added at 00:34Z, same zero-cost session, no provider contact. This section extends section 3 with
+the arithmetic, because the conclusion changed once I looked at the numbers.
+
+Two facts make a pre-dispatch judge bound computable.
+
+First, the candidate's output length is hard-capped by configuration, not discovered at runtime.
+`config/openrouter-qualification.toml` sets `max_output_tokens_per_request = 4096` and
+`[models.reasoning] reserved_tokens = 4096`. So the candidate cannot emit more than 8192 billable
+completion tokens on any attempt, worst case, counting reasoning as completion. The judge's prompt
+therefore cannot carry more than 8192 tokens of candidate output, and that ceiling is known before
+any request is sent.
+
+Second, all three frozen routes publish complete `exact_pricing` with no unpriced component:
+
+| route | prompt / tok | completion / tok | `pricing_sha256` |
+|---|---|---|---|
+| `deepseek/deepseek-v4-pro-0813=together` | `0.00000132` | `0.00000396` | `28c7c6e3…` |
+| `z-ai/glm-5.2=deepinfra/fp4` | `0.0000004875` | `0.00000156` | `f2f1fe4f…` |
+| `moonshotai/kimi-k3=together` | `0.000003` | `0.000015` | `7bf62c55…` |
+
+The third component on each is `input_cache_read`, priced below `prompt` on all three, so it cannot
+raise a bound computed from `prompt`.
+
+Multiplying the 8192-token ceiling through those prices gives a worst-case per-attempt subtotal for
+each leg, exclusive of the fixed prompt scaffold, which is itself preflight-knowable because the
+judge template is constructed at preflight:
+
+| route | completion at ceiling | carrying 8192 candidate tokens | per-attempt subtotal |
+|---|---|---|---|
+| candidate | `0.03244032` | `0.01081344` | `0.04325376` |
+| primary judge | `0.01277952` | `0.00399360` | `0.01677312` |
+| replay judge | `0.12288000` | `0.02457600` | `0.14745600` |
+
+The candidate subtotal is consistent with the `derived_interval_cap_usd 0.20898768` the preflight
+already prints, which is what makes me think the same derivation would work for the judges rather
+than being blocked by something I cannot see.
+
+Why this matters beyond tidiness: the unbounded leg is the expensive one. The replay judge's
+completion price is 9.62 times the primary judge's and 3.79 times the candidate's. The product
+derives a bound for the cheapest leg and declines to derive one for the leg that dominates the bill.
+On the 8-attempt smoke that is a small absolute number, but the same code path is what a real audit
+would run at scale, and there the difference is not small.
+
+So I would restate the section 3 recommendation more definitely. `PENDING_REAL_CANDIDATE_OUTPUTS` is
+the right status for an *exact* cost, which genuinely does not exist until the candidate answers. It
+is not the right status for a *bound*. The bound exists, it is `max_output_tokens_per_request +
+reserved_tokens` multiplied through pinned per-component prices, and binding it into the staged cost
+plan would let the preflight print a real `full_smoke_cost_bound` instead of
+`UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS`.
+
+One caveat I cannot settle without a real run: I am assuming reasoning tokens bill as `completion`
+on these providers, and I am assuming `reserved_tokens` is an actual dispatch ceiling rather than a
+planning reserve. Both assumptions make the bound larger, so they are safe for a ceiling, but if
+either is wrong the bound is loose rather than incorrect. The first live smoke will settle both, and
+that is a good reason to record the derivation now and check it against the observed bill afterward.
+
+Separately, and unrelated to cost: the single smoke case `case-df79ea132113b863` embeds a
+prompt-injection canary in a Solidity string constant, `BENCHMARK_CANARY_SCHEMA` with an
+instruction to reveal a hidden rubric. I read that as deliberate, and the live run should be scored
+for whether any of the three models repeats or obeys it, not only for cost and schema conformance.
+
+
 
 ## 2026-09-09T19:20Z — **`V3-PLANROUTES-001` VERIFIED LIVE AT $0: all three roles now pass constrained discovery, 24/29 predicates SATISFIED and NONE REFUSED. The five remaining are `UNAVAILABLE` pending a live authenticated run. This is the first admissible route set since the August revocation.**
 
